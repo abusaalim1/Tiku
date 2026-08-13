@@ -1,0 +1,159 @@
+@import "tailwindcss";
+
+@layer base {
+  :root {
+    --bg-cream: #FAF6F0;
+    --blush-pink: #FFDEE5;
+    --mauve-accent: #E8AFC0;
+    --deep-plum: #3E2431;
+    --soft-plum: #6E495B;
+    --rose-primary: #FF4B72;
+  }
+
+  body {
+    font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+    color: #3E2431;
+    background-color: #FAF5F0;
+    background-image: 
+      radial-gradient(circle at 15% 10%, rgba(255, 205, 218, 0.55) 0%, transparent 45%),
+      radial-gradient(circle at 85% 85%, rgba(191, 227, 208, 0.45) 0%, transparent 50%),
+      radial-gradient(circle at 80% 15%, rgba(255, 230, 200, 0.45) 0%, transparent 45%),
+      radial-gradient(circle at 15% 85%, rgba(232, 175, 192, 0.4) 0%, transparent 45%),
+      radial-gradient(circle at 50% 50%, rgba(255, 255, 255, 0.3) 0%, transparent 70%);
+    background-attachment: fixed;
+    min-height: 100vh;
+    -webkit-tap-highlight-color: transparent;
+    letter-spacing: -0.011em;
+  }
+
+  h1, h2, h3, h4, h5, h6, .font-heading {
+    font-family: 'Outfit', 'Plus Jakarta Sans', sans-serif;
+    letter-spacing: -0.025em;
+  }
+}
+
+/* Apple-style Glassmorphism & Soft Lighting Shadows */
+.glass-panel {
+  background: rgba(255, 255, 255, 0.72);
+  backdrop-filter: blur(20px) saturate(180%);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
+  border: 1px solid rgba(255, 255, 255, 0.85);
+  box-shadow: 
+    0 10px 30px -5px rgba(62, 36, 49, 0.06),
+    0 4px 12px -2px rgba(255, 222, 229, 0.25),
+    inset 0 1px 1px 0 rgba(255, 255, 255, 0.9);
+}
+
+.glass-panel-hover {
+  transition: all 0.35s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.glass-panel-hover:hover {
+  background: rgba(255, 255, 255, 0.88);
+  border-color: rgba(255, 222, 229, 0.9);
+  box-shadow: 
+    0 20px 40px -10px rgba(62, 36, 49, 0.12),
+    0 8px 20px -4px rgba(255, 75, 114, 0.12),
+    inset 0 1px 1.5px 0 rgba(255, 255, 255, 1);
+  transform: translateY(-3px);
+}
+
+.glass-dock {
+  background: rgba(255, 255, 255, 0.78);
+  backdrop-filter: blur(24px) saturate(190%);
+  -webkit-backdrop-filter: blur(24px) saturate(190%);
+  border: 1px solid rgba(255, 255, 255, 0.9);
+  box-shadow: 
+    0 20px 50px -10px rgba(62, 36, 49, 0.14),
+    0 10px 20px -5px rgba(255, 222, 229, 0.3),
+    inset 0 1px 1.5px 0 rgba(255, 255, 255, 0.95);
+}
+
+.glass-modal {
+  background: rgba(255, 255, 255, 0.92);
+  backdrop-filter: blur(28px) saturate(180%);
+  -webkit-backdrop-filter: blur(28px) saturate(180%);
+  border: 1px solid rgba(255, 255, 255, 0.95);
+  box-shadow: 
+    0 30px 60px -12px rgba(62, 36, 49, 0.2),
+    0 12px 28px -6px rgba(255, 75, 114, 0.15);
+}
+
+/* Custom Soft Shadows */
+.shadow-tuchi {
+  box-shadow: 0 12px 32px -10px rgba(62, 36, 49, 0.08);
+}
+
+.shadow-tuchi-lg {
+  box-shadow: 0 24px 48px -12px rgba(62, 36, 49, 0.14);
+}
+
+.shadow-tuchi-glow {
+  box-shadow: 0 8px 30px rgba(255, 75, 114, 0.25);
+}
+
+/* Polaroid Card Effect */
+.polaroid-card {
+  background: #FFFFFF;
+  border-radius: 20px;
+  padding: 12px 12px 18px 12px;
+  box-shadow: 
+    0 12px 30px -10px rgba(62, 36, 49, 0.1),
+    0 2px 6px -1px rgba(0, 0, 0, 0.03),
+    inset 0 0 0 1px rgba(255, 222, 229, 0.4);
+  transition: all 0.35s cubic-bezier(0.16, 1, 0.3, 1);
+  backface-visibility: hidden;
+}
+
+.polaroid-card:hover {
+  transform: rotate(0deg) scale(1.025) translateY(-6px) !important;
+  box-shadow: 
+    0 24px 48px -12px rgba(62, 36, 49, 0.18),
+    0 8px 24px -6px rgba(255, 75, 114, 0.15),
+    inset 0 0 0 1px rgba(255, 222, 229, 0.8);
+  z-index: 20;
+}
+
+/* Smooth custom horizontal scrollbars */
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+/* Custom glossy highlights */
+.glossy-top {
+  position: relative;
+}
+.glossy-top::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.9), transparent);
+  pointer-events: none;
+}
+
+/* Floating animations */
+@keyframes floatSlow {
+  0%, 100% { transform: translateY(0px) rotate(0deg); }
+  50% { transform: translateY(-6px) rotate(0.8deg); }
+}
+
+.animate-float {
+  animation: floatSlow 4s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+}
+
+@keyframes pulseSoft {
+  0%, 100% { transform: scale(1); opacity: 1; }
+  50% { transform: scale(1.04); opacity: 0.9; }
+}
+
+.animate-pulse-soft {
+  animation: pulseSoft 3s ease-in-out infinite;
+}
+

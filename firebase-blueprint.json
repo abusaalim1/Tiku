@@ -1,0 +1,62 @@
+{
+  "entities": {
+    "CoupleProfile": {
+      "title": "CoupleProfile",
+      "description": "Couple relationship profile and settings",
+      "type": "object",
+      "properties": {
+        "userName": { "type": "string", "maxLength": 100 },
+        "partnerName": { "type": "string", "maxLength": 100 },
+        "startDate": { "type": "string", "maxLength": 10 },
+        "userPhotoUrl": { "type": "string", "maxLength": 500000 },
+        "partnerPhotoUrl": { "type": "string", "maxLength": 500000 },
+        "isOnboarded": { "type": "boolean" },
+        "createdAt": { "type": "string", "maxLength": 50 }
+      },
+      "required": ["userName", "partnerName", "startDate", "isOnboarded"]
+    },
+    "Category": {
+      "title": "Category",
+      "description": "Category or custom tag for photo memories",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 100 },
+        "name": { "type": "string", "maxLength": 100 },
+        "iconName": { "type": "string", "maxLength": 50 },
+        "color": { "type": "string", "maxLength": 20 }
+      },
+      "required": ["id", "name", "iconName", "color"]
+    },
+    "Snap": {
+      "title": "Snap",
+      "description": "Photo memory snap entry",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 100 },
+        "categoryId": { "type": "string", "maxLength": 100 },
+        "imageUrl": { "type": "string", "maxLength": 500000 },
+        "caption": { "type": "string", "maxLength": 1000 },
+        "location": { "type": "string", "maxLength": 200 },
+        "snapDate": { "type": "string", "maxLength": 10 },
+        "rotationDeg": { "type": "number" },
+        "favorite": { "type": "boolean" },
+        "createdAt": { "type": "string", "maxLength": 50 }
+      },
+      "required": ["id", "categoryId", "imageUrl", "snapDate", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/profiles/{profileId}": {
+      "schema": { "$ref": "#/entities/CoupleProfile" },
+      "description": "Couple profile document"
+    },
+    "/categories/{categoryId}": {
+      "schema": { "$ref": "#/entities/Category" },
+      "description": "Memory categories collection"
+    },
+    "/snaps/{snapId}": {
+      "schema": { "$ref": "#/entities/Snap" },
+      "description": "Photo memory snaps collection"
+    }
+  }
+}

@@ -1,0 +1,6 @@
+{
+  "name": "Tiku",
+  "description": "A cute, minimalistic web app where couples save, organize, and cherish their photo memories.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
