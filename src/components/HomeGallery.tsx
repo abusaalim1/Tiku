@@ -1,10 +1,11 @@
 import React, { useState, useMemo } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Category, CoupleProfile, Snap } from '../types';
+import { Category, CoupleProfile, DailyPromptEntry, Snap } from '../types';
 import { calculateDaysTogether, calculateUpcomingAnniversaries, formatDate } from '../utils/dateUtils';
 import { CategoryIcon } from '../utils/categoryIcons';
 import { PolaroidCard } from './PolaroidCard';
 import { AnniversaryCelebrationCard } from './AnniversaryCelebrationCard';
+import { DailyPromptCard } from './DailyPromptCard';
 import {
   Heart,
   Plus,
@@ -19,6 +20,18 @@ interface HomeGalleryProps {
   profile: CoupleProfile;
   categories: Category[];
   snaps: Snap[];
+  dailyPrompts: DailyPromptEntry[];
+  onSavePromptEntry: (entry: DailyPromptEntry) => void;
+  onDeletePromptEntry?: (entryId: string) => void;
+  onSaveSnap: (newSnap: {
+    categoryId: string;
+    imageUrl: string;
+    caption?: string;
+    description?: string;
+    location?: string;
+    snapDate: string;
+    rotationDeg: number;
+  }) => void;
   onSelectSnap: (snap: Snap) => void;
   onToggleFavorite: (snapId: string, e: React.MouseEvent) => void;
   onOpenAddSnap: () => void;
@@ -31,6 +44,10 @@ export const HomeGallery: React.FC<HomeGalleryProps> = ({
   profile,
   categories,
   snaps,
+  dailyPrompts,
+  onSavePromptEntry,
+  onDeletePromptEntry,
+  onSaveSnap,
   onSelectSnap,
   onToggleFavorite,
   onOpenAddSnap,
@@ -160,6 +177,16 @@ export const HomeGallery: React.FC<HomeGalleryProps> = ({
         profile={profile}
         anniversaries={anniversaries}
         onNavigateToMemories={onNavigateToMemories}
+      />
+
+      {/* DAILY COUPLE PROMPT CARD */}
+      <DailyPromptCard
+        profile={profile}
+        categories={categories}
+        dailyPrompts={dailyPrompts}
+        onSavePromptEntry={onSavePromptEntry}
+        onDeletePromptEntry={onDeletePromptEntry}
+        onSaveSnap={onSaveSnap}
       />
 
       {/* FILTER & SEARCH BAR */}

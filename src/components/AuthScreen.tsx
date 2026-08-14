@@ -5,6 +5,7 @@ import {
   loginWithEmail,
   registerWithEmail,
   loginGuest,
+  sendPasswordReset,
 } from '../lib/firebase';
 import {
   Lock,
@@ -24,6 +25,8 @@ import {
   Check,
   ChevronDown,
   ChevronUp,
+  Send,
+  RefreshCw,
 } from 'lucide-react';
 
 interface AuthScreenProps {
@@ -32,23 +35,28 @@ interface AuthScreenProps {
 
 export const AuthScreen: React.FC<AuthScreenProps> = () => {
   const [mode, setMode] = useState<'signin' | 'signup'>('signin');
-  const [email, setEmail] = useState('');
+  const [email, setEmail] = useState('abusalim202322@gmail.com');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [resetLoading, setResetLoading] = useState(false);
+  const [resetSuccessMsg, setResetSuccessMsg] = useState<string | null>(null);
   const [copiedDomain, setCopiedDomain] = useState(false);
   const [errorMsg, setErrorMsg] = useState<{
     title: string;
     description: string;
     isFirebaseConfigIssue?: boolean;
     isDomainIssue?: boolean;
+    isExistingAccount?: boolean;
+    isCredentialIssue?: boolean;
+    isSignupRestricted?: boolean;
   } | null>(null);
   const [showAdminHelp, setShowAdminHelp] = useState(false);
 
   // Current domain hostname
-  const currentHostname = typeof window !== 'undefined' ? window.location.hostname : 'your-domain.com';
+  const currentHostname = typeof window !== 'undefined' ? window.location.hostname : 'tiku-memories.vercel.app';
 
   const copyToClipboard = (text: string) => {
     navigator.clipboard.writeText(text);
@@ -92,7 +100,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = () => {
       return {
         title: 'Email Sign-Up Not Enabled in Firebase Console',
         description:
-          'Firebase blocked account creation because Email/Password sign-up is turned off in your Firebase project. Enable Email/Password in Authentication > Sign-in method and check "Enable create (sign-up)" in Settings > User actions.',
+          'Firebase blocked new account creation because Email Sign-Up is disabled. You can still sign in to existing accounts or use Guest Mode.',
         isFirebaseConfigIssue: true,
         isSignupRestricted: true,
       };
@@ -101,14 +109,15 @@ export const AuthScreen: React.FC<AuthScreenProps> = () => {
     if (message.includes('closing') || message.includes('hidden') || message.includes('indexeddb')) {
       return {
         title: 'Browser Connection Suspended',
-        description: 'Your mobile browser tab went to sleep or closed the local cache. Simply tap the button again or reload the page to continue.',
+        description: 'Your mobile browser tab went to sleep. Tap the button again to continue.',
       };
     }
 
     if (code === 'auth/email-already-in-use') {
       return {
         title: 'Account Already Exists',
-        description: 'This email is already registered. Please click "Sign In" above to unlock your memories.',
+        description: `An account for ${email} already exists. Click "Switch to Sign In" below to unlock your memories!`,
+        isExistingAccount: true,
       };
     }
 
@@ -118,8 +127,9 @@ export const AuthScreen: React.FC<AuthScreenProps> = () => {
       code === 'auth/user-not-found'
     ) {
       return {
-        title: 'Incorrect Credentials',
-        description: 'Invalid email or password. Please double-check your password or click Create Vault Account.',
+        title: 'Incorrect Email or Password',
+        description: 'The password entered did not match. You can reset your password or enter in instant mode.',
+        isCredentialIssue: true,
       };
     }
 
@@ -133,14 +143,21 @@ export const AuthScreen: React.FC<AuthScreenProps> = () => {
     if (code === 'auth/weak-password') {
       return {
         title: 'Password Too Short',
-        description: 'Firebase requires your password to have at least 6 characters.',
+        description: 'Firebase requires passwords to have at least 6 characters.',
       };
     }
 
     if (code === 'auth/popup-closed-by-user') {
       return {
         title: 'Google Sign-In Cancelled',
-        description: 'The Google popup was closed before signing in. Please tap Continue with Google again.',
+        description: 'The Google popup was closed before completing sign in. Please tap Continue with Google again.',
+      };
+    }
+
+    if (code === 'auth/popup-blocked') {
+      return {
+        title: 'Popup Blocked by Browser',
+        description: 'Your mobile browser blocked the Google popup. Please allow popups or use Email Sign In.',
       };
     }
 
@@ -152,7 +169,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = () => {
     }
 
     return {
-      title: 'Authentication Error',
+      title: 'Authentication Notice',
       description: err?.message || 'Something went wrong while connecting to your vault. Please try again.',
     };
   };
@@ -160,6 +177,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = () => {
   const handleGoogleLogin = async () => {
     setLoading(true);
     setErrorMsg(null);
+    setResetSuccessMsg(null);
     try {
       await loginWithGoogle();
     } catch (err: any) {
@@ -174,6 +192,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = () => {
   const handleEmailAuth = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMsg(null);
+    setResetSuccessMsg(null);
 
     if (!email.trim() || !password.trim()) {
       setErrorMsg({
@@ -213,9 +232,31 @@ export const AuthScreen: React.FC<AuthScreenProps> = () => {
     }
   };
 
+  const handlePasswordReset = async () => {
+    if (!email.trim()) {
+      setErrorMsg({
+        title: 'Email Required',
+        description: 'Please enter your email address above to receive the password reset link.',
+      });
+      return;
+    }
+
+    setResetLoading(true);
+    setErrorMsg(null);
+    try {
+      await sendPasswordReset(email);
+      setResetSuccessMsg(`Password reset link sent to ${email}! Please check your email inbox (and spam folder) to set a new password.`);
+    } catch (err: any) {
+      setErrorMsg(parseAuthError(err));
+    } finally {
+      setResetLoading(false);
+    }
+  };
+
   const handleGuestLogin = async () => {
     setLoading(true);
     setErrorMsg(null);
+    setResetSuccessMsg(null);
     try {
       await loginGuest();
     } catch (err: any) {
@@ -293,7 +334,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = () => {
           duration: 0.45,
           ease: [0.16, 1, 0.3, 1],
         }}
-        className="w-full max-w-[440px] bg-white/85 backdrop-blur-xl rounded-[36px] p-6 sm:p-8 border border-white/95 shadow-tuchi-lg space-y-6 relative z-10 glossy-top"
+        className="w-full max-w-[440px] bg-white/90 backdrop-blur-xl rounded-[36px] p-6 sm:p-8 border border-white/95 shadow-tuchi-lg space-y-5 relative z-10 glossy-top"
       >
         {/* TOP BRANDING & BADGE */}
         <div className="text-center space-y-3">
@@ -334,7 +375,25 @@ export const AuthScreen: React.FC<AuthScreenProps> = () => {
           </div>
         </div>
 
-        {/* ERROR / NOTICE BANNER WITH INTELLIGENT ADVICE */}
+        {/* SUCCESS NOTIFICATION (E.G. PASSWORD RESET) */}
+        <AnimatePresence>
+          {resetSuccessMsg && (
+            <motion.div
+              initial={{ opacity: 0, y: -10 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -10 }}
+              className="p-3.5 rounded-2xl bg-emerald-50 border border-emerald-200 text-emerald-900 text-xs flex items-start gap-2.5 shadow-xs"
+            >
+              <CheckCircle2 className="w-4 h-4 text-emerald-600 flex-shrink-0 mt-0.5" />
+              <div className="space-y-1">
+                <p className="font-bold text-emerald-800">Email Sent Successfully</p>
+                <p className="text-emerald-700 leading-relaxed">{resetSuccessMsg}</p>
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        {/* ERROR / NOTICE BANNER WITH ACTIONABLE SHORTCUTS */}
         <AnimatePresence mode="wait">
           {errorMsg && (
             <motion.div
@@ -346,17 +405,62 @@ export const AuthScreen: React.FC<AuthScreenProps> = () => {
             >
               <div className="flex items-start gap-2">
                 <AlertCircle className="w-4 h-4 text-red-500 flex-shrink-0 mt-0.5" />
-                <div className="space-y-1">
+                <div className="space-y-1 flex-1">
                   <p className="font-bold text-red-700">{errorMsg.title}</p>
                   <p className="text-red-600/90 leading-relaxed">{errorMsg.description}</p>
                 </div>
               </div>
 
+              {/* ACTION: Switch to Sign In if account already exists */}
+              {errorMsg.isExistingAccount && (
+                <div className="pt-2 border-t border-red-200/70 flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setMode('signin');
+                      setErrorMsg(null);
+                    }}
+                    className="flex-1 py-2 px-3 rounded-xl bg-[#3E2431] text-white hover:bg-[#8C3F5D] font-extrabold text-xs flex items-center justify-center gap-1.5 transition-all shadow-xs cursor-pointer"
+                  >
+                    <span>Switch to Sign In & Enter</span>
+                    <ArrowRight className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              )}
+
+              {/* ACTION: Send Password Reset if credentials failed */}
+              {errorMsg.isCredentialIssue && (
+                <div className="pt-2 border-t border-red-200/70 flex flex-col gap-2">
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      disabled={resetLoading}
+                      onClick={handlePasswordReset}
+                      className="flex-1 py-2 px-3 rounded-xl bg-[#FF4B72] text-white hover:bg-[#E83E63] font-extrabold text-xs flex items-center justify-center gap-1.5 transition-all shadow-xs cursor-pointer disabled:opacity-50"
+                    >
+                      {resetLoading ? (
+                        <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                      ) : (
+                        <Send className="w-3.5 h-3.5" />
+                      )}
+                      <span>Send Password Reset Email</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleGuestLogin}
+                      className="py-2 px-3 rounded-xl bg-white border border-red-200 text-[#3E2431] hover:bg-neutral-50 font-bold text-xs cursor-pointer flex-shrink-0"
+                    >
+                      Enter as Guest
+                    </button>
+                  </div>
+                </div>
+              )}
+
               {/* Copy Hostname Button for Unauthorized Domain issue */}
               {errorMsg.isDomainIssue && (
                 <div className="p-2 rounded-xl bg-white/95 border border-red-200 flex items-center justify-between gap-2">
                   <div className="min-w-0 flex-1">
-                    <p className="text-[10px] font-bold text-neutral-500 uppercase">Domain to add:</p>
+                    <p className="text-[10px] font-bold text-neutral-500 uppercase">Domain to add in Firebase:</p>
                     <p className="text-xs font-mono font-bold text-[#3E2431] truncate">{currentHostname}</p>
                   </div>
                   <button
@@ -406,7 +510,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = () => {
                       >
                         {errorMsg.isDomainIssue ? (
                           <>
-                            <p className="font-bold text-[#3E2431]">To authorize this domain:</p>
+                            <p className="font-bold text-[#3E2431]">To authorize Google Sign-In:</p>
                             <ol className="list-decimal pl-4 space-y-1">
                               <li>Go to <b>console.firebase.google.com</b> &gt; Project <b>gen-lang-client-0274845526</b></li>
                               <li>Click <b>Authentication</b> &gt; <b>Settings</b> tab</li>
@@ -446,7 +550,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = () => {
             type="button"
             disabled={loading}
             onClick={handleGoogleLogin}
-            className="w-full py-3.5 px-4 rounded-2xl bg-white hover:bg-neutral-50/90 text-[#3E2431] text-xs sm:text-sm font-bold border border-neutral-200/90 shadow-xs flex items-center justify-center gap-3 transition-all cursor-pointer disabled:opacity-50 group"
+            className="w-full py-3 px-4 rounded-2xl bg-white hover:bg-neutral-50/90 text-[#3E2431] text-xs sm:text-sm font-bold border border-neutral-200/90 shadow-xs flex items-center justify-center gap-3 transition-all cursor-pointer disabled:opacity-50 group"
           >
             <svg className="w-4 h-4 transition-transform group-hover:scale-110" viewBox="0 0 24 24">
               <path
@@ -523,7 +627,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = () => {
         </div>
 
         {/* ANIMATED EMAIL & PASSWORD FORM */}
-        <form onSubmit={handleEmailAuth} className="space-y-3.5">
+        <form onSubmit={handleEmailAuth} className="space-y-3">
           {/* EMAIL FIELD */}
           <div className="space-y-1">
             <label className="block text-xs font-bold text-[#6E495B] flex items-center justify-between">
@@ -538,31 +642,42 @@ export const AuthScreen: React.FC<AuthScreenProps> = () => {
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 placeholder="you@example.com"
-                className="w-full px-4 py-2.5 rounded-2xl bg-white/95 border border-[#FFCCD5] text-[#3E2431] text-xs sm:text-sm font-medium focus:outline-none focus:border-[#FF4B72] focus:ring-2 focus:ring-[#FFE5EC] transition-all placeholder:text-neutral-400 shadow-xs"
+                className="w-full px-3.5 py-2.5 rounded-2xl bg-white/95 border border-[#FFCCD5] text-[#3E2431] text-xs sm:text-sm font-medium focus:outline-none focus:border-[#FF4B72] focus:ring-2 focus:ring-[#FFE5EC] transition-all placeholder:text-neutral-400 shadow-xs"
               />
             </div>
           </div>
 
           {/* PASSWORD FIELD WITH VISIBILITY TOGGLE */}
           <div className="space-y-1">
-            <label className="block text-xs font-bold text-[#6E495B] flex items-center justify-between">
-              <span className="flex items-center gap-1.5">
+            <div className="flex items-center justify-between">
+              <label className="text-xs font-bold text-[#6E495B] flex items-center gap-1.5">
                 <KeyRound className="w-3.5 h-3.5 text-[#FF4B72]" /> Password
-              </span>
-              {mode === 'signup' && password && (
-                <span className="text-[10px] font-bold text-[#8C3F5D]">
-                  {strength.text}
-                </span>
+              </label>
+              {mode === 'signin' ? (
+                <button
+                  type="button"
+                  disabled={resetLoading}
+                  onClick={handlePasswordReset}
+                  className="text-[11px] font-extrabold text-[#FF4B72] hover:text-[#3E2431] transition-colors cursor-pointer disabled:opacity-50"
+                >
+                  {resetLoading ? 'Sending link...' : 'Forgot password?'}
+                </button>
+              ) : (
+                password && (
+                  <span className="text-[10px] font-bold text-[#8C3F5D]">
+                    {strength.text}
+                  </span>
+                )
               )}
-            </label>
+            </div>
             <div className="relative">
               <input
                 type={showPassword ? 'text' : 'password'}
                 required
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                placeholder={mode === 'signup' ? 'Create a strong password (min 6 chars)' : 'Enter your password'}
-                className="w-full pl-4 pr-10 py-2.5 rounded-2xl bg-white/95 border border-[#FFCCD5] text-[#3E2431] text-xs sm:text-sm font-medium focus:outline-none focus:border-[#FF4B72] focus:ring-2 focus:ring-[#FFE5EC] transition-all placeholder:text-neutral-400 shadow-xs"
+                placeholder={mode === 'signup' ? 'Create password (min 6 chars)' : 'Enter your password'}
+                className="w-full pl-3.5 pr-10 py-2.5 rounded-2xl bg-white/95 border border-[#FFCCD5] text-[#3E2431] text-xs sm:text-sm font-medium focus:outline-none focus:border-[#FF4B72] focus:ring-2 focus:ring-[#FFE5EC] transition-all placeholder:text-neutral-400 shadow-xs"
               />
               <button
                 type="button"
@@ -618,7 +733,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = () => {
                     value={confirmPassword}
                     onChange={(e) => setConfirmPassword(e.target.value)}
                     placeholder="Repeat your password"
-                    className="w-full pl-4 pr-10 py-2.5 rounded-2xl bg-white/95 border border-[#FFCCD5] text-[#3E2431] text-xs sm:text-sm font-medium focus:outline-none focus:border-[#FF4B72] focus:ring-2 focus:ring-[#FFE5EC] transition-all placeholder:text-neutral-400 shadow-xs"
+                    className="w-full pl-3.5 pr-10 py-2.5 rounded-2xl bg-white/95 border border-[#FFCCD5] text-[#3E2431] text-xs sm:text-sm font-medium focus:outline-none focus:border-[#FF4B72] focus:ring-2 focus:ring-[#FFE5EC] transition-all placeholder:text-neutral-400 shadow-xs"
                   />
                   <button
                     type="button"
@@ -634,8 +749,8 @@ export const AuthScreen: React.FC<AuthScreenProps> = () => {
 
           {/* SUBMIT BUTTON WITH HOVER/TAP SPRING TRANSITIONS */}
           <motion.button
-            whileHover={{ scale: 1.02, y: -1 }}
-            whileTap={{ scale: 0.98 }}
+            whileHover={{ scale: 1.015, y: -1 }}
+            whileTap={{ scale: 0.985 }}
             type="submit"
             disabled={loading}
             className="w-full py-3.5 px-4 rounded-2xl bg-gradient-to-r from-[#3E2431] via-[#6E495B] to-[#FF4B72] text-white text-xs sm:text-sm font-extrabold shadow-tuchi flex items-center justify-center gap-2 transition-all cursor-pointer disabled:opacity-50 border border-white/20"
@@ -660,7 +775,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = () => {
         </form>
 
         {/* GUEST MODE OPTION */}
-        <div className="pt-2 text-center border-t border-[#FFCCD5]/50 flex flex-col items-center gap-1.5">
+        <div className="pt-2 text-center border-t border-[#FFCCD5]/50 flex flex-col items-center gap-1">
           <motion.button
             whileHover={{ scale: 1.02 }}
             whileTap={{ scale: 0.98 }}
@@ -681,3 +796,4 @@ export const AuthScreen: React.FC<AuthScreenProps> = () => {
     </div>
   );
 };
+

@@ -66,3 +66,32 @@ export interface UpcomingAnniversarySummary {
   nextClosest: AnniversaryItem;
   isAnyAnniversaryToday: boolean;
 }
+
+export type PromptCategory = 'romantic' | 'fun' | 'activity' | 'memories' | 'deep' | 'future';
+
+export interface PromptTemplate {
+  id: string;
+  category: PromptCategory;
+  type: 'question' | 'activity';
+  text: string;
+  subtext?: string;
+  emoji: string;
+  suggestedAction?: string;
+}
+
+export interface DailyPromptEntry {
+  id: string; // e.g. "dp-2026-08-14" or "dp-1738..."
+  date: string; // YYYY-MM-DD
+  promptId: string;
+  category: PromptCategory;
+  type: 'question' | 'activity';
+  question: string;
+  userAnswer?: string;
+  partnerAnswer?: string;
+  jointAnswer?: string;
+  imageUrl?: string;
+  isCompleted: boolean;
+  completedAt?: string;
+  createdAt: string;
+  convertedToSnapId?: string;
+}

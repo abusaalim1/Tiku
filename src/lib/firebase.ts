@@ -6,6 +6,7 @@ import {
   signInWithEmailAndPassword,
   createUserWithEmailAndPassword,
   signInAnonymously,
+  sendPasswordResetEmail,
   signOut,
   onAuthStateChanged,
   User,
@@ -21,7 +22,7 @@ import {
   writeBatch,
 } from 'firebase/firestore';
 import firebaseConfig from '../../firebase-applet-config.json';
-import { CoupleProfile, Category, Snap, MilestoneNote } from '../types';
+import { CoupleProfile, Category, Snap, MilestoneNote, DailyPromptEntry } from '../types';
 import { compressAvatar, compressSnapPhoto, sanitizePhotoString } from '../utils/imageUtils';
 
 const app = initializeApp(firebaseConfig);
@@ -93,6 +94,10 @@ export async function loginWithEmail(email: string, pass: string): Promise<User>
 export async function registerWithEmail(email: string, pass: string): Promise<User> {
   const result = await createUserWithEmailAndPassword(auth, email.trim(), pass);
   return result.user;
+}
+
+export async function sendPasswordReset(email: string): Promise<void> {
+  await sendPasswordResetEmail(auth, email.trim());
 }
 
 export async function loginGuest(): Promise<User> {
@@ -294,5 +299,57 @@ export async function saveMilestoneNoteToFirestore(userId: string, milestoneId: 
     await setDoc(doc(db, 'users', userId, 'milestoneNotes', milestoneId), data);
   } catch (error) {
     handleFirestoreError(error, OperationType.WRITE, path);
+  }
+}
+
+export function subscribeDailyPrompts(
+  userId: string,
+  onUpdate: (prompts: DailyPromptEntry[]) => void
+) {
+  if (!userId) return () => {};
+  const promptsCol = collection(db, 'users', userId, 'dailyPrompts');
+  return onSnapshot(
+    promptsCol,
+    (snapshot) => {
+      const list: DailyPromptEntry[] = snapshot.docs.map((d) => d.data() as DailyPromptEntry);
+      list.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+      onUpdate(list);
+    },
+    (error) => {
+      console.info('Daily prompts snapshot offline/info:', error?.message || error);
+    }
+  );
+}
+
+export async function saveDailyPromptToFirestore(
+  userId: string,
+  promptEntry: DailyPromptEntry
+): Promise<void> {
+  if (!userId) return;
+  const path = `users/${userId}/dailyPrompts/${promptEntry.id}`;
+  try {
+    let imageUrl = promptEntry.imageUrl ? await compressSnapPhoto(promptEntry.imageUrl) : '';
+    imageUrl = sanitizePhotoString(imageUrl, 350000);
+
+    const safeEntry: DailyPromptEntry = {
+      ...promptEntry,
+      imageUrl,
+    };
+    await setDoc(doc(db, 'users', userId, 'dailyPrompts', promptEntry.id), safeEntry);
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, path);
+  }
+}
+
+export async function deleteDailyPromptFromFirestore(
+  userId: string,
+  promptId: string
+): Promise<void> {
+  if (!userId) return;
+  const path = `users/${userId}/dailyPrompts/${promptId}`;
+  try {
+    await deleteDoc(doc(db, 'users', userId, 'dailyPrompts', promptId));
+  } catch (error) {
+    handleFirestoreError(error, OperationType.DELETE, path);
   }
 }

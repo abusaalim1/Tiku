@@ -1,8 +1,9 @@
 import React, { useState } from 'react';
 import { motion } from 'motion/react';
-import { Category, CoupleProfile, Snap } from '../types';
+import { Category, CoupleProfile, DailyPromptEntry, Snap } from '../types';
 import { formatDate } from '../utils/dateUtils';
 import { CategoryIcon } from '../utils/categoryIcons';
+import { calculatePromptStreak } from '../data/dailyPromptsData';
 import { compressAvatar, MAX_FILE_SIZE_BYTES, MAX_FILE_SIZE_MB } from '../utils/imageUtils';
 import {
   Heart,
@@ -16,6 +17,8 @@ import {
   ShieldCheck,
   LogOut,
   User as UserIcon,
+  Flame,
+  BookOpen,
 } from 'lucide-react';
 import { User } from 'firebase/auth';
 
@@ -23,6 +26,7 @@ interface UsProfileViewProps {
   profile: CoupleProfile;
   categories: Category[];
   snaps: Snap[];
+  dailyPrompts?: DailyPromptEntry[];
   currentUser?: User | null;
   onSignOut?: () => void;
   onUpdateProfile: (updated: CoupleProfile) => void;
@@ -34,6 +38,7 @@ export const UsProfileView: React.FC<UsProfileViewProps> = ({
   profile,
   categories,
   snaps,
+  dailyPrompts = [],
   currentUser,
   onSignOut,
   onUpdateProfile,
@@ -54,6 +59,8 @@ export const UsProfileView: React.FC<UsProfileViewProps> = ({
   const now = new Date();
   const diffTime = Math.abs(now.getTime() - start.getTime());
   const daysTogether = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+
+  const promptStreakInfo = calculatePromptStreak(dailyPrompts);
 
   const handleFileUpload = async (
     e: React.ChangeEvent<HTMLInputElement>,
@@ -173,6 +180,20 @@ export const UsProfileView: React.FC<UsProfileViewProps> = ({
         </h3>
         <p className="text-xs text-[#FF4B72] font-extrabold mt-1">Day {daysTogether} Together</p>
         <p className="text-[11px] text-[#6E495B] mt-0.5">Since {formatDate(startDate)}</p>
+
+        {/* Quick Connection Stats Chips */}
+        <div className="flex flex-wrap items-center justify-center gap-2 pt-3">
+          {promptStreakInfo.streak > 0 && (
+            <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-orange-50 border border-orange-200 text-orange-800 text-xs font-extrabold shadow-2xs">
+              <Flame className="w-3.5 h-3.5 text-orange-500 fill-orange-500" />
+              <span>{promptStreakInfo.streak} Day Prompt Streak</span>
+            </span>
+          )}
+          <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-[#FFF0F3] border border-[#FFCCD5] text-[#8C3F5D] text-xs font-bold shadow-2xs">
+            <BookOpen className="w-3.5 h-3.5 text-[#FF4B72]" />
+            <span>{dailyPrompts.length} Prompts Answered</span>
+          </span>
+        </div>
       </section>
 
       {/* STATS BREAKDOWN */}

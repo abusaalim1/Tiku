@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { User } from 'firebase/auth';
-import { Category, CoupleProfile, NavTab, Snap } from './types';
+import { Category, CoupleProfile, DailyPromptEntry, NavTab, Snap } from './types';
 import {
   loadProfile,
   saveProfile,
@@ -8,6 +8,8 @@ import {
   saveCategories,
   loadSnaps,
   saveSnaps,
+  loadDailyPrompts,
+  saveDailyPrompts,
   resetToDemoData,
 } from './utils/storage';
 import {
@@ -22,6 +24,9 @@ import {
   clearAllSnapsFromFirestore,
   subscribeMilestoneNotes,
   saveMilestoneNoteToFirestore,
+  subscribeDailyPrompts,
+  saveDailyPromptToFirestore,
+  deleteDailyPromptFromFirestore,
   logoutUser,
 } from './lib/firebase';
 import { AuthScreen } from './components/AuthScreen';
@@ -42,6 +47,7 @@ export default function App() {
   const [profile, setProfileState] = useState<CoupleProfile>(() => loadProfile());
   const [categories, setCategoriesState] = useState<Category[]>(() => loadCategories());
   const [snaps, setSnapsState] = useState<Snap[]>(() => loadSnaps());
+  const [dailyPrompts, setDailyPrompts] = useState<DailyPromptEntry[]>(() => loadDailyPrompts());
   const [milestoneNotes, setMilestoneNotes] = useState<Record<string, string>>({});
   const [activeTab, setActiveTab] = useState<NavTab>('home');
 
@@ -93,11 +99,17 @@ export default function App() {
       setMilestoneNotes(notes);
     });
 
+    const unsubDailyPrompts = subscribeDailyPrompts(userId, (prompts) => {
+      setDailyPrompts(prompts);
+      saveDailyPrompts(prompts);
+    });
+
     return () => {
       unsubProfile();
       unsubCategories();
       unsubSnaps();
       unsubMilestoneNotes();
+      unsubDailyPrompts();
     };
   }, [currentUser?.uid]);
 
@@ -193,6 +205,29 @@ export default function App() {
     }
   };
 
+  const handleSavePromptEntry = (entry: DailyPromptEntry) => {
+    setDailyPrompts((prev) => {
+      const filtered = prev.filter((p) => p.id !== entry.id && p.date !== entry.date);
+      const updated = [entry, ...filtered];
+      saveDailyPrompts(updated);
+      return updated;
+    });
+    if (currentUser?.uid) {
+      saveDailyPromptToFirestore(currentUser.uid, entry).catch(console.error);
+    }
+  };
+
+  const handleDeletePromptEntry = (entryId: string) => {
+    setDailyPrompts((prev) => {
+      const updated = prev.filter((p) => p.id !== entryId);
+      saveDailyPrompts(updated);
+      return updated;
+    });
+    if (currentUser?.uid) {
+      deleteDailyPromptFromFirestore(currentUser.uid, entryId).catch(console.error);
+    }
+  };
+
   const handleResetData = () => {
     resetToDemoData();
     const defaultProf = loadProfile();
@@ -252,6 +287,10 @@ export default function App() {
           profile={profile}
           categories={categories}
           snaps={snaps}
+          dailyPrompts={dailyPrompts}
+          onSavePromptEntry={handleSavePromptEntry}
+          onDeletePromptEntry={handleDeletePromptEntry}
+          onSaveSnap={handleSaveSnap}
           onSelectSnap={(snap) => setSelectedSnap(snap)}
           onToggleFavorite={handleToggleFavorite}
           onOpenAddSnap={() => setIsAddSnapOpen(true)}
@@ -288,6 +327,7 @@ export default function App() {
           profile={profile}
           categories={categories}
           snaps={snaps}
+          dailyPrompts={dailyPrompts}
           currentUser={currentUser}
           onSignOut={handleSignOut}
           onUpdateProfile={(updated) => updateProfile(updated)}

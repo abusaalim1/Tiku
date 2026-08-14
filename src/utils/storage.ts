@@ -1,4 +1,4 @@
-import { Category, CoupleProfile, Snap } from '../types';
+import { Category, CoupleProfile, DailyPromptEntry, Snap } from '../types';
 import { DEFAULT_CATEGORIES, DEFAULT_PROFILE, INITIAL_SNAPS } from '../data/initialData';
 import { sanitizePhotoString } from './imageUtils';
 
@@ -6,6 +6,7 @@ const KEYS = {
   PROFILE: 'tuchi_couple_profile',
   CATEGORIES: 'tuchi_categories',
   SNAPS: 'tuchi_snaps',
+  DAILY_PROMPTS: 'tuchi_daily_prompts',
 };
 
 export const loadProfile = (): CoupleProfile => {
@@ -87,14 +88,42 @@ export const saveSnaps = (snaps: Snap[]): void => {
   }
 };
 
+export const loadDailyPrompts = (): DailyPromptEntry[] => {
+  try {
+    const saved = localStorage.getItem(KEYS.DAILY_PROMPTS);
+    if (saved) {
+      const parsed = JSON.parse(saved);
+      if (Array.isArray(parsed)) {
+        return parsed.map((p) => ({
+          ...p,
+          imageUrl: p.imageUrl ? sanitizePhotoString(p.imageUrl, 350000) : '',
+        }));
+      }
+    }
+  } catch (e) {
+    console.error('Failed to load daily prompts from storage', e);
+  }
+  return [];
+};
+
+export const saveDailyPrompts = (prompts: DailyPromptEntry[]): void => {
+  try {
+    localStorage.setItem(KEYS.DAILY_PROMPTS, JSON.stringify(prompts));
+  } catch (e) {
+    console.error('Failed to save daily prompts to storage', e);
+  }
+};
+
 export const resetToDemoData = () => {
   localStorage.setItem(KEYS.PROFILE, JSON.stringify({ ...DEFAULT_PROFILE, isOnboarded: true }));
   localStorage.setItem(KEYS.CATEGORIES, JSON.stringify(DEFAULT_CATEGORIES));
   localStorage.setItem(KEYS.SNAPS, JSON.stringify(INITIAL_SNAPS));
+  localStorage.removeItem(KEYS.DAILY_PROMPTS);
 };
 
 export const clearAllData = () => {
   localStorage.removeItem(KEYS.PROFILE);
   localStorage.removeItem(KEYS.CATEGORIES);
   localStorage.removeItem(KEYS.SNAPS);
+  localStorage.removeItem(KEYS.DAILY_PROMPTS);
 };
