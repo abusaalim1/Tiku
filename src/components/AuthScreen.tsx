@@ -77,7 +77,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = () => {
   const parseAuthError = (err: any) => {
     console.error('Auth action error:', err);
     const code = err?.code || '';
-    const message = err?.message || '';
+    const message = (err?.message || '').toLowerCase();
 
     if (code === 'auth/unauthorized-domain') {
       return {
@@ -90,17 +90,25 @@ export const AuthScreen: React.FC<AuthScreenProps> = () => {
 
     if (code === 'auth/admin-restricted-operation' || code === 'auth/operation-not-allowed') {
       return {
-        title: 'Email Sign-Up Not Enabled in Firebase',
+        title: 'Email Sign-Up Not Enabled in Firebase Console',
         description:
-          'Email/Password provider is turned off in Firebase Console. Enable "Email/Password" in Firebase Authentication > Sign-in method, or sign in instantly with Google or Guest Mode!',
+          'Firebase blocked account creation because Email/Password sign-up is turned off in your Firebase project. Enable Email/Password in Authentication > Sign-in method and check "Enable create (sign-up)" in Settings > User actions.',
         isFirebaseConfigIssue: true,
+        isSignupRestricted: true,
+      };
+    }
+
+    if (message.includes('closing') || message.includes('hidden') || message.includes('indexeddb')) {
+      return {
+        title: 'Browser Connection Suspended',
+        description: 'Your mobile browser tab went to sleep or closed the local cache. Simply tap the button again or reload the page to continue.',
       };
     }
 
     if (code === 'auth/email-already-in-use') {
       return {
         title: 'Account Already Exists',
-        description: 'This email is already registered. Please switch to "Sign In" to access your memories.',
+        description: 'This email is already registered. Please click "Sign In" above to unlock your memories.',
       };
     }
 
@@ -111,7 +119,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = () => {
     ) {
       return {
         title: 'Incorrect Credentials',
-        description: 'Invalid email or password. Please verify your details or create a new vault account.',
+        description: 'Invalid email or password. Please double-check your password or click Create Vault Account.',
       };
     }
 
@@ -132,20 +140,20 @@ export const AuthScreen: React.FC<AuthScreenProps> = () => {
     if (code === 'auth/popup-closed-by-user') {
       return {
         title: 'Google Sign-In Cancelled',
-        description: 'The Google authentication popup was closed before completion. Please try again.',
+        description: 'The Google popup was closed before signing in. Please tap Continue with Google again.',
       };
     }
 
     if (code === 'auth/network-request-failed') {
       return {
         title: 'Network Issue',
-        description: 'Could not connect to Firebase servers. Please check your internet connection and try again.',
+        description: 'Could not reach Firebase servers. Please check your internet connection and try again.',
       };
     }
 
     return {
       title: 'Authentication Error',
-      description: message || 'Something went wrong while connecting to your vault. Please try again.',
+      description: err?.message || 'Something went wrong while connecting to your vault. Please try again.',
     };
   };
 
@@ -409,12 +417,12 @@ export const AuthScreen: React.FC<AuthScreenProps> = () => {
                           </>
                         ) : (
                           <>
-                            <p className="font-bold text-[#3E2431]">To enable Email Sign-In:</p>
-                            <ol className="list-decimal pl-4 space-y-1">
-                              <li>Go to Firebase Console &gt; Project <b>gen-lang-client-0274845526</b></li>
-                              <li>Click <b>Authentication</b> &gt; <b>Sign-in method</b></li>
-                              <li>Click <b>Email/Password</b> and toggle <b>Enable</b></li>
-                              <li>Click <b>Save</b> and return here</li>
+                            <p className="font-bold text-[#3E2431]">To enable Email Sign-Up in Firebase:</p>
+                            <ol className="list-decimal pl-4 space-y-1 text-[11px]">
+                              <li>Go to <b>console.firebase.google.com</b> &gt; Project <b>gen-lang-client-0274845526</b></li>
+                              <li>Click <b>Authentication</b> &gt; <b>Sign-in method</b> tab &gt; Click <b>Email/Password</b> &gt; Turn on <b>Enable</b> &gt; Click <b>Save</b></li>
+                              <li>Next, click the <b>Settings</b> tab &gt; Scroll to <b>User actions</b> &gt; Ensure <b>"Enable create (sign-up)"</b> is checked &gt; Click <b>Save</b></li>
+                              <li>Return here and click Create Vault Account or Sign In!</li>
                             </ol>
                           </>
                         )}
