@@ -13,13 +13,18 @@ import {
   Trash2,
   RefreshCw,
   Sparkles,
-  Users,
+  ShieldCheck,
+  LogOut,
+  User as UserIcon,
 } from 'lucide-react';
+import { User } from 'firebase/auth';
 
 interface UsProfileViewProps {
   profile: CoupleProfile;
   categories: Category[];
   snaps: Snap[];
+  currentUser?: User | null;
+  onSignOut?: () => void;
   onUpdateProfile: (updated: CoupleProfile) => void;
   onResetData: () => void;
   onClearAllSnaps?: () => void;
@@ -29,6 +34,8 @@ export const UsProfileView: React.FC<UsProfileViewProps> = ({
   profile,
   categories,
   snaps,
+  currentUser,
+  onSignOut,
   onUpdateProfile,
   onResetData,
   onClearAllSnaps,
@@ -87,25 +94,57 @@ export const UsProfileView: React.FC<UsProfileViewProps> = ({
 
   return (
     <div className="pb-28 pt-4 px-4 sm:px-6 max-w-4xl mx-auto space-y-6">
+      {/* AUTHENTICATION & PRIVACY VAULT BADGE */}
+      <section className="glass-panel rounded-3xl p-4 sm:p-5 border border-white/90 shadow-tuchi flex flex-col sm:flex-row items-center justify-between gap-4 glossy-top">
+        <div className="flex items-center gap-3.5">
+          <div className="w-11 h-11 rounded-2xl bg-gradient-to-tr from-emerald-100 to-emerald-200 text-emerald-800 flex items-center justify-center border border-white shadow-xs">
+            <ShieldCheck className="w-6 h-6 text-emerald-700" />
+          </div>
+          <div>
+            <div className="flex items-center gap-2">
+              <h4 className="text-sm font-extrabold font-heading text-[#3E2431]">Private Memory Vault</h4>
+              <span className="px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 text-[10px] font-extrabold">
+                Active & Protected
+              </span>
+            </div>
+            <p className="text-xs text-[#6E495B] font-medium">
+              Signed in as: <span className="font-bold text-[#3E2431]">{currentUser?.email || (currentUser?.isAnonymous ? 'Guest Mode (Private Vault)' : 'Connected Account')}</span>
+            </p>
+          </div>
+        </div>
+
+        {onSignOut && (
+          <motion.button
+            whileHover={{ scale: 1.04 }}
+            whileTap={{ scale: 0.96 }}
+            onClick={onSignOut}
+            className="py-2 px-4 rounded-full bg-white/90 hover:bg-white text-[#8C3F5D] text-xs font-extrabold border border-[#FFDEE5] shadow-xs flex items-center gap-1.5 cursor-pointer transition-all"
+          >
+            <LogOut className="w-3.5 h-3.5" />
+            <span>Sign Out</span>
+          </motion.button>
+        )}
+      </section>
+
       {/* COUPLE HEADER BADGE */}
-      <section className="glass-panel rounded-3xl p-6 sm:p-8 text-center border-2 border-[#FFDEE5] shadow-tuchi relative overflow-hidden">
-        <div className="absolute top-4 left-4 text-[#FFDEE5]">
+      <section className="glass-panel rounded-3xl p-6 sm:p-8 text-center border border-white/90 shadow-tuchi relative overflow-hidden glossy-top">
+        <div className="absolute top-4 left-4 text-[#FFCCD5] opacity-80">
           <Heart className="w-5 h-5 fill-current" />
         </div>
-        <div className="absolute bottom-4 right-4 text-[#FFDEE5]">
-          <Sparkles className="w-5 h-5 text-[#E8AFC0]" />
+        <div className="absolute bottom-4 right-4 text-[#E8AFC0] opacity-80">
+          <Sparkles className="w-5 h-5 text-[#FF4B72]" />
         </div>
 
         {/* Avatars Display */}
         <div className="flex items-center justify-center -space-x-4 mb-4">
           <motion.div
             whileHover={{ scale: 1.08, rotate: -3 }}
-            className="w-20 h-20 rounded-full border-4 border-white bg-[#FFDEE5] overflow-hidden shadow-md flex items-center justify-center relative"
+            className="w-20 h-20 rounded-full border-4 border-white bg-[#FFE5EC] overflow-hidden shadow-md flex items-center justify-center relative"
           >
             {userPhoto ? (
               <img src={userPhoto} alt="You" className="w-full h-full object-cover" />
             ) : (
-              <span className="text-2xl font-bold font-heading text-[#4A2C3A]">
+              <span className="text-2xl font-bold font-heading text-[#3E2431]">
                 {userName ? userName.charAt(0).toUpperCase() : 'Y'}
               </span>
             )}
@@ -117,32 +156,32 @@ export const UsProfileView: React.FC<UsProfileViewProps> = ({
 
           <motion.div
             whileHover={{ scale: 1.08, rotate: 3 }}
-            className="w-20 h-20 rounded-full border-4 border-white bg-[#E8AFC0] overflow-hidden shadow-md flex items-center justify-center relative"
+            className="w-20 h-20 rounded-full border-4 border-white bg-[#FFD0DC] overflow-hidden shadow-md flex items-center justify-center relative"
           >
             {partnerPhoto ? (
               <img src={partnerPhoto} alt="Partner" className="w-full h-full object-cover" />
             ) : (
-              <span className="text-2xl font-bold font-heading text-[#4A2C3A]">
+              <span className="text-2xl font-bold font-heading text-[#3E2431]">
                 {partnerName ? partnerName.charAt(0).toUpperCase() : 'P'}
               </span>
             )}
           </motion.div>
         </div>
 
-        <h3 className="text-2xl sm:text-3xl font-extrabold font-heading text-[#4A2C3A]">
+        <h3 className="text-2xl sm:text-3xl font-extrabold font-heading text-[#3E2431]">
           {userName || 'You'} & {partnerName || 'Partner'}
         </h3>
-        <p className="text-xs text-[#8C3F5D] font-extrabold mt-1">Day {daysTogether} Together</p>
-        <p className="text-[11px] text-[#7A5566] mt-0.5">Since {formatDate(startDate)}</p>
+        <p className="text-xs text-[#FF4B72] font-extrabold mt-1">Day {daysTogether} Together</p>
+        <p className="text-[11px] text-[#6E495B] mt-0.5">Since {formatDate(startDate)}</p>
       </section>
 
       {/* STATS BREAKDOWN */}
-      <section className="glass-panel rounded-3xl p-6 border-2 border-[#FFDEE5] shadow-tuchi space-y-4">
+      <section className="glass-panel rounded-3xl p-6 border border-white/90 shadow-tuchi space-y-4 glossy-top">
         <div className="flex items-center justify-between">
-          <h3 className="text-lg font-bold font-heading text-[#4A2C3A] flex items-center gap-2">
+          <h3 className="text-lg font-bold font-heading text-[#3E2431] flex items-center gap-2">
             <BarChart2 className="w-5 h-5 text-[#8C3F5D]" /> Memory Breakdown
           </h3>
-          <span className="text-xs font-bold text-[#7A5566]">{snaps.length} Total Snaps</span>
+          <span className="text-xs font-bold text-[#6E495B]">{snaps.length} Total Snaps</span>
         </div>
 
         {/* Categories Breakdown List with Distinct Icons */}
@@ -156,7 +195,7 @@ export const UsProfileView: React.FC<UsProfileViewProps> = ({
               <motion.div
                 key={cat.id}
                 whileHover={{ scale: 1.02 }}
-                className="p-3.5 rounded-2xl bg-white/90 border border-[#FFDEE5] flex items-center justify-between shadow-xs"
+                className="p-3.5 rounded-2xl bg-white/90 border border-white/90 flex items-center justify-between shadow-xs"
               >
                 <div className="flex items-center gap-3">
                   <div className="w-8 h-8 rounded-xl bg-[#FFE5EC] border border-[#FFCCD5] flex items-center justify-center flex-shrink-0">
@@ -167,10 +206,10 @@ export const UsProfileView: React.FC<UsProfileViewProps> = ({
                     />
                   </div>
                   <div>
-                    <span className="text-xs font-bold text-[#4A2C3A] block">
+                    <span className="text-xs font-bold text-[#3E2431] block">
                       {cat.name}
                     </span>
-                    <p className="text-[10px] text-[#7A5566] font-medium">{percentage}% of all snaps</p>
+                    <p className="text-[10px] text-[#6E495B] font-medium">{percentage}% of all snaps</p>
                   </div>
                 </div>
 
@@ -184,11 +223,11 @@ export const UsProfileView: React.FC<UsProfileViewProps> = ({
       </section>
 
       {/* EDIT PROFILE FORM */}
-      <section className="glass-panel rounded-3xl p-6 border-2 border-[#FFDEE5] shadow-tuchi space-y-6">
+      <section className="glass-panel rounded-3xl p-6 border border-white/90 shadow-tuchi space-y-6 glossy-top">
         <div className="flex items-center justify-between">
-          <h3 className="text-lg font-bold font-heading text-[#4A2C3A]">Edit Relationship & Profile Photos</h3>
+          <h3 className="text-lg font-bold font-heading text-[#3E2431]">Edit Relationship & Profile Photos</h3>
           {isSavedMessage && (
-            <span className="text-xs font-bold text-emerald-600 bg-emerald-50 px-3 py-1 rounded-full border border-emerald-200 animate-fade-in">
+            <span className="text-xs font-bold text-emerald-700 bg-emerald-50 px-3 py-1 rounded-full border border-emerald-200">
               ✓ Saved successfully!
             </span>
           )}
@@ -197,15 +236,15 @@ export const UsProfileView: React.FC<UsProfileViewProps> = ({
         <form onSubmit={handleSave} className="space-y-6">
           {/* PROFILE PICTURES EDITING SECTION */}
           <div className="space-y-4 pt-1 border-b border-[#FFDEE5]/60 pb-6">
-            <h4 className="text-xs font-bold text-[#7A5566] uppercase tracking-wider flex items-center gap-1.5">
+            <h4 className="text-xs font-bold text-[#6E495B] uppercase tracking-wider flex items-center gap-1.5">
               <Camera className="w-4 h-4 text-[#8C3F5D]" /> Profile Pictures (Max 20MB)
             </h4>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               {/* Your Profile Picture */}
-              <div className="p-4 rounded-2xl bg-white/90 border border-[#FFDEE5] space-y-3">
+              <div className="p-4 rounded-2xl bg-white/90 border border-white/90 space-y-3 shadow-xs">
                 <div className="flex items-center justify-between">
-                  <span className="text-xs font-bold text-[#4A2C3A]">Your Photo ({userName || 'You'})</span>
+                  <span className="text-xs font-bold text-[#3E2431]">Your Photo ({userName || 'You'})</span>
                   {userPhoto && (
                     <button
                       type="button"
@@ -218,11 +257,11 @@ export const UsProfileView: React.FC<UsProfileViewProps> = ({
                 </div>
 
                 <div className="flex items-center gap-3">
-                  <div className="relative w-16 h-16 rounded-full overflow-hidden border-2 border-[#E8AFC0] flex-shrink-0 bg-[#FFDEE5]/30 flex items-center justify-center shadow-xs">
+                  <div className="relative w-16 h-16 rounded-full overflow-hidden border-2 border-[#FFDEE5] flex-shrink-0 bg-[#FFDEE5]/30 flex items-center justify-center shadow-xs">
                     {userPhoto ? (
                       <img src={userPhoto} alt="Your profile" className="w-full h-full object-cover" />
                     ) : (
-                      <span className="text-xl font-bold text-[#4A2C3A]">
+                      <span className="text-xl font-bold text-[#3E2431]">
                         {userName ? userName.charAt(0).toUpperCase() : 'Y'}
                       </span>
                     )}
@@ -246,7 +285,7 @@ export const UsProfileView: React.FC<UsProfileViewProps> = ({
                         value={userPhoto}
                         onChange={(e) => setUserPhoto(e.target.value)}
                         placeholder="Or paste Image URL..."
-                        className="w-full px-3 py-1.5 rounded-xl bg-white border border-[#FFDEE5] text-[#4A2C3A] text-xs focus:outline-none focus:ring-1 focus:ring-[#8C3F5D]"
+                        className="w-full px-3 py-1.5 rounded-xl bg-white border border-[#FFDEE5] text-[#3E2431] text-xs focus:outline-none focus:ring-1 focus:ring-[#FF4B72]"
                       />
                     </div>
                   </div>
@@ -254,9 +293,9 @@ export const UsProfileView: React.FC<UsProfileViewProps> = ({
               </div>
 
               {/* Partner Profile Picture */}
-              <div className="p-4 rounded-2xl bg-white/90 border border-[#FFDEE5] space-y-3">
+              <div className="p-4 rounded-2xl bg-white/90 border border-white/90 space-y-3 shadow-xs">
                 <div className="flex items-center justify-between">
-                  <span className="text-xs font-bold text-[#4A2C3A]">Partner Photo ({partnerName || 'Partner'})</span>
+                  <span className="text-xs font-bold text-[#3E2431]">Partner Photo ({partnerName || 'Partner'})</span>
                   {partnerPhoto && (
                     <button
                       type="button"
@@ -269,11 +308,11 @@ export const UsProfileView: React.FC<UsProfileViewProps> = ({
                 </div>
 
                 <div className="flex items-center gap-3">
-                  <div className="relative w-16 h-16 rounded-full overflow-hidden border-2 border-[#E8AFC0] flex-shrink-0 bg-[#E8AFC0]/30 flex items-center justify-center shadow-xs">
+                  <div className="relative w-16 h-16 rounded-full overflow-hidden border-2 border-[#FFDEE5] flex-shrink-0 bg-[#FFD0DC]/30 flex items-center justify-center shadow-xs">
                     {partnerPhoto ? (
                       <img src={partnerPhoto} alt="Partner profile" className="w-full h-full object-cover" />
                     ) : (
-                      <span className="text-xl font-bold text-[#4A2C3A]">
+                      <span className="text-xl font-bold text-[#3E2431]">
                         {partnerName ? partnerName.charAt(0).toUpperCase() : 'P'}
                       </span>
                     )}
@@ -297,7 +336,7 @@ export const UsProfileView: React.FC<UsProfileViewProps> = ({
                         value={partnerPhoto}
                         onChange={(e) => setPartnerPhoto(e.target.value)}
                         placeholder="Or paste Image URL..."
-                        className="w-full px-3 py-1.5 rounded-xl bg-white border border-[#FFDEE5] text-[#4A2C3A] text-xs focus:outline-none focus:ring-1 focus:ring-[#8C3F5D]"
+                        className="w-full px-3 py-1.5 rounded-xl bg-white border border-[#FFDEE5] text-[#3E2431] text-xs focus:outline-none focus:ring-1 focus:ring-[#FF4B72]"
                       />
                     </div>
                   </div>
@@ -308,7 +347,7 @@ export const UsProfileView: React.FC<UsProfileViewProps> = ({
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
-              <label className="block text-xs font-bold text-[#7A5566] uppercase tracking-wider mb-1">
+              <label className="block text-xs font-bold text-[#6E495B] uppercase tracking-wider mb-1">
                 Your Name
               </label>
               <input
@@ -316,12 +355,12 @@ export const UsProfileView: React.FC<UsProfileViewProps> = ({
                 value={userName}
                 onChange={(e) => setUserName(e.target.value)}
                 placeholder="Your name"
-                className="w-full px-4 py-2.5 rounded-2xl bg-white border-2 border-[#FFDEE5] text-[#4A2C3A] text-xs font-medium focus:outline-none focus:border-[#8C3F5D]"
+                className="w-full px-4 py-2.5 rounded-2xl bg-white border border-[#FFDEE5] text-[#3E2431] text-xs font-medium focus:outline-none focus:border-[#FF4B72]"
               />
             </div>
 
             <div>
-              <label className="block text-xs font-bold text-[#7A5566] uppercase tracking-wider mb-1">
+              <label className="block text-xs font-bold text-[#6E495B] uppercase tracking-wider mb-1">
                 Partner's Name
               </label>
               <input
@@ -329,20 +368,20 @@ export const UsProfileView: React.FC<UsProfileViewProps> = ({
                 value={partnerName}
                 onChange={(e) => setPartnerName(e.target.value)}
                 placeholder="Partner's name"
-                className="w-full px-4 py-2.5 rounded-2xl bg-white border-2 border-[#FFDEE5] text-[#4A2C3A] text-xs font-medium focus:outline-none focus:border-[#8C3F5D]"
+                className="w-full px-4 py-2.5 rounded-2xl bg-white border border-[#FFDEE5] text-[#3E2431] text-xs font-medium focus:outline-none focus:border-[#FF4B72]"
               />
             </div>
           </div>
 
           <div>
-            <label className="block text-xs font-bold text-[#7A5566] uppercase tracking-wider mb-1 flex items-center gap-1">
-              <Calendar className="w-3.5 h-3.5 text-[#8C3F5D]" /> Relationship Start Date
+            <label className="block text-xs font-bold text-[#6E495B] uppercase tracking-wider mb-1 flex items-center gap-1">
+              <Calendar className="w-3.5 h-3.5 text-[#8C3F5D]" /> Relationship Start Date (Used to Unlock Milestones)
             </label>
             <input
               type="date"
               value={startDate}
               onChange={(e) => setStartDate(e.target.value)}
-              className="w-full px-4 py-2.5 rounded-2xl bg-white border-2 border-[#FFDEE5] text-[#4A2C3A] text-xs font-semibold focus:outline-none focus:border-[#8C3F5D]"
+              className="w-full px-4 py-2.5 rounded-2xl bg-white border border-[#FFDEE5] text-[#3E2431] text-xs font-semibold focus:outline-none focus:border-[#FF4B72]"
             />
           </div>
 
@@ -351,7 +390,7 @@ export const UsProfileView: React.FC<UsProfileViewProps> = ({
               whileHover={{ scale: 1.02 }}
               whileTap={{ scale: 0.98 }}
               type="submit"
-              className="w-full py-3.5 px-6 rounded-full bg-gradient-to-r from-[#4A2C3A] to-[#8C3F5D] text-white text-xs font-extrabold shadow-tuchi flex items-center justify-center gap-2 cursor-pointer transition-all"
+              className="w-full py-3.5 px-6 rounded-full bg-gradient-to-r from-[#3E2431] via-[#6E495B] to-[#FF4B72] text-white text-xs font-extrabold shadow-tuchi flex items-center justify-center gap-2 cursor-pointer transition-all"
             >
               <Save className="w-4 h-4 text-[#FFDEE5]" />
               <span>Save Profile & Photos</span>
@@ -361,8 +400,8 @@ export const UsProfileView: React.FC<UsProfileViewProps> = ({
       </section>
 
       {/* DEMO / RESET CONTROLS */}
-      <section className="glass-panel rounded-3xl p-5 border-2 border-[#FFDEE5] shadow-xs text-center space-y-3">
-        <h4 className="text-xs font-bold uppercase text-[#7A5566]">Scrapbook Data Options</h4>
+      <section className="glass-panel rounded-3xl p-5 border border-white/90 shadow-xs text-center space-y-3 glossy-top">
+        <h4 className="text-xs font-bold uppercase text-[#6E495B]">Scrapbook Data Options</h4>
         <div className="flex flex-wrap items-center justify-center gap-3">
           {onClearAllSnaps && snaps.length > 0 && (
             <motion.button
@@ -385,7 +424,7 @@ export const UsProfileView: React.FC<UsProfileViewProps> = ({
                 onResetData();
               }
             }}
-            className="py-2 px-4 rounded-full bg-white hover:bg-[#FFF6F0] text-[#7A5566] text-xs font-bold border border-[#FFDEE5] flex items-center gap-1.5 shadow-xs cursor-pointer"
+            className="py-2 px-4 rounded-full bg-white hover:bg-[#FAF5F0] text-[#6E495B] text-xs font-bold border border-[#FFDEE5] flex items-center gap-1.5 shadow-xs cursor-pointer"
           >
             <RefreshCw className="w-3.5 h-3.5 text-[#8C3F5D]" /> Reset Profile Data
           </motion.button>

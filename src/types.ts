@@ -31,9 +31,20 @@ export interface Snap {
 export type NavTab = 'home' | 'albums' | 'memories' | 'us';
 
 export interface Milestone {
+  id: string;
   days: number;
   label: string;
+  subtitle: string;
   iconName: string;
   reached: boolean;
   targetDate: string;
+  daysRemaining: number;
+  promptQuestion: string;
+  rewardBadge: string;
+}
+
+export interface MilestoneNote {
+  milestoneId: string;
+  note: string;
+  updatedAt: string;
 }

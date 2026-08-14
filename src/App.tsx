@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { User } from 'firebase/auth';
 import { Category, CoupleProfile, NavTab, Snap } from './types';
 import {
   loadProfile,
@@ -10,6 +11,7 @@ import {
   resetToDemoData,
 } from './utils/storage';
 import {
+  subscribeAuth,
   subscribeProfile,
   saveProfileToFirestore,
   subscribeCategories,
@@ -18,7 +20,11 @@ import {
   saveSnapToFirestore,
   deleteSnapFromFirestore,
   clearAllSnapsFromFirestore,
+  subscribeMilestoneNotes,
+  saveMilestoneNoteToFirestore,
+  logoutUser,
 } from './lib/firebase';
+import { AuthScreen } from './components/AuthScreen';
 import { Onboarding } from './components/Onboarding';
 import { HomeGallery } from './components/HomeGallery';
 import { AlbumsView } from './components/AlbumsView';
@@ -30,9 +36,13 @@ import { SnapDetailModal } from './components/SnapDetailModal';
 import { CategoryModal } from './components/CategoryModal';
 
 export default function App() {
+  const [currentUser, setCurrentUser] = useState<User | null>(null);
+  const [isAuthLoading, setIsAuthLoading] = useState<boolean>(true);
+
   const [profile, setProfileState] = useState<CoupleProfile>(() => loadProfile());
   const [categories, setCategoriesState] = useState<Category[]>(() => loadCategories());
   const [snaps, setSnapsState] = useState<Snap[]>(() => loadSnaps());
+  const [milestoneNotes, setMilestoneNotes] = useState<Record<string, string>>({});
   const [activeTab, setActiveTab] = useState<NavTab>('home');
 
   // Modals state
@@ -40,35 +50,64 @@ export default function App() {
   const [isAddCategoryOpen, setIsAddCategoryOpen] = useState<boolean>(false);
   const [selectedSnap, setSelectedSnap] = useState<Snap | null>(null);
 
-  // Subscribe to real-time Firestore sync
+  // 1. Subscribe to Firebase Authentication
   useEffect(() => {
-    const unsubProfile = subscribeProfile((p) => {
-      setProfileState(p);
-      saveProfile(p);
-    }, loadProfile());
+    const unsubAuth = subscribeAuth((user) => {
+      setCurrentUser(user);
+      setIsAuthLoading(false);
+    });
 
-    const unsubCategories = subscribeCategories((cats) => {
-      setCategoriesState(cats);
-      saveCategories(cats);
-    }, loadCategories());
+    return () => unsubAuth();
+  }, []);
 
-    const unsubSnaps = subscribeSnaps((sList) => {
+  // 2. Subscribe to real-time User-Scoped Firestore sync
+  useEffect(() => {
+    if (!currentUser?.uid) return;
+
+    const userId = currentUser.uid;
+
+    const unsubProfile = subscribeProfile(
+      userId,
+      (p) => {
+        setProfileState(p);
+        saveProfile(p);
+      },
+      loadProfile()
+    );
+
+    const unsubCategories = subscribeCategories(
+      userId,
+      (cats) => {
+        setCategoriesState(cats);
+        saveCategories(cats);
+      },
+      loadCategories()
+    );
+
+    const unsubSnaps = subscribeSnaps(userId, (sList) => {
       setSnapsState(sList);
       saveSnaps(sList);
+    });
+
+    const unsubMilestoneNotes = subscribeMilestoneNotes(userId, (notes) => {
+      setMilestoneNotes(notes);
     });
 
     return () => {
       unsubProfile();
       unsubCategories();
       unsubSnaps();
+      unsubMilestoneNotes();
     };
-  }, []);
+  }, [currentUser?.uid]);
 
   // Update profile wrapper
   const updateProfile = (updated: CoupleProfile) => {
     setProfileState(updated);
     saveProfile(updated);
-    saveProfileToFirestore(updated).catch(console.error);
+    if (currentUser?.uid) {
+      saveProfileToFirestore(currentUser.uid, updated).catch(console.error);
+    }
   };
 
   // Handlers
@@ -99,7 +138,9 @@ export default function App() {
     };
 
     setSnapsState((prev) => [newSnap, ...prev]);
-    saveSnapToFirestore(newSnap).catch(console.error);
+    if (currentUser?.uid) {
+      saveSnapToFirestore(currentUser.uid, newSnap).catch(console.error);
+    }
   };
 
   const handleToggleFavorite = (snapId: string, e?: React.MouseEvent) => {
@@ -115,11 +156,10 @@ export default function App() {
       })
     );
 
-    if (updatedSnap) {
-      saveSnapToFirestore(updatedSnap).catch(console.error);
+    if (updatedSnap && currentUser?.uid) {
+      saveSnapToFirestore(currentUser.uid, updatedSnap).catch(console.error);
     }
 
-    // Also update currently open detail modal snap if selected
     if (selectedSnap && selectedSnap.id === snapId) {
       setSelectedSnap((prev) => (prev ? { ...prev, favorite: !prev.favorite } : null));
     }
@@ -127,7 +167,9 @@ export default function App() {
 
   const handleDeleteSnap = (snapId: string) => {
     setSnapsState((prev) => prev.filter((s) => s.id !== snapId));
-    deleteSnapFromFirestore(snapId).catch(console.error);
+    if (currentUser?.uid) {
+      deleteSnapFromFirestore(currentUser.uid, snapId).catch(console.error);
+    }
   };
 
   const handleSaveCategory = (newCategoryData: { name: string; iconName: string; color: string }) => {
@@ -139,33 +181,71 @@ export default function App() {
     };
 
     setCategoriesState((prev) => [...prev, newCat]);
-    saveCategoryToFirestore(newCat).catch(console.error);
+    if (currentUser?.uid) {
+      saveCategoryToFirestore(currentUser.uid, newCat).catch(console.error);
+    }
+  };
+
+  const handleSaveMilestoneNote = (milestoneId: string, note: string) => {
+    setMilestoneNotes((prev) => ({ ...prev, [milestoneId]: note }));
+    if (currentUser?.uid) {
+      saveMilestoneNoteToFirestore(currentUser.uid, milestoneId, note).catch(console.error);
+    }
   };
 
   const handleResetData = () => {
     resetToDemoData();
     const defaultProf = loadProfile();
     updateProfile(defaultProf);
-    clearAllSnapsFromFirestore().catch(console.error);
+    if (currentUser?.uid) {
+      clearAllSnapsFromFirestore(currentUser.uid).catch(console.error);
+    }
   };
 
   const handleClearAllSnaps = () => {
     setSnapsState([]);
     saveSnaps([]);
-    clearAllSnapsFromFirestore().catch(console.error);
+    if (currentUser?.uid) {
+      clearAllSnapsFromFirestore(currentUser.uid).catch(console.error);
+    }
   };
+
+  const handleSignOut = async () => {
+    await logoutUser();
+  };
+
+  // Auth Loading State
+  if (isAuthLoading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-[#FAF5F0]">
+        <div className="text-center space-y-3">
+          <div className="w-10 h-10 rounded-full border-3 border-[#FF4B72] border-t-transparent animate-spin mx-auto" />
+          <p className="text-xs font-bold text-[#6E495B]">Opening secure couple vault...</p>
+        </div>
+      </div>
+    );
+  }
+
+  // If user is not authenticated, show AuthScreen (Login/Signup/Guest)
+  if (!currentUser) {
+    return (
+      <main className="min-h-screen selection:bg-[#FFE5EC]">
+        <AuthScreen />
+      </main>
+    );
+  }
 
   // If user hasn't completed onboarding, render Onboarding Screen
   if (!profile.isOnboarded) {
     return (
-      <main className="min-h-screen selection:bg-[#FFDEE5]">
+      <main className="min-h-screen selection:bg-[#FFE5EC]">
         <Onboarding initialProfile={profile} onComplete={handleOnboardingComplete} />
       </main>
     );
   }
 
   return (
-    <main className="min-h-screen selection:bg-[#FFDEE5] relative">
+    <main className="min-h-screen selection:bg-[#FFE5EC] relative">
       {/* Active Screen Content */}
       {activeTab === 'home' && (
         <HomeGallery
@@ -195,6 +275,8 @@ export default function App() {
           profile={profile}
           categories={categories}
           snaps={snaps}
+          milestoneNotes={milestoneNotes}
+          onSaveMilestoneNote={handleSaveMilestoneNote}
           onSelectSnap={(snap) => setSelectedSnap(snap)}
           onToggleFavorite={handleToggleFavorite}
         />
@@ -205,6 +287,8 @@ export default function App() {
           profile={profile}
           categories={categories}
           snaps={snaps}
+          currentUser={currentUser}
+          onSignOut={handleSignOut}
           onUpdateProfile={(updated) => updateProfile(updated)}
           onResetData={handleResetData}
           onClearAllSnaps={handleClearAllSnaps}

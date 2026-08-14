@@ -2,7 +2,7 @@
   "entities": {
     "CoupleProfile": {
       "title": "CoupleProfile",
-      "description": "Couple relationship profile and settings",
+      "description": "Couple relationship profile and settings for authenticated user",
       "type": "object",
       "properties": {
         "userName": { "type": "string", "maxLength": 100 },
@@ -36,6 +36,7 @@
         "categoryId": { "type": "string", "maxLength": 100 },
         "imageUrl": { "type": "string", "maxLength": 500000 },
         "caption": { "type": "string", "maxLength": 1000 },
+        "description": { "type": "string", "maxLength": 3000 },
         "location": { "type": "string", "maxLength": 200 },
         "snapDate": { "type": "string", "maxLength": 10 },
         "rotationDeg": { "type": "number" },
@@ -46,17 +47,17 @@
     }
   },
   "firestore": {
-    "/profiles/{profileId}": {
+    "/users/{userId}/profile/couple": {
       "schema": { "$ref": "#/entities/CoupleProfile" },
-      "description": "Couple profile document"
+      "description": "Private couple profile document for the authenticated user"
     },
-    "/categories/{categoryId}": {
+    "/users/{userId}/categories/{categoryId}": {
       "schema": { "$ref": "#/entities/Category" },
-      "description": "Memory categories collection"
+      "description": "Private categories collection for the authenticated user"
     },
-    "/snaps/{snapId}": {
+    "/users/{userId}/snaps/{snapId}": {
       "schema": { "$ref": "#/entities/Snap" },
-      "description": "Photo memory snaps collection"
+      "description": "Private photo memories collection for the authenticated user"
     }
   }
 }

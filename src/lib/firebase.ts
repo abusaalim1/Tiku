@@ -1,23 +1,35 @@
 import { initializeApp } from 'firebase/app';
-import { getAuth } from 'firebase/auth';
+import {
+  getAuth,
+  GoogleAuthProvider,
+  signInWithPopup,
+  signInWithEmailAndPassword,
+  createUserWithEmailAndPassword,
+  signInAnonymously,
+  signOut,
+  onAuthStateChanged,
+  User,
+} from 'firebase/auth';
 import {
   getFirestore,
   doc,
-  getDocFromServer,
   collection,
   onSnapshot,
   setDoc,
   deleteDoc,
   getDocs,
-  writeBatch
+  writeBatch,
 } from 'firebase/firestore';
 import firebaseConfig from '../../firebase-applet-config.json';
-import { CoupleProfile, Category, Snap } from '../types';
+import { CoupleProfile, Category, Snap, MilestoneNote } from '../types';
 import { compressAvatar, compressSnapPhoto, sanitizePhotoString } from '../utils/imageUtils';
 
 const app = initializeApp(firebaseConfig);
 export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
 export const auth = getAuth(app);
+
+export const googleProvider = new GoogleAuthProvider();
+googleProvider.setCustomParameters({ prompt: 'select_account' });
 
 export enum OperationType {
   CREATE = 'create',
@@ -66,62 +78,76 @@ export function handleFirestoreError(error: unknown, operationType: OperationTyp
   throw new Error(JSON.stringify(errInfo));
 }
 
-// Test initial connection to Firestore asynchronously
-async function testConnection() {
-  try {
-    await getDocFromServer(doc(db, 'test', 'connection'));
-  } catch (error) {
-    const msg = error instanceof Error ? error.message : String(error);
-    if (msg.includes('offline') || msg.includes('unavailable') || msg.includes('Could not reach')) {
-      console.info('Firestore client operating in offline/reconnecting mode.');
-    } else {
-      console.warn('Firestore initial connection status:', msg);
-    }
-  }
+// --- FIREBASE AUTHENTICATION HELPERS ---
+
+export async function loginWithGoogle(): Promise<User> {
+  const result = await signInWithPopup(auth, googleProvider);
+  return result.user;
 }
-setTimeout(testConnection, 1200);
 
-// --- FIRESTORE SERVICES FOR TUCHI APP ---
+export async function loginWithEmail(email: string, pass: string): Promise<User> {
+  const result = await signInWithEmailAndPassword(auth, email.trim(), pass);
+  return result.user;
+}
 
-const PROFILE_DOC_ID = 'main_couple';
+export async function registerWithEmail(email: string, pass: string): Promise<User> {
+  const result = await createUserWithEmailAndPassword(auth, email.trim(), pass);
+  return result.user;
+}
+
+export async function loginGuest(): Promise<User> {
+  const result = await signInAnonymously(auth);
+  return result.user;
+}
+
+export async function logoutUser(): Promise<void> {
+  await signOut(auth);
+}
+
+export function subscribeAuth(callback: (user: User | null) => void) {
+  return onAuthStateChanged(auth, callback);
+}
+
+// --- USER-ISOLATED FIRESTORE SERVICES ---
 
 export function subscribeProfile(
+  userId: string,
   onUpdate: (profile: CoupleProfile) => void,
   fallbackProfile: CoupleProfile
 ) {
-  const profileRef = doc(db, 'profiles', PROFILE_DOC_ID);
+  if (!userId) return () => {};
+  const profileRef = doc(db, 'users', userId, 'profile', 'couple');
   return onSnapshot(
     profileRef,
     (snapshot) => {
       if (snapshot.exists()) {
         onUpdate(snapshot.data() as CoupleProfile);
       } else {
-        // Prepare sanitized fallback profile to avoid size errors on initial write
         const safeFallback: CoupleProfile = {
           ...fallbackProfile,
           userPhotoUrl: sanitizePhotoString(fallbackProfile.userPhotoUrl, 150000),
           partnerPhotoUrl: sanitizePhotoString(fallbackProfile.partnerPhotoUrl, 150000),
         };
-        saveProfileToFirestore(safeFallback).catch((err) =>
-          console.warn('Notice: Could not save fallback profile to firestore:', err?.message || err)
+        saveProfileToFirestore(userId, safeFallback).catch((err) =>
+          console.warn('Notice: Could not save initial profile to firestore:', err?.message || err)
         );
         onUpdate(safeFallback);
       }
     },
     (error) => {
-      console.info('Profile snapshot operating in offline mode:', error?.message || error);
+      console.info('Profile snapshot offline/info:', error?.message || error);
       onUpdate(fallbackProfile);
     }
   );
 }
 
-export async function saveProfileToFirestore(profile: CoupleProfile): Promise<void> {
-  const path = `profiles/${PROFILE_DOC_ID}`;
+export async function saveProfileToFirestore(userId: string, profile: CoupleProfile): Promise<void> {
+  if (!userId) return;
+  const path = `users/${userId}/profile/couple`;
   try {
     let userPhotoUrl = profile.userPhotoUrl ? await compressAvatar(profile.userPhotoUrl) : '';
     let partnerPhotoUrl = profile.partnerPhotoUrl ? await compressAvatar(profile.partnerPhotoUrl) : '';
 
-    // Extra safety length check
     userPhotoUrl = sanitizePhotoString(userPhotoUrl, 200000);
     partnerPhotoUrl = sanitizePhotoString(partnerPhotoUrl, 200000);
 
@@ -131,17 +157,19 @@ export async function saveProfileToFirestore(profile: CoupleProfile): Promise<vo
       partnerPhotoUrl,
     };
 
-    await setDoc(doc(db, 'profiles', PROFILE_DOC_ID), safeProfile);
+    await setDoc(doc(db, 'users', userId, 'profile', 'couple'), safeProfile);
   } catch (error) {
     handleFirestoreError(error, OperationType.WRITE, path);
   }
 }
 
 export function subscribeCategories(
+  userId: string,
   onUpdate: (categories: Category[]) => void,
   fallbackCategories: Category[]
 ) {
-  const categoriesCol = collection(db, 'categories');
+  if (!userId) return () => {};
+  const categoriesCol = collection(db, 'users', userId, 'categories');
   return onSnapshot(
     categoriesCol,
     (snapshot) => {
@@ -149,51 +177,53 @@ export function subscribeCategories(
         const cats: Category[] = snapshot.docs.map((d) => d.data() as Category);
         onUpdate(cats);
       } else {
-        // Seed initial default categories if empty
+        // Seed default categories for this user
         const batch = writeBatch(db);
         fallbackCategories.forEach((cat) => {
-          batch.set(doc(db, 'categories', cat.id), cat);
+          batch.set(doc(db, 'users', userId, 'categories', cat.id), cat);
         });
         batch.commit().catch((err) =>
-          console.warn('Notice: Could not seed initial categories to firestore:', err?.message || err)
+          console.warn('Notice: Could not seed initial categories:', err?.message || err)
         );
         onUpdate(fallbackCategories);
       }
     },
     (error) => {
-      console.info('Categories snapshot operating in offline mode:', error?.message || error);
+      console.info('Categories snapshot offline/info:', error?.message || error);
       onUpdate(fallbackCategories);
     }
   );
 }
 
-export async function saveCategoryToFirestore(category: Category): Promise<void> {
-  const path = `categories/${category.id}`;
+export async function saveCategoryToFirestore(userId: string, category: Category): Promise<void> {
+  if (!userId) return;
+  const path = `users/${userId}/categories/${category.id}`;
   try {
-    await setDoc(doc(db, 'categories', category.id), category);
+    await setDoc(doc(db, 'users', userId, 'categories', category.id), category);
   } catch (error) {
     handleFirestoreError(error, OperationType.WRITE, path);
   }
 }
 
-export function subscribeSnaps(onUpdate: (snaps: Snap[]) => void) {
-  const snapsCol = collection(db, 'snaps');
+export function subscribeSnaps(userId: string, onUpdate: (snaps: Snap[]) => void) {
+  if (!userId) return () => {};
+  const snapsCol = collection(db, 'users', userId, 'snaps');
   return onSnapshot(
     snapsCol,
     (snapshot) => {
       const snaps: Snap[] = snapshot.docs.map((d) => d.data() as Snap);
-      // Sort newest first
       snaps.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
       onUpdate(snaps);
     },
     (error) => {
-      console.info('Snaps snapshot operating in offline mode:', error?.message || error);
+      console.info('Snaps snapshot offline/info:', error?.message || error);
     }
   );
 }
 
-export async function saveSnapToFirestore(snap: Snap): Promise<void> {
-  const path = `snaps/${snap.id}`;
+export async function saveSnapToFirestore(userId: string, snap: Snap): Promise<void> {
+  if (!userId) return;
+  const path = `users/${userId}/snaps/${snap.id}`;
   try {
     let imageUrl = snap.imageUrl ? await compressSnapPhoto(snap.imageUrl) : '';
     imageUrl = sanitizePhotoString(imageUrl, 350000);
@@ -202,25 +232,27 @@ export async function saveSnapToFirestore(snap: Snap): Promise<void> {
       ...snap,
       imageUrl,
     };
-    await setDoc(doc(db, 'snaps', snap.id), safeSnap);
+    await setDoc(doc(db, 'users', userId, 'snaps', snap.id), safeSnap);
   } catch (error) {
     handleFirestoreError(error, OperationType.WRITE, path);
   }
 }
 
-export async function deleteSnapFromFirestore(snapId: string): Promise<void> {
-  const path = `snaps/${snapId}`;
+export async function deleteSnapFromFirestore(userId: string, snapId: string): Promise<void> {
+  if (!userId) return;
+  const path = `users/${userId}/snaps/${snapId}`;
   try {
-    await deleteDoc(doc(db, 'snaps', snapId));
+    await deleteDoc(doc(db, 'users', userId, 'snaps', snapId));
   } catch (error) {
     handleFirestoreError(error, OperationType.DELETE, path);
   }
 }
 
-export async function clearAllSnapsFromFirestore(): Promise<void> {
-  const path = 'snaps';
+export async function clearAllSnapsFromFirestore(userId: string): Promise<void> {
+  if (!userId) return;
+  const path = `users/${userId}/snaps`;
   try {
-    const snapshot = await getDocs(collection(db, 'snaps'));
+    const snapshot = await getDocs(collection(db, 'users', userId, 'snaps'));
     const batch = writeBatch(db);
     snapshot.docs.forEach((d) => {
       batch.delete(d.ref);
@@ -228,5 +260,39 @@ export async function clearAllSnapsFromFirestore(): Promise<void> {
     await batch.commit();
   } catch (error) {
     handleFirestoreError(error, OperationType.DELETE, path);
+  }
+}
+
+export function subscribeMilestoneNotes(userId: string, onUpdate: (notes: Record<string, string>) => void) {
+  if (!userId) return () => {};
+  const notesCol = collection(db, 'users', userId, 'milestoneNotes');
+  return onSnapshot(
+    notesCol,
+    (snapshot) => {
+      const map: Record<string, string> = {};
+      snapshot.docs.forEach((d) => {
+        const data = d.data() as MilestoneNote;
+        map[data.milestoneId || d.id] = data.note;
+      });
+      onUpdate(map);
+    },
+    (error) => {
+      console.info('Milestone notes snapshot offline/info:', error?.message || error);
+    }
+  );
+}
+
+export async function saveMilestoneNoteToFirestore(userId: string, milestoneId: string, note: string): Promise<void> {
+  if (!userId) return;
+  const path = `users/${userId}/milestoneNotes/${milestoneId}`;
+  try {
+    const data: MilestoneNote = {
+      milestoneId,
+      note,
+      updatedAt: new Date().toISOString(),
+    };
+    await setDoc(doc(db, 'users', userId, 'milestoneNotes', milestoneId), data);
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, path);
   }
 }

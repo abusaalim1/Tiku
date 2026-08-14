@@ -1,20 +1,18 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    match /profiles/{profileId} {
-      allow read, write: if true;
+    // Only authenticated users can access their own private data
+    match /users/{userId} {
+      allow read, write: if request.auth != null && request.auth.uid == userId;
+
+      match /{allSubcollections=**} {
+        allow read, write: if request.auth != null && request.auth.uid == userId;
+      }
     }
 
-    match /categories/{categoryId} {
-      allow read, write: if true;
-    }
-
-    match /snaps/{snapId} {
-      allow read, write: if true;
-    }
-
+    // Fallback/Legacy test collection if needed
     match /test/{docId} {
-      allow read, write: if true;
+      allow read, write: if request.auth != null;
     }
   }
 }
