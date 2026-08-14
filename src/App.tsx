@@ -257,6 +257,7 @@ export default function App() {
           onOpenAddSnap={() => setIsAddSnapOpen(true)}
           onOpenAddCategory={() => setIsAddCategoryOpen(true)}
           onNavigateToUs={() => setActiveTab('us')}
+          onNavigateToMemories={() => setActiveTab('memories')}
         />
       )}
 

@@ -48,3 +48,21 @@ export interface MilestoneNote {
   note: string;
   updatedAt: string;
 }
+
+export interface AnniversaryItem {
+  type: 'monthly' | 'annual';
+  label: string;
+  targetDate: string;
+  daysRemaining: number;
+  isToday: boolean;
+  count: number; // e.g. 6 (6th month) or 2 (2nd year)
+  countLabel: string; // e.g. "6th Month" or "2nd Year"
+  badgeEmoji: string;
+}
+
+export interface UpcomingAnniversarySummary {
+  monthly: AnniversaryItem;
+  annual: AnniversaryItem;
+  nextClosest: AnniversaryItem;
+  isAnyAnniversaryToday: boolean;
+}

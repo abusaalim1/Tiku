@@ -1,3 +1,5 @@
+import { AnniversaryItem, UpcomingAnniversarySummary } from '../types';
+
 // Utility functions for dates and couple day calculations
 
 export function calculateDaysTogether(startDateStr: string): number {
@@ -159,3 +161,139 @@ export function getRandomTilt(): number {
   const tilt = (Math.random() * 7.6) - 3.8;
   return Number(tilt.toFixed(1));
 }
+
+export function getOrdinalSuffix(n: number): string {
+  const j = n % 10;
+  const k = n % 100;
+  if (j === 1 && k !== 11) {
+    return `${n}st`;
+  }
+  if (j === 2 && k !== 12) {
+    return `${n}nd`;
+  }
+  if (j === 3 && k !== 13) {
+    return `${n}rd`;
+  }
+  return `${n}th`;
+}
+
+/**
+ * Calculates upcoming monthly and annual anniversaries based on couple's start date
+ */
+export function calculateUpcomingAnniversaries(startDateStr: string): UpcomingAnniversarySummary {
+  const defaultDateStr = startDateStr || getTodayDateString();
+  const [sYear, sMonth, sDay] = defaultDateStr.split('-').map(Number);
+
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+
+  // 1. Calculate next Monthly Anniversary
+  let monthlyItem: AnniversaryItem = {
+    type: 'monthly',
+    label: 'Monthly Anniversary',
+    targetDate: defaultDateStr,
+    daysRemaining: 0,
+    isToday: false,
+    count: 1,
+    countLabel: '1st Month',
+    badgeEmoji: '🌸',
+  };
+
+  // Find smallest monthOffset >= 1 where targetDate >= today (or monthOffset=0 if start date is in the future)
+  for (let monthOffset = 1; monthOffset <= 1200; monthOffset++) {
+    const totalMonths = (sMonth - 1) + monthOffset;
+    const targetYear = sYear + Math.floor(totalMonths / 12);
+    const targetMonth = totalMonths % 12; // 0-indexed
+
+    // Calculate max days in that target month
+    const daysInMonth = new Date(targetYear, targetMonth + 1, 0).getDate();
+    const clampedDay = Math.min(sDay, daysInMonth);
+
+    const targetDateObj = new Date(targetYear, targetMonth, clampedDay);
+    targetDateObj.setHours(0, 0, 0, 0);
+
+    const diffDays = Math.round((targetDateObj.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
+
+    if (diffDays >= 0) {
+      const monthStr = String(targetMonth + 1).padStart(2, '0');
+      const dayStr = String(clampedDay).padStart(2, '0');
+      const dateIso = `${targetYear}-${monthStr}-${dayStr}`;
+      const ordinal = getOrdinalSuffix(monthOffset);
+
+      monthlyItem = {
+        type: 'monthly',
+        label: `${ordinal} Monthiversary`,
+        targetDate: dateIso,
+        daysRemaining: diffDays,
+        isToday: diffDays === 0,
+        count: monthOffset,
+        countLabel: `${ordinal} Month`,
+        badgeEmoji: diffDays === 0 ? '🎉' : '💖',
+      };
+      break;
+    }
+  }
+
+  // 2. Calculate next Annual Anniversary
+  let annualItem: AnniversaryItem = {
+    type: 'annual',
+    label: '1st Year Anniversary',
+    targetDate: defaultDateStr,
+    daysRemaining: 0,
+    isToday: false,
+    count: 1,
+    countLabel: '1st Year',
+    badgeEmoji: '💍',
+  };
+
+  for (let yearOffset = 1; yearOffset <= 100; yearOffset++) {
+    const targetYear = sYear + yearOffset;
+    const targetMonth = sMonth - 1;
+
+    const daysInMonth = new Date(targetYear, targetMonth + 1, 0).getDate();
+    const clampedDay = Math.min(sDay, daysInMonth);
+
+    const targetDateObj = new Date(targetYear, targetMonth, clampedDay);
+    targetDateObj.setHours(0, 0, 0, 0);
+
+    const diffDays = Math.round((targetDateObj.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
+
+    if (diffDays >= 0) {
+      const monthStr = String(targetMonth + 1).padStart(2, '0');
+      const dayStr = String(clampedDay).padStart(2, '0');
+      const dateIso = `${targetYear}-${monthStr}-${dayStr}`;
+      const ordinal = getOrdinalSuffix(yearOffset);
+
+      annualItem = {
+        type: 'annual',
+        label: `${ordinal} Year Anniversary`,
+        targetDate: dateIso,
+        daysRemaining: diffDays,
+        isToday: diffDays === 0,
+        count: yearOffset,
+        countLabel: `${ordinal} Year`,
+        badgeEmoji: diffDays === 0 ? '👑' : '✨',
+      };
+      break;
+    }
+  }
+
+  // Determine closest next anniversary
+  const nextClosest = annualItem.isToday
+    ? annualItem
+    : monthlyItem.isToday
+    ? monthlyItem
+    : annualItem.daysRemaining < monthlyItem.daysRemaining
+    ? annualItem
+    : monthlyItem;
+
+  const isAnyAnniversaryToday = monthlyItem.isToday || annualItem.isToday;
+
+  return {
+    monthly: monthlyItem,
+    annual: annualItem,
+    nextClosest,
+    isAnyAnniversaryToday,
+  };
+}
+

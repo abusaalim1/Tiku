@@ -1,9 +1,10 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Category, CoupleProfile, Snap } from '../types';
-import { formatDate } from '../utils/dateUtils';
+import { calculateDaysTogether, calculateUpcomingAnniversaries, formatDate } from '../utils/dateUtils';
 import { CategoryIcon } from '../utils/categoryIcons';
 import { PolaroidCard } from './PolaroidCard';
+import { AnniversaryCelebrationCard } from './AnniversaryCelebrationCard';
 import {
   Heart,
   Plus,
@@ -23,6 +24,7 @@ interface HomeGalleryProps {
   onOpenAddSnap: () => void;
   onOpenAddCategory: () => void;
   onNavigateToUs: () => void;
+  onNavigateToMemories?: () => void;
 }
 
 export const HomeGallery: React.FC<HomeGalleryProps> = ({
@@ -34,16 +36,20 @@ export const HomeGallery: React.FC<HomeGalleryProps> = ({
   onOpenAddSnap,
   onOpenAddCategory,
   onNavigateToUs,
+  onNavigateToMemories,
 }) => {
   const [selectedCategory, setSelectedCategory] = useState<string>('all');
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [onlyFavorites, setOnlyFavorites] = useState<boolean>(false);
 
   // Calculate days together
-  const startDate = new Date(profile.startDate || Date.now());
-  const now = new Date();
-  const diffTime = Math.abs(now.getTime() - startDate.getTime());
-  const daysTogether = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+  const daysTogether = calculateDaysTogether(profile.startDate);
+
+  // Calculate upcoming monthly and annual anniversaries
+  const anniversaries = useMemo(
+    () => calculateUpcomingAnniversaries(profile.startDate),
+    [profile.startDate]
+  );
 
   // Category map for fast lookup
   const categoryMap = new Map<string, Category>(categories.map((c) => [c.id, c]));
@@ -148,6 +154,13 @@ export const HomeGallery: React.FC<HomeGalleryProps> = ({
           </p>
         </div>
       </section>
+
+      {/* UPCOMING ANNIVERSARY NOTIFICATION / CELEBRATION BADGE */}
+      <AnniversaryCelebrationCard
+        profile={profile}
+        anniversaries={anniversaries}
+        onNavigateToMemories={onNavigateToMemories}
+      />
 
       {/* FILTER & SEARCH BAR */}
       <section className="space-y-3.5">
