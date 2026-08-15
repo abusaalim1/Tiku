@@ -36,7 +36,7 @@ export const Onboarding: React.FC<OnboardingProps> = ({ initialProfile, onComple
       particleCount: 100,
       spread: 70,
       origin: { y: 0.6 },
-      colors: ['#FFDEE5', '#E8AFC0', '#D9A15E', '#BFE3D0'],
+      colors: ['#F47D90', '#FDE2E7', '#FFF0F3', '#EE6A80', '#FFFFFF'],
     });
 
     const compressedUserPhoto = await compressAvatar(userPhoto);
@@ -71,21 +71,21 @@ export const Onboarding: React.FC<OnboardingProps> = ({ initialProfile, onComple
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center p-4 sm:p-6">
-      <div className="w-full max-w-md glass-panel rounded-3xl p-6 sm:p-8 shadow-tuchi-lg border border-[#FFDEE5] relative overflow-hidden flex flex-col justify-between min-h-[520px]">
+    <div className="min-h-screen flex items-center justify-center p-4 sm:p-6 bg-[#FFF7F9]">
+      <div className="w-full max-w-md glass-panel rounded-3xl p-6 sm:p-8 shadow-[0_12px_32px_rgba(244,125,144,0.15)] border border-[#FDE2E7] relative overflow-hidden flex flex-col justify-between min-h-[520px] bg-white">
         {/* Subtle Background Accent Orbs */}
-        <div className="absolute -top-12 -right-12 w-32 h-32 bg-[#FFDEE5]/50 rounded-full blur-2xl pointer-events-none" />
-        <div className="absolute -bottom-12 -left-12 w-32 h-32 bg-[#BFE3D0]/40 rounded-full blur-2xl pointer-events-none" />
+        <div className="absolute -top-12 -right-12 w-32 h-32 bg-[#FDE2E7]/60 rounded-full blur-2xl pointer-events-none" />
+        <div className="absolute -bottom-12 -left-12 w-32 h-32 bg-[#FFF0F3]/80 rounded-full blur-2xl pointer-events-none" />
 
         {/* Progress Bar Header */}
         <div className="relative z-10 mb-6">
-          <div className="flex items-center justify-between text-xs font-semibold text-[#7A5566] mb-2">
+          <div className="flex items-center justify-between text-xs font-semibold text-[#7A5C68] mb-2">
             <span>Step {step} of 6</span>
             <span>{Math.round((step / 6) * 100)}%</span>
           </div>
-          <div className="w-full bg-[#FFF6F0] h-2 rounded-full overflow-hidden p-0.5 border border-[#FFDEE5]">
+          <div className="w-full bg-[#FFF0F3] h-2 rounded-full overflow-hidden p-0.5 border border-[#FDE2E7]">
             <div
-              className="bg-[#E8AFC0] h-full rounded-full transition-all duration-300"
+              className="bg-[#F47D90] h-full rounded-full transition-all duration-300"
               style={{ width: `${(step / 6) * 100}%` }}
             />
           </div>
@@ -96,14 +96,14 @@ export const Onboarding: React.FC<OnboardingProps> = ({ initialProfile, onComple
           {/* STEP 1: WELCOME SCREEN */}
           {step === 1 && (
             <div className="text-center space-y-5 animate-fade-in py-4">
-              <div className="w-20 h-20 mx-auto bg-gradient-to-br from-[#FFDEE5] to-[#E8AFC0] rounded-full flex items-center justify-center shadow-tuchi-glow animate-float">
-                <Heart className="w-10 h-10 text-[#4A2C3A] fill-[#4A2C3A]" />
+              <div className="w-20 h-20 mx-auto bg-gradient-to-br from-[#FFF0F3] to-[#FDE2E7] rounded-full flex items-center justify-center shadow-xs animate-float border border-[#FDE2E7]">
+                <Heart className="w-10 h-10 text-[#F47D90] fill-[#F47D90]" />
               </div>
               <div className="space-y-2">
-                <h1 className="text-3xl font-bold font-heading text-[#4A2C3A] flex items-center justify-center gap-1.5">
-                  Tiku <Sparkles className="w-5 h-5 text-[#E8AFC0]" />
+                <h1 className="text-3xl font-bold font-heading text-[#3E2431] flex items-center justify-center gap-1.5">
+                  Tiku <Sparkles className="w-5 h-5 text-[#F47D90]" />
                 </h1>
-                <p className="text-[#7A5566] text-base font-medium max-w-xs mx-auto leading-relaxed">
+                <p className="text-[#7A5C68] text-base font-medium max-w-xs mx-auto leading-relaxed">
                   Your cute, cozy corner to save, organize, and never lose your photo memories.
                 </p>
               </div>
@@ -111,10 +111,10 @@ export const Onboarding: React.FC<OnboardingProps> = ({ initialProfile, onComple
               <div className="pt-4">
                 <button
                   onClick={handleNext}
-                  className="w-full py-4 px-6 rounded-full bg-[#4A2C3A] hover:bg-[#38202b] text-white font-semibold text-base shadow-tuchi transition-all transform active:scale-95 flex items-center justify-center gap-2 cursor-pointer"
+                  className="w-full py-4 px-6 rounded-full bg-[#F47D90] hover:bg-[#EE6A80] text-white font-semibold text-base shadow-xs transition-all transform active:scale-95 flex items-center justify-center gap-2 cursor-pointer"
                 >
                   <span>Get Started</span>
-                  <ArrowRight className="w-5 h-5 text-[#FFDEE5]" />
+                  <ArrowRight className="w-5 h-5 text-white" />
                 </button>
               </div>
             </div>
@@ -124,17 +124,17 @@ export const Onboarding: React.FC<OnboardingProps> = ({ initialProfile, onComple
           {step === 2 && (
             <div className="space-y-6 animate-fade-in py-2">
               <div className="text-center space-y-2">
-                <div className="w-12 h-12 mx-auto rounded-full bg-[#FFDEE5] flex items-center justify-center text-[#4A2C3A]">
+                <div className="w-12 h-12 mx-auto rounded-full bg-[#FFF0F3] border border-[#FDE2E7] flex items-center justify-center text-[#F47D90]">
                   <User className="w-6 h-6" />
                 </div>
-                <h2 className="text-2xl font-bold font-heading text-[#4A2C3A]">
+                <h2 className="text-2xl font-bold font-heading text-[#3E2431]">
                   First, what is your name?
                 </h2>
-                <p className="text-sm text-[#7A5566]">So Tiku knows who is saving these cute snaps!</p>
+                <p className="text-sm text-[#7A5C68]">So Tiku knows who is saving these cute snaps!</p>
               </div>
 
               <div className="space-y-2">
-                <label className="block text-xs font-bold text-[#7A5566] uppercase tracking-wider">
+                <label className="block text-xs font-bold text-[#7A5C68] uppercase tracking-wider">
                   Your Name
                 </label>
                 <input
@@ -143,7 +143,7 @@ export const Onboarding: React.FC<OnboardingProps> = ({ initialProfile, onComple
                   onChange={(e) => setUserName(e.target.value)}
                   placeholder="Enter your name..."
                   autoFocus
-                  className="w-full px-5 py-3.5 rounded-full bg-white border border-[#FFDEE5] text-[#4A2C3A] text-lg font-medium focus:outline-none focus:ring-2 focus:ring-[#E8AFC0] shadow-xs"
+                  className="w-full px-5 py-3.5 rounded-full bg-white border border-[#FDE2E7] text-[#3E2431] text-lg font-medium focus:outline-none focus:ring-2 focus:ring-[#F47D90] shadow-xs"
                 />
               </div>
             </div>
@@ -153,17 +153,17 @@ export const Onboarding: React.FC<OnboardingProps> = ({ initialProfile, onComple
           {step === 3 && (
             <div className="space-y-6 animate-fade-in py-2">
               <div className="text-center space-y-2">
-                <div className="w-12 h-12 mx-auto rounded-full bg-[#FFDEE5] flex items-center justify-center text-[#4A2C3A]">
-                  <Heart className="w-6 h-6 fill-[#4A2C3A]" />
+                <div className="w-12 h-12 mx-auto rounded-full bg-[#FFF0F3] border border-[#FDE2E7] flex items-center justify-center text-[#F47D90]">
+                  <Heart className="w-6 h-6 fill-[#F47D90]" />
                 </div>
-                <h2 className="text-2xl font-bold font-heading text-[#4A2C3A]">
+                <h2 className="text-2xl font-bold font-heading text-[#3E2431]">
                   And who is your partner?
                 </h2>
-                <p className="text-sm text-[#7A5566]">The special someone sharing these moments with you.</p>
+                <p className="text-sm text-[#7A5C68]">The special someone sharing these moments with you.</p>
               </div>
 
               <div className="space-y-2">
-                <label className="block text-xs font-bold text-[#7A5566] uppercase tracking-wider">
+                <label className="block text-xs font-bold text-[#7A5C68] uppercase tracking-wider">
                   Partner's Name
                 </label>
                 <input
@@ -172,7 +172,7 @@ export const Onboarding: React.FC<OnboardingProps> = ({ initialProfile, onComple
                   onChange={(e) => setPartnerName(e.target.value)}
                   placeholder="Enter partner's name..."
                   autoFocus
-                  className="w-full px-5 py-3.5 rounded-full bg-white border border-[#FFDEE5] text-[#4A2C3A] text-lg font-medium focus:outline-none focus:ring-2 focus:ring-[#E8AFC0] shadow-xs"
+                  className="w-full px-5 py-3.5 rounded-full bg-white border border-[#FDE2E7] text-[#3E2431] text-lg font-medium focus:outline-none focus:ring-2 focus:ring-[#F47D90] shadow-xs"
                 />
               </div>
             </div>
@@ -182,26 +182,26 @@ export const Onboarding: React.FC<OnboardingProps> = ({ initialProfile, onComple
           {step === 4 && (
             <div className="space-y-6 animate-fade-in py-2">
               <div className="text-center space-y-2">
-                <div className="w-12 h-12 mx-auto rounded-full bg-[#FFDEE5] flex items-center justify-center text-[#4A2C3A]">
+                <div className="w-12 h-12 mx-auto rounded-full bg-[#FFF0F3] border border-[#FDE2E7] flex items-center justify-center text-[#F47D90]">
                   <Calendar className="w-6 h-6" />
                 </div>
-                <h2 className="text-2xl font-bold font-heading text-[#4A2C3A]">
+                <h2 className="text-2xl font-bold font-heading text-[#3E2431]">
                   When did your love story start?
                 </h2>
-                <p className="text-sm text-[#7A5566]">
+                <p className="text-sm text-[#7A5C68]">
                   This powers your automatic "Day X Together" counter!
                 </p>
               </div>
 
               <div className="space-y-2">
-                <label className="block text-xs font-bold text-[#7A5566] uppercase tracking-wider">
+                <label className="block text-xs font-bold text-[#7A5C68] uppercase tracking-wider">
                   Relationship Start Date
                 </label>
                 <input
                   type="date"
                   value={startDate}
                   onChange={(e) => setStartDate(e.target.value)}
-                  className="w-full px-5 py-3.5 rounded-full bg-white border border-[#FFDEE5] text-[#4A2C3A] text-lg font-medium focus:outline-none focus:ring-2 focus:ring-[#E8AFC0] shadow-xs cursor-pointer"
+                  className="w-full px-5 py-3.5 rounded-full bg-white border border-[#FDE2E7] text-[#3E2431] text-lg font-medium focus:outline-none focus:ring-2 focus:ring-[#F47D90] shadow-xs cursor-pointer"
                 />
               </div>
             </div>
@@ -211,13 +211,13 @@ export const Onboarding: React.FC<OnboardingProps> = ({ initialProfile, onComple
           {step === 5 && (
             <div className="space-y-5 animate-fade-in py-2">
               <div className="text-center space-y-1">
-                <div className="w-12 h-12 mx-auto rounded-full bg-[#FFDEE5] flex items-center justify-center text-[#4A2C3A]">
+                <div className="w-12 h-12 mx-auto rounded-full bg-[#FFF0F3] border border-[#FDE2E7] flex items-center justify-center text-[#F47D90]">
                   <Camera className="w-6 h-6" />
                 </div>
-                <h2 className="text-2xl font-bold font-heading text-[#4A2C3A]">
+                <h2 className="text-2xl font-bold font-heading text-[#3E2431]">
                   Add profile avatars
                 </h2>
-                <p className="text-xs text-[#7A5566]">
+                <p className="text-xs text-[#7A5C68]">
                   Upload photos or select presets for your couple header.
                 </p>
               </div>
@@ -225,9 +225,9 @@ export const Onboarding: React.FC<OnboardingProps> = ({ initialProfile, onComple
               {/* Photos Grid */}
               <div className="grid grid-cols-2 gap-4 pt-2">
                 {/* User Photo */}
-                <div className="flex flex-col items-center gap-2 p-3 rounded-2xl bg-white/70 border border-[#FFDEE5]">
-                  <span className="text-xs font-bold text-[#4A2C3A]">{userName || 'You'}</span>
-                  <div className="relative w-20 h-20 rounded-full overflow-hidden border-2 border-[#E8AFC0] shadow-xs group bg-[#FFDEE5]/40 flex items-center justify-center">
+                <div className="flex flex-col items-center gap-2 p-3 rounded-2xl bg-[#FFF7F9] border border-[#FDE2E7]">
+                  <span className="text-xs font-bold text-[#3E2431]">{userName || 'You'}</span>
+                  <div className="relative w-20 h-20 rounded-full overflow-hidden border-2 border-[#F47D90] shadow-xs group bg-[#FFF0F3] flex items-center justify-center">
                     {userPhoto ? (
                       <img
                         src={userPhoto}
@@ -235,7 +235,7 @@ export const Onboarding: React.FC<OnboardingProps> = ({ initialProfile, onComple
                         className="w-full h-full object-cover"
                       />
                     ) : (
-                      <span className="text-xl font-bold text-[#4A2C3A]">
+                      <span className="text-xl font-bold text-[#3E2431]">
                         {userName ? userName.charAt(0).toUpperCase() : 'Y'}
                       </span>
                     )}
@@ -249,7 +249,7 @@ export const Onboarding: React.FC<OnboardingProps> = ({ initialProfile, onComple
                       />
                     </label>
                   </div>
-                  <label className="text-[11px] font-semibold text-[#E8AFC0] hover:underline cursor-pointer">
+                  <label className="text-[11px] font-semibold text-[#F47D90] hover:underline cursor-pointer">
                     Upload Photo
                     <input
                       type="file"
@@ -261,9 +261,9 @@ export const Onboarding: React.FC<OnboardingProps> = ({ initialProfile, onComple
                 </div>
 
                 {/* Partner Photo */}
-                <div className="flex flex-col items-center gap-2 p-3 rounded-2xl bg-white/70 border border-[#FFDEE5]">
-                  <span className="text-xs font-bold text-[#4A2C3A]">{partnerName || 'Partner'}</span>
-                  <div className="relative w-20 h-20 rounded-full overflow-hidden border-2 border-[#E8AFC0] shadow-xs group bg-[#E8AFC0]/40 flex items-center justify-center">
+                <div className="flex flex-col items-center gap-2 p-3 rounded-2xl bg-[#FFF7F9] border border-[#FDE2E7]">
+                  <span className="text-xs font-bold text-[#3E2431]">{partnerName || 'Partner'}</span>
+                  <div className="relative w-20 h-20 rounded-full overflow-hidden border-2 border-[#F47D90] shadow-xs group bg-[#FFF0F3] flex items-center justify-center">
                     {partnerPhoto ? (
                       <img
                         src={partnerPhoto}
@@ -271,7 +271,7 @@ export const Onboarding: React.FC<OnboardingProps> = ({ initialProfile, onComple
                         className="w-full h-full object-cover"
                       />
                     ) : (
-                      <span className="text-xl font-bold text-[#4A2C3A]">
+                      <span className="text-xl font-bold text-[#3E2431]">
                         {partnerName ? partnerName.charAt(0).toUpperCase() : 'P'}
                       </span>
                     )}
@@ -285,7 +285,7 @@ export const Onboarding: React.FC<OnboardingProps> = ({ initialProfile, onComple
                       />
                     </label>
                   </div>
-                  <label className="text-[11px] font-semibold text-[#E8AFC0] hover:underline cursor-pointer">
+                  <label className="text-[11px] font-semibold text-[#F47D90] hover:underline cursor-pointer">
                     Upload Photo
                     <input
                       type="file"
@@ -302,22 +302,22 @@ export const Onboarding: React.FC<OnboardingProps> = ({ initialProfile, onComple
           {/* STEP 6: DONE & CELEBRATE */}
           {step === 6 && (
             <div className="text-center space-y-5 animate-fade-in py-2">
-              <div className="w-16 h-16 mx-auto bg-[#BFE3D0] text-[#4A2C3A] rounded-full flex items-center justify-center shadow-tuchi">
+              <div className="w-16 h-16 mx-auto bg-[#FFF0F3] text-[#F47D90] border border-[#FDE2E7] rounded-full flex items-center justify-center shadow-xs">
                 <Check className="w-8 h-8 stroke-[3]" />
               </div>
 
               <div className="space-y-2">
-                <h2 className="text-2xl font-bold font-heading text-[#4A2C3A]">
+                <h2 className="text-2xl font-bold font-heading text-[#3E2431]">
                   You're all set!
                 </h2>
-                <p className="text-sm text-[#7A5566] max-w-xs mx-auto">
-                  Welcome, <strong className="text-[#4A2C3A]">{userName || 'You'}</strong> &{' '}
-                  <strong className="text-[#4A2C3A]">{partnerName || 'Partner'}</strong>! Your cozy memory scrapbook is ready.
+                <p className="text-sm text-[#7A5C68] max-w-xs mx-auto">
+                  Welcome, <strong className="text-[#3E2431]">{userName || 'You'}</strong> &{' '}
+                  <strong className="text-[#3E2431]">{partnerName || 'Partner'}</strong>! Your cozy memory scrapbook is ready.
                 </p>
               </div>
 
               {/* Preview Avatar Badge */}
-              <div className="p-4 rounded-2xl bg-white/80 border border-[#FFDEE5] inline-flex items-center gap-3 shadow-xs mx-auto">
+              <div className="p-4 rounded-2xl bg-white border border-[#FDE2E7] inline-flex items-center gap-3 shadow-xs mx-auto">
                 <div className="flex items-center -space-x-3">
                   {userPhoto ? (
                     <img
@@ -326,7 +326,7 @@ export const Onboarding: React.FC<OnboardingProps> = ({ initialProfile, onComple
                       className="w-11 h-11 rounded-full border-2 border-white object-cover shadow-xs"
                     />
                   ) : (
-                    <div className="w-11 h-11 rounded-full border-2 border-white bg-[#FFDEE5] flex items-center justify-center text-[#4A2C3A] font-bold shadow-xs">
+                    <div className="w-11 h-11 rounded-full border-2 border-white bg-[#FFF0F3] flex items-center justify-center text-[#F47D90] font-bold shadow-xs">
                       {userName ? userName.charAt(0).toUpperCase() : 'Y'}
                     </div>
                   )}
@@ -337,16 +337,16 @@ export const Onboarding: React.FC<OnboardingProps> = ({ initialProfile, onComple
                       className="w-11 h-11 rounded-full border-2 border-white object-cover shadow-xs"
                     />
                   ) : (
-                    <div className="w-11 h-11 rounded-full border-2 border-white bg-[#E8AFC0] flex items-center justify-center text-white font-bold shadow-xs">
+                    <div className="w-11 h-11 rounded-full border-2 border-white bg-[#FDE2E7] flex items-center justify-center text-[#F47D90] font-bold shadow-xs">
                       {partnerName ? partnerName.charAt(0).toUpperCase() : 'P'}
                     </div>
                   )}
                 </div>
                 <div className="text-left">
-                  <div className="text-sm font-bold font-heading text-[#4A2C3A]">
+                  <div className="text-sm font-bold font-heading text-[#3E2431]">
                     {userName || 'You'} & {partnerName || 'Partner'}
                   </div>
-                  <div className="text-xs text-[#E8AFC0] font-semibold flex items-center gap-1">
+                  <div className="text-xs text-[#F47D90] font-semibold flex items-center gap-1">
                     <Sparkles className="w-3 h-3" /> Ready to capture moments
                   </div>
                 </div>
@@ -356,11 +356,11 @@ export const Onboarding: React.FC<OnboardingProps> = ({ initialProfile, onComple
         </div>
 
         {/* Navigation Buttons Footer */}
-        <div className="relative z-10 pt-6 mt-2 flex items-center justify-between border-t border-[#FFDEE5]/60">
+        <div className="relative z-10 pt-6 mt-2 flex items-center justify-between border-t border-[#FDE2E7]">
           {step > 1 ? (
             <button
               onClick={handleBack}
-              className="py-2.5 px-4 rounded-full bg-white hover:bg-[#FFF6F0] text-[#7A5566] text-sm font-semibold flex items-center gap-1 transition-colors border border-[#FFDEE5] cursor-pointer"
+              className="py-2.5 px-4 rounded-full bg-white hover:bg-[#FFF0F3] text-[#7A5C68] text-sm font-semibold flex items-center gap-1 transition-colors border border-[#FDE2E7] cursor-pointer"
             >
               <ArrowLeft className="w-4 h-4" />
               <span>Back</span>
@@ -372,10 +372,10 @@ export const Onboarding: React.FC<OnboardingProps> = ({ initialProfile, onComple
           {step > 1 && (
             <button
               onClick={handleNext}
-              className="py-2.5 px-6 rounded-full bg-[#4A2C3A] hover:bg-[#38202b] text-white text-sm font-semibold shadow-tuchi flex items-center gap-2 transition-all transform active:scale-95 cursor-pointer"
+              className="py-2.5 px-6 rounded-full bg-[#F47D90] hover:bg-[#EE6A80] text-white text-sm font-semibold shadow-xs flex items-center gap-2 transition-all transform active:scale-95 cursor-pointer"
             >
               <span>{step === 6 ? 'Enter Tiku' : 'Next'}</span>
-              <ArrowRight className="w-4 h-4 text-[#FFDEE5]" />
+              <ArrowRight className="w-4 h-4 text-white" />
             </button>
           )}
         </div>

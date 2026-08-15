@@ -1,0 +1,41 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="bg-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#F47D90" />
+      <stop offset="50%" stop-color="#EE6A80" />
+      <stop offset="100%" stop-color="#E0556D" />
+    </linearGradient>
+    <linearGradient id="heart-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#FFFFFF" />
+      <stop offset="100%" stop-color="#FFF0F3" />
+    </linearGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="16" stdDeviation="20" flood-color="#3E2431" flood-opacity="0.2" />
+    </filter>
+  </defs>
+
+  <!-- Android Adaptive Squircle / Rounded Background -->
+  <rect width="512" height="512" rx="128" fill="url(#bg-grad)" />
+
+  <!-- Subtle Inner Glass Circle -->
+  <circle cx="256" cy="256" r="190" fill="#FFFFFF" opacity="0.12" />
+
+  <!-- Polaroid Frame Icon with Hearts -->
+  <g filter="url(#shadow)">
+    <!-- Polaroid White Base -->
+    <rect x="136" y="116" width="240" height="280" rx="28" fill="#FFFFFF" />
+    
+    <!-- Photo Inner Area -->
+    <rect x="160" y="140" width="192" height="184" rx="16" fill="#FFF0F3" />
+    
+    <!-- Heart in Photo Area -->
+    <path d="M 256,260 C 256,260 216,220 200,196 C 184,172 196,152 220,152 C 236,152 248,164 256,174 C 264,164 276,152 292,152 C 316,152 328,172 312,196 C 296,220 256,260 256,260 Z" fill="#F47D90" />
+    
+    <!-- Little Sparkle -->
+    <path d="M 314,142 Q 314,152 324,152 Q 314,152 314,162 Q 314,152 304,152 Q 314,152 314,142 Z" fill="#FFD700" />
+    
+    <!-- Polaroid Bottom Title Line -->
+    <rect x="180" y="348" width="88" height="12" rx="6" fill="#FDE2E7" />
+    <circle cx="320" cy="354" r="8" fill="#F47D90" />
+  </g>
+</svg>

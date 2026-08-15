@@ -39,11 +39,11 @@ export const SnapDetailModal: React.FC<SnapDetailModalProps> = ({
             animate={{ opacity: 1, scale: 1, y: 0, rotate: 0 }}
             exit={{ opacity: 0, scale: 0.88, y: 20, rotate: 2 }}
             transition={{ type: 'spring', damping: 22, stiffness: 280 }}
-            className="relative w-full max-w-lg glass-modal rounded-[32px] p-5 sm:p-7 border border-white/90 max-h-[92vh] overflow-y-auto no-scrollbar z-10 glossy-top"
+            className="relative w-full max-w-lg glass-modal rounded-[32px] p-5 sm:p-7 border border-[#FDE2E7] max-h-[92vh] overflow-y-auto no-scrollbar z-10 glossy-top"
           >
             {/* Washi Tape Graphic */}
-            <div className="absolute -top-3 left-1/2 -translate-x-1/2 w-28 h-6 bg-[#FFE5EC] border border-[#FFCCD5] rotate-[-1deg] shadow-2xs rounded-xs flex items-center justify-center pointer-events-none z-20">
-              <span className="text-[10px] font-bold text-[#A85B7A] tracking-wider uppercase flex items-center gap-1">
+            <div className="absolute -top-3 left-1/2 -translate-x-1/2 w-28 h-6 bg-[#FDE2E7] border border-[#FDE2E7] rotate-[-1deg] shadow-2xs rounded-xs flex items-center justify-center pointer-events-none z-20">
+              <span className="text-[10px] font-bold text-[#F47D90] tracking-wider uppercase flex items-center gap-1">
                 <Sparkles className="w-2.5 h-2.5" /> Polaroid Snap
               </span>
             </div>
@@ -51,15 +51,15 @@ export const SnapDetailModal: React.FC<SnapDetailModalProps> = ({
             {/* Close Button */}
             <button
               onClick={onClose}
-              className="absolute top-4 right-4 w-9 h-9 rounded-full bg-white/90 hover:bg-[#FFDEE5] text-[#7A5566] hover:text-[#4A2C3A] flex items-center justify-center transition-all shadow-xs z-30 cursor-pointer hover:scale-105 active:scale-95"
+              className="absolute top-4 right-4 w-9 h-9 rounded-full bg-white hover:bg-[#FFF0F3] text-[#7A5C68] hover:text-[#3E2431] flex items-center justify-center transition-all shadow-xs z-30 cursor-pointer hover:scale-105 active:scale-95 border border-[#FDE2E7]"
             >
               <X className="w-5 h-5" />
             </button>
 
             {/* Polaroid Style Display */}
-            <div className="mt-2 bg-white p-4 sm:p-5 rounded-2xl border-2 border-[#FFDEE5] shadow-tuchi relative">
+            <div className="mt-2 bg-white p-4 sm:p-5 rounded-2xl border-2 border-[#FDE2E7] shadow-tuchi relative">
               {/* Photo Frame */}
-              <div className="relative rounded-xl overflow-hidden aspect-4/3 bg-[#FFF0F3] shadow-inner">
+              <div className="relative rounded-xl overflow-hidden aspect-4/3 bg-[#FFF7F9] shadow-inner border border-[#FDE2E7]">
                 <img
                   src={snap.imageUrl}
                   alt={snap.caption || 'Memory Detail'}
@@ -73,8 +73,8 @@ export const SnapDetailModal: React.FC<SnapDetailModalProps> = ({
                     onClick={() => onToggleFavorite(snap.id)}
                     className={`w-10 h-10 rounded-full flex items-center justify-center transition-all shadow-md cursor-pointer ${
                       snap.favorite
-                        ? 'bg-[#FF4B72] text-white'
-                        : 'bg-white/80 text-[#7A5566] hover:bg-white'
+                        ? 'bg-[#F47D90] text-white'
+                        : 'bg-white/80 text-[#7A5C68] hover:bg-white'
                     }`}
                   >
                     <Heart className={`w-5 h-5 ${snap.favorite ? 'fill-current' : ''}`} />
@@ -86,47 +86,47 @@ export const SnapDetailModal: React.FC<SnapDetailModalProps> = ({
               <div className="pt-4 space-y-3">
                 {/* Category Tag */}
                 {category && (
-                  <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-[#FFE5EC] text-xs font-bold text-[#8C3F5D] shadow-2xs border border-[#FFCCD5]">
+                  <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-[#FFF0F3] text-xs font-bold text-[#3E2431] shadow-2xs border border-[#FDE2E7]">
                     <span
                       className="w-2.5 h-2.5 rounded-full"
-                      style={{ backgroundColor: category.color || '#E8AFC0' }}
+                      style={{ backgroundColor: category.color || '#F47D90' }}
                     />
-                    <CategoryIcon iconName={category.iconName} className="w-3.5 h-3.5" />
+                    <CategoryIcon iconName={category.iconName} className="w-3.5 h-3.5 text-[#F47D90]" />
                     <span>{category.name}</span>
                   </div>
                 )}
 
                 {/* Caption */}
                 {snap.caption ? (
-                  <h3 className="text-xl sm:text-2xl font-bold font-heading text-[#4A2C3A] leading-snug">
+                  <h3 className="text-xl sm:text-2xl font-bold font-heading text-[#3E2431] leading-snug">
                     {snap.caption}
                   </h3>
                 ) : (
-                  <p className="text-sm italic text-[#7A5566]">A quiet, beautiful memory together 💖</p>
+                  <p className="text-sm italic text-[#7A5C68]">A quiet, beautiful memory together 💖</p>
                 )}
 
                 {/* Description / What Happened */}
                 {snap.description && (
-                  <div className="p-3.5 sm:p-4 rounded-2xl bg-[#FFF3F5] border border-[#FFCCD5] space-y-1">
-                    <div className="text-[11px] font-bold text-[#8C3F5D] uppercase tracking-wider flex items-center gap-1.5">
-                      <BookOpen className="w-3.5 h-3.5 text-[#FF4B72]" /> What Happened That Day
+                  <div className="p-3.5 sm:p-4 rounded-2xl bg-[#FFF7F9] border border-[#FDE2E7] space-y-1">
+                    <div className="text-[11px] font-bold text-[#F47D90] uppercase tracking-wider flex items-center gap-1.5">
+                      <BookOpen className="w-3.5 h-3.5 text-[#F47D90]" /> What Happened That Day
                     </div>
-                    <p className="text-xs sm:text-sm text-[#4A2C3A] font-medium leading-relaxed whitespace-pre-wrap">
+                    <p className="text-xs sm:text-sm text-[#3E2431] font-medium leading-relaxed whitespace-pre-wrap">
                       {snap.description}
                     </p>
                   </div>
                 )}
 
                 {/* Meta details */}
-                <div className="flex flex-wrap items-center gap-4 text-xs font-semibold text-[#7A5566] pt-3 border-t border-[#FFDEE5]">
+                <div className="flex flex-wrap items-center gap-4 text-xs font-semibold text-[#7A5C68] pt-3 border-t border-[#FDE2E7]">
                   <div className="flex items-center gap-1.5">
-                    <Calendar className="w-4 h-4 text-[#8C3F5D]" />
+                    <Calendar className="w-4 h-4 text-[#F47D90]" />
                     <span>{formatDate(snap.snapDate)}</span>
                   </div>
 
                   {snap.location && (
                     <div className="flex items-center gap-1.5">
-                      <MapPin className="w-4 h-4 text-[#8C3F5D]" />
+                      <MapPin className="w-4 h-4 text-[#F47D90]" />
                       <span>{snap.location}</span>
                     </div>
                   )}
@@ -151,7 +151,7 @@ export const SnapDetailModal: React.FC<SnapDetailModalProps> = ({
 
               <button
                 onClick={onClose}
-                className="py-2.5 px-6 rounded-full bg-[#4A2C3A] hover:bg-[#38202b] text-white text-xs font-extrabold shadow-tuchi cursor-pointer active:scale-95 transition-all"
+                className="py-2.5 px-6 rounded-full bg-[#3E2431] hover:bg-[#F47D90] text-white text-xs font-extrabold shadow-tuchi cursor-pointer active:scale-95 transition-all"
               >
                 Close Memory
               </button>

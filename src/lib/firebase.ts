@@ -12,7 +12,7 @@ import {
   User,
 } from 'firebase/auth';
 import {
-  getFirestore,
+  initializeFirestore,
   doc,
   collection,
   onSnapshot,
@@ -20,13 +20,23 @@ import {
   deleteDoc,
   getDocs,
   writeBatch,
+  Firestore,
 } from 'firebase/firestore';
 import firebaseConfig from '../../firebase-applet-config.json';
 import { CoupleProfile, Category, Snap, MilestoneNote, DailyPromptEntry } from '../types';
 import { compressAvatar, compressSnapPhoto, sanitizePhotoString } from '../utils/imageUtils';
 
 const app = initializeApp(firebaseConfig);
-export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
+
+// Initialize Firestore with auto-detect long polling to prevent WebChannel disconnects in container/proxy environments
+export const db: Firestore = initializeFirestore(
+  app,
+  {
+    experimentalAutoDetectLongPolling: true,
+  },
+  firebaseConfig.firestoreDatabaseId
+);
+
 export const auth = getAuth(app);
 
 export const googleProvider = new GoogleAuthProvider();
@@ -59,8 +69,9 @@ export interface FirestoreErrorInfo {
 }
 
 export function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null) {
+  const errMessage = error instanceof Error ? error.message : String(error);
   const errInfo: FirestoreErrorInfo = {
-    error: error instanceof Error ? error.message : String(error),
+    error: errMessage,
     authInfo: {
       userId: auth.currentUser?.uid,
       email: auth.currentUser?.email,
@@ -75,8 +86,13 @@ export function handleFirestoreError(error: unknown, operationType: OperationTyp
     operationType,
     path,
   };
-  console.error('Firestore Error: ', JSON.stringify(errInfo));
-  throw new Error(JSON.stringify(errInfo));
+
+  // If network is offline or unavailable, log as warning and don't hard crash the client
+  if (errMessage.includes('unavailable') || errMessage.includes('offline') || errMessage.includes('network')) {
+    console.warn('Firestore offline/unavailable notice:', JSON.stringify(errInfo));
+  } else {
+    console.warn('Firestore operation notice:', JSON.stringify(errInfo));
+  }
 }
 
 // --- FIREBASE AUTHENTICATION HELPERS ---

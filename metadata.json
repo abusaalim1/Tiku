@@ -1,6 +1,6 @@
 {
-  "name": "Tiku",
-  "description": "A cute, minimalistic web app where couples save, organize, and cherish their photo memories.",
+  "name": "Tuchi",
+  "description": "A cute, aesthetic couple space to save, organize, and cherish relationship memories, photo albums, love notes, and milestones.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

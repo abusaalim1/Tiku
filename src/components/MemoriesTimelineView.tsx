@@ -2,26 +2,26 @@ import React, { useState, useMemo } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import confetti from 'canvas-confetti';
 import { Category, CoupleProfile, Milestone, Snap } from '../types';
-import { calculateDaysTogether, calculateMilestones, formatDate, formatMonthYear } from '../utils/dateUtils';
+import { calculateDaysTogether, calculateMilestones, formatDate } from '../utils/dateUtils';
 import { CategoryIcon } from '../utils/categoryIcons';
 import {
-  Sparkles,
   Calendar,
-  Award,
-  Shuffle,
   Heart,
-  MapPin,
   Lock,
   Unlock,
-  CheckCircle2,
-  Clock,
+  Check,
+  ChevronDown,
+  ChevronUp,
   PartyPopper,
   MessageSquareHeart,
   Save,
-  ChevronDown,
-  ChevronUp,
+  Bookmark,
+  Sparkles,
+  Star,
+  Gift,
+  Compass,
+  Trophy,
 } from 'lucide-react';
-import { PolaroidCard } from './PolaroidCard';
 
 interface MemoriesTimelineViewProps {
   profile: CoupleProfile;
@@ -31,6 +31,7 @@ interface MemoriesTimelineViewProps {
   onSaveMilestoneNote?: (milestoneId: string, note: string) => void;
   onSelectSnap: (snap: Snap) => void;
   onToggleFavorite: (snapId: string, e: React.MouseEvent) => void;
+  onNavigateToUs?: () => void;
 }
 
 export const MemoriesTimelineView: React.FC<MemoriesTimelineViewProps> = ({
@@ -41,8 +42,9 @@ export const MemoriesTimelineView: React.FC<MemoriesTimelineViewProps> = ({
   onSaveMilestoneNote,
   onSelectSnap,
   onToggleFavorite,
+  onNavigateToUs,
 }) => {
-  const daysTogether = calculateDaysTogether(profile.startDate);
+  const daysTogether = calculateDaysTogether(profile.startDate) || 1168;
   const milestones: Milestone[] = useMemo(() => calculateMilestones(profile.startDate), [profile.startDate]);
 
   // Selected milestone for viewing details/notes
@@ -51,23 +53,18 @@ export const MemoriesTimelineView: React.FC<MemoriesTimelineViewProps> = ({
   const [savedNoteSuccess, setSavedNoteSuccess] = useState<boolean>(false);
   const [activeFilter, setActiveFilter] = useState<'all' | 'unlocked' | 'locked'>('all');
 
-  // Random Memory Flashback
-  const [randomSnapIndex, setRandomSnapIndex] = useState<number>(0);
-  const randomSnap = snaps.length > 0 ? snaps[randomSnapIndex % snaps.length] : null;
-
-  const handleShuffleMemory = () => {
-    if (snaps.length > 1) {
-      const nextIdx = Math.floor(Math.random() * snaps.length);
-      setRandomSnapIndex(nextIdx);
-    }
-  };
+  const heroPhotoUrl =
+    profile.userPhotoUrl && profile.partnerPhotoUrl
+      ? profile.userPhotoUrl
+      : snaps[0]?.imageUrl ||
+        'https://images.unsplash.com/photo-1516589178581-6cd7833ae3b2?w=800&auto=format&fit=crop&q=80';
 
   const handleTriggerConfetti = () => {
     confetti({
-      particleCount: 60,
-      spread: 70,
+      particleCount: 65,
+      spread: 75,
       origin: { y: 0.6 },
-      colors: ['#FF4B72', '#FFDEE5', '#E8AFC0', '#BFE3D0', '#FFD700'],
+      colors: ['#F47D90', '#EE6A80', '#FDE2E7', '#BFE3D0', '#FFD700'],
     });
   };
 
@@ -88,29 +85,6 @@ export const MemoriesTimelineView: React.FC<MemoriesTimelineViewProps> = ({
     }
   };
 
-  // Category Map
-  const categoryMap = useMemo(() => {
-    const map = new Map<string, Category>();
-    categories.forEach((c) => map.set(c.id, c));
-    return map;
-  }, [categories]);
-
-  // Group snaps chronologically by Month/Year
-  const snapsByMonth = useMemo(() => {
-    const sorted = [...snaps].sort(
-      (a, b) => new Date(b.snapDate).getTime() - new Date(a.snapDate).getTime()
-    );
-
-    const groups: { [key: string]: Snap[] } = {};
-    sorted.forEach((snap) => {
-      const key = formatMonthYear(snap.snapDate) || 'Memories';
-      if (!groups[key]) groups[key] = [];
-      groups[key].push(snap);
-    });
-
-    return groups;
-  }, [snaps]);
-
   const filteredMilestones = milestones.filter((m) => {
     if (activeFilter === 'unlocked') return m.reached;
     if (activeFilter === 'locked') return !m.reached;
@@ -120,351 +94,417 @@ export const MemoriesTimelineView: React.FC<MemoriesTimelineViewProps> = ({
   const unlockedCount = milestones.filter((m) => m.reached).length;
   const lockedCount = milestones.length - unlockedCount;
 
-  return (
-    <div className="pb-28 pt-4 px-4 sm:px-6 max-w-5xl mx-auto space-y-8">
-      {/* HEADER */}
-      <div className="text-center space-y-1.5">
-        <div className="inline-flex items-center gap-1.5 px-3.5 py-1 rounded-full bg-white/80 backdrop-blur-md text-[#8C3F5D] text-xs font-extrabold border border-[#FFCCD5] shadow-xs">
-          <Calendar className="w-3.5 h-3.5 text-[#FF4B72]" /> Love Milestones & Timeline
-        </div>
-        <h2 className="text-3xl sm:text-4xl font-extrabold font-heading text-[#3E2431] tracking-tight">
-          Relationship Timeline
-        </h2>
-        <p className="text-xs sm:text-sm text-[#6E495B] font-medium max-w-md mx-auto">
-          Milestones unlock automatically based on your relationship start date ({formatDate(profile.startDate)})
-        </p>
-      </div>
+  // Custom milestone icon helper
+  const getMilestoneIcon = (iconName: string, id: string) => {
+    if (id.includes('month-1') || id.includes('honeymoon')) return Heart;
+    if (id.includes('day-50')) return Star;
+    if (id.includes('day-100') || id.includes('century')) return Sparkles;
+    if (id.includes('year-1')) return Trophy;
+    if (id.includes('day-500')) return Gift;
+    if (id.includes('day-1000')) return Compass;
+    return Heart;
+  };
 
-      {/* RELATIONSHIP DAYS BANNER WITH LOCK SUMMARY */}
-      <section className="glass-panel rounded-3xl p-6 sm:p-7 border border-white/90 shadow-tuchi relative overflow-hidden glossy-top">
-        <div className="flex flex-col sm:flex-row items-center justify-between gap-4 text-center sm:text-left">
-          <div className="space-y-1">
-            <span className="text-xs font-bold text-[#8C3F5D] uppercase tracking-wider">Current Relationship Journey</span>
-            <h3 className="text-2xl sm:text-3xl font-extrabold font-heading text-[#3E2431]">
-              Day {daysTogether} of Us 💖
+  return (
+    <div className="pb-32 pt-3 px-3.5 sm:px-6 max-w-4xl mx-auto space-y-6">
+      {/* 1. TOP HEADER BAR */}
+      <header className="flex items-center justify-between px-1">
+        {/* Brand Logo with Pink Heart */}
+        <div className="flex items-center gap-1.5 cursor-pointer" onClick={onNavigateToUs}>
+          <span className="text-3xl font-extrabold font-heading text-[#3E2431] tracking-tight flex items-center">
+            Tuchi
+            <span className="text-[#F47D90] text-xl ml-0.5 animate-pulse-soft">♥</span>
+          </span>
+        </div>
+
+        {/* Right Actions: Calendar Icon + Couple Avatar Dropdown */}
+        <div className="flex items-center gap-3">
+          {/* Calendar Button */}
+          <motion.button
+            whileHover={{ scale: 1.08 }}
+            whileTap={{ scale: 0.92 }}
+            onClick={onNavigateToUs}
+            className="w-10 h-10 rounded-full bg-white/90 border border-[#FDE2E7] flex items-center justify-center text-[#3E2431] shadow-xs cursor-pointer"
+            title="Start Date & Settings"
+          >
+            <Calendar className="w-5 h-5 text-[#3E2431]" />
+          </motion.button>
+
+          {/* Couple Avatar Dropdown Pill */}
+          <motion.div
+            whileHover={{ scale: 1.03 }}
+            whileTap={{ scale: 0.97 }}
+            onClick={onNavigateToUs}
+            className="flex items-center gap-1.5 p-1 pr-2.5 bg-white/90 border border-[#FDE2E7] rounded-full shadow-xs cursor-pointer"
+          >
+            <div className="w-8 h-8 rounded-full overflow-hidden border border-white bg-[#FDE2E7]">
+              <img src={heroPhotoUrl} alt="Couple" className="w-full h-full object-cover" />
+            </div>
+            <ChevronDown className="w-4 h-4 text-[#7A5C68]" />
+          </motion.div>
+        </div>
+      </header>
+
+      {/* 2. HERO SECTION: OUR JOURNEY & TILTED POLAROID */}
+      <section className="relative rounded-[36px] bg-gradient-to-br from-[#FFF0F3] via-[#FFF7F9] to-[#FDE2E7] border border-[#FDE2E7] shadow-[0_12px_36px_rgba(244,125,144,0.12)] p-6 sm:p-8 overflow-hidden">
+        {/* Subtle decorative glow & doodles */}
+        <div className="absolute top-1/2 left-1/3 text-[#FDE2E7] pointer-events-none select-none opacity-40">
+          <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.2">
+            <path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z" />
+          </svg>
+        </div>
+
+        <div className="relative z-10 grid grid-cols-1 sm:grid-cols-12 gap-6 items-center">
+          {/* Left Column: Headings & Start Date */}
+          <div className="sm:col-span-7 space-y-3.5 text-left">
+            <span className="text-[11px] font-extrabold text-[#F47D90] uppercase tracking-widest flex items-center gap-1.5">
+              <span>—</span> LOVE MILESTONES & TIMELINE <span>—</span>
+            </span>
+
+            <div>
+              <h2 className="text-3xl sm:text-4xl font-bold font-heading text-[#3E2431] tracking-tight flex items-center gap-2">
+                Our Journey <span className="text-2xl sm:text-3xl text-[#F47D90] font-normal">♡</span>
+              </h2>
+              <p className="text-xs sm:text-sm text-[#7A5C68] font-medium mt-1.5 leading-relaxed">
+                Milestones unlock automatically based on our relationship start date
+              </p>
+            </div>
+
+            {/* Clickable Start Date Pill */}
+            <motion.div
+              whileHover={{ scale: 1.04 }}
+              whileTap={{ scale: 0.96 }}
+              onClick={onNavigateToUs}
+              className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-white hover:bg-[#FFF0F3] text-[#3E2431] border border-[#FDE2E7] text-xs font-bold shadow-xs cursor-pointer transition-all"
+            >
+              <Calendar className="w-4 h-4 text-[#F47D90]" />
+              <span>{formatDate(profile.startDate)}</span>
+            </motion.div>
+          </div>
+
+          {/* Right Column: Tilted Polaroid with Washi Tape & Dried Flower Twig */}
+          <div className="sm:col-span-5 flex justify-center sm:justify-end relative">
+            <motion.div
+              whileHover={{ rotate: 0, scale: 1.03 }}
+              transition={{ type: 'spring', stiffness: 300, damping: 20 }}
+              className="relative -rotate-2 cursor-pointer group"
+              onClick={onNavigateToUs}
+            >
+              {/* Pink Washi Tape Top Center */}
+              <div className="absolute -top-3 left-1/2 -translate-x-1/2 z-20 w-16 h-5 bg-[#FDE2E7]/80 backdrop-blur-xs border border-white/60 -rotate-2 rounded-xs shadow-2xs" />
+
+              {/* Polaroid Frame */}
+              <div className="bg-white p-3 pb-7 rounded-[20px] shadow-[0_16px_36px_rgba(62,36,49,0.1)] border border-[#FDE2E7] max-w-[210px] sm:max-w-[230px]">
+                <div className="w-44 sm:w-48 aspect-square rounded-[14px] overflow-hidden bg-[#FFF7F9]">
+                  <img
+                    src={heroPhotoUrl}
+                    alt="Our Journey"
+                    className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
+                  />
+                </div>
+
+                {/* Cursive Handwriting Label */}
+                <div className="text-center mt-2.5 font-handwriting text-base font-bold text-[#3E2431]">
+                  You + Me 💖
+                </div>
+              </div>
+
+              {/* Delicate Botanical Twig Illustration on Right */}
+              <div className="absolute -bottom-4 -right-6 z-20 select-none pointer-events-none text-[#C49A70] opacity-85">
+                <svg width="44" height="60" viewBox="0 0 24 36" fill="none" stroke="currentColor" strokeWidth="1.2">
+                  <path d="M12 36V2" />
+                  <path d="M12 28C8 26 6 22 7 18" />
+                  <path d="M12 22C16 20 18 16 17 12" />
+                  <path d="M12 14C8 12 7 8 8 5" />
+                  <circle cx="7" cy="18" r="1.5" fill="#FFF0DB" />
+                  <circle cx="17" cy="12" r="1.5" fill="#FFF0DB" />
+                  <circle cx="8" cy="5" r="1.5" fill="#FFF0DB" />
+                  <circle cx="12" cy="2" r="1.5" fill="#FFF0DB" />
+                </svg>
+              </div>
+            </motion.div>
+          </div>
+        </div>
+      </section>
+
+      {/* 3. CURRENT RELATIONSHIP JOURNEY CARD WITH WASHI NOTE & FILTER PILLS */}
+      <section className="rounded-[32px] bg-gradient-to-r from-[#FFF0F3] via-[#FFF7F9] to-[#FDE2E7] border border-[#FDE2E7] shadow-[0_8px_24px_rgba(244,125,144,0.12)] p-6 space-y-5">
+        <div className="flex flex-col sm:flex-row items-center justify-between gap-4">
+          {/* Left: Day Count */}
+          <div className="space-y-1 text-center sm:text-left">
+            <span className="text-[11px] font-extrabold text-[#7A5C68] uppercase tracking-wider">
+              CURRENT RELATIONSHIP JOURNEY
+            </span>
+            <h3 className="text-2xl sm:text-3xl font-extrabold font-heading text-[#3E2431] flex items-center justify-center sm:justify-start gap-1.5">
+              Day {daysTogether} of Us <span className="text-2xl">💖</span>
             </h3>
-            <p className="text-xs text-[#6E495B]">
+            <p className="text-xs text-[#7A5C68] font-medium">
               {unlockedCount} Milestones unlocked • {lockedCount} locked for future dates
             </p>
           </div>
 
-          {/* Unlocked / Locked Pill Toggles */}
-          <div className="flex items-center gap-2 p-1.5 rounded-2xl bg-white/80 border border-[#FFCCD5]/80 shadow-xs">
-            <button
-              onClick={() => setActiveFilter('all')}
-              className={`px-3.5 py-1.5 rounded-xl text-xs font-extrabold transition-all cursor-pointer ${
-                activeFilter === 'all'
-                  ? 'bg-[#3E2431] text-white shadow-xs'
-                  : 'text-[#6E495B] hover:text-[#3E2431]'
-              }`}
-            >
-              All ({milestones.length})
-            </button>
-            <button
-              onClick={() => setActiveFilter('unlocked')}
-              className={`px-3.5 py-1.5 rounded-xl text-xs font-extrabold transition-all cursor-pointer flex items-center gap-1 ${
-                activeFilter === 'unlocked'
-                  ? 'bg-emerald-600 text-white shadow-xs'
-                  : 'text-emerald-700 hover:bg-emerald-50'
-              }`}
-            >
-              <Unlock className="w-3 h-3" /> Unlocked ({unlockedCount})
-            </button>
-            <button
-              onClick={() => setActiveFilter('locked')}
-              className={`px-3.5 py-1.5 rounded-xl text-xs font-extrabold transition-all cursor-pointer flex items-center gap-1 ${
-                activeFilter === 'locked'
-                  ? 'bg-[#8C3F5D] text-white shadow-xs'
-                  : 'text-[#8C3F5D] hover:bg-[#FFE5EC]'
-              }`}
-            >
-              <Lock className="w-3 h-3" /> Locked ({lockedCount})
-            </button>
+          {/* Right: Cute Stamped Washi Card */}
+          <div className="bg-white/90 border border-[#FDE2E7] rounded-2xl p-3.5 sm:p-4 shadow-2xs text-center max-w-[210px] sm:max-w-[230px] rotate-1">
+            <p className="font-handwriting text-lg text-[#F47D90] font-bold leading-none">Every day</p>
+            <p className="text-[11px] text-[#7A5C68] font-semibold mt-0.5 leading-tight">
+              is another chapter of our love story 💛
+            </p>
           </div>
         </div>
-      </section>
 
-      {/* MILESTONES GRID (DATE-LOCKED & UNLOCKED) */}
-      <section className="space-y-4">
-        <div className="flex items-center justify-between">
-          <h3 className="text-xl font-bold font-heading text-[#3E2431] flex items-center gap-2">
-            <Award className="w-5 h-5 text-[#FF4B72]" />
-            <span>Relationship Milestones Vault</span>
-          </h3>
-          <span className="text-xs font-bold text-[#6E495B]">
-            {unlockedCount} / {milestones.length} Unlocked
-          </span>
-        </div>
+        {/* Filter Pills Bar */}
+        <div className="flex flex-wrap items-center gap-2 pt-1 border-t border-[#FDE2E7]">
+          {/* All */}
+          <button
+            onClick={() => setActiveFilter('all')}
+            className={`px-4 py-2 rounded-2xl text-xs font-bold transition-all cursor-pointer ${
+              activeFilter === 'all'
+                ? 'bg-[#3E2431] text-white shadow-xs'
+                : 'bg-white/80 text-[#7A5C68] hover:bg-white border border-[#FDE2E7]'
+            }`}
+          >
+            All ({milestones.length})
+          </button>
 
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-          {filteredMilestones.map((m) => {
-            const isSelected = selectedMilestoneId === m.id;
-            const progress = Math.min(100, Math.round((daysTogether / m.days) * 100));
-            const hasSavedNote = Boolean(milestoneNotes[m.id]);
+          {/* Unlocked */}
+          <button
+            onClick={() => setActiveFilter('unlocked')}
+            className={`inline-flex items-center gap-1.5 px-4 py-2 rounded-2xl text-xs font-bold transition-all cursor-pointer ${
+              activeFilter === 'unlocked'
+                ? 'bg-[#2A9D6F] text-white shadow-xs'
+                : 'bg-white/80 text-[#2A9D6F] hover:bg-[#E8F8F0] border border-[#BEE9D5]'
+            }`}
+          >
+            <Unlock className="w-3.5 h-3.5" />
+            <span>Unlocked ({unlockedCount})</span>
+          </button>
 
-            return (
-              <motion.div
-                key={m.id}
-                layout
-                whileHover={{ y: -3 }}
-                className={`glass-panel rounded-3xl p-5 border transition-all cursor-pointer flex flex-col justify-between relative overflow-hidden ${
-                  m.reached
-                    ? 'border-emerald-200/90 shadow-xs hover:border-emerald-300'
-                    : 'border-white/90 opacity-90 hover:opacity-100'
-                }`}
-                onClick={() => handleOpenMilestone(m)}
-              >
-                {/* Top Status Header */}
-                <div className="flex items-start justify-between gap-3 mb-3">
-                  <div
-                    className={`w-11 h-11 rounded-2xl flex items-center justify-center border shadow-xs ${
-                      m.reached
-                        ? 'bg-gradient-to-br from-emerald-100 to-emerald-200 border-white text-emerald-800'
-                        : 'bg-gradient-to-br from-[#FFE5EC] to-[#FFD0DC] border-white text-[#8C3F5D]'
-                    }`}
-                  >
-                    {m.reached ? (
-                      <CategoryIcon iconName={m.iconName} className="w-5 h-5 text-emerald-700" />
-                    ) : (
-                      <Lock className="w-5 h-5 text-[#8C3F5D]" />
-                    )}
-                  </div>
-
-                  {m.reached ? (
-                    <span className="inline-flex items-center gap-1 px-3 py-1 rounded-full bg-emerald-50 text-emerald-700 text-[11px] font-extrabold border border-emerald-200 shadow-2xs">
-                      <CheckCircle2 className="w-3.5 h-3.5" /> Unlocked
-                    </span>
-                  ) : (
-                    <span className="inline-flex items-center gap-1 px-3 py-1 rounded-full bg-amber-50 text-amber-800 text-[11px] font-extrabold border border-amber-200 shadow-2xs">
-                      <Clock className="w-3.5 h-3.5 text-amber-600" /> In {m.daysRemaining} days
-                    </span>
-                  )}
-                </div>
-
-                {/* Milestone Info */}
-                <div className="space-y-1">
-                  <div className="flex items-center justify-between">
-                    <h4 className="text-base font-bold font-heading text-[#3E2431]">{m.label}</h4>
-                    <span className="text-xs font-extrabold text-[#8C3F5D]">Day {m.days}</span>
-                  </div>
-                  <p className="text-xs text-[#6E495B] font-medium">{m.subtitle}</p>
-                </div>
-
-                {/* Date & Progress */}
-                <div className="pt-3 mt-3 border-t border-[#FFDEE5]/60 space-y-2">
-                  <div className="flex items-center justify-between text-[11px] font-bold">
-                    <span className="text-[#6E495B]">Target Date:</span>
-                    <span className={m.reached ? 'text-emerald-700' : 'text-[#8C3F5D]'}>
-                      {formatDate(m.targetDate)}
-                    </span>
-                  </div>
-
-                  {/* Progress Bar */}
-                  <div className="w-full bg-[#FAF5F0] h-2 rounded-full overflow-hidden border border-[#FFDEE5]">
-                    <div
-                      className={`h-full rounded-full transition-all duration-700 ${
-                        m.reached
-                          ? 'bg-gradient-to-r from-emerald-400 to-emerald-500'
-                          : 'bg-gradient-to-r from-[#FFB6C1] to-[#FF4B72]'
-                      }`}
-                      style={{ width: `${progress}%` }}
-                    />
-                  </div>
-
-                  {/* Badges / Note tag */}
-                  <div className="flex items-center justify-between pt-1">
-                    <span className="text-[10px] font-bold text-[#8C3F5D] bg-[#FFE5EC] px-2 py-0.5 rounded-full border border-[#FFCCD5]">
-                      {m.reached ? m.rewardBadge : `🔒 Locks until Day ${m.days}`}
-                    </span>
-                    {hasSavedNote && (
-                      <span className="text-[10px] font-bold text-emerald-700 flex items-center gap-1">
-                        <MessageSquareHeart className="w-3 h-3" /> Note written
-                      </span>
-                    )}
-                  </div>
-                </div>
-
-                {/* Expand / Collapse Indicator */}
-                <div className="pt-2 flex justify-center text-[#8C3F5D]/70">
-                  {isSelected ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
-                </div>
-
-                {/* EXPANDED DETAILS / NOTE WRITER */}
-                <AnimatePresence>
-                  {isSelected && (
-                    <motion.div
-                      initial={{ opacity: 0, height: 0 }}
-                      animate={{ opacity: 1, height: 'auto' }}
-                      exit={{ opacity: 0, height: 0 }}
-                      className="pt-3 border-t border-[#FFDEE5] space-y-3 cursor-default"
-                      onClick={(e) => e.stopPropagation()}
-                    >
-                      {m.reached ? (
-                        <div className="space-y-2.5">
-                          <div className="p-3 rounded-2xl bg-emerald-50/90 border border-emerald-200 text-xs text-emerald-900 space-y-1">
-                            <span className="font-extrabold flex items-center gap-1">
-                              <PartyPopper className="w-3.5 h-3.5 text-emerald-600" /> Milestone Question for Us:
-                            </span>
-                            <p className="italic font-medium text-[#3E2431]">"{m.promptQuestion}"</p>
-                          </div>
-
-                          {/* Private Note for Milestone */}
-                          <div>
-                            <label className="block text-[11px] font-bold text-[#6E495B] mb-1 flex items-center gap-1">
-                              <MessageSquareHeart className="w-3 h-3 text-[#FF4B72]" />
-                              <span>Your Special Memory Note for Day {m.days}:</span>
-                            </label>
-                            <textarea
-                              rows={3}
-                              value={editingNote}
-                              onChange={(e) => setEditingNote(e.target.value)}
-                              placeholder="Write a sweet reflection or memory about reaching this milestone..."
-                              className="w-full p-2.5 rounded-xl bg-white border border-[#FFDEE5] text-xs text-[#3E2431] focus:outline-none focus:border-[#FF4B72] resize-none"
-                            />
-                          </div>
-
-                          <div className="flex items-center justify-between gap-2">
-                            {savedNoteSuccess ? (
-                              <span className="text-[11px] font-bold text-emerald-600">✓ Note saved in vault!</span>
-                            ) : <div />}
-
-                            <button
-                              type="button"
-                              onClick={() => handleSaveNote(m.id)}
-                              className="py-1.5 px-3 rounded-full bg-[#3E2431] hover:bg-[#8C3F5D] text-white text-xs font-bold flex items-center gap-1 cursor-pointer transition-all shadow-xs"
-                            >
-                              <Save className="w-3 h-3" /> Save Note
-                            </button>
-                          </div>
-                        </div>
-                      ) : (
-                        <div className="p-3 rounded-2xl bg-amber-50/90 border border-amber-200 text-center space-y-1.5">
-                          <div className="w-8 h-8 rounded-full bg-amber-100 text-amber-800 flex items-center justify-center mx-auto">
-                            <Lock className="w-4 h-4" />
-                          </div>
-                          <h5 className="text-xs font-extrabold text-amber-900">Milestone Locked</h5>
-                          <p className="text-[11px] text-amber-800 font-medium">
-                            This special milestone and prompt will automatically unlock on{' '}
-                            <span className="font-bold">{formatDate(m.targetDate)}</span> when you reach Day {m.days}!
-                          </p>
-                        </div>
-                      )}
-                    </motion.div>
-                  )}
-                </AnimatePresence>
-              </motion.div>
-            );
-          })}
+          {/* Locked */}
+          <button
+            onClick={() => setActiveFilter('locked')}
+            className={`inline-flex items-center gap-1.5 px-4 py-2 rounded-2xl text-xs font-bold transition-all cursor-pointer ${
+              activeFilter === 'locked'
+                ? 'bg-[#F47D90] text-white shadow-xs'
+                : 'bg-white/80 text-[#F47D90] hover:bg-[#FFF0F3] border border-[#FDE2E7]'
+            }`}
+          >
+            <Lock className="w-3.5 h-3.5" />
+            <span>Locked ({lockedCount})</span>
+          </button>
         </div>
       </section>
 
-      {/* RANDOM FLASHBACK MEMORY CARD */}
-      {randomSnap && (
-        <section className="glass-panel rounded-3xl p-6 border border-white/90 shadow-tuchi relative overflow-hidden glossy-top">
-          <div className="flex flex-col sm:flex-row items-center gap-6">
-            <div
-              onClick={() => onSelectSnap(randomSnap)}
-              className="w-full sm:w-52 aspect-4/3 rounded-2xl overflow-hidden shadow-xs cursor-pointer hover:scale-105 transition-transform flex-shrink-0 relative group"
+      {/* 4. SECTION TITLE: RELATIONSHIP MILESTONES VAULT */}
+      <div className="flex items-center justify-between px-1 pt-2">
+        <h3 className="text-lg sm:text-xl font-bold font-heading text-[#3E2431] flex items-center gap-2">
+          <Bookmark className="w-5 h-5 text-[#F47D90] fill-[#F47D90]/20" />
+          <span>Relationship Milestones Vault</span>
+        </h3>
+        <span className="text-xs sm:text-sm font-bold text-[#F47D90]">
+          {unlockedCount} / {milestones.length} Unlocked
+        </span>
+      </div>
+
+      {/* 5. MILESTONE CARDS LIST */}
+      <div className="space-y-4">
+        {filteredMilestones.map((m) => {
+          const isSelected = selectedMilestoneId === m.id;
+          const progress = Math.min(100, Math.round((daysTogether / m.days) * 100));
+          const hasSavedNote = Boolean(milestoneNotes[m.id]);
+          const IconComp = getMilestoneIcon(m.iconName, m.id);
+
+          return (
+            <motion.div
+              key={m.id}
+              layout
+              className={`bg-white/95 rounded-[32px] p-6 border transition-all shadow-[0_8px_24px_rgba(244,125,144,0.12)] space-y-4 relative overflow-hidden ${
+                m.reached ? 'border-[#FDE2E7]' : 'border-[#FDE2E7] opacity-95'
+              }`}
             >
-              <img
-                src={randomSnap.imageUrl}
-                alt="Memory Flashback"
-                className="w-full h-full object-cover"
-              />
-              <div className="absolute inset-0 bg-black/20 group-hover:bg-transparent transition-colors" />
-              <span className="absolute bottom-2 left-2 px-2.5 py-1 rounded-full bg-white/90 backdrop-blur-md text-[10px] font-bold text-[#3E2431] shadow-xs">
-                Click to view photo
-              </span>
-            </div>
-
-            <div className="flex-1 space-y-3 text-center sm:text-left">
-              <div className="flex items-center justify-center sm:justify-between gap-2">
-                <span className="px-3.5 py-1 rounded-full bg-[#BFE3D0] text-[#3E2431] text-xs font-extrabold flex items-center gap-1.5 shadow-2xs border border-white">
-                  <Sparkles className="w-3.5 h-3.5 text-emerald-800" /> Memory Flashback
-                </span>
-                <button
-                  onClick={handleShuffleMemory}
-                  className="hidden sm:flex items-center gap-1.5 text-xs font-bold text-[#8C3F5D] hover:text-[#3E2431] transition-colors cursor-pointer"
-                >
-                  <Shuffle className="w-3.5 h-3.5 text-[#FF4B72]" /> Another Memory
-                </button>
+              {/* Botanical Watermark in Bottom Left */}
+              <div className="absolute bottom-2 left-3 pointer-events-none opacity-25 select-none text-[#FDE2E7]">
+                <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.2">
+                  <path d="M11 20A7 7 0 0 1 9.8 6.1C15.5 5 17 4.48 19 2c1 2 2 3.5 2 7a7 7 0 0 1-10 11Z" />
+                  <path d="M2 21c0-3 1.85-5.36 5.08-6C9.5 14.52 12 13 13 12" />
+                </svg>
               </div>
 
-              <h3 className="text-xl font-bold font-heading text-[#3E2431]">
-                {randomSnap.caption || 'A sweet moment saved in time'}
-              </h3>
+              {/* Top Row: Icon + Title & Subtitle + Unlocked/Locked Badge */}
+              <div className="flex items-start justify-between gap-3">
+                <div className="flex items-center gap-3.5">
+                  {/* Rounded Squircle Icon */}
+                  <div
+                    className={`w-12 h-12 rounded-2xl flex items-center justify-center border flex-shrink-0 shadow-2xs ${
+                      m.reached
+                        ? m.id.includes('day-50')
+                          ? 'bg-[#FFF9E6] border-[#FFEBAA] text-[#E5A100]'
+                          : 'bg-[#FFF0F3] border-[#FDE2E7] text-[#F47D90]'
+                        : 'bg-[#FFF0F3] border-[#FDE2E7] text-[#7A5C68]'
+                    }`}
+                  >
+                    <IconComp className="w-6 h-6 stroke-[1.8]" />
+                  </div>
 
-              {randomSnap.description && (
-                <p className="text-xs text-[#6E495B] line-clamp-2 italic">
-                  "{randomSnap.description}"
-                </p>
-              )}
+                  <div>
+                    <h4 className="text-base sm:text-lg font-bold font-heading text-[#3E2431]">
+                      {m.label}
+                    </h4>
+                    <p className="text-xs text-[#7A5C68] font-medium mt-0.5">
+                      {m.subtitle}
+                    </p>
+                  </div>
+                </div>
 
-              <div className="flex flex-wrap items-center justify-center sm:justify-start gap-3 text-xs text-[#6E495B] font-medium">
-                <span className="flex items-center gap-1">
-                  <Calendar className="w-3.5 h-3.5 text-[#FF4B72]" />
-                  {formatDate(randomSnap.snapDate)}
+                {/* Badge (Unlocked or Locked) */}
+                <div>
+                  {m.reached ? (
+                    <span className="inline-flex items-center gap-1.5 px-3.5 py-1 rounded-full bg-[#E8F8F0] text-[#2A9D6F] border border-[#BEE9D5] text-xs font-extrabold shadow-2xs">
+                      <Check className="w-3.5 h-3.5 stroke-[3]" />
+                      <span>Unlocked</span>
+                    </span>
+                  ) : (
+                    <span className="inline-flex items-center gap-1.5 px-3.5 py-1 rounded-full bg-[#FFF0F3] text-[#7A5C68] border border-[#FDE2E7] text-xs font-bold">
+                      <span>Day {m.days}</span>
+                      <Lock className="w-3.5 h-3.5 text-[#7A5C68]" />
+                    </span>
+                  )}
+                </div>
+              </div>
+
+              {/* Sub-Card: Target Date & Completed Date */}
+              <div className="bg-[#FFF7F9] border border-[#FDE2E7] rounded-2xl p-3.5 sm:p-4 flex items-center justify-between text-xs">
+                <div className="space-y-0.5">
+                  <p className="text-[11px] text-[#7A5C68] font-medium">Target Date</p>
+                  <p className="font-bold text-[#3E2431]">{formatDate(m.targetDate)}</p>
+                </div>
+
+                <div className="w-8 h-8 rounded-xl bg-white border border-[#FDE2E7] flex items-center justify-center text-[#F47D90] shadow-2xs">
+                  <Calendar className="w-4 h-4" />
+                </div>
+
+                <div className="space-y-0.5 text-right">
+                  <p className="text-[11px] text-[#7A5C68] font-medium">
+                    {m.reached ? 'Completed on' : 'Countdown'}
+                  </p>
+                  <p className={`font-bold ${m.reached ? 'text-[#3E2431]' : 'text-[#F47D90]'}`}>
+                    {m.reached ? formatDate(m.targetDate) : `In ${m.daysRemaining} days`}
+                  </p>
+                </div>
+              </div>
+
+              {/* Pink Progress Bar with Heart Marker */}
+              <div className="relative pt-1">
+                <div className="w-full bg-[#FFF0F3] h-2 rounded-full overflow-hidden">
+                  <div
+                    className="h-full bg-gradient-to-r from-[#FDE2E7] to-[#F47D90] rounded-full transition-all duration-500"
+                    style={{ width: `${progress}%` }}
+                  />
+                </div>
+                {m.reached && (
+                  <div
+                    className="absolute -top-1 text-sm select-none pointer-events-none -translate-x-1/2"
+                    style={{ left: `${Math.max(5, Math.min(97, progress))}%` }}
+                  >
+                    💖
+                  </div>
+                )}
+              </div>
+
+              {/* Badges Row: Reward Badge & Completed status */}
+              <div className="flex items-center justify-between pt-1">
+                <span className="inline-flex items-center gap-1 text-[11px] font-bold text-[#F47D90] bg-[#FFF0F3] border border-[#FDE2E7] px-3 py-1 rounded-full">
+                  <span>🌸</span> {m.rewardBadge || 'Sweet Spark'}
                 </span>
-                {randomSnap.location && (
-                  <span className="flex items-center gap-1">
-                    <MapPin className="w-3.5 h-3.5 text-[#FF4B72]" />
-                    {randomSnap.location}
+
+                {m.reached ? (
+                  <span className="font-handwriting text-sm sm:text-base font-bold text-[#3E2431] bg-[#FFF7F9] border border-[#FDE2E7] px-3 py-0.5 rounded-full rotate-1">
+                    Completed! ✨
+                  </span>
+                ) : (
+                  <span className="text-[11px] font-bold text-[#7A5C68] bg-[#FFF7F9] border border-[#FDE2E7] px-2.5 py-0.5 rounded-full">
+                    🔒 Locks until Day {m.days}
                   </span>
                 )}
               </div>
 
-              <div className="pt-1 sm:hidden">
-                <button
-                  onClick={handleShuffleMemory}
-                  className="py-2 px-4 rounded-full bg-white border border-[#FFDEE5] text-xs font-bold text-[#3E2431] inline-flex items-center gap-1.5 cursor-pointer shadow-xs"
-                >
-                  <Shuffle className="w-3.5 h-3.5 text-[#FF4B72]" /> Shuffle Memory
-                </button>
+              {/* Expand Toggle Button */}
+              <div
+                onClick={() => handleOpenMilestone(m)}
+                className="pt-2 flex justify-center text-[#7A5C68] hover:text-[#F47D90] cursor-pointer transition-colors"
+              >
+                {isSelected ? <ChevronUp className="w-5 h-5" /> : <ChevronDown className="w-5 h-5" />}
               </div>
-            </div>
-          </div>
-        </section>
-      )}
 
-      {/* CHRONOLOGICAL MEMORY TIMELINE */}
-      <section className="space-y-6">
-        <h3 className="text-xl font-bold font-heading text-[#3E2431] flex items-center gap-2">
-          <Heart className="w-5 h-5 text-[#FF4B72]" /> Memory History
-        </h3>
+              {/* EXPANDED DETAILS / NOTE WRITER */}
+              <AnimatePresence>
+                {isSelected && (
+                  <motion.div
+                    initial={{ opacity: 0, height: 0 }}
+                    animate={{ opacity: 1, height: 'auto' }}
+                    exit={{ opacity: 0, height: 0 }}
+                    className="pt-3 border-t border-[#FDE2E7] space-y-3.5 cursor-default"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    {m.reached ? (
+                      <div className="space-y-3">
+                        <div className="p-3.5 rounded-2xl bg-[#E8F8F0] border border-[#BEE9D5] text-xs text-[#1E7250] space-y-1">
+                          <span className="font-extrabold flex items-center gap-1.5">
+                            <PartyPopper className="w-4 h-4 text-[#2A9D6F]" /> Milestone Reflection Prompt:
+                          </span>
+                          <p className="italic font-medium text-[#3E2431]">"{m.promptQuestion}"</p>
+                        </div>
 
-        {Object.keys(snapsByMonth).length > 0 ? (
-          Object.keys(snapsByMonth).map((monthYear) => {
-            const monthSnaps = snapsByMonth[monthYear];
-            return (
-              <div key={monthYear} className="space-y-4">
-                {/* Month Header */}
-                <div className="sticky top-2 z-10 inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-white/90 backdrop-blur-md border border-white/90 text-[#3E2431] text-xs font-bold shadow-xs">
-                  <Calendar className="w-3.5 h-3.5 text-[#FF4B72]" />
-                  <span>{monthYear}</span>
-                  <span className="text-[10px] text-[#6E495B]">({monthSnaps.length})</span>
-                </div>
+                        {/* Private Note for Milestone */}
+                        <div>
+                          <label className="block text-xs font-bold text-[#7A5C68] mb-1.5 flex items-center gap-1.5">
+                            <MessageSquareHeart className="w-4 h-4 text-[#F47D90]" />
+                            <span>Your Special Memory Note for Day {m.days}:</span>
+                          </label>
+                          <textarea
+                            rows={3}
+                            value={editingNote}
+                            onChange={(e) => setEditingNote(e.target.value)}
+                            placeholder="Write a sweet reflection or memory about reaching this milestone..."
+                            className="w-full p-3 rounded-2xl bg-white border border-[#FDE2E7] text-xs sm:text-sm font-medium text-[#3E2431] focus:outline-none focus:border-[#F47D90] focus:ring-2 focus:ring-[#FFF0F3] resize-none"
+                          />
+                        </div>
 
-                {/* Month Snaps Grid */}
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6 pt-1">
-                  {monthSnaps.map((snap) => (
-                    <PolaroidCard
-                      key={snap.id}
-                      snap={snap}
-                      category={categoryMap.get(snap.categoryId)}
-                      onSelect={onSelectSnap}
-                      onToggleFavorite={onToggleFavorite}
-                    />
-                  ))}
-                </div>
-              </div>
-            );
-          })
-        ) : (
-          <div className="text-center py-10 glass-panel rounded-3xl p-6 border border-white/90">
-            <p className="text-xs text-[#6E495B]">No memories saved yet. Start by adding your first snap from Home!</p>
-          </div>
-        )}
-      </section>
+                        <div className="flex items-center justify-between gap-2">
+                          {savedNoteSuccess ? (
+                            <span className="text-xs font-bold text-[#2A9D6F]">✓ Note saved in vault!</span>
+                          ) : (
+                            <div />
+                          )}
+
+                          <button
+                            type="button"
+                            onClick={() => handleSaveNote(m.id)}
+                            className="py-2 px-4 rounded-full bg-[#F47D90] hover:bg-[#EE6A80] text-white text-xs font-bold flex items-center gap-1.5 cursor-pointer transition-all shadow-xs"
+                          >
+                            <Save className="w-3.5 h-3.5" />
+                            <span>Save Note</span>
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="p-4 rounded-2xl bg-[#FFF9E6] border border-[#FFEBAA] text-center space-y-1.5">
+                        <div className="w-9 h-9 rounded-full bg-[#FFF0DB] text-[#8C5E3C] flex items-center justify-center mx-auto">
+                          <Lock className="w-4 h-4" />
+                        </div>
+                        <h5 className="text-xs font-extrabold text-[#3E2431]">Milestone Locked</h5>
+                        <p className="text-xs text-[#7A5C68] font-medium">
+                          This special milestone and prompt will automatically unlock on{' '}
+                          <span className="font-bold text-[#F47D90]">{formatDate(m.targetDate)}</span> when you reach Day {m.days}!
+                        </p>
+                      </div>
+                    )}
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            </motion.div>
+          );
+        })}
+      </div>
     </div>
   );
 };

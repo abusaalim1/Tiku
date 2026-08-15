@@ -38,13 +38,13 @@ export const AlbumsView: React.FC<AlbumsViewProps> = ({
     <div className="pb-28 pt-4 px-4 sm:px-6 max-w-5xl mx-auto space-y-6">
       {/* HEADER */}
       <div className="text-center space-y-1.5">
-        <div className="inline-flex items-center gap-1.5 px-3.5 py-1 rounded-full bg-white/80 backdrop-blur-md text-[#8C3F5D] text-xs font-extrabold border border-[#FFCCD5] shadow-xs">
-          <FolderHeart className="w-3.5 h-3.5 text-[#FF4B72]" /> Couple Collections
+        <div className="inline-flex items-center gap-1.5 px-3.5 py-1 rounded-full bg-white/80 backdrop-blur-md text-[#3E2431] text-xs font-extrabold border border-[#FDE2E7] shadow-xs">
+          <FolderHeart className="w-3.5 h-3.5 text-[#F47D90]" /> Couple Collections
         </div>
         <h2 className="text-3xl sm:text-4xl font-extrabold font-heading text-[#3E2431] tracking-tight">
           Photo Albums
         </h2>
-        <p className="text-xs sm:text-sm text-[#6E495B] font-medium">
+        <p className="text-xs sm:text-sm text-[#7A5C68] font-medium">
           Your active memory albums categorized with love
         </p>
       </div>
@@ -61,16 +61,16 @@ export const AlbumsView: React.FC<AlbumsViewProps> = ({
             className="space-y-6"
           >
             {/* Back to all albums banner */}
-            <div className="glass-panel rounded-3xl p-4 sm:p-5 flex items-center justify-between border border-white/90 shadow-tuchi glossy-top">
+            <div className="glass-panel rounded-3xl p-4 sm:p-5 flex items-center justify-between border border-[#FDE2E7] shadow-tuchi glossy-top">
               <div className="flex items-center gap-3.5">
-                <div className="w-11 h-11 rounded-2xl bg-gradient-to-br from-[#FFE5EC] to-[#FFD0DC] border border-white flex items-center justify-center shadow-xs">
-                  <CategoryIcon iconName={activeCategory.iconName} categoryName={activeCategory.name} className="w-5 h-5 text-[#8C3F5D]" />
+                <div className="w-11 h-11 rounded-2xl bg-gradient-to-br from-[#FFF0F3] to-[#FDE2E7] border border-[#FDE2E7] flex items-center justify-center shadow-xs">
+                  <CategoryIcon iconName={activeCategory.iconName} categoryName={activeCategory.name} className="w-5 h-5 text-[#F47D90]" />
                 </div>
                 <div>
                   <h3 className="text-xl font-bold font-heading text-[#3E2431]">
                     {activeCategory.name} Album
                   </h3>
-                  <p className="text-xs text-[#6E495B] font-medium">
+                  <p className="text-xs text-[#7A5C68] font-medium">
                     {activeSnaps.length} {activeSnaps.length === 1 ? 'photo memory' : 'photo memories'}
                   </p>
                 </div>
@@ -80,7 +80,7 @@ export const AlbumsView: React.FC<AlbumsViewProps> = ({
                 whileHover={{ scale: 1.05 }}
                 whileTap={{ scale: 0.95 }}
                 onClick={() => setSelectedAlbumId(null)}
-                className="py-2.5 px-4 rounded-full bg-white/90 hover:bg-white text-[#8C3F5D] text-xs font-bold border border-[#FFDEE5] shadow-xs cursor-pointer flex items-center gap-1.5 transition-all"
+                className="py-2.5 px-4 rounded-full bg-white hover:bg-[#FFF0F3] text-[#3E2431] text-xs font-bold border border-[#FDE2E7] shadow-xs cursor-pointer flex items-center gap-1.5 transition-all"
               >
                 <ArrowLeft className="w-3.5 h-3.5" /> Back to Albums
               </motion.button>
@@ -100,12 +100,12 @@ export const AlbumsView: React.FC<AlbumsViewProps> = ({
                 ))}
               </div>
             ) : (
-              <div className="glass-panel rounded-3xl p-10 text-center space-y-3 border border-white/80">
-                <Sparkles className="w-8 h-8 text-[#8C3F5D] mx-auto" />
+              <div className="glass-panel rounded-3xl p-10 text-center space-y-3 border border-[#FDE2E7]">
+                <Sparkles className="w-8 h-8 text-[#F47D90] mx-auto" />
                 <h4 className="text-lg font-bold font-heading text-[#3E2431]">
                   No snaps in {activeCategory.name} yet
                 </h4>
-                <p className="text-xs text-[#6E495B]">Add photos under this category from the home screen!</p>
+                <p className="text-xs text-[#7A5C68]">Add photos under this category from the home screen!</p>
               </div>
             )}
           </motion.div>
@@ -129,10 +129,10 @@ export const AlbumsView: React.FC<AlbumsViewProps> = ({
                   whileHover={{ y: -5, scale: 1.02 }}
                   whileTap={{ scale: 0.98 }}
                   onClick={() => setSelectedAlbumId(cat.id)}
-                  className="glass-panel glass-panel-hover rounded-3xl p-4 border border-white/90 shadow-tuchi cursor-pointer group flex flex-col justify-between glossy-top"
+                  className="glass-panel glass-panel-hover rounded-3xl p-4 border border-[#FDE2E7] shadow-tuchi cursor-pointer group flex flex-col justify-between glossy-top"
                 >
                   {/* Album Cover Photo Stack */}
-                  <div className="relative aspect-4/3 w-full rounded-2xl overflow-hidden bg-[#FAF5F0] border border-[#FFDEE5]/60 mb-3.5 shadow-2xs">
+                  <div className="relative aspect-4/3 w-full rounded-2xl overflow-hidden bg-[#FFF7F9] border border-[#FDE2E7] mb-3.5 shadow-2xs">
                     {coverSnap ? (
                       <img
                         src={coverSnap.imageUrl}
@@ -142,12 +142,12 @@ export const AlbumsView: React.FC<AlbumsViewProps> = ({
                     ) : null}
 
                     {/* Top Category Badge */}
-                    <div className="absolute top-3 left-3 px-3 py-1 rounded-full bg-white/90 backdrop-blur-xl text-xs font-extrabold text-[#3E2431] flex items-center gap-1.5 shadow-xs border border-white/80">
+                    <div className="absolute top-3 left-3 px-3 py-1 rounded-full bg-white/90 backdrop-blur-xl text-xs font-extrabold text-[#3E2431] flex items-center gap-1.5 shadow-xs border border-[#FDE2E7]">
                       <span
                         className="w-2.5 h-2.5 rounded-full ring-2 ring-white/60"
-                        style={{ backgroundColor: cat.color || '#E8AFC0' }}
+                        style={{ backgroundColor: cat.color || '#F47D90' }}
                       />
-                      <CategoryIcon iconName={cat.iconName} categoryName={cat.name} className="w-3.5 h-3.5 text-[#8C3F5D]" />
+                      <CategoryIcon iconName={cat.iconName} categoryName={cat.name} className="w-3.5 h-3.5 text-[#F47D90]" />
                       <span>{cat.name}</span>
                     </div>
                   </div>
@@ -155,16 +155,16 @@ export const AlbumsView: React.FC<AlbumsViewProps> = ({
                   {/* Album Info */}
                   <div className="flex items-center justify-between px-1">
                     <div>
-                      <h3 className="text-lg font-bold font-heading text-[#3E2431] group-hover:text-[#FF4B72] transition-colors">
+                      <h3 className="text-lg font-bold font-heading text-[#3E2431] group-hover:text-[#F47D90] transition-colors">
                         {cat.name}
                       </h3>
-                      <p className="text-xs text-[#6E495B] font-medium">
+                      <p className="text-xs text-[#7A5C68] font-medium">
                         {catSnaps.length} {catSnaps.length === 1 ? 'photo' : 'photos'}
                         {coverSnap && ` • ${formatDate(coverSnap.snapDate)}`}
                       </p>
                     </div>
 
-                    <div className="w-8 h-8 rounded-full bg-[#FFE5EC] text-[#8C3F5D] flex items-center justify-center group-hover:translate-x-1 group-hover:bg-[#FF4B72] group-hover:text-white transition-all shadow-xs border border-white/60">
+                    <div className="w-8 h-8 rounded-full bg-[#FFF0F3] text-[#F47D90] flex items-center justify-center group-hover:translate-x-1 group-hover:bg-[#F47D90] group-hover:text-white transition-all shadow-xs border border-[#FDE2E7]">
                       <ArrowRight className="w-4 h-4" />
                     </div>
                   </div>
@@ -174,12 +174,12 @@ export const AlbumsView: React.FC<AlbumsViewProps> = ({
 
             {/* Empty state when NO albums have photos */}
             {nonEmptyCategories.length === 0 && (
-              <div className="col-span-full glass-panel rounded-3xl p-10 text-center space-y-3 border border-white/80 my-4">
-                <div className="w-14 h-14 rounded-full bg-[#FFE5EC] text-[#FF4B72] flex items-center justify-center mx-auto border border-white shadow-xs">
+              <div className="col-span-full glass-panel rounded-3xl p-10 text-center space-y-3 border border-[#FDE2E7] my-4">
+                <div className="w-14 h-14 rounded-full bg-[#FFF0F3] text-[#F47D90] flex items-center justify-center mx-auto border border-[#FDE2E7] shadow-xs">
                   <ImageIcon className="w-7 h-7" />
                 </div>
                 <h3 className="text-xl font-bold font-heading text-[#3E2431]">No Photo Albums Yet</h3>
-                <p className="text-xs text-[#6E495B] max-w-sm mx-auto">
+                <p className="text-xs text-[#7A5C68] max-w-sm mx-auto">
                   Upload your first photo memory from the home screen, and its album will automatically appear here!
                 </p>
               </div>
@@ -190,14 +190,14 @@ export const AlbumsView: React.FC<AlbumsViewProps> = ({
               whileHover={{ scale: 1.02, y: -2 }}
               whileTap={{ scale: 0.98 }}
               onClick={onOpenAddCategory}
-              className="rounded-3xl p-6 border-2 border-dashed border-[#E8AFC0]/80 hover:border-[#FF4B72] bg-white/40 hover:bg-white/80 backdrop-blur-md text-center flex flex-col items-center justify-center gap-2.5 transition-all cursor-pointer min-h-[200px]"
+              className="rounded-3xl p-6 border-2 border-dashed border-[#FDE2E7] hover:border-[#F47D90] bg-white/40 hover:bg-white/80 backdrop-blur-md text-center flex flex-col items-center justify-center gap-2.5 transition-all cursor-pointer min-h-[200px]"
             >
-              <div className="w-12 h-12 rounded-2xl bg-gradient-to-tr from-[#FFE5EC] to-[#FFF0F3] text-[#8C3F5D] flex items-center justify-center border border-white shadow-xs">
-                <Sparkles className="w-6 h-6 text-[#FF4B72]" />
+              <div className="w-12 h-12 rounded-2xl bg-gradient-to-tr from-[#FFF0F3] to-[#FDE2E7] text-[#F47D90] flex items-center justify-center border border-[#FDE2E7] shadow-xs">
+                <Sparkles className="w-6 h-6 text-[#F47D90]" />
               </div>
               <div>
                 <span className="text-sm font-bold font-heading text-[#3E2431]">Create Custom Album Tag</span>
-                <p className="text-xs text-[#6E495B] mt-0.5">Add a new category for your memories</p>
+                <p className="text-xs text-[#7A5C68] mt-0.5">Add a new category for your memories</p>
               </div>
             </motion.button>
           </motion.div>

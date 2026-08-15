@@ -8,17 +8,18 @@ import { compressSnapPhoto, MAX_FILE_SIZE_BYTES, MAX_FILE_SIZE_MB } from '../uti
 import {
   X,
   Upload,
-  Plus,
-  CalendarDays,
+  Calendar,
   MapPin,
   Heart,
   Camera,
-  CheckCircle2,
+  Check,
+  ChevronDown,
+  Sparkles,
   RefreshCw,
-  ImagePlus,
-  Tags,
-  MessageSquareHeart,
-  FileText,
+  Gift,
+  Smile,
+  Plane,
+  Plus,
 } from 'lucide-react';
 
 interface AddSnapModalProps {
@@ -45,7 +46,7 @@ export const AddSnapModal: React.FC<AddSnapModalProps> = ({
   onOpenAddCategory,
 }) => {
   const [imageUrl, setImageUrl] = useState<string>('');
-  const [categoryId, setCategoryId] = useState<string>(categories[0]?.id || '');
+  const [categoryId, setCategoryId] = useState<string>(categories[0]?.id || 'cat-special');
   const [caption, setCaption] = useState<string>('');
   const [description, setDescription] = useState<string>('');
   const [location, setLocation] = useState<string>('');
@@ -53,6 +54,21 @@ export const AddSnapModal: React.FC<AddSnapModalProps> = ({
   const [isDragOver, setIsDragOver] = useState<boolean>(false);
   const [isCompressing, setIsCompressing] = useState<boolean>(false);
   const [isDeveloping, setIsDeveloping] = useState<boolean>(false);
+
+  // Preset default tags matching the design if category list is minimal
+  const displayTags = [
+    { id: 'cat-special', name: 'Anniversaries', icon: Gift, color: '#F47D90' },
+    { id: 'cat-dates', name: 'Dates', icon: Calendar, color: '#FDE2E7' },
+    { id: 'cat-cute', name: 'First Kiss', icon: Heart, color: '#EE6A80' },
+    { id: 'cat-random', name: 'Random Cute', icon: Smile, color: '#F8A0AF' },
+    { id: 'cat-adventures', name: 'Trips', icon: Plane, color: '#F29CA9' },
+  ];
+
+  // Merge custom user categories that aren't already represented
+  const mergedTags = [
+    ...displayTags,
+    ...categories.filter((cat) => !displayTags.some((d) => d.id === cat.id)),
+  ];
 
   const handleFileUpload = async (file: File) => {
     if (file && file.type.startsWith('image/')) {
@@ -92,22 +108,21 @@ export const AddSnapModal: React.FC<AddSnapModalProps> = ({
 
     setIsDeveloping(true);
 
-    // Cute polaroid development animation delay
     setTimeout(async () => {
       try {
         const compressedImage = await compressSnapPhoto(imageUrl);
 
         // Confetti burst on save!
         confetti({
-          particleCount: 65,
-          spread: 70,
+          particleCount: 75,
+          spread: 80,
           origin: { y: 0.6 },
-          colors: ['#FFDEE5', '#E8AFC0', '#D9A15E', '#BFE3D0', '#FF4B72'],
+          colors: ['#F47D90', '#FDE2E7', '#FFF0F3', '#EE6A80', '#FFFFFF'],
           shapes: ['circle', 'square'],
         });
 
         onSaveSnap({
-          categoryId: categoryId || categories[0]?.id || 'cat-random',
+          categoryId: categoryId || categories[0]?.id || 'cat-special',
           imageUrl: compressedImage,
           caption: caption.trim() || undefined,
           description: description.trim() || undefined,
@@ -127,13 +142,14 @@ export const AddSnapModal: React.FC<AddSnapModalProps> = ({
         console.error('Error submitting snap:', err);
         setIsDeveloping(false);
       }
-    }, 900);
+    }, 800);
   };
 
   const handleModalClose = () => {
     if (isDeveloping) return;
     setImageUrl('');
     setCaption('');
+    setDescription('');
     setLocation('');
     onClose();
   };
@@ -141,114 +157,69 @@ export const AddSnapModal: React.FC<AddSnapModalProps> = ({
   return (
     <AnimatePresence>
       {isOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-6 overflow-y-auto">
-          {/* Backdrop Blur & Fade */}
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-6 overflow-y-auto">
+          {/* Backdrop Blur & Dim */}
           <motion.div
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             onClick={handleModalClose}
-            className="fixed inset-0 bg-black/45 backdrop-blur-md cursor-pointer"
+            className="fixed inset-0 bg-[#3E2431]/40 backdrop-blur-md cursor-pointer"
           />
 
-          {/* Floating Hearts Background Elements */}
-          <div className="fixed inset-0 pointer-events-none overflow-hidden z-10">
-            <motion.div
-              initial={{ y: 20, opacity: 0 }}
-              animate={{ y: [0, -15, 0], opacity: [0.3, 0.7, 0.3] }}
-              transition={{ duration: 4, repeat: Infinity, ease: 'easeInOut' }}
-              className="absolute top-12 left-10 text-[#FFDEE5]"
-            >
-              <Heart className="w-8 h-8 fill-current" />
-            </motion.div>
-            <motion.div
-              initial={{ y: -20, opacity: 0 }}
-              animate={{ y: [0, 15, 0], opacity: [0.3, 0.6, 0.3] }}
-              transition={{ duration: 5, repeat: Infinity, ease: 'easeInOut', delay: 1 }}
-              className="absolute bottom-16 right-12 text-[#E8AFC0]"
-            >
-              <Heart className="w-10 h-10 fill-current" />
-            </motion.div>
-          </div>
-
-          {/* Modal Container */}
+          {/* Modal Card */}
           <motion.div
-            initial={{ opacity: 0, scale: 0.88, y: 24, rotate: -1 }}
-            animate={{ opacity: 1, scale: 1, y: 0, rotate: 0 }}
-            exit={{ opacity: 0, scale: 0.88, y: 20, rotate: 1 }}
-            transition={{ type: 'spring', damping: 22, stiffness: 280 }}
-            className="relative w-full max-w-lg glass-modal rounded-[32px] p-6 sm:p-8 border border-white/90 max-h-[92vh] overflow-y-auto no-scrollbar z-20 glossy-top"
+            initial={{ opacity: 0, scale: 0.92, y: 20 }}
+            animate={{ opacity: 1, scale: 1, y: 0 }}
+            exit={{ opacity: 0, scale: 0.92, y: 16 }}
+            transition={{ type: 'spring', damping: 24, stiffness: 300 }}
+            className="relative w-full max-w-xl bg-white rounded-[36px] p-6 sm:p-8 border border-[#FDE2E7] shadow-[0_20px_50px_rgba(62,36,49,0.18)] max-h-[92vh] overflow-y-auto no-scrollbar z-20"
           >
-            {/* Close Button */}
-            <button
-              onClick={handleModalClose}
-              disabled={isDeveloping}
-              className="absolute top-5 right-5 w-9 h-9 rounded-full bg-white/90 hover:bg-[#FFDEE5] text-[#7A5566] hover:text-[#4A2C3A] flex items-center justify-center transition-all shadow-xs z-30 cursor-pointer hover:scale-105 active:scale-95"
-            >
-              <X className="w-5 h-5" />
-            </button>
+            {/* Header: Icon + Title + Close Button */}
+            <div className="flex items-start justify-between mb-6">
+              <div className="flex items-center gap-3.5">
+                {/* Pink Rounded Camera Box */}
+                <div className="w-12 h-12 rounded-2xl bg-[#FFF0F3] border border-[#FDE2E7] flex items-center justify-center text-[#F47D90] shadow-2xs flex-shrink-0">
+                  <div className="relative">
+                    <Camera className="w-6 h-6 stroke-[1.8]" />
+                    <Heart className="w-2.5 h-2.5 fill-[#F47D90] text-[#F47D90] absolute -top-1 -right-1" />
+                  </div>
+                </div>
 
-            {/* Clean Header */}
-            <div className="text-center mb-6 pt-1">
-              <h2 className="text-2xl sm:text-3xl font-extrabold font-heading text-[#4A2C3A] tracking-tight">
-                Add a Couple Memory
-              </h2>
-              <p className="text-xs sm:text-sm text-[#7A5566] font-medium mt-1">
-                Turn your special moment into a sweet polaroid snap 📸
-              </p>
+                <div>
+                  <h2 className="text-xl sm:text-2xl font-bold font-heading text-[#3E2431] tracking-tight">
+                    Add a{' '}
+                    <span className="text-[#F47D90] font-heading font-extrabold">Couple Memory</span>
+                  </h2>
+                  <p className="text-xs sm:text-sm text-[#7A5C68] font-medium mt-0.5">
+                    Turn your special moment into a sweet memory ✨📸
+                  </p>
+                </div>
+              </div>
+
+              {/* Circular Close Button */}
+              <button
+                type="button"
+                onClick={handleModalClose}
+                disabled={isDeveloping}
+                className="w-9 h-9 rounded-full bg-[#FFF7F9] hover:bg-[#FFF0F3] text-[#7A5C68] hover:text-[#3E2431] flex items-center justify-center transition-all cursor-pointer shadow-2xs border border-[#FDE2E7]"
+              >
+                <X className="w-5 h-5" />
+              </button>
             </div>
 
-            {/* Developing Polaroid Animation Overlay */}
-            <AnimatePresence>
-              {isDeveloping && (
-                <motion.div
-                  initial={{ opacity: 0, scale: 0.9 }}
-                  animate={{ opacity: 1, scale: 1 }}
-                  exit={{ opacity: 0 }}
-                  className="absolute inset-0 bg-[#FFFDF9]/95 backdrop-blur-md rounded-[32px] z-40 flex flex-col items-center justify-center p-8 text-center"
-                >
-                  <motion.div
-                    animate={{ rotate: [0, -5, 5, -3, 0], scale: [0.95, 1.05, 1] }}
-                    transition={{ duration: 1.2, repeat: Infinity, ease: 'easeInOut' }}
-                    className="relative w-48 bg-white p-3 pt-3 pb-8 rounded-2xl shadow-tuchi border border-[#FFDEE5] mb-6"
-                  >
-                    <div className="aspect-square rounded-xl overflow-hidden bg-[#FFE5EC] relative flex items-center justify-center">
-                      {imageUrl ? (
-                        <img src={imageUrl} alt="Developing" className="w-full h-full object-cover blur-[1px] opacity-80" />
-                      ) : (
-                        <Camera className="w-10 h-10 text-[#E8AFC0]" />
-                      )}
-                      <div className="absolute inset-0 bg-gradient-to-t from-[#8C3F5D]/30 to-transparent flex items-center justify-center">
-                        <motion.div
-                          animate={{ scale: [0.8, 1.2, 0.8] }}
-                          transition={{ duration: 0.8, repeat: Infinity }}
-                        >
-                          <Heart className="w-10 h-10 fill-[#FF4B72] text-[#FF4B72] drop-shadow-md" />
-                        </motion.div>
-                      </div>
-                    </div>
-                    <div className="mt-3 text-center">
-                      <p className="font-heading text-xs font-bold text-[#4A2C3A]">Developing Snap...</p>
-                    </div>
-                  </motion.div>
-
-                  <h3 className="text-xl font-bold font-heading text-[#4A2C3A]">Creating Your Memory Polaroid 💖</h3>
-                  <p className="text-xs text-[#7A5566] mt-1.5 animate-pulse">Saving to your couple album...</p>
-                </motion.div>
-              )}
-            </AnimatePresence>
-
             <form onSubmit={handleSubmit} className="space-y-5">
-              {/* Photo Upload Area */}
+              {/* 01 MEMORY PHOTO */}
               <div>
-                <label className="block text-xs font-bold text-[#7A5566] uppercase tracking-wider mb-2 flex items-center justify-between">
-                  <span className="flex items-center gap-1.5">
-                    <ImagePlus className="w-4 h-4 text-[#8C3F5D]" /> Memory Photo
-                  </span>
-                  <span className="text-[11px] text-[#A85B7A] font-bold lowercase">Max 20MB (JPG, PNG, WEBP)</span>
-                </label>
+                <div className="flex items-center justify-between mb-2">
+                  <label className="text-xs font-extrabold uppercase tracking-wider flex items-center gap-2">
+                    <span className="text-[#F47D90]">01</span>
+                    <span className="text-[#3E2431]">MEMORY PHOTO</span>
+                  </label>
+                  <span className="text-[11px] text-[#7A5C68] font-medium">Max 20MB (jpg, png, webp)</span>
+                </div>
 
-                {/* Hidden File Input for both Dropzone and Replace button */}
+                {/* Hidden File Input */}
                 <input
                   type="file"
                   accept="image/*"
@@ -261,239 +232,233 @@ export const AddSnapModal: React.FC<AddSnapModalProps> = ({
                 />
 
                 {imageUrl ? (
-                  /* Aesthetic Scrapbook Polaroid Preview */
-                  <motion.div
-                    initial={{ scale: 0.94, opacity: 0, rotate: -1 }}
-                    animate={{ scale: 1, opacity: 1, rotate: 0 }}
-                    transition={{ type: 'spring', stiffness: 220, damping: 20 }}
-                    onDragOver={(e) => {
-                      e.preventDefault();
-                      setIsDragOver(true);
-                    }}
-                    onDragLeave={() => setIsDragOver(false)}
-                    onDrop={handleDrop}
-                    className={`relative bg-white/90 p-4 rounded-[28px] border-2 border-dashed transition-all shadow-tuchi group ${
-                      isDragOver
-                        ? 'border-[#8C3F5D] bg-[#FFE5EC]/50 ring-4 ring-[#FFDEE5]'
-                        : 'border-[#E8AFC0] hover:border-[#8C3F5D]'
-                    }`}
-                  >
-                    {/* Cute Border-Radius Preview Thumbnail */}
-                    <div className="relative rounded-[22px] overflow-hidden aspect-4/3 bg-[#FFF0F3] border border-[#FFDEE5] shadow-inner group/thumb">
-                      <img
-                        src={imageUrl}
-                        alt="Memory Preview"
-                        className="w-full h-full object-cover transition-transform duration-300 group-hover/thumb:scale-105"
-                      />
-
-                      {/* Photo Ready Badge */}
-                      <div className="absolute top-3 left-3 px-3 py-1 rounded-full bg-white/90 backdrop-blur-md text-[11px] font-extrabold text-[#4A2C3A] shadow-xs border border-[#FFCCD5] flex items-center gap-1.5">
-                        <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500 fill-emerald-100" />
-                        <span>Ready to Snap ✨</span>
-                      </div>
-
-                      {/* Replace Photo Button */}
+                  /* Photo Uploaded Preview State */
+                  <div className="relative rounded-[28px] overflow-hidden bg-[#FAF5F0] border-2 border-dashed border-[#FDE2E7] p-3 text-center">
+                    <div className="aspect-4/3 sm:aspect-16/9 rounded-[22px] overflow-hidden bg-white relative shadow-xs">
+                      <img src={imageUrl} alt="Uploaded Memory" className="w-full h-full object-cover" />
                       <label
                         htmlFor="snap-file-input"
-                        className="absolute bottom-3 right-3 px-3.5 py-1.5 rounded-full bg-white/95 hover:bg-[#8C3F5D] text-[#8C3F5D] hover:text-white text-xs font-extrabold backdrop-blur-md border border-[#FFCCD5] shadow-md transition-all cursor-pointer flex items-center gap-1.5 hover:scale-105 active:scale-95"
+                        className="absolute bottom-3 right-3 px-4 py-2 rounded-full bg-white hover:bg-[#F47D90] text-[#F47D90] hover:text-white text-xs font-bold shadow-md border border-[#FDE2E7] transition-all cursor-pointer flex items-center gap-1.5"
                       >
                         <RefreshCw className="w-3.5 h-3.5" />
-                        <span>Replace Photo</span>
+                        <span>Change Photo</span>
                       </label>
                     </div>
-
-                    {/* Drag-and-drop Replacement Prompt */}
-                    <div className="mt-2.5 flex items-center justify-between px-1 text-[11px] font-semibold text-[#7A5566]">
-                      <span className="truncate flex items-center gap-1">
-                        <Heart className="w-3 h-3 text-[#FF4B72] fill-current" /> {caption || 'Sweet Memory Photo'}
-                      </span>
-                      <span className="text-[10px] text-[#A85B7A] font-bold">
-                        Drop image to replace
-                      </span>
-                    </div>
-                  </motion.div>
+                  </div>
                 ) : (
-                  /* Aesthetic Drag & Drop Area */
-                  <motion.div
-                    whileHover={{ scale: 1.01 }}
-                    whileTap={{ scale: 0.99 }}
+                  /* Drag & Drop Dashed Area Matching Screenshot */
+                  <div
                     onDragOver={(e) => {
                       e.preventDefault();
                       setIsDragOver(true);
                     }}
                     onDragLeave={() => setIsDragOver(false)}
                     onDrop={handleDrop}
-                    className={`relative border-2 border-dashed rounded-[28px] p-7 text-center transition-all cursor-pointer flex flex-col items-center justify-center gap-3 overflow-hidden ${
+                    className={`relative rounded-[28px] border-2 border-dashed transition-all p-7 sm:p-9 text-center flex flex-col items-center justify-center gap-2.5 overflow-hidden ${
                       isDragOver
-                        ? 'border-[#8C3F5D] bg-[#FFE5EC]/70 scale-[1.01] shadow-tuchi-glow'
-                        : 'border-[#E8AFC0] bg-gradient-to-br from-white via-[#FFF8F9] to-[#FFF3F5] hover:bg-white hover:border-[#8C3F5D] shadow-xs'
+                        ? 'border-[#F47D90] bg-[#FFF0F3]'
+                        : 'border-[#FDE2E7] bg-[#FFF7F9] hover:bg-[#FFF0F3]'
                     }`}
                   >
-                    {/* Floating Heart Bubbles in Dropzone */}
-                    <div className="absolute -top-2 -left-2 text-[#FFE5EC] pointer-events-none">
-                      <Heart className="w-12 h-12 fill-current" />
-                    </div>
-                    <div className="absolute -bottom-2 -right-2 text-[#FFE5EC] pointer-events-none">
-                      <Heart className="w-10 h-10 fill-current" />
+                    {/* Decorative Botanical Leaf (Bottom Left) */}
+                    <div className="absolute bottom-3 left-4 pointer-events-none opacity-40 select-none text-[#FDE2E7]">
+                      <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M11 20A7 7 0 0 1 9.8 6.1C15.5 5 17 4.48 19 2c1 2 2 3.5 2 7a7 7 0 0 1-10 11Z" />
+                        <path d="M2 21c0-3 1.85-5.36 5.08-6C9.5 14.52 12 13 13 12" />
+                      </svg>
                     </div>
 
-                    {isCompressing ? (
-                      <div className="py-4 flex flex-col items-center gap-2">
-                        <motion.div
-                          animate={{ rotate: 360 }}
-                          transition={{ duration: 1.5, repeat: Infinity, ease: 'linear' }}
-                          className="w-10 h-10 rounded-full border-3 border-[#FFE5EC] border-t-[#8C3F5D] flex items-center justify-center"
-                        />
-                        <p className="text-xs font-bold text-[#4A2C3A] mt-2">Optimizing Photo with Love...</p>
+                    {/* Decorative Intertwined Hearts (Bottom Right) */}
+                    <div className="absolute bottom-3 right-4 pointer-events-none opacity-40 select-none text-[#FDE2E7]">
+                      <svg width="42" height="42" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z" />
+                        <path d="M12 5 9.04 7.96a2.17 2.17 0 0 0 0 3.08v0c.82.82 2.13.85 3 .07l.96-.83" />
+                      </svg>
+                    </div>
+
+                    {/* Cloud Upload Circle with Sparkles */}
+                    <div className="relative mb-1">
+                      <div className="w-14 h-14 rounded-full bg-[#FFF0F3] border border-[#FDE2E7] flex items-center justify-center text-[#F47D90]">
+                        <Upload className="w-6 h-6 stroke-[2]" />
                       </div>
-                    ) : (
-                      <>
-                        <motion.div
-                          animate={{ y: [0, -4, 0] }}
-                          transition={{ duration: 2.5, repeat: Infinity, ease: 'easeInOut' }}
-                          className="w-14 h-14 rounded-2xl bg-gradient-to-tr from-[#FFE5EC] to-[#FFF0F3] border border-[#FFCCD5] flex items-center justify-center text-[#8C3F5D] shadow-xs"
-                        >
-                          <Upload className="w-7 h-7" />
-                        </motion.div>
+                      <span className="absolute -top-1 -right-3 text-[#F8A0AF] text-xs select-none">✦</span>
+                      <span className="absolute -top-1 -left-3 text-[#F8A0AF] text-xs select-none">✦</span>
+                      <span className="absolute -bottom-1 right-5 text-[#F8A0AF] text-[10px] select-none">✦</span>
+                    </div>
 
-                        <div>
-                          <p className="text-sm font-bold text-[#4A2C3A]">
-                            Drag & drop your couple photo here
-                          </p>
-                          <p className="text-xs text-[#7A5566] mt-0.5">
-                            Up to <span className="text-[#8C3F5D] font-bold">20MB</span> • <span className="text-[#8C3F5D] font-bold underline">click to browse</span>
-                          </p>
-                        </div>
-
+                    {/* Main Title & Click to Browse */}
+                    <div>
+                      <p className="text-sm sm:text-base font-extrabold text-[#3E2431]">
+                        Drag & drop your couple photo here
+                      </p>
+                      <p className="text-xs text-[#7A5C68] font-medium mt-1">
+                        Up to 20MB • or{' '}
                         <label
                           htmlFor="snap-file-input"
-                          className="mt-1 px-5 py-2 rounded-full bg-[#FFE5EC] hover:bg-[#8C3F5D] text-[#8C3F5D] hover:text-white text-xs font-extrabold transition-all cursor-pointer shadow-2xs hover:shadow-xs active:scale-95 flex items-center gap-1.5"
+                          className="text-[#F47D90] underline font-bold cursor-pointer hover:text-[#EE6A80]"
                         >
-                          <Camera className="w-3.5 h-3.5" /> Choose Memory Photo
+                          click to browse
                         </label>
-                      </>
-                    )}
-                  </motion.div>
+                      </p>
+                    </div>
+
+                    {/* Gradient Pill Button: Choose Memory Photo */}
+                    <label
+                      htmlFor="snap-file-input"
+                      className="mt-2 inline-flex items-center gap-2 px-6 py-2.5 rounded-full bg-[#F47D90] hover:bg-[#EE6A80] text-white text-xs sm:text-sm font-bold shadow-[0_4px_14px_rgba(244,125,144,0.3)] transition-all cursor-pointer hover:scale-105 active:scale-95"
+                    >
+                      <Camera className="w-4 h-4" />
+                      <span>Choose Memory Photo</span>
+                    </label>
+                  </div>
                 )}
               </div>
 
-              {/* Category Selector */}
+              {/* 02 MEMORY TAG / CATEGORY */}
               <div>
                 <div className="flex items-center justify-between mb-2">
-                  <label className="text-xs font-bold text-[#7A5566] uppercase tracking-wider flex items-center gap-1.5">
-                    <Tags className="w-4 h-4 text-[#8C3F5D]" /> Memory Tag / Category
+                  <label className="text-xs font-extrabold uppercase tracking-wider flex items-center gap-2">
+                    <span className="text-[#F47D90]">02</span>
+                    <span className="text-[#3E2431]">MEMORY TAG / CATEGORY</span>
                   </label>
                   <button
                     type="button"
                     onClick={onOpenAddCategory}
-                    className="text-xs font-bold text-[#8C3F5D] hover:text-[#4A2C3A] flex items-center gap-1 cursor-pointer transition-colors"
+                    className="text-xs font-bold text-[#F47D90] hover:text-[#3E2431] flex items-center gap-1 cursor-pointer transition-colors"
                   >
-                    <Plus className="w-3.5 h-3.5" /> Custom Tag
+                    <Plus className="w-3.5 h-3.5" />
+                    <span>Custom Tag</span>
                   </button>
                 </div>
 
-                <div className="flex flex-wrap gap-2 max-h-32 overflow-y-auto p-1 no-scrollbar">
-                  {categories.map((cat) => {
-                    const isSelected = categoryId === cat.id;
+                {/* Category Pill Buttons */}
+                <div className="flex flex-wrap gap-2.5">
+                  {mergedTags.map((tag) => {
+                    const isSelected = categoryId === tag.id;
+                    const IconComponent = (tag as any).icon || Sparkles;
+
                     return (
-                      <motion.button
-                        key={cat.id}
+                      <button
+                        key={tag.id}
                         type="button"
-                        whileHover={{ scale: 1.05 }}
-                        whileTap={{ scale: 0.95 }}
-                        onClick={() => setCategoryId(cat.id)}
-                        className={`px-3.5 py-1.5 rounded-full text-xs font-bold flex items-center gap-2 transition-all cursor-pointer ${
+                        onClick={() => setCategoryId(tag.id)}
+                        className={`inline-flex items-center gap-2 px-4 py-2 rounded-full text-xs font-bold transition-all cursor-pointer border ${
                           isSelected
-                            ? 'bg-[#4A2C3A] text-white shadow-xs scale-105 ring-2 ring-[#FFDEE5]'
-                            : 'bg-white border border-[#FFDEE5] text-[#7A5566] hover:bg-[#FFF3F5] hover:border-[#E8AFC0]'
+                            ? 'bg-[#F47D90] border-[#F47D90] text-white shadow-sm'
+                            : 'bg-white border-[#FDE2E7] text-[#3E2431] hover:bg-[#FFF0F3] hover:border-[#F47D90]'
                         }`}
                       >
-                        <span
-                          className="w-2.5 h-2.5 rounded-full"
-                          style={{ backgroundColor: cat.color || '#E8AFC0' }}
-                        />
-                        <CategoryIcon iconName={cat.iconName} categoryName={cat.name} className="w-3.5 h-3.5" />
-                        <span>{cat.name}</span>
-                      </motion.button>
+                        {tag.icon ? (
+                          <IconComponent className={`w-4 h-4 ${isSelected ? 'text-white' : 'text-[#F47D90]'}`} />
+                        ) : (
+                          <CategoryIcon iconName={(tag as any).iconName} categoryName={tag.name} className="w-4 h-4" />
+                        )}
+                        <span>{tag.name}</span>
+                        {isSelected && (
+                          <div className="w-4 h-4 rounded-full bg-white/20 flex items-center justify-center ml-0.5">
+                            <Check className="w-2.5 h-2.5 stroke-[3]" />
+                          </div>
+                        )}
+                      </button>
                     );
                   })}
                 </div>
               </div>
 
-              {/* Caption, Date, Location Inputs */}
-              <div className="space-y-3 pt-1">
-                <div>
-                  <label className="block text-xs font-bold text-[#7A5566] uppercase tracking-wider mb-1 flex items-center gap-1.5">
-                    <MessageSquareHeart className="w-4 h-4 text-[#FF4B72]" /> Sweet Title / Caption
-                  </label>
+              {/* 03 SWEET TITLE / CAPTION */}
+              <div>
+                <label className="block text-xs font-extrabold uppercase tracking-wider mb-2 flex items-center gap-2">
+                  <span className="text-[#F47D90]">03</span>
+                  <span className="text-[#3E2431]">SWEET TITLE / CAPTION</span>
+                </label>
+                <div className="relative">
                   <input
                     type="text"
                     value={caption}
                     onChange={(e) => setCaption(e.target.value)}
                     placeholder="e.g. Late night ice cream run 🍦"
-                    className="w-full px-4 py-2.5 rounded-2xl bg-white border-2 border-[#FFDEE5] text-[#4A2C3A] text-xs sm:text-sm font-medium focus:outline-none focus:border-[#8C3F5D] focus:ring-2 focus:ring-[#FFE5EC] transition-all"
+                    className="w-full px-4 py-3 rounded-2xl bg-white border border-[#FDE2E7] text-[#3E2431] text-xs sm:text-sm font-medium placeholder:text-[#7A5C68]/60 focus:outline-none focus:border-[#F47D90] focus:ring-2 focus:ring-[#FDE2E7] shadow-2xs pr-10"
                   />
+                  <Heart className="w-4 h-4 text-[#FDE2E7] absolute right-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
                 </div>
+              </div>
 
-                <div>
-                  <label className="block text-xs font-bold text-[#7A5566] uppercase tracking-wider mb-1 flex items-center justify-between">
-                    <span className="flex items-center gap-1.5">
-                      <FileText className="w-4 h-4 text-[#8C3F5D]" /> Memory Story / What Happened?
-                    </span>
-                    <span className="text-[10px] text-[#A85B7A] font-medium lowercase">optional story</span>
+              {/* 04 MEMORY STORY / WHAT HAPPENED? */}
+              <div>
+                <div className="flex items-center justify-between mb-2">
+                  <label className="text-xs font-extrabold uppercase tracking-wider flex items-center gap-2">
+                    <span className="text-[#F47D90]">04</span>
+                    <span className="text-[#3E2431]">MEMORY STORY / WHAT HAPPENED?</span>
                   </label>
+                  <span className="text-[11px] text-[#7A5C68] font-medium">Optional story</span>
+                </div>
+                <div className="relative">
                   <textarea
                     rows={3}
                     value={description}
                     onChange={(e) => setDescription(e.target.value)}
-                    placeholder="Describe what happened at this moment... e.g. Us din hum bina bataye picnic par gaye aur bohot enjoy kiya ✨"
-                    className="w-full px-4 py-2.5 rounded-2xl bg-white border-2 border-[#FFDEE5] text-[#4A2C3A] text-xs sm:text-sm font-medium focus:outline-none focus:border-[#8C3F5D] focus:ring-2 focus:ring-[#FFE5EC] transition-all resize-none"
+                    placeholder="Describe what happened at this moment...&#10;e.g. Us din hum bina bataye picnic par gaye aur bohot enjoy kiya ✨"
+                    className="w-full px-4 py-3 rounded-2xl bg-white border border-[#FDE2E7] text-[#3E2431] text-xs sm:text-sm font-medium placeholder:text-[#7A5C68]/60 focus:outline-none focus:border-[#F47D90] focus:ring-2 focus:ring-[#FDE2E7] shadow-2xs resize-none pr-10"
                   />
+                  <Heart className="w-4 h-4 text-[#FDE2E7] absolute right-3.5 bottom-3.5 pointer-events-none" />
                 </div>
+              </div>
 
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <label className="block text-xs font-bold text-[#7A5566] uppercase tracking-wider mb-1 flex items-center gap-1.5">
-                      <CalendarDays className="w-4 h-4 text-[#8C3F5D]" /> Date
-                    </label>
+              {/* 05 DATE & 06 LOCATION (2-Column Grid) */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
+                {/* 05 DATE */}
+                <div>
+                  <label className="block text-xs font-extrabold uppercase tracking-wider mb-2 flex items-center gap-2">
+                    <span className="text-[#F47D90]">05</span>
+                    <span className="text-[#3E2431]">DATE</span>
+                  </label>
+                  <div className="relative flex items-center bg-white border border-[#FDE2E7] rounded-2xl px-3.5 py-2.5 shadow-2xs focus-within:border-[#F47D90] focus-within:ring-2 focus-within:ring-[#FDE2E7]">
+                    <Calendar className="w-4 h-4 text-[#7A5C68] mr-2 flex-shrink-0" />
                     <input
                       type="date"
                       value={snapDate}
                       onChange={(e) => setSnapDate(e.target.value)}
-                      className="w-full px-3.5 py-2.5 rounded-2xl bg-white border-2 border-[#FFDEE5] text-[#4A2C3A] text-xs font-semibold focus:outline-none focus:border-[#8C3F5D] transition-all"
+                      className="w-full bg-transparent text-[#3E2431] text-xs font-semibold focus:outline-none cursor-pointer"
                     />
+                    <ChevronDown className="w-4 h-4 text-[#7A5C68] pointer-events-none ml-1 flex-shrink-0" />
                   </div>
+                </div>
 
-                  <div>
-                    <label className="block text-xs font-bold text-[#7A5566] uppercase tracking-wider mb-1 flex items-center gap-1.5">
-                      <MapPin className="w-4 h-4 text-[#8C3F5D]" /> Location
-                    </label>
+                {/* 06 LOCATION */}
+                <div>
+                  <label className="block text-xs font-extrabold uppercase tracking-wider mb-2 flex items-center gap-2">
+                    <span className="text-[#F47D90]">06</span>
+                    <span className="text-[#3E2431]">LOCATION</span>
+                  </label>
+                  <div className="relative flex items-center bg-white border border-[#FDE2E7] rounded-2xl px-3.5 py-2.5 shadow-2xs focus-within:border-[#F47D90] focus-within:ring-2 focus-within:ring-[#FDE2E7]">
+                    <MapPin className="w-4 h-4 text-[#7A5C68] mr-2 flex-shrink-0" />
                     <input
                       type="text"
                       value={location}
                       onChange={(e) => setLocation(e.target.value)}
-                      placeholder="e.g. Paris, Rooftop..."
-                      className="w-full px-3.5 py-2.5 rounded-2xl bg-white border-2 border-[#FFDEE5] text-[#4A2C3A] text-xs font-medium focus:outline-none focus:border-[#8C3F5D] transition-all"
+                      placeholder="Add location"
+                      className="w-full bg-transparent text-[#3E2431] text-xs font-medium placeholder:text-[#7A5C68]/60 focus:outline-none"
                     />
+                    <ChevronDown className="w-4 h-4 text-[#7A5C68] pointer-events-none ml-1 flex-shrink-0" />
                   </div>
                 </div>
               </div>
 
-              {/* Submit Button */}
-              <div className="pt-3">
+              {/* SAVE MEMORY SUBMIT BUTTON */}
+              <div className="pt-2">
                 <motion.button
-                  whileHover={{ scale: imageUrl ? 1.02 : 1 }}
-                  whileTap={{ scale: imageUrl ? 0.98 : 1 }}
+                  whileHover={{ scale: imageUrl ? 1.015 : 1 }}
+                  whileTap={{ scale: imageUrl ? 0.985 : 1 }}
                   type="submit"
                   disabled={!imageUrl || isDeveloping}
-                  className={`w-full py-4 px-6 rounded-full font-extrabold text-sm sm:text-base shadow-tuchi transition-all flex items-center justify-center gap-2 ${
+                  className={`w-full py-3.5 sm:py-4 px-6 rounded-full font-bold text-sm sm:text-base transition-all flex items-center justify-center gap-2 ${
                     imageUrl && !isDeveloping
-                      ? 'bg-gradient-to-r from-[#4A2C3A] via-[#5C3247] to-[#8C3F5D] hover:opacity-95 text-white cursor-pointer shadow-tuchi-glow'
-                      : 'bg-gray-200 text-gray-400 cursor-not-allowed border border-gray-300'
+                      ? 'bg-[#F47D90] hover:bg-[#EE6A80] text-white cursor-pointer shadow-[0_8px_24px_rgba(244,125,144,0.35)]'
+                      : 'bg-[#FDE2E7] text-[#7A5C68]/60 cursor-not-allowed'
                   }`}
                 >
-                  <Heart className="w-4 h-4 fill-[#FFDEE5] text-[#FFDEE5]" />
-                  <span>{isDeveloping ? 'Developing Memory...' : 'Save Memory Snap 📸'}</span>
+                  <Sparkles className="w-4 h-4 fill-white/80 text-white" />
+                  <span>{isDeveloping ? 'Saving Memory...' : 'Save Memory'}</span>
                 </motion.button>
               </div>
             </form>

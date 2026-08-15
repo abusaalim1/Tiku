@@ -5,6 +5,7 @@ import { formatDate } from '../utils/dateUtils';
 import { CategoryIcon } from '../utils/categoryIcons';
 import { calculatePromptStreak } from '../data/dailyPromptsData';
 import { compressAvatar, MAX_FILE_SIZE_BYTES, MAX_FILE_SIZE_MB } from '../utils/imageUtils';
+import { AndroidInstallModal } from './AndroidInstallModal';
 import {
   Heart,
   Calendar,
@@ -19,6 +20,8 @@ import {
   User as UserIcon,
   Flame,
   BookOpen,
+  Smartphone,
+  Download,
 } from 'lucide-react';
 import { User } from 'firebase/auth';
 
@@ -53,6 +56,7 @@ export const UsProfileView: React.FC<UsProfileViewProps> = ({
   const [userPhoto, setUserPhoto] = useState<string>(profile.userPhotoUrl || '');
   const [partnerPhoto, setPartnerPhoto] = useState<string>(profile.partnerPhotoUrl || '');
   const [isSavedMessage, setIsSavedMessage] = useState<boolean>(false);
+  const [showAndroidInstall, setShowAndroidInstall] = useState<boolean>(false);
 
   // Calculate days together
   const start = new Date(startDate || Date.now());
@@ -102,19 +106,19 @@ export const UsProfileView: React.FC<UsProfileViewProps> = ({
   return (
     <div className="pb-28 pt-4 px-4 sm:px-6 max-w-4xl mx-auto space-y-6">
       {/* AUTHENTICATION & PRIVACY VAULT BADGE */}
-      <section className="glass-panel rounded-3xl p-4 sm:p-5 border border-white/90 shadow-tuchi flex flex-col sm:flex-row items-center justify-between gap-4 glossy-top">
+      <section className="glass-panel rounded-3xl p-4 sm:p-5 border border-[#FDE2E7] shadow-tuchi flex flex-col sm:flex-row items-center justify-between gap-4 glossy-top">
         <div className="flex items-center gap-3.5">
-          <div className="w-11 h-11 rounded-2xl bg-gradient-to-tr from-emerald-100 to-emerald-200 text-emerald-800 flex items-center justify-center border border-white shadow-xs">
-            <ShieldCheck className="w-6 h-6 text-emerald-700" />
+          <div className="w-11 h-11 rounded-2xl bg-[#E8F8F0] text-[#2A9D6F] flex items-center justify-center border border-[#BEE9D5] shadow-xs">
+            <ShieldCheck className="w-6 h-6 text-[#2A9D6F]" />
           </div>
           <div>
             <div className="flex items-center gap-2">
               <h4 className="text-sm font-extrabold font-heading text-[#3E2431]">Private Memory Vault</h4>
-              <span className="px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 text-[10px] font-extrabold">
+              <span className="px-2 py-0.5 rounded-full bg-[#E8F8F0] text-[#2A9D6F] text-[10px] font-extrabold border border-[#BEE9D5]">
                 Active & Protected
               </span>
             </div>
-            <p className="text-xs text-[#6E495B] font-medium">
+            <p className="text-xs text-[#7A5C68] font-medium">
               Signed in as: <span className="font-bold text-[#3E2431]">{currentUser?.email || (currentUser?.isAnonymous ? 'Guest Mode (Private Vault)' : 'Connected Account')}</span>
             </p>
           </div>
@@ -125,7 +129,7 @@ export const UsProfileView: React.FC<UsProfileViewProps> = ({
             whileHover={{ scale: 1.04 }}
             whileTap={{ scale: 0.96 }}
             onClick={onSignOut}
-            className="py-2 px-4 rounded-full bg-white/90 hover:bg-white text-[#8C3F5D] text-xs font-extrabold border border-[#FFDEE5] shadow-xs flex items-center gap-1.5 cursor-pointer transition-all"
+            className="py-2 px-4 rounded-full bg-white hover:bg-[#FFF0F3] text-[#F47D90] text-xs font-extrabold border border-[#FDE2E7] shadow-xs flex items-center gap-1.5 cursor-pointer transition-all"
           >
             <LogOut className="w-3.5 h-3.5" />
             <span>Sign Out</span>
@@ -134,19 +138,19 @@ export const UsProfileView: React.FC<UsProfileViewProps> = ({
       </section>
 
       {/* COUPLE HEADER BADGE */}
-      <section className="glass-panel rounded-3xl p-6 sm:p-8 text-center border border-white/90 shadow-tuchi relative overflow-hidden glossy-top">
-        <div className="absolute top-4 left-4 text-[#FFCCD5] opacity-80">
+      <section className="glass-panel rounded-3xl p-6 sm:p-8 text-center border border-[#FDE2E7] shadow-tuchi relative overflow-hidden glossy-top">
+        <div className="absolute top-4 left-4 text-[#FDE2E7] opacity-80">
           <Heart className="w-5 h-5 fill-current" />
         </div>
-        <div className="absolute bottom-4 right-4 text-[#E8AFC0] opacity-80">
-          <Sparkles className="w-5 h-5 text-[#FF4B72]" />
+        <div className="absolute bottom-4 right-4 text-[#FDE2E7] opacity-80">
+          <Sparkles className="w-5 h-5 text-[#F47D90]" />
         </div>
 
         {/* Avatars Display */}
         <div className="flex items-center justify-center -space-x-4 mb-4">
           <motion.div
             whileHover={{ scale: 1.08, rotate: -3 }}
-            className="w-20 h-20 rounded-full border-4 border-white bg-[#FFE5EC] overflow-hidden shadow-md flex items-center justify-center relative"
+            className="w-20 h-20 rounded-full border-4 border-white bg-[#FFF0F3] overflow-hidden shadow-md flex items-center justify-center relative"
           >
             {userPhoto ? (
               <img src={userPhoto} alt="You" className="w-full h-full object-cover" />
@@ -157,13 +161,13 @@ export const UsProfileView: React.FC<UsProfileViewProps> = ({
             )}
           </motion.div>
 
-          <div className="w-9 h-9 rounded-full bg-[#FF4B72] text-white flex items-center justify-center z-10 shadow-md border-2 border-white">
+          <div className="w-9 h-9 rounded-full bg-[#F47D90] text-white flex items-center justify-center z-10 shadow-md border-2 border-white">
             <Heart className="w-5 h-5 fill-current" />
           </div>
 
           <motion.div
             whileHover={{ scale: 1.08, rotate: 3 }}
-            className="w-20 h-20 rounded-full border-4 border-white bg-[#FFD0DC] overflow-hidden shadow-md flex items-center justify-center relative"
+            className="w-20 h-20 rounded-full border-4 border-white bg-[#FDE2E7] overflow-hidden shadow-md flex items-center justify-center relative"
           >
             {partnerPhoto ? (
               <img src={partnerPhoto} alt="Partner" className="w-full h-full object-cover" />
@@ -178,8 +182,8 @@ export const UsProfileView: React.FC<UsProfileViewProps> = ({
         <h3 className="text-2xl sm:text-3xl font-extrabold font-heading text-[#3E2431]">
           {userName || 'You'} & {partnerName || 'Partner'}
         </h3>
-        <p className="text-xs text-[#FF4B72] font-extrabold mt-1">Day {daysTogether} Together</p>
-        <p className="text-[11px] text-[#6E495B] mt-0.5">Since {formatDate(startDate)}</p>
+        <p className="text-xs text-[#F47D90] font-extrabold mt-1">Day {daysTogether} Together</p>
+        <p className="text-[11px] text-[#7A5C68] mt-0.5">Since {formatDate(startDate)}</p>
 
         {/* Quick Connection Stats Chips */}
         <div className="flex flex-wrap items-center justify-center gap-2 pt-3">
@@ -189,20 +193,20 @@ export const UsProfileView: React.FC<UsProfileViewProps> = ({
               <span>{promptStreakInfo.streak} Day Prompt Streak</span>
             </span>
           )}
-          <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-[#FFF0F3] border border-[#FFCCD5] text-[#8C3F5D] text-xs font-bold shadow-2xs">
-            <BookOpen className="w-3.5 h-3.5 text-[#FF4B72]" />
+          <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-[#FFF0F3] border border-[#FDE2E7] text-[#3E2431] text-xs font-bold shadow-2xs">
+            <BookOpen className="w-3.5 h-3.5 text-[#F47D90]" />
             <span>{dailyPrompts.length} Prompts Answered</span>
           </span>
         </div>
       </section>
 
       {/* STATS BREAKDOWN */}
-      <section className="glass-panel rounded-3xl p-6 border border-white/90 shadow-tuchi space-y-4 glossy-top">
+      <section className="glass-panel rounded-3xl p-6 border border-[#FDE2E7] shadow-tuchi space-y-4 glossy-top">
         <div className="flex items-center justify-between">
           <h3 className="text-lg font-bold font-heading text-[#3E2431] flex items-center gap-2">
-            <BarChart2 className="w-5 h-5 text-[#8C3F5D]" /> Memory Breakdown
+            <BarChart2 className="w-5 h-5 text-[#F47D90]" /> Memory Breakdown
           </h3>
-          <span className="text-xs font-bold text-[#6E495B]">{snaps.length} Total Snaps</span>
+          <span className="text-xs font-bold text-[#7A5C68]">{snaps.length} Total Snaps</span>
         </div>
 
         {/* Categories Breakdown List with Distinct Icons */}
@@ -216,25 +220,25 @@ export const UsProfileView: React.FC<UsProfileViewProps> = ({
               <motion.div
                 key={cat.id}
                 whileHover={{ scale: 1.02 }}
-                className="p-3.5 rounded-2xl bg-white/90 border border-white/90 flex items-center justify-between shadow-xs"
+                className="p-3.5 rounded-2xl bg-white border border-[#FDE2E7] flex items-center justify-between shadow-xs"
               >
                 <div className="flex items-center gap-3">
-                  <div className="w-8 h-8 rounded-xl bg-[#FFE5EC] border border-[#FFCCD5] flex items-center justify-center flex-shrink-0">
+                  <div className="w-8 h-8 rounded-xl bg-[#FFF0F3] border border-[#FDE2E7] flex items-center justify-center flex-shrink-0">
                     <CategoryIcon
                       iconName={cat.iconName}
                       categoryName={cat.name}
-                      className="w-4 h-4 text-[#8C3F5D]"
+                      className="w-4 h-4 text-[#F47D90]"
                     />
                   </div>
                   <div>
                     <span className="text-xs font-bold text-[#3E2431] block">
                       {cat.name}
                     </span>
-                    <p className="text-[10px] text-[#6E495B] font-medium">{percentage}% of all snaps</p>
+                    <p className="text-[10px] text-[#7A5C68] font-medium">{percentage}% of all snaps</p>
                   </div>
                 </div>
 
-                <span className="text-xs font-bold font-heading text-[#8C3F5D] px-3 py-1 rounded-full bg-[#FFF0F3] border border-[#FFCCD5]">
+                <span className="text-xs font-bold font-heading text-[#F47D90] px-3 py-1 rounded-full bg-[#FFF0F3] border border-[#FDE2E7]">
                   {count}
                 </span>
               </motion.div>
@@ -244,7 +248,7 @@ export const UsProfileView: React.FC<UsProfileViewProps> = ({
       </section>
 
       {/* EDIT PROFILE FORM */}
-      <section className="glass-panel rounded-3xl p-6 border border-white/90 shadow-tuchi space-y-6 glossy-top">
+      <section className="glass-panel rounded-3xl p-6 border border-[#FDE2E7] shadow-tuchi space-y-6 glossy-top">
         <div className="flex items-center justify-between">
           <h3 className="text-lg font-bold font-heading text-[#3E2431]">Edit Relationship & Profile Photos</h3>
           {isSavedMessage && (
@@ -256,14 +260,14 @@ export const UsProfileView: React.FC<UsProfileViewProps> = ({
 
         <form onSubmit={handleSave} className="space-y-6">
           {/* PROFILE PICTURES EDITING SECTION */}
-          <div className="space-y-4 pt-1 border-b border-[#FFDEE5]/60 pb-6">
-            <h4 className="text-xs font-bold text-[#6E495B] uppercase tracking-wider flex items-center gap-1.5">
-              <Camera className="w-4 h-4 text-[#8C3F5D]" /> Profile Pictures (Max 20MB)
+          <div className="space-y-4 pt-1 border-b border-[#FDE2E7] pb-6">
+            <h4 className="text-xs font-bold text-[#7A5C68] uppercase tracking-wider flex items-center gap-1.5">
+              <Camera className="w-4 h-4 text-[#F47D90]" /> Profile Pictures (Max 20MB)
             </h4>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               {/* Your Profile Picture */}
-              <div className="p-4 rounded-2xl bg-white/90 border border-white/90 space-y-3 shadow-xs">
+              <div className="p-4 rounded-2xl bg-white border border-[#FDE2E7] space-y-3 shadow-xs">
                 <div className="flex items-center justify-between">
                   <span className="text-xs font-bold text-[#3E2431]">Your Photo ({userName || 'You'})</span>
                   {userPhoto && (
@@ -278,7 +282,7 @@ export const UsProfileView: React.FC<UsProfileViewProps> = ({
                 </div>
 
                 <div className="flex items-center gap-3">
-                  <div className="relative w-16 h-16 rounded-full overflow-hidden border-2 border-[#FFDEE5] flex-shrink-0 bg-[#FFDEE5]/30 flex items-center justify-center shadow-xs">
+                  <div className="relative w-16 h-16 rounded-full overflow-hidden border-2 border-[#FDE2E7] flex-shrink-0 bg-[#FFF0F3] flex items-center justify-center shadow-xs">
                     {userPhoto ? (
                       <img src={userPhoto} alt="Your profile" className="w-full h-full object-cover" />
                     ) : (
@@ -289,7 +293,7 @@ export const UsProfileView: React.FC<UsProfileViewProps> = ({
                   </div>
 
                   <div className="flex-1 space-y-2">
-                    <label className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-[#FFE5EC] hover:bg-[#8C3F5D] text-[#8C3F5D] hover:text-white text-xs font-extrabold cursor-pointer transition-all shadow-xs border border-[#FFCCD5]">
+                    <label className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-[#FFF0F3] hover:bg-[#F47D90] text-[#F47D90] hover:text-white text-xs font-extrabold cursor-pointer transition-all shadow-xs border border-[#FDE2E7]">
                       <Camera className="w-3.5 h-3.5" />
                       <span>Upload Photo</span>
                       <input
@@ -306,7 +310,7 @@ export const UsProfileView: React.FC<UsProfileViewProps> = ({
                         value={userPhoto}
                         onChange={(e) => setUserPhoto(e.target.value)}
                         placeholder="Or paste Image URL..."
-                        className="w-full px-3 py-1.5 rounded-xl bg-white border border-[#FFDEE5] text-[#3E2431] text-xs focus:outline-none focus:ring-1 focus:ring-[#FF4B72]"
+                        className="w-full px-3 py-1.5 rounded-xl bg-white border border-[#FDE2E7] text-[#3E2431] text-xs focus:outline-none focus:ring-1 focus:ring-[#F47D90]"
                       />
                     </div>
                   </div>
@@ -314,7 +318,7 @@ export const UsProfileView: React.FC<UsProfileViewProps> = ({
               </div>
 
               {/* Partner Profile Picture */}
-              <div className="p-4 rounded-2xl bg-white/90 border border-white/90 space-y-3 shadow-xs">
+              <div className="p-4 rounded-2xl bg-white border border-[#FDE2E7] space-y-3 shadow-xs">
                 <div className="flex items-center justify-between">
                   <span className="text-xs font-bold text-[#3E2431]">Partner Photo ({partnerName || 'Partner'})</span>
                   {partnerPhoto && (
@@ -329,7 +333,7 @@ export const UsProfileView: React.FC<UsProfileViewProps> = ({
                 </div>
 
                 <div className="flex items-center gap-3">
-                  <div className="relative w-16 h-16 rounded-full overflow-hidden border-2 border-[#FFDEE5] flex-shrink-0 bg-[#FFD0DC]/30 flex items-center justify-center shadow-xs">
+                  <div className="relative w-16 h-16 rounded-full overflow-hidden border-2 border-[#FDE2E7] flex-shrink-0 bg-[#FFF0F3] flex items-center justify-center shadow-xs">
                     {partnerPhoto ? (
                       <img src={partnerPhoto} alt="Partner profile" className="w-full h-full object-cover" />
                     ) : (
@@ -340,7 +344,7 @@ export const UsProfileView: React.FC<UsProfileViewProps> = ({
                   </div>
 
                   <div className="flex-1 space-y-2">
-                    <label className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-[#FFE5EC] hover:bg-[#8C3F5D] text-[#8C3F5D] hover:text-white text-xs font-extrabold cursor-pointer transition-all shadow-xs border border-[#FFCCD5]">
+                    <label className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-[#FFF0F3] hover:bg-[#F47D90] text-[#F47D90] hover:text-white text-xs font-extrabold cursor-pointer transition-all shadow-xs border border-[#FDE2E7]">
                       <Camera className="w-3.5 h-3.5" />
                       <span>Upload Photo</span>
                       <input
@@ -357,7 +361,7 @@ export const UsProfileView: React.FC<UsProfileViewProps> = ({
                         value={partnerPhoto}
                         onChange={(e) => setPartnerPhoto(e.target.value)}
                         placeholder="Or paste Image URL..."
-                        className="w-full px-3 py-1.5 rounded-xl bg-white border border-[#FFDEE5] text-[#3E2431] text-xs focus:outline-none focus:ring-1 focus:ring-[#FF4B72]"
+                        className="w-full px-3 py-1.5 rounded-xl bg-white border border-[#FDE2E7] text-[#3E2431] text-xs focus:outline-none focus:ring-1 focus:ring-[#F47D90]"
                       />
                     </div>
                   </div>
@@ -368,7 +372,7 @@ export const UsProfileView: React.FC<UsProfileViewProps> = ({
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
-              <label className="block text-xs font-bold text-[#6E495B] uppercase tracking-wider mb-1">
+              <label className="block text-xs font-bold text-[#7A5C68] uppercase tracking-wider mb-1">
                 Your Name
               </label>
               <input
@@ -376,12 +380,12 @@ export const UsProfileView: React.FC<UsProfileViewProps> = ({
                 value={userName}
                 onChange={(e) => setUserName(e.target.value)}
                 placeholder="Your name"
-                className="w-full px-4 py-2.5 rounded-2xl bg-white border border-[#FFDEE5] text-[#3E2431] text-xs font-medium focus:outline-none focus:border-[#FF4B72]"
+                className="w-full px-4 py-2.5 rounded-2xl bg-white border border-[#FDE2E7] text-[#3E2431] text-xs font-medium focus:outline-none focus:border-[#F47D90]"
               />
             </div>
 
             <div>
-              <label className="block text-xs font-bold text-[#6E495B] uppercase tracking-wider mb-1">
+              <label className="block text-xs font-bold text-[#7A5C68] uppercase tracking-wider mb-1">
                 Partner's Name
               </label>
               <input
@@ -389,20 +393,20 @@ export const UsProfileView: React.FC<UsProfileViewProps> = ({
                 value={partnerName}
                 onChange={(e) => setPartnerName(e.target.value)}
                 placeholder="Partner's name"
-                className="w-full px-4 py-2.5 rounded-2xl bg-white border border-[#FFDEE5] text-[#3E2431] text-xs font-medium focus:outline-none focus:border-[#FF4B72]"
+                className="w-full px-4 py-2.5 rounded-2xl bg-white border border-[#FDE2E7] text-[#3E2431] text-xs font-medium focus:outline-none focus:border-[#F47D90]"
               />
             </div>
           </div>
 
           <div>
-            <label className="block text-xs font-bold text-[#6E495B] uppercase tracking-wider mb-1 flex items-center gap-1">
-              <Calendar className="w-3.5 h-3.5 text-[#8C3F5D]" /> Relationship Start Date (Used to Unlock Milestones)
+            <label className="block text-xs font-bold text-[#7A5C68] uppercase tracking-wider mb-1 flex items-center gap-1">
+              <Calendar className="w-3.5 h-3.5 text-[#F47D90]" /> Relationship Start Date (Used to Unlock Milestones)
             </label>
             <input
               type="date"
               value={startDate}
               onChange={(e) => setStartDate(e.target.value)}
-              className="w-full px-4 py-2.5 rounded-2xl bg-white border border-[#FFDEE5] text-[#3E2431] text-xs font-semibold focus:outline-none focus:border-[#FF4B72]"
+              className="w-full px-4 py-2.5 rounded-2xl bg-white border border-[#FDE2E7] text-[#3E2431] text-xs font-semibold focus:outline-none focus:border-[#F47D90]"
             />
           </div>
 
@@ -411,18 +415,48 @@ export const UsProfileView: React.FC<UsProfileViewProps> = ({
               whileHover={{ scale: 1.02 }}
               whileTap={{ scale: 0.98 }}
               type="submit"
-              className="w-full py-3.5 px-6 rounded-full bg-gradient-to-r from-[#3E2431] via-[#6E495B] to-[#FF4B72] text-white text-xs font-extrabold shadow-tuchi flex items-center justify-center gap-2 cursor-pointer transition-all"
+              className="w-full py-3.5 px-6 rounded-full bg-[#F47D90] hover:bg-[#EE6A80] text-white text-xs font-extrabold shadow-tuchi flex items-center justify-center gap-2 cursor-pointer transition-all"
             >
-              <Save className="w-4 h-4 text-[#FFDEE5]" />
+              <Save className="w-4 h-4 text-white" />
               <span>Save Profile & Photos</span>
             </motion.button>
           </div>
         </form>
       </section>
 
+      {/* ANDROID APP INSTALLATION BADGE & ACTIONS */}
+      <section className="glass-panel rounded-3xl p-5 border border-[#FDE2E7] shadow-tuchi flex flex-col sm:flex-row items-center justify-between gap-4 glossy-top">
+        <div className="flex items-center gap-3.5">
+          <div className="w-12 h-12 rounded-2xl bg-[#FFF0F3] border border-[#FDE2E7] p-2 shadow-xs flex-shrink-0 flex items-center justify-center">
+            <img src="/icon.svg" alt="Tuchi App" className="w-full h-full object-contain" />
+          </div>
+          <div>
+            <div className="flex items-center gap-2">
+              <h4 className="text-sm font-extrabold font-heading text-[#3E2431]">Tuchi for Android</h4>
+              <span className="px-2 py-0.5 rounded-full bg-[#E8F8F0] text-[#1E7250] text-[10px] font-extrabold border border-[#BEE9D5]">
+                Native PWA Ready
+              </span>
+            </div>
+            <p className="text-xs text-[#7A5C68] font-medium mt-0.5">
+              Install as a full-screen Android app with home screen icon & offline vault.
+            </p>
+          </div>
+        </div>
+
+        <motion.button
+          whileHover={{ scale: 1.03 }}
+          whileTap={{ scale: 0.97 }}
+          onClick={() => setShowAndroidInstall(true)}
+          className="py-2.5 px-5 rounded-2xl bg-[#F47D90] hover:bg-[#EE6A80] text-white text-xs font-extrabold shadow-xs flex items-center gap-2 cursor-pointer transition-all flex-shrink-0"
+        >
+          <Smartphone className="w-4 h-4 text-white" />
+          <span>Install Android App</span>
+        </motion.button>
+      </section>
+
       {/* DEMO / RESET CONTROLS */}
-      <section className="glass-panel rounded-3xl p-5 border border-white/90 shadow-xs text-center space-y-3 glossy-top">
-        <h4 className="text-xs font-bold uppercase text-[#6E495B]">Scrapbook Data Options</h4>
+      <section className="glass-panel rounded-3xl p-5 border border-[#FDE2E7] shadow-xs text-center space-y-3 glossy-top">
+        <h4 className="text-xs font-bold uppercase text-[#7A5C68]">Scrapbook Data Options</h4>
         <div className="flex flex-wrap items-center justify-center gap-3">
           {onClearAllSnaps && snaps.length > 0 && (
             <motion.button
@@ -445,12 +479,18 @@ export const UsProfileView: React.FC<UsProfileViewProps> = ({
                 onResetData();
               }
             }}
-            className="py-2 px-4 rounded-full bg-white hover:bg-[#FAF5F0] text-[#6E495B] text-xs font-bold border border-[#FFDEE5] flex items-center gap-1.5 shadow-xs cursor-pointer"
+            className="py-2 px-4 rounded-full bg-white hover:bg-[#FFF0F3] text-[#7A5C68] text-xs font-bold border border-[#FDE2E7] flex items-center gap-1.5 shadow-xs cursor-pointer"
           >
-            <RefreshCw className="w-3.5 h-3.5 text-[#8C3F5D]" /> Reset Profile Data
+            <RefreshCw className="w-3.5 h-3.5 text-[#F47D90]" /> Reset Profile Data
           </motion.button>
         </div>
       </section>
+
+      {/* Android Install Modal */}
+      <AndroidInstallModal
+        isOpen={showAndroidInstall}
+        onClose={() => setShowAndroidInstall(false)}
+      />
     </div>
   );
 };

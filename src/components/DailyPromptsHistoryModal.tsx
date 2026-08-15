@@ -68,16 +68,16 @@ export const DailyPromptsHistoryModal: React.FC<DailyPromptsHistoryModalProps> =
           className="w-full max-w-3xl bg-white rounded-[32px] shadow-tuchi-lg border border-white/90 overflow-hidden flex flex-col max-h-[88vh]"
         >
           {/* HEADER */}
-          <div className="p-5 sm:p-6 border-b border-neutral-100 flex items-center justify-between bg-gradient-to-r from-[#FFF0F3] via-white to-[#FAF5F0]">
+          <div className="p-5 sm:p-6 border-b border-[#FDE2E7] flex items-center justify-between bg-white">
             <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-2xl bg-[#3E2431] text-white flex items-center justify-center shadow-xs">
-                <BookOpen className="w-5 h-5 text-[#FFDEE5]" />
+              <div className="w-10 h-10 rounded-2xl bg-[#F47D90] text-white flex items-center justify-center shadow-xs">
+                <BookOpen className="w-5 h-5 text-white" />
               </div>
               <div>
                 <h3 className="text-lg sm:text-xl font-bold font-heading text-[#3E2431]">
                   Couple Prompt Journal
                 </h3>
-                <p className="text-xs text-[#6E495B]">
+                <p className="text-xs text-[#7A5C68]">
                   Your archive of answered questions, reflections & micro-dates
                 </p>
               </div>
@@ -85,47 +85,47 @@ export const DailyPromptsHistoryModal: React.FC<DailyPromptsHistoryModalProps> =
 
             <button
               onClick={onClose}
-              className="w-9 h-9 rounded-full bg-white hover:bg-neutral-100 text-[#3E2431] flex items-center justify-center transition-colors shadow-2xs border border-neutral-200 cursor-pointer"
+              className="w-9 h-9 rounded-full bg-white hover:bg-[#FFF0F3] text-[#3E2431] flex items-center justify-center transition-colors shadow-2xs border border-[#FDE2E7] cursor-pointer"
             >
               <X className="w-4 h-4" />
             </button>
           </div>
 
           {/* STREAK & SUMMARY STATS BAR */}
-          <div className="px-5 sm:px-6 py-3 bg-neutral-50/70 border-b border-neutral-100 flex flex-wrap items-center justify-between gap-3 text-xs">
+          <div className="px-5 sm:px-6 py-3 bg-[#FFF7F9] border-b border-[#FDE2E7] flex flex-wrap items-center justify-between gap-3 text-xs">
             <div className="flex items-center gap-3">
               <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-orange-100 text-orange-800 font-extrabold border border-orange-200">
                 <Flame className="w-4 h-4 text-orange-500 fill-orange-500" />
                 <span>{streakInfo.streak} Day Streak</span>
               </div>
-              <div className="inline-flex items-center gap-1 px-3 py-1 rounded-full bg-emerald-100 text-emerald-800 font-extrabold border border-emerald-200">
-                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+              <div className="inline-flex items-center gap-1 px-3 py-1 rounded-full bg-[#E8F8F0] text-[#1E7250] font-extrabold border border-[#BEE9D5]">
+                <CheckCircle2 className="w-3.5 h-3.5 text-[#2A9D6F]" />
                 <span>{entries.length} Total Prompts Answered</span>
               </div>
             </div>
 
             {/* SEARCH */}
             <div className="relative w-full sm:w-60">
-              <Search className="w-3.5 h-3.5 text-[#8C3F5D] absolute left-3 top-1/2 -translate-y-1/2" />
+              <Search className="w-3.5 h-3.5 text-[#F47D90] absolute left-3 top-1/2 -translate-y-1/2" />
               <input
                 type="text"
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 placeholder="Search past answers..."
-                className="w-full pl-8 pr-3 py-1.5 rounded-xl bg-white border border-neutral-200 text-xs text-[#3E2431] focus:outline-none focus:border-[#FF4B72]"
+                className="w-full pl-8 pr-3 py-1.5 rounded-xl bg-white border border-[#FDE2E7] text-xs text-[#3E2431] focus:outline-none focus:border-[#F47D90]"
               />
             </div>
           </div>
 
           {/* CATEGORY FILTER CHIPS */}
-          <div className="px-5 sm:px-6 py-2.5 flex items-center gap-1.5 overflow-x-auto no-scrollbar border-b border-neutral-100 bg-white">
+          <div className="px-5 sm:px-6 py-2.5 flex items-center gap-1.5 overflow-x-auto no-scrollbar border-b border-[#FDE2E7] bg-white">
             <button
               type="button"
               onClick={() => setActiveCategory('all')}
               className={`px-3 py-1 rounded-full text-xs font-bold flex-shrink-0 transition-all cursor-pointer ${
                 activeCategory === 'all'
                   ? 'bg-[#3E2431] text-white shadow-xs'
-                  : 'bg-neutral-100 text-[#6E495B] hover:bg-neutral-200'
+                  : 'bg-[#FFF0F3] text-[#7A5C68] hover:bg-[#FDE2E7]'
               }`}
             >
               All ({entries.length})
@@ -141,8 +141,8 @@ export const DailyPromptsHistoryModal: React.FC<DailyPromptsHistoryModalProps> =
                   onClick={() => setActiveCategory(catKey)}
                   className={`px-3 py-1 rounded-full text-xs font-bold flex items-center gap-1 flex-shrink-0 transition-all cursor-pointer border ${
                     isSelected
-                      ? 'bg-[#8C3F5D] text-white border-[#8C3F5D] shadow-xs'
-                      : 'bg-white text-[#6E495B] border-neutral-200 hover:bg-neutral-50'
+                      ? 'bg-[#F47D90] text-white border-[#F47D90] shadow-xs'
+                      : 'bg-white text-[#7A5C68] border-[#FDE2E7] hover:bg-[#FFF0F3]'
                   }`}
                 >
                   <span>{meta.emoji}</span>
@@ -163,7 +163,7 @@ export const DailyPromptsHistoryModal: React.FC<DailyPromptsHistoryModalProps> =
                   <motion.div
                     key={entry.id}
                     layout
-                    className="p-5 rounded-3xl bg-neutral-50/70 border border-neutral-200/90 space-y-3.5 relative overflow-hidden"
+                    className="p-5 rounded-3xl bg-[#FFF7F9] border border-[#FDE2E7] space-y-3.5 relative overflow-hidden"
                   >
                     {/* Header */}
                     <div className="flex flex-wrap items-center justify-between gap-2">
@@ -180,8 +180,8 @@ export const DailyPromptsHistoryModal: React.FC<DailyPromptsHistoryModalProps> =
                           <span>{entry.type === 'activity' ? 'Date Activity' : meta.label}</span>
                         </span>
 
-                        <span className="text-xs font-bold text-[#6E495B] flex items-center gap-1">
-                          <Calendar className="w-3.5 h-3.5 text-[#FF4B72]" />
+                        <span className="text-xs font-bold text-[#7A5C68] flex items-center gap-1">
+                          <Calendar className="w-3.5 h-3.5 text-[#F47D90]" />
                           {formatDate(entry.date)}
                         </span>
                       </div>
@@ -192,9 +192,9 @@ export const DailyPromptsHistoryModal: React.FC<DailyPromptsHistoryModalProps> =
                           <button
                             type="button"
                             onClick={() => onConvertToSnap(entry)}
-                            className="px-3 py-1 rounded-full bg-white border border-[#FFCCD5] hover:bg-[#FFE5EC] text-[#8C3F5D] text-xs font-bold flex items-center gap-1 shadow-2xs cursor-pointer transition-colors"
+                            className="px-3 py-1 rounded-full bg-white border border-[#FDE2E7] hover:bg-[#FFF0F3] text-[#F47D90] text-xs font-bold flex items-center gap-1 shadow-2xs cursor-pointer transition-colors"
                           >
-                            <Camera className="w-3 h-3 text-[#FF4B72]" />
+                            <Camera className="w-3 h-3 text-[#F47D90]" />
                             <span>Save as Polaroid Snap</span>
                           </button>
                         )}
@@ -236,9 +236,9 @@ export const DailyPromptsHistoryModal: React.FC<DailyPromptsHistoryModalProps> =
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
                       {/* User Answer */}
                       {entry.userAnswer && (
-                        <div className="p-3.5 rounded-2xl bg-white border border-[#FFCCD5]/80 shadow-2xs space-y-1">
-                          <div className="flex items-center gap-2 text-xs font-bold text-[#8C3F5D]">
-                            <div className="w-5 h-5 rounded-full bg-[#FFDEE5] overflow-hidden flex items-center justify-center text-[10px]">
+                        <div className="p-3.5 rounded-2xl bg-white border border-[#FDE2E7] shadow-2xs space-y-1">
+                          <div className="flex items-center gap-2 text-xs font-bold text-[#F47D90]">
+                            <div className="w-5 h-5 rounded-full bg-[#FFF0F3] overflow-hidden flex items-center justify-center text-[10px] border border-[#FDE2E7]">
                               {profile.userPhotoUrl ? (
                                 <img
                                   src={profile.userPhotoUrl}
@@ -259,9 +259,9 @@ export const DailyPromptsHistoryModal: React.FC<DailyPromptsHistoryModalProps> =
 
                       {/* Partner Answer */}
                       {entry.partnerAnswer && (
-                        <div className="p-3.5 rounded-2xl bg-white border border-[#E8AFC0]/80 shadow-2xs space-y-1">
-                          <div className="flex items-center gap-2 text-xs font-bold text-[#4A2C3A]">
-                            <div className="w-5 h-5 rounded-full bg-[#E8AFC0] overflow-hidden flex items-center justify-center text-[10px]">
+                        <div className="p-3.5 rounded-2xl bg-white border border-[#FDE2E7] shadow-2xs space-y-1">
+                          <div className="flex items-center gap-2 text-xs font-bold text-[#3E2431]">
+                            <div className="w-5 h-5 rounded-full bg-[#FDE2E7] overflow-hidden flex items-center justify-center text-[10px] border border-[#FDE2E7]">
                               {profile.partnerPhotoUrl ? (
                                 <img
                                   src={profile.partnerPhotoUrl}
@@ -282,8 +282,8 @@ export const DailyPromptsHistoryModal: React.FC<DailyPromptsHistoryModalProps> =
 
                       {/* Joint Answer */}
                       {entry.jointAnswer && (
-                        <div className="sm:col-span-2 p-3.5 rounded-2xl bg-white border border-[#FFCCD5]/80 shadow-2xs space-y-1">
-                          <div className="flex items-center gap-1.5 text-xs font-bold text-[#FF4B72]">
+                        <div className="sm:col-span-2 p-3.5 rounded-2xl bg-white border border-[#FDE2E7] shadow-2xs space-y-1">
+                          <div className="flex items-center gap-1.5 text-xs font-bold text-[#F47D90]">
                             <Heart className="w-3.5 h-3.5 fill-current" />
                             <span>Our Joint Reflection:</span>
                           </div>
@@ -298,13 +298,13 @@ export const DailyPromptsHistoryModal: React.FC<DailyPromptsHistoryModalProps> =
               })
             ) : (
               <div className="text-center py-16 space-y-3">
-                <div className="w-14 h-14 rounded-full bg-[#FFE5EC] text-[#8C3F5D] flex items-center justify-center mx-auto">
+                <div className="w-14 h-14 rounded-full bg-[#FFF0F3] text-[#F47D90] flex items-center justify-center mx-auto border border-[#FDE2E7]">
                   <MessageSquareHeart className="w-7 h-7" />
                 </div>
                 <h4 className="text-base font-bold font-heading text-[#3E2431]">
                   No prompt memories found
                 </h4>
-                <p className="text-xs text-[#6E495B] max-w-xs mx-auto">
+                <p className="text-xs text-[#7A5C68] max-w-xs mx-auto">
                   Answer today’s Daily Prompt on the Home page to start building your romantic journal!
                 </p>
               </div>

@@ -1,0 +1,49 @@
+{
+  "name": "Tuchi — Our Couple Memory Space",
+  "short_name": "Tuchi",
+  "description": "A cute, aesthetic couple memory space, polaroid photo journal, and daily relationship prompts.",
+  "start_url": "/",
+  "id": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#FFFFFF",
+  "theme_color": "#F47D90",
+  "categories": ["lifestyle", "social", "photo"],
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "/icon-192.svg",
+      "sizes": "192x192",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/icon-512.svg",
+      "sizes": "512x512",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Add Couple Memory",
+      "short_name": "Add Snap",
+      "description": "Capture a new polaroid photo memory",
+      "url": "/?action=add-snap",
+      "icons": [{ "src": "/icon.svg", "sizes": "96x96" }]
+    },
+    {
+      "name": "Today's Couple Prompt",
+      "short_name": "Daily Prompt",
+      "description": "Answer today's relationship question together",
+      "url": "/?action=daily-prompt",
+      "icons": [{ "src": "/icon.svg", "sizes": "96x96" }]
+    }
+  ]
+}

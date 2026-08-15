@@ -252,10 +252,10 @@ export default function App() {
   // Auth Loading State
   if (isAuthLoading) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-[#FAF5F0]">
+      <div className="min-h-screen flex items-center justify-center bg-white">
         <div className="text-center space-y-3">
-          <div className="w-10 h-10 rounded-full border-3 border-[#FF4B72] border-t-transparent animate-spin mx-auto" />
-          <p className="text-xs font-bold text-[#6E495B]">Opening secure couple vault...</p>
+          <div className="w-10 h-10 rounded-full border-3 border-[#F47D90] border-t-transparent animate-spin mx-auto" />
+          <p className="text-xs font-bold text-[#7A5C68]">Opening secure couple vault...</p>
         </div>
       </div>
     );
@@ -264,7 +264,7 @@ export default function App() {
   // If user is not authenticated, show AuthScreen (Login/Signup/Guest)
   if (!currentUser) {
     return (
-      <main className="min-h-screen selection:bg-[#FFE5EC]">
+      <main className="min-h-screen selection:bg-[#FDE2E7]">
         <AuthScreen />
       </main>
     );
@@ -273,14 +273,14 @@ export default function App() {
   // If user hasn't completed onboarding, render Onboarding Screen
   if (!profile.isOnboarded) {
     return (
-      <main className="min-h-screen selection:bg-[#FFE5EC]">
+      <main className="min-h-screen selection:bg-[#FDE2E7]">
         <Onboarding initialProfile={profile} onComplete={handleOnboardingComplete} />
       </main>
     );
   }
 
   return (
-    <main className="min-h-screen selection:bg-[#FFE5EC] relative">
+    <main className="min-h-screen selection:bg-[#FDE2E7] relative">
       {/* Active Screen Content */}
       {activeTab === 'home' && (
         <HomeGallery
@@ -297,6 +297,7 @@ export default function App() {
           onOpenAddCategory={() => setIsAddCategoryOpen(true)}
           onNavigateToUs={() => setActiveTab('us')}
           onNavigateToMemories={() => setActiveTab('memories')}
+          onNavigateToAlbums={() => setActiveTab('albums')}
         />
       )}
 
@@ -319,6 +320,7 @@ export default function App() {
           onSaveMilestoneNote={handleSaveMilestoneNote}
           onSelectSnap={(snap) => setSelectedSnap(snap)}
           onToggleFavorite={handleToggleFavorite}
+          onNavigateToUs={() => setActiveTab('us')}
         />
       )}
 

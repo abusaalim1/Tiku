@@ -76,7 +76,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = () => {
     if (score <= 1) return { score: 1, text: 'Weak', color: 'bg-red-400' };
     if (score === 2) return { score: 2, text: 'Fair', color: 'bg-amber-400' };
     if (score === 3) return { score: 3, text: 'Good', color: 'bg-emerald-400' };
-    return { score: 4, text: 'Strong', color: 'bg-[#FF4B72]' };
+    return { score: 4, text: 'Strong', color: 'bg-[#F47D90]' };
   };
 
   const strength = getPasswordStrength(password);
@@ -267,7 +267,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = () => {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center p-4 sm:p-6 relative overflow-hidden bg-gradient-to-br from-[#FFF5F7] via-[#FFF0F3] to-[#F7EBEF]">
+    <div className="min-h-screen flex items-center justify-center p-4 sm:p-6 relative overflow-hidden bg-gradient-to-br from-[#FFF7F9] via-[#FFF0F3] to-[#FDE2E7]">
       {/* Floating Animated Background Hearts & Glows */}
       <motion.div
         animate={{
@@ -276,7 +276,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = () => {
           y: [0, -20, 0],
         }}
         transition={{ duration: 10, repeat: Infinity, ease: 'easeInOut' }}
-        className="absolute top-12 left-12 w-72 h-72 bg-[#FFCCD5]/50 rounded-full blur-3xl pointer-events-none -z-10"
+        className="absolute top-12 left-12 w-72 h-72 bg-[#FDE2E7]/60 rounded-full blur-3xl pointer-events-none -z-10"
       />
       <motion.div
         animate={{
@@ -285,7 +285,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = () => {
           y: [0, 20, 0],
         }}
         transition={{ duration: 12, repeat: Infinity, ease: 'easeInOut', delay: 1 }}
-        className="absolute bottom-12 right-12 w-80 h-80 bg-[#BFE3D0]/40 rounded-full blur-3xl pointer-events-none -z-10"
+        className="absolute bottom-12 right-12 w-80 h-80 bg-[#FFF0F3]/80 rounded-full blur-3xl pointer-events-none -z-10"
       />
       <motion.div
         animate={{
@@ -293,35 +293,35 @@ export const AuthScreen: React.FC<AuthScreenProps> = () => {
           opacity: [0.3, 0.6, 0.3],
         }}
         transition={{ duration: 8, repeat: Infinity, ease: 'easeInOut', delay: 2 }}
-        className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-96 h-96 bg-[#FFE5EC]/45 rounded-full blur-3xl pointer-events-none -z-10"
+        className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-96 h-96 bg-[#FDE2E7]/40 rounded-full blur-3xl pointer-events-none -z-10"
       />
 
       {/* Floating Mini Hearts */}
       <motion.div
         animate={{ y: [-10, 10, -10], rotate: [0, 10, 0] }}
         transition={{ duration: 5, repeat: Infinity, ease: 'easeInOut' }}
-        className="hidden md:block absolute top-20 left-[15%] text-2xl text-[#FFCCD5] select-none pointer-events-none"
+        className="hidden md:block absolute top-20 left-[15%] text-2xl text-[#FDE2E7] select-none pointer-events-none"
       >
         🌸
       </motion.div>
       <motion.div
         animate={{ y: [10, -10, 10], rotate: [0, -12, 0] }}
         transition={{ duration: 6, repeat: Infinity, ease: 'easeInOut', delay: 1 }}
-        className="hidden md:block absolute bottom-24 left-[12%] text-3xl text-[#FF4B72]/30 select-none pointer-events-none"
+        className="hidden md:block absolute bottom-24 left-[12%] text-3xl text-[#F47D90]/30 select-none pointer-events-none"
       >
         💖
       </motion.div>
       <motion.div
         animate={{ y: [-15, 15, -15], rotate: [0, 15, 0] }}
         transition={{ duration: 7, repeat: Infinity, ease: 'easeInOut', delay: 0.5 }}
-        className="hidden md:block absolute top-28 right-[15%] text-2xl text-[#E8AFC0] select-none pointer-events-none"
+        className="hidden md:block absolute top-28 right-[15%] text-2xl text-[#F47D90]/40 select-none pointer-events-none"
       >
         ✨
       </motion.div>
       <motion.div
         animate={{ y: [12, -12, 12], rotate: [0, -10, 0] }}
         transition={{ duration: 8, repeat: Infinity, ease: 'easeInOut', delay: 2 }}
-        className="hidden md:block absolute bottom-28 right-[14%] text-3xl text-[#FFCCD5] select-none pointer-events-none"
+        className="hidden md:block absolute bottom-28 right-[14%] text-3xl text-[#FDE2E7] select-none pointer-events-none"
       >
         🎀
       </motion.div>
@@ -334,7 +334,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = () => {
           duration: 0.45,
           ease: [0.16, 1, 0.3, 1],
         }}
-        className="w-full max-w-[440px] bg-white/90 backdrop-blur-xl rounded-[36px] p-6 sm:p-8 border border-white/95 shadow-tuchi-lg space-y-5 relative z-10 glossy-top"
+        className="w-full max-w-[440px] bg-white/95 backdrop-blur-xl rounded-[36px] p-6 sm:p-8 border border-[#FDE2E7] shadow-[0_12px_32px_rgba(244,125,144,0.12)] space-y-5 relative z-10 glossy-top"
       >
         {/* TOP BRANDING & BADGE */}
         <div className="text-center space-y-3">
@@ -342,9 +342,9 @@ export const AuthScreen: React.FC<AuthScreenProps> = () => {
             initial={{ scale: 0.8, opacity: 0 }}
             animate={{ scale: 1, opacity: 1 }}
             transition={{ delay: 0.1 }}
-            className="inline-flex items-center gap-1.5 px-3.5 py-1 rounded-full bg-gradient-to-r from-[#FFF0F3] to-[#FFE5EC] text-[#8C3F5D] text-[11px] font-extrabold border border-[#FFCCD5] shadow-xs"
+            className="inline-flex items-center gap-1.5 px-3.5 py-1 rounded-full bg-gradient-to-r from-[#FFF0F3] to-[#FDE2E7] text-[#3E2431] text-[11px] font-extrabold border border-[#FDE2E7] shadow-xs"
           >
-            <ShieldCheck className="w-3.5 h-3.5 text-[#FF4B72]" />
+            <ShieldCheck className="w-3.5 h-3.5 text-[#F47D90]" />
             <span>Private & Encrypted Couple Vault</span>
           </motion.div>
 
@@ -352,9 +352,9 @@ export const AuthScreen: React.FC<AuthScreenProps> = () => {
             <motion.div
               animate={{ scale: [1, 1.06, 1] }}
               transition={{ duration: 3, repeat: Infinity, ease: 'easeInOut' }}
-              className="w-16 h-16 rounded-3xl bg-gradient-to-tr from-[#FFE5EC] via-[#FFF0F3] to-[#FFD8E3] border border-white mx-auto flex items-center justify-center shadow-xs"
+              className="w-16 h-16 rounded-3xl bg-gradient-to-tr from-[#FFF0F3] via-white to-[#FDE2E7] border border-[#FDE2E7] mx-auto flex items-center justify-center shadow-xs"
             >
-              <Heart className="w-8 h-8 fill-[#FF4B72] text-[#FF4B72] drop-shadow-xs" />
+              <Heart className="w-8 h-8 fill-[#F47D90] text-[#F47D90] drop-shadow-xs" />
             </motion.div>
             <motion.div
               animate={{ rotate: 360 }}
@@ -369,7 +369,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = () => {
             <h1 className="text-2xl sm:text-3xl font-extrabold font-heading text-[#3E2431] tracking-tight">
               Our Private Scrapbook
             </h1>
-            <p className="text-xs sm:text-sm text-[#6E495B] font-medium max-w-xs mx-auto leading-relaxed mt-1">
+            <p className="text-xs sm:text-sm text-[#7A5C68] font-medium max-w-xs mx-auto leading-relaxed mt-1">
               Sign in to unlock your shared memories, photos, milestones, and love notes.
             </p>
           </div>
@@ -420,7 +420,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = () => {
                       setMode('signin');
                       setErrorMsg(null);
                     }}
-                    className="flex-1 py-2 px-3 rounded-xl bg-[#3E2431] text-white hover:bg-[#8C3F5D] font-extrabold text-xs flex items-center justify-center gap-1.5 transition-all shadow-xs cursor-pointer"
+                    className="flex-1 py-2 px-3 rounded-xl bg-[#3E2431] text-white hover:bg-[#F47D90] font-extrabold text-xs flex items-center justify-center gap-1.5 transition-all shadow-xs cursor-pointer"
                   >
                     <span>Switch to Sign In & Enter</span>
                     <ArrowRight className="w-3.5 h-3.5" />
@@ -436,7 +436,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = () => {
                       type="button"
                       disabled={resetLoading}
                       onClick={handlePasswordReset}
-                      className="flex-1 py-2 px-3 rounded-xl bg-[#FF4B72] text-white hover:bg-[#E83E63] font-extrabold text-xs flex items-center justify-center gap-1.5 transition-all shadow-xs cursor-pointer disabled:opacity-50"
+                      className="flex-1 py-2 px-3 rounded-xl bg-[#F47D90] text-white hover:bg-[#EE6A80] font-extrabold text-xs flex items-center justify-center gap-1.5 transition-all shadow-xs cursor-pointer disabled:opacity-50"
                     >
                       {resetLoading ? (
                         <RefreshCw className="w-3.5 h-3.5 animate-spin" />
@@ -466,7 +466,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = () => {
                   <button
                     type="button"
                     onClick={() => copyToClipboard(currentHostname)}
-                    className="px-2.5 py-1.5 rounded-lg bg-[#3E2431] text-white hover:bg-[#8C3F5D] text-[11px] font-bold flex items-center gap-1 cursor-pointer transition-all flex-shrink-0"
+                    className="px-2.5 py-1.5 rounded-lg bg-[#3E2431] text-white hover:bg-[#F47D90] text-[11px] font-bold flex items-center gap-1 cursor-pointer transition-all flex-shrink-0"
                   >
                     {copiedDomain ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
                     <span>{copiedDomain ? 'Copied!' : 'Copy'}</span>
@@ -480,7 +480,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = () => {
                     <button
                       type="button"
                       onClick={() => setShowAdminHelp(!showAdminHelp)}
-                      className="text-[11px] font-bold text-[#8C3F5D] hover:text-[#3E2431] inline-flex items-center gap-1 cursor-pointer text-left"
+                      className="text-[11px] font-bold text-[#F47D90] hover:text-[#3E2431] inline-flex items-center gap-1 cursor-pointer text-left"
                     >
                       <HelpCircle className="w-3.5 h-3.5 flex-shrink-0" />
                       <span>{errorMsg.isDomainIssue ? 'How to authorize domain?' : 'How to enable in Firebase?'}</span>
@@ -494,7 +494,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = () => {
                     <button
                       type="button"
                       onClick={handleGuestLogin}
-                      className="text-[11px] font-extrabold px-2.5 py-1 rounded-lg bg-[#FF4B72] text-white hover:bg-[#E83E63] cursor-pointer shadow-xs flex-shrink-0"
+                      className="text-[11px] font-extrabold px-2.5 py-1 rounded-lg bg-[#F47D90] text-white hover:bg-[#EE6A80] cursor-pointer shadow-xs flex-shrink-0"
                     >
                       Enter as Guest
                     </button>
@@ -506,7 +506,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = () => {
                         initial={{ opacity: 0, height: 0 }}
                         animate={{ opacity: 1, height: 'auto' }}
                         exit={{ opacity: 0, height: 0 }}
-                        className="bg-white/90 p-2.5 rounded-xl border border-red-200 text-[11px] text-[#6E495B] space-y-1.5"
+                        className="bg-white/90 p-2.5 rounded-xl border border-red-200 text-[11px] text-[#7A5C68] space-y-1.5"
                       >
                         {errorMsg.isDomainIssue ? (
                           <>
@@ -550,7 +550,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = () => {
             type="button"
             disabled={loading}
             onClick={handleGoogleLogin}
-            className="w-full py-3 px-4 rounded-2xl bg-white hover:bg-neutral-50/90 text-[#3E2431] text-xs sm:text-sm font-bold border border-neutral-200/90 shadow-xs flex items-center justify-center gap-3 transition-all cursor-pointer disabled:opacity-50 group"
+            className="w-full py-3 px-4 rounded-2xl bg-white hover:bg-[#FFF7F9] text-[#3E2431] text-xs sm:text-sm font-bold border border-[#FDE2E7] shadow-xs flex items-center justify-center gap-3 transition-all cursor-pointer disabled:opacity-50 group"
           >
             <svg className="w-4 h-4 transition-transform group-hover:scale-110" viewBox="0 0 24 24">
               <path
@@ -575,16 +575,16 @@ export const AuthScreen: React.FC<AuthScreenProps> = () => {
 
           {/* DIVIDER */}
           <div className="flex items-center gap-3 my-1">
-            <div className="flex-1 h-px bg-[#FFCCD5]/70" />
-            <span className="text-[10px] font-extrabold text-[#8C3F5D]/70 uppercase tracking-wider">
+            <div className="flex-1 h-px bg-[#FDE2E7]" />
+            <span className="text-[10px] font-extrabold text-[#7A5C68] uppercase tracking-wider">
               or continue with email
             </span>
-            <div className="flex-1 h-px bg-[#FFCCD5]/70" />
+            <div className="flex-1 h-px bg-[#FDE2E7]" />
           </div>
         </div>
 
         {/* SMOOTH SLIDING TAB TOGGLE: SIGN IN / SIGN UP */}
-        <div className="relative flex rounded-2xl bg-[#FFF0F3] p-1 border border-[#FFCCD5]/60">
+        <div className="relative flex rounded-2xl bg-[#FFF0F3] p-1 border border-[#FDE2E7]">
           <button
             type="button"
             onClick={() => {
@@ -592,14 +592,14 @@ export const AuthScreen: React.FC<AuthScreenProps> = () => {
               setErrorMsg(null);
             }}
             className={`relative flex-1 py-2 text-xs font-extrabold rounded-xl transition-colors cursor-pointer z-10 ${
-              mode === 'signin' ? 'text-[#3E2431]' : 'text-[#8C3F5D] hover:text-[#3E2431]'
+              mode === 'signin' ? 'text-[#3E2431]' : 'text-[#7A5C68] hover:text-[#3E2431]'
             }`}
           >
             {mode === 'signin' && (
               <motion.div
                 layoutId="activeAuthTab"
                 transition={{ type: 'spring', stiffness: 450, damping: 35 }}
-                className="absolute inset-0 bg-white rounded-xl shadow-xs -z-10 border border-white"
+                className="absolute inset-0 bg-white rounded-xl shadow-xs -z-10 border border-[#FDE2E7]"
               />
             )}
             <span>Sign In</span>
@@ -612,14 +612,14 @@ export const AuthScreen: React.FC<AuthScreenProps> = () => {
               setErrorMsg(null);
             }}
             className={`relative flex-1 py-2 text-xs font-extrabold rounded-xl transition-colors cursor-pointer z-10 ${
-              mode === 'signup' ? 'text-[#3E2431]' : 'text-[#8C3F5D] hover:text-[#3E2431]'
+              mode === 'signup' ? 'text-[#3E2431]' : 'text-[#7A5C68] hover:text-[#3E2431]'
             }`}
           >
             {mode === 'signup' && (
               <motion.div
                 layoutId="activeAuthTab"
                 transition={{ type: 'spring', stiffness: 450, damping: 35 }}
-                className="absolute inset-0 bg-white rounded-xl shadow-xs -z-10 border border-white"
+                className="absolute inset-0 bg-white rounded-xl shadow-xs -z-10 border border-[#FDE2E7]"
               />
             )}
             <span>Create Vault Account</span>
@@ -630,9 +630,9 @@ export const AuthScreen: React.FC<AuthScreenProps> = () => {
         <form onSubmit={handleEmailAuth} className="space-y-3">
           {/* EMAIL FIELD */}
           <div className="space-y-1">
-            <label className="block text-xs font-bold text-[#6E495B] flex items-center justify-between">
+            <label className="block text-xs font-bold text-[#7A5C68] flex items-center justify-between">
               <span className="flex items-center gap-1.5">
-                <Mail className="w-3.5 h-3.5 text-[#FF4B72]" /> Email Address
+                <Mail className="w-3.5 h-3.5 text-[#F47D90]" /> Email Address
               </span>
             </label>
             <div className="relative">
@@ -642,7 +642,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = () => {
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 placeholder="you@example.com"
-                className="w-full px-3.5 py-2.5 rounded-2xl bg-white/95 border border-[#FFCCD5] text-[#3E2431] text-xs sm:text-sm font-medium focus:outline-none focus:border-[#FF4B72] focus:ring-2 focus:ring-[#FFE5EC] transition-all placeholder:text-neutral-400 shadow-xs"
+                className="w-full px-3.5 py-2.5 rounded-2xl bg-white border border-[#FDE2E7] text-[#3E2431] text-xs sm:text-sm font-medium focus:outline-none focus:border-[#F47D90] focus:ring-2 focus:ring-[#FFF0F3] transition-all placeholder:text-neutral-400 shadow-xs"
               />
             </div>
           </div>
@@ -650,21 +650,21 @@ export const AuthScreen: React.FC<AuthScreenProps> = () => {
           {/* PASSWORD FIELD WITH VISIBILITY TOGGLE */}
           <div className="space-y-1">
             <div className="flex items-center justify-between">
-              <label className="text-xs font-bold text-[#6E495B] flex items-center gap-1.5">
-                <KeyRound className="w-3.5 h-3.5 text-[#FF4B72]" /> Password
+              <label className="text-xs font-bold text-[#7A5C68] flex items-center gap-1.5">
+                <KeyRound className="w-3.5 h-3.5 text-[#F47D90]" /> Password
               </label>
               {mode === 'signin' ? (
                 <button
                   type="button"
                   disabled={resetLoading}
                   onClick={handlePasswordReset}
-                  className="text-[11px] font-extrabold text-[#FF4B72] hover:text-[#3E2431] transition-colors cursor-pointer disabled:opacity-50"
+                  className="text-[11px] font-extrabold text-[#F47D90] hover:text-[#3E2431] transition-colors cursor-pointer disabled:opacity-50"
                 >
                   {resetLoading ? 'Sending link...' : 'Forgot password?'}
                 </button>
               ) : (
                 password && (
-                  <span className="text-[10px] font-bold text-[#8C3F5D]">
+                  <span className="text-[10px] font-bold text-[#F47D90]">
                     {strength.text}
                   </span>
                 )
@@ -677,12 +677,12 @@ export const AuthScreen: React.FC<AuthScreenProps> = () => {
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 placeholder={mode === 'signup' ? 'Create password (min 6 chars)' : 'Enter your password'}
-                className="w-full pl-3.5 pr-10 py-2.5 rounded-2xl bg-white/95 border border-[#FFCCD5] text-[#3E2431] text-xs sm:text-sm font-medium focus:outline-none focus:border-[#FF4B72] focus:ring-2 focus:ring-[#FFE5EC] transition-all placeholder:text-neutral-400 shadow-xs"
+                className="w-full pl-3.5 pr-10 py-2.5 rounded-2xl bg-white border border-[#FDE2E7] text-[#3E2431] text-xs sm:text-sm font-medium focus:outline-none focus:border-[#F47D90] focus:ring-2 focus:ring-[#FFF0F3] transition-all placeholder:text-neutral-400 shadow-xs"
               />
               <button
                 type="button"
                 onClick={() => setShowPassword(!showPassword)}
-                className="absolute right-3 top-1/2 -translate-y-1/2 text-[#8C3F5D] hover:text-[#3E2431] transition-colors p-1 cursor-pointer"
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-[#7A5C68] hover:text-[#3E2431] transition-colors p-1 cursor-pointer"
                 title={showPassword ? 'Hide password' : 'Show password'}
               >
                 {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
@@ -716,9 +716,9 @@ export const AuthScreen: React.FC<AuthScreenProps> = () => {
                 transition={{ duration: 0.2 }}
                 className="space-y-1 overflow-hidden"
               >
-                <label className="block text-xs font-bold text-[#6E495B] flex items-center justify-between">
+                <label className="block text-xs font-bold text-[#7A5C68] flex items-center justify-between">
                   <span className="flex items-center gap-1.5">
-                    <CheckCircle2 className="w-3.5 h-3.5 text-[#FF4B72]" /> Confirm Password
+                    <CheckCircle2 className="w-3.5 h-3.5 text-[#F47D90]" /> Confirm Password
                   </span>
                   {confirmPassword && (
                     <span className={`text-[10px] font-bold ${passwordsMatch ? 'text-emerald-600' : 'text-red-500'}`}>
@@ -733,12 +733,12 @@ export const AuthScreen: React.FC<AuthScreenProps> = () => {
                     value={confirmPassword}
                     onChange={(e) => setConfirmPassword(e.target.value)}
                     placeholder="Repeat your password"
-                    className="w-full pl-3.5 pr-10 py-2.5 rounded-2xl bg-white/95 border border-[#FFCCD5] text-[#3E2431] text-xs sm:text-sm font-medium focus:outline-none focus:border-[#FF4B72] focus:ring-2 focus:ring-[#FFE5EC] transition-all placeholder:text-neutral-400 shadow-xs"
+                    className="w-full pl-3.5 pr-10 py-2.5 rounded-2xl bg-white border border-[#FDE2E7] text-[#3E2431] text-xs sm:text-sm font-medium focus:outline-none focus:border-[#F47D90] focus:ring-2 focus:ring-[#FFF0F3] transition-all placeholder:text-neutral-400 shadow-xs"
                   />
                   <button
                     type="button"
                     onClick={() => setShowConfirmPassword(!showConfirmPassword)}
-                    className="absolute right-3 top-1/2 -translate-y-1/2 text-[#8C3F5D] hover:text-[#3E2431] transition-colors p-1 cursor-pointer"
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-[#7A5C68] hover:text-[#3E2431] transition-colors p-1 cursor-pointer"
                   >
                     {showConfirmPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                   </button>
@@ -753,7 +753,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = () => {
             whileTap={{ scale: 0.985 }}
             type="submit"
             disabled={loading}
-            className="w-full py-3.5 px-4 rounded-2xl bg-gradient-to-r from-[#3E2431] via-[#6E495B] to-[#FF4B72] text-white text-xs sm:text-sm font-extrabold shadow-tuchi flex items-center justify-center gap-2 transition-all cursor-pointer disabled:opacity-50 border border-white/20"
+            className="w-full py-3.5 px-4 rounded-2xl bg-gradient-to-r from-[#F47D90] to-[#EE6A80] text-white text-xs sm:text-sm font-extrabold shadow-xs flex items-center justify-center gap-2 transition-all cursor-pointer disabled:opacity-50 border border-white/20"
           >
             {loading ? (
               <div className="flex items-center gap-2">
@@ -775,20 +775,20 @@ export const AuthScreen: React.FC<AuthScreenProps> = () => {
         </form>
 
         {/* GUEST MODE OPTION */}
-        <div className="pt-2 text-center border-t border-[#FFCCD5]/50 flex flex-col items-center gap-1">
+        <div className="pt-2 text-center border-t border-[#FDE2E7] flex flex-col items-center gap-1">
           <motion.button
             whileHover={{ scale: 1.02 }}
             whileTap={{ scale: 0.98 }}
             type="button"
             disabled={loading}
             onClick={handleGuestLogin}
-            className="text-xs font-extrabold text-[#8C3F5D] hover:text-[#3E2431] transition-colors inline-flex items-center gap-1.5 cursor-pointer py-1.5 px-3 rounded-xl hover:bg-white/60"
+            className="text-xs font-extrabold text-[#F47D90] hover:text-[#3E2431] transition-colors inline-flex items-center gap-1.5 cursor-pointer py-1.5 px-3 rounded-xl hover:bg-[#FFF0F3]"
           >
-            <UserCheck className="w-3.5 h-3.5 text-[#FF4B72]" />
+            <UserCheck className="w-3.5 h-3.5 text-[#F47D90]" />
             <span>Try Instant Guest Mode</span>
             <ArrowRight className="w-3 h-3" />
           </motion.button>
-          <span className="text-[10px] text-[#6E495B]/70 font-medium">
+          <span className="text-[10px] text-[#7A5C68]/70 font-medium">
             Jump in immediately without entering an email or password
           </span>
         </div>
