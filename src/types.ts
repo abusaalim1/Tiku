@@ -19,6 +19,7 @@ export interface Snap {
   id: string;
   categoryId: string;
   imageUrl: string;
+  imageUrls?: string[]; // Multiple photos support (2-3+ photos)
   caption?: string;
   description?: string; // Story / Details of what happened
   location?: string;
@@ -26,6 +27,17 @@ export interface Snap {
   rotationDeg: number; // -4 to +4 for polaroid tilt
   favorite?: boolean;
   createdAt: string;
+}
+
+export interface SnapDraft {
+  id: string;
+  categoryId: string;
+  imageUrls: string[];
+  caption: string;
+  description: string;
+  location: string;
+  snapDate: string;
+  updatedAt: string;
 }
 
 export type NavTab = 'home' | 'albums' | 'memories' | 'us';

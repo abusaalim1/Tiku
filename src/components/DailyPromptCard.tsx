@@ -6,7 +6,6 @@ import {
   DailyPromptEntry,
   PromptCategory,
   PromptTemplate,
-  Snap,
   Category,
 } from '../types';
 import {
@@ -25,19 +24,22 @@ import {
   Shuffle,
   BookOpen,
   Send,
-  Camera,
   ImagePlus,
   X,
   Edit2,
   CheckCircle2,
   Flame,
   Users,
-  MessageSquareHeart,
   Calendar,
-  Layers,
-  Check,
-  Upload,
 } from 'lucide-react';
+import {
+  Heart3D,
+  Sparkles3D,
+  LoveLetter3D,
+  CoupleHearts3D,
+  PhotoAlbum3D,
+  Category3DIcon,
+} from './Romance3DIcons';
 
 interface DailyPromptCardProps {
   profile: CoupleProfile;
@@ -95,7 +97,7 @@ export const DailyPromptCard: React.FC<DailyPromptCardProps> = ({
   const [isEditing, setIsEditing] = useState<boolean>(false);
   const [isCompressingPhoto, setIsCompressingPhoto] = useState<boolean>(false);
   const [alsoSaveAsSnap, setAlsoSaveAsSnap] = useState<boolean>(true);
-  const [selectedSnapCategory, setSelectedSnapCategory] = useState<string>(
+  const [selectedSnapCategory] = useState<string>(
     categories[0]?.id || 'cat-dates'
   );
 
@@ -201,15 +203,13 @@ export const DailyPromptCard: React.FC<DailyPromptCardProps> = ({
     onSavePromptEntry(newEntry);
     setIsEditing(false);
 
-    // Confetti celebration!
     confetti({
-      particleCount: 75,
+      particleCount: 80,
       spread: 80,
       origin: { y: 0.6 },
-      colors: ['#F47D90', '#EE6A80', '#FDE2E7', '#BFE3D0', '#FFD700'],
+      colors: ['#F47D90', '#EE6A80', '#FDE2E7', '#FFFFFF', '#FFE082', '#FF9FB0'],
     });
 
-    // Also auto-save as polaroid snap if checked
     if (alsoSaveAsSnap && onSaveSnap && imageUrl) {
       const summaryText =
         answerMode === 'both'
@@ -260,38 +260,29 @@ export const DailyPromptCard: React.FC<DailyPromptCardProps> = ({
       <motion.section
         initial={{ opacity: 0, y: 10 }}
         animate={{ opacity: 1, y: 0 }}
-        className="glass-panel rounded-3xl p-5 sm:p-7 border border-[#FDE2E7] shadow-tuchi relative overflow-hidden glossy-top space-y-5"
+        className="glass-panel rounded-[32px] p-5 sm:p-7 border border-[#FDE2E7] shadow-tuchi relative overflow-hidden glossy-top space-y-5 text-[#2D1F27] bg-white/95"
       >
         {/* TOP BADGE & QUICK ACTIONS */}
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-2">
-            <span
-              className="px-3 py-1 rounded-full text-xs font-extrabold flex items-center gap-1.5 border shadow-2xs"
-              style={{
-                backgroundColor: meta.bgColor,
-                color: meta.color,
-                borderColor: meta.borderColor,
-              }}
-            >
-              <span>{meta.emoji}</span>
+            <span className="px-3.5 py-1 rounded-full text-xs font-extrabold flex items-center gap-2 border bg-[#FFF0F3] border-[#FDE2E7] text-[#F47D90] shadow-xs">
+              <Category3DIcon categoryName={activePrompt.category} size={18} />
               <span>{activePrompt.type === 'activity' ? 'Date Activity' : meta.label}</span>
             </span>
 
-            {/* Streak Counter Badge */}
             {streakInfo.streak > 0 && (
-              <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-orange-50 text-orange-700 text-xs font-extrabold border border-orange-200 shadow-2xs">
-                <Flame className="w-3.5 h-3.5 text-orange-500 fill-orange-500" />
+              <span className="inline-flex items-center gap-1 px-3 py-1 rounded-full bg-amber-50 text-amber-700 text-xs font-extrabold border border-amber-200 shadow-xs">
+                <Flame className="w-3.5 h-3.5 text-amber-500 fill-amber-500" />
                 <span>{streakInfo.streak} Day Streak!</span>
               </span>
             )}
           </div>
 
-          {/* Action Buttons: Shuffle, Topics, History */}
           <div className="flex items-center gap-1.5">
             <button
               type="button"
               onClick={handleShuffle}
-              className="px-3 py-1.5 rounded-full bg-white hover:bg-[#FFF0F3] text-[#3E2431] text-xs font-bold border border-[#FDE2E7] flex items-center gap-1 cursor-pointer transition-all shadow-2xs"
+              className="px-3 py-1.5 rounded-2xl bg-white hover:bg-[#FFF0F3] text-[#6B5360] hover:text-[#2D1F27] text-xs font-bold border border-[#FDE2E7] flex items-center gap-1.5 cursor-pointer transition-all shadow-xs"
               title="Shuffle to another question"
             >
               <Shuffle className="w-3.5 h-3.5 text-[#F47D90]" />
@@ -301,7 +292,7 @@ export const DailyPromptCard: React.FC<DailyPromptCardProps> = ({
             <button
               type="button"
               onClick={() => setIsSelectorOpen(true)}
-              className="px-3 py-1.5 rounded-full bg-white hover:bg-[#FFF0F3] text-[#3E2431] text-xs font-bold border border-[#FDE2E7] flex items-center gap-1 cursor-pointer transition-all shadow-2xs"
+              className="px-3 py-1.5 rounded-2xl bg-white hover:bg-[#FFF0F3] text-[#6B5360] hover:text-[#2D1F27] text-xs font-bold border border-[#FDE2E7] flex items-center gap-1.5 cursor-pointer transition-all shadow-xs"
               title="Browse topics or write your own"
             >
               <Sparkles className="w-3.5 h-3.5 text-[#F47D90]" />
@@ -311,34 +302,34 @@ export const DailyPromptCard: React.FC<DailyPromptCardProps> = ({
             <button
               type="button"
               onClick={() => setIsHistoryOpen(true)}
-              className="px-3 py-1.5 rounded-full bg-[#3E2431] hover:bg-[#F47D90] text-white text-xs font-bold flex items-center gap-1 cursor-pointer transition-all shadow-xs"
+              className="px-3.5 py-1.5 rounded-2xl bg-gradient-to-r from-[#F47D90] to-[#EE6A80] hover:opacity-95 text-white text-xs font-extrabold flex items-center gap-1.5 cursor-pointer transition-all shadow-tuchi-glow"
               title="View past prompt memories"
             >
-              <BookOpen className="w-3.5 h-3.5 text-[#FDE2E7]" />
+              <BookOpen className="w-3.5 h-3.5 text-white" />
               <span>Journal ({dailyPrompts.length})</span>
             </button>
           </div>
         </div>
 
-        {/* PROMPT QUESTION / ACTIVITY TEXT */}
+        {/* PROMPT QUESTION */}
         <div className="space-y-1.5">
-          <div className="flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wider text-[#F47D90]">
+          <div className="flex items-center gap-1.5 text-[11px] font-extrabold uppercase tracking-wider text-[#F47D90]">
             <Calendar className="w-3.5 h-3.5 text-[#F47D90]" />
-            <span>Today's Couple Prompt</span>
+            <span>Today's Couple Question</span>
           </div>
 
-          <h3 className="text-xl sm:text-2xl font-extrabold font-heading text-[#3E2431] leading-tight">
+          <h3 className="text-xl sm:text-2xl font-extrabold font-heading text-[#2D1F27] leading-tight">
             "{activePrompt.text}"
           </h3>
 
           {activePrompt.subtext && (
-            <p className="text-xs sm:text-sm text-[#7A5C68] font-medium italic">
+            <p className="text-xs sm:text-sm text-[#6B5360] font-medium font-serif-italic">
               {activePrompt.subtext}
             </p>
           )}
 
           {activePrompt.suggestedAction && (
-            <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-xl bg-[#FFF0F3] border border-[#FDE2E7] text-[#3E2431] text-xs font-bold mt-1">
+            <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-xl bg-[#FFF0F3] border border-[#FDE2E7] text-[#F47D90] text-xs font-bold mt-1">
               <span>✨ Tip: {activePrompt.suggestedAction}</span>
             </div>
           )}
@@ -348,14 +339,14 @@ export const DailyPromptCard: React.FC<DailyPromptCardProps> = ({
         {isCompleted ? (
           <div className="space-y-4 pt-1">
             {/* Completion Banner */}
-            <div className="p-3.5 rounded-2xl bg-[#E8F8F0] border border-[#BEE9D5] flex items-center justify-between gap-3">
+            <div className="p-3.5 rounded-2xl bg-emerald-50 border border-emerald-200 flex items-center justify-between gap-3">
               <div className="flex items-center gap-2">
-                <CheckCircle2 className="w-5 h-5 text-[#2A9D6F] flex-shrink-0" />
+                <CheckCircle2 className="w-5 h-5 text-emerald-600 flex-shrink-0" />
                 <div>
-                  <p className="text-xs font-extrabold text-[#1E7250]">
+                  <p className="text-xs font-extrabold text-emerald-900">
                     Prompt Answered for Today! 💖
                   </p>
-                  <p className="text-[11px] text-[#2A9D6F] font-medium">
+                  <p className="text-[11px] text-emerald-700 font-medium">
                     Saved in your Couple Vault and Memories Journal.
                   </p>
                 </div>
@@ -364,19 +355,19 @@ export const DailyPromptCard: React.FC<DailyPromptCardProps> = ({
               <button
                 type="button"
                 onClick={() => setIsEditing(true)}
-                className="px-3 py-1.5 rounded-xl bg-white hover:bg-[#E8F8F0] text-[#1E7250] text-xs font-bold border border-[#BEE9D5] flex items-center gap-1 cursor-pointer transition-colors shadow-2xs"
+                className="px-3.5 py-1.5 rounded-xl bg-white hover:bg-[#FFF0F3] text-[#6B5360] text-xs font-bold border border-[#FDE2E7] flex items-center gap-1 cursor-pointer transition-colors shadow-xs"
               >
-                <Edit2 className="w-3.5 h-3.5" />
+                <Edit2 className="w-3.5 h-3.5 text-[#F47D90]" />
                 <span>Edit</span>
               </button>
             </div>
 
-            {/* Display Answers in couple dialogue style */}
+            {/* Display Answers */}
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
               {todayEntry?.userAnswer && (
-                <div className="p-4 rounded-2xl bg-white border border-[#FDE2E7] shadow-xs space-y-2">
+                <div className="p-4 rounded-2xl bg-[#FFF7F9] border border-[#FDE2E7] shadow-xs space-y-2">
                   <div className="flex items-center gap-2 text-xs font-bold text-[#F47D90]">
-                    <div className="w-6 h-6 rounded-full bg-[#FFF0F3] overflow-hidden flex items-center justify-center text-[11px] border border-[#FDE2E7]">
+                    <div className="w-6 h-6 rounded-full bg-[#FFF0F3] overflow-hidden flex items-center justify-center text-[11px] border border-[#FDE2E7] text-[#2D1F27]">
                       {profile.userPhotoUrl ? (
                         <img src={profile.userPhotoUrl} alt="You" className="w-full h-full object-cover" />
                       ) : (
@@ -385,16 +376,16 @@ export const DailyPromptCard: React.FC<DailyPromptCardProps> = ({
                     </div>
                     <span>{profile.userName || 'You'}'s Reflection:</span>
                   </div>
-                  <p className="text-xs sm:text-sm text-[#3E2431] font-medium leading-relaxed italic">
+                  <p className="text-xs sm:text-sm text-[#2D1F27] font-medium leading-relaxed italic font-serif-italic">
                     "{todayEntry.userAnswer}"
                   </p>
                 </div>
               )}
 
               {todayEntry?.partnerAnswer && (
-                <div className="p-4 rounded-2xl bg-white border border-[#FDE2E7] shadow-xs space-y-2">
-                  <div className="flex items-center gap-2 text-xs font-bold text-[#3E2431]">
-                    <div className="w-6 h-6 rounded-full bg-[#FDE2E7] overflow-hidden flex items-center justify-center text-[11px] border border-[#FDE2E7]">
+                <div className="p-4 rounded-2xl bg-[#FFF7F9] border border-[#FDE2E7] shadow-xs space-y-2">
+                  <div className="flex items-center gap-2 text-xs font-bold text-[#F47D90]">
+                    <div className="w-6 h-6 rounded-full bg-[#FFF0F3] overflow-hidden flex items-center justify-center text-[11px] border border-[#FDE2E7] text-[#2D1F27]">
                       {profile.partnerPhotoUrl ? (
                         <img src={profile.partnerPhotoUrl} alt="Partner" className="w-full h-full object-cover" />
                       ) : (
@@ -403,19 +394,19 @@ export const DailyPromptCard: React.FC<DailyPromptCardProps> = ({
                     </div>
                     <span>{profile.partnerName || 'Partner'}'s Reflection:</span>
                   </div>
-                  <p className="text-xs sm:text-sm text-[#3E2431] font-medium leading-relaxed italic">
+                  <p className="text-xs sm:text-sm text-[#2D1F27] font-medium leading-relaxed italic font-serif-italic">
                     "{todayEntry.partnerAnswer}"
                   </p>
                 </div>
               )}
 
               {todayEntry?.jointAnswer && (
-                <div className="sm:col-span-2 p-4 rounded-2xl bg-white border border-[#FDE2E7] shadow-xs space-y-2">
+                <div className="sm:col-span-2 p-4 rounded-2xl bg-[#FFF7F9] border border-[#FDE2E7] shadow-xs space-y-2">
                   <div className="flex items-center gap-2 text-xs font-bold text-[#F47D90]">
-                    <Heart className="w-4 h-4 fill-current" />
+                    <Heart className="w-4 h-4 fill-[#F47D90]" />
                     <span>Our Shared Reflection:</span>
                   </div>
-                  <p className="text-xs sm:text-sm text-[#3E2431] font-medium leading-relaxed italic">
+                  <p className="text-xs sm:text-sm text-[#2D1F27] font-medium leading-relaxed italic font-serif-italic">
                     "{todayEntry.jointAnswer}"
                   </p>
                 </div>
@@ -424,31 +415,30 @@ export const DailyPromptCard: React.FC<DailyPromptCardProps> = ({
 
             {/* Photo if attached */}
             {todayEntry?.imageUrl && (
-              <div className="flex items-center gap-3 p-3 rounded-2xl bg-white border border-[#FDE2E7]">
+              <div className="flex items-center gap-3 p-3 rounded-2xl bg-[#FFF7F9] border border-[#FDE2E7]">
                 <div className="w-16 h-16 rounded-xl overflow-hidden shadow-xs flex-shrink-0 border border-[#FDE2E7]">
                   <img src={todayEntry.imageUrl} alt="Attached snap" className="w-full h-full object-cover" />
                 </div>
                 <div className="space-y-0.5">
-                  <p className="text-xs font-bold text-[#3E2431]">Attached Memory Photo 📸</p>
-                  <p className="text-[11px] text-[#7A5C68]">Included in today's daily prompt memory</p>
+                  <p className="text-xs font-bold text-[#2D1F27]">Attached Memory Photo 📸</p>
+                  <p className="text-[11px] text-[#6B5360]">Included in today's daily prompt memory</p>
                 </div>
               </div>
             )}
           </div>
         ) : (
-          /* ANSWERING FORM (EXPANDED) */
+          /* ANSWERING FORM */
           <div className="space-y-4 pt-1">
-            {/* Toggle: Individual Answers vs Joint Reflection */}
             <div className="flex items-center justify-between gap-2 border-b border-[#FDE2E7] pb-3">
-              <span className="text-xs font-bold text-[#7A5C68]">How would you like to answer?</span>
-              <div className="flex items-center gap-1.5 p-1 rounded-xl bg-white border border-[#FDE2E7] shadow-2xs text-xs">
+              <span className="text-xs font-bold text-[#6B5360]">How would you like to answer?</span>
+              <div className="flex items-center gap-1.5 p-1 rounded-2xl bg-[#FFF0F3] border border-[#FDE2E7] shadow-xs text-xs">
                 <button
                   type="button"
                   onClick={() => setAnswerMode('both')}
-                  className={`px-3 py-1 rounded-lg font-bold transition-all cursor-pointer flex items-center gap-1 ${
+                  className={`px-3 py-1 rounded-xl font-bold transition-all cursor-pointer flex items-center gap-1 ${
                     answerMode === 'both'
-                      ? 'bg-[#3E2431] text-white shadow-xs'
-                      : 'text-[#7A5C68] hover:text-[#3E2431]'
+                      ? 'bg-[#F47D90] text-white shadow-tuchi-glow'
+                      : 'text-[#6B5360] hover:text-[#2D1F27]'
                   }`}
                 >
                   <Users className="w-3 h-3" />
@@ -457,10 +447,10 @@ export const DailyPromptCard: React.FC<DailyPromptCardProps> = ({
                 <button
                   type="button"
                   onClick={() => setAnswerMode('joint')}
-                  className={`px-3 py-1 rounded-lg font-bold transition-all cursor-pointer flex items-center gap-1 ${
+                  className={`px-3 py-1 rounded-xl font-bold transition-all cursor-pointer flex items-center gap-1 ${
                     answerMode === 'joint'
-                      ? 'bg-[#F47D90] text-white shadow-xs'
-                      : 'text-[#7A5C68] hover:text-[#3E2431]'
+                      ? 'bg-[#F47D90] text-white shadow-tuchi-glow'
+                      : 'text-[#6B5360] hover:text-[#2D1F27]'
                   }`}
                 >
                   <Heart className="w-3 h-3" />
@@ -472,10 +462,9 @@ export const DailyPromptCard: React.FC<DailyPromptCardProps> = ({
             {/* INPUT FIELDS */}
             {answerMode === 'both' ? (
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
-                {/* User Answer Field */}
                 <div className="space-y-1.5">
-                  <label className="text-xs font-bold text-[#F47D90] flex items-center gap-2">
-                    <div className="w-5 h-5 rounded-full bg-[#FFF0F3] overflow-hidden flex items-center justify-center text-[10px] border border-[#FDE2E7]">
+                  <label className="text-xs font-bold text-[#6B5360] flex items-center gap-2">
+                    <div className="w-5 h-5 rounded-full bg-[#FFF0F3] overflow-hidden flex items-center justify-center text-[10px] border border-[#FDE2E7] text-[#2D1F27]">
                       {profile.userPhotoUrl ? (
                         <img src={profile.userPhotoUrl} alt="You" className="w-full h-full object-cover" />
                       ) : (
@@ -489,14 +478,13 @@ export const DailyPromptCard: React.FC<DailyPromptCardProps> = ({
                     value={userAnswer}
                     onChange={(e) => setUserAnswer(e.target.value)}
                     placeholder={`Write ${profile.userName || 'your'} answer here...`}
-                    className="w-full p-3 rounded-2xl bg-white border border-[#FDE2E7] text-xs font-medium text-[#3E2431] focus:outline-none focus:border-[#F47D90] focus:ring-2 focus:ring-[#FFF0F3] shadow-2xs resize-none"
+                    className="w-full p-3 rounded-2xl bg-[#FFF7F9] border border-[#FDE2E7] text-xs font-medium text-[#2D1F27] placeholder:text-[#9E8592]/60 focus:outline-none focus:border-[#F47D90] shadow-xs resize-none"
                   />
                 </div>
 
-                {/* Partner Answer Field */}
                 <div className="space-y-1.5">
-                  <label className="text-xs font-bold text-[#3E2431] flex items-center gap-2">
-                    <div className="w-5 h-5 rounded-full bg-[#FDE2E7] overflow-hidden flex items-center justify-center text-[10px] border border-[#FDE2E7]">
+                  <label className="text-xs font-bold text-[#F47D90] flex items-center gap-2">
+                    <div className="w-5 h-5 rounded-full bg-[#FFF0F3] overflow-hidden flex items-center justify-center text-[10px] border border-[#FDE2E7] text-[#2D1F27]">
                       {profile.partnerPhotoUrl ? (
                         <img src={profile.partnerPhotoUrl} alt="Partner" className="w-full h-full object-cover" />
                       ) : (
@@ -510,15 +498,14 @@ export const DailyPromptCard: React.FC<DailyPromptCardProps> = ({
                     value={partnerAnswer}
                     onChange={(e) => setPartnerAnswer(e.target.value)}
                     placeholder={`Write ${profile.partnerName || "partner's"} answer here...`}
-                    className="w-full p-3 rounded-2xl bg-white border border-[#FDE2E7] text-xs font-medium text-[#3E2431] focus:outline-none focus:border-[#F47D90] focus:ring-2 focus:ring-[#FFF0F3] shadow-2xs resize-none"
+                    className="w-full p-3 rounded-2xl bg-[#FFF7F9] border border-[#FDE2E7] text-xs font-medium text-[#2D1F27] placeholder:text-[#9E8592]/60 focus:outline-none focus:border-[#F47D90] shadow-xs resize-none"
                   />
                 </div>
               </div>
             ) : (
-              /* Joint Reflection Input */
               <div className="space-y-1.5">
                 <label className="text-xs font-bold text-[#F47D90] flex items-center gap-1.5">
-                  <Heart className="w-3.5 h-3.5 fill-current" />
+                  <Heart className="w-3.5 h-3.5 fill-[#F47D90]" />
                   <span>Our Shared Answer & Reflection</span>
                 </label>
                 <textarea
@@ -526,15 +513,15 @@ export const DailyPromptCard: React.FC<DailyPromptCardProps> = ({
                   value={jointAnswer}
                   onChange={(e) => setJointAnswer(e.target.value)}
                   placeholder="Write what the two of you discussed or experienced together today..."
-                  className="w-full p-3 rounded-2xl bg-white border border-[#FDE2E7] text-xs font-medium text-[#3E2431] focus:outline-none focus:border-[#F47D90] focus:ring-2 focus:ring-[#FFF0F3] shadow-2xs resize-none"
+                  className="w-full p-3 rounded-2xl bg-[#FFF7F9] border border-[#FDE2E7] text-xs font-medium text-[#2D1F27] placeholder:text-[#9E8592]/60 focus:outline-none focus:border-[#F47D90] shadow-xs resize-none"
                 />
               </div>
             )}
 
-            {/* PHOTO ATTACHMENT SECTION */}
+            {/* PHOTO ATTACHMENT */}
             <div className="pt-1">
               {imageUrl ? (
-                <div className="relative inline-block rounded-2xl overflow-hidden border-2 border-white shadow-xs group">
+                <div className="relative inline-block rounded-2xl overflow-hidden border-2 border-[#F47D90] shadow-xs group">
                   <img src={imageUrl} alt="Attached" className="w-32 h-32 object-cover" />
                   <button
                     type="button"
@@ -543,12 +530,12 @@ export const DailyPromptCard: React.FC<DailyPromptCardProps> = ({
                   >
                     <X className="w-3.5 h-3.5" />
                   </button>
-                  <span className="absolute bottom-1 left-1 px-2 py-0.5 rounded-full bg-white/90 text-[10px] font-bold text-[#3E2431]">
+                  <span className="absolute bottom-1 left-1 px-2 py-0.5 rounded-full bg-black/80 text-[10px] font-bold text-white">
                     Photo attached
                   </span>
                 </div>
               ) : (
-                <label className="flex items-center gap-2 p-3 rounded-2xl bg-white border border-dashed border-[#FDE2E7] hover:bg-[#FFF0F3] transition-colors cursor-pointer text-xs font-bold text-[#F47D90] w-fit">
+                <label className="flex items-center gap-2 p-3 rounded-2xl bg-[#FFF7F9] border border-dashed border-[#FDE2E7] hover:bg-[#FFF0F3] transition-colors cursor-pointer text-xs font-bold text-[#6B5360] hover:text-[#2D1F27] w-fit">
                   <ImagePlus className="w-4 h-4 text-[#F47D90]" />
                   <span>{isCompressingPhoto ? 'Processing image...' : 'Attach a couple photo for today (optional)'}</span>
                   <input
@@ -568,7 +555,7 @@ export const DailyPromptCard: React.FC<DailyPromptCardProps> = ({
             {/* SAVE BUTTON & POLAROID CONVERSION CHECKBOX */}
             <div className="pt-2 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 border-t border-[#FDE2E7]">
               {imageUrl && onSaveSnap && (
-                <label className="flex items-center gap-2 text-xs font-bold text-[#3E2431] cursor-pointer">
+                <label className="flex items-center gap-2 text-xs font-bold text-[#6B5360] cursor-pointer">
                   <input
                     type="checkbox"
                     checked={alsoSaveAsSnap}
@@ -584,7 +571,7 @@ export const DailyPromptCard: React.FC<DailyPromptCardProps> = ({
                   <button
                     type="button"
                     onClick={() => setIsEditing(false)}
-                    className="px-4 py-2.5 rounded-2xl text-xs font-bold text-[#7A5C68] hover:bg-white cursor-pointer"
+                    className="px-4 py-2.5 rounded-2xl text-xs font-bold text-[#6B5360] hover:text-[#2D1F27] cursor-pointer"
                   >
                     Cancel
                   </button>
@@ -595,7 +582,7 @@ export const DailyPromptCard: React.FC<DailyPromptCardProps> = ({
                   whileTap={{ scale: 0.98 }}
                   type="button"
                   onClick={handleSaveAnswers}
-                  className="px-6 py-2.5 rounded-2xl bg-[#F47D90] hover:bg-[#EE6A80] text-white text-xs sm:text-sm font-extrabold shadow-tuchi flex items-center justify-center gap-2 cursor-pointer transition-transform"
+                  className="px-6 py-2.5 rounded-2xl bg-gradient-to-r from-[#F47D90] to-[#EE6A80] hover:opacity-95 text-white text-xs sm:text-sm font-extrabold shadow-tuchi-glow flex items-center justify-center gap-2 cursor-pointer transition-transform"
                 >
                   <Send className="w-3.5 h-3.5 text-white" />
                   <span>Save to Couple Memories</span>
