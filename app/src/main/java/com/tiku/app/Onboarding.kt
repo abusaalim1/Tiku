@@ -181,11 +181,11 @@ fun RestorePasswordScreen() {
     var error by remember { mutableStateOf("") }
     val scope = rememberCoroutineScope()
     val ctx = LocalContext.current
-    FormScaffold("Welcome back", "Enter your study-journal password to restore your journal on this phone.") {
+    FormScaffold("Welcome back", "Your journal was found on this account. Enter the password you set when you created it — and everything comes back on this phone: every note and every conversation, exactly as you left it.") {
         PasswordField(pw, { pw = it; error = "" }, "Backup password")
         Spacer(Modifier.height(6.dp))
         Text(
-            if (error.isNotEmpty()) error else "Without this password your journal can’t be restored here — nobody can, not even Tikuu.",
+            if (error.isNotEmpty()) error else "Only this password opens this journal — there is no starting over with a new one. A wrong try changes nothing and deletes nothing.",
             fontSize = 13.sp, color = if (error.isNotEmpty()) TikuTokens.Red else TikuTokens.Muted, fontFamily = Manrope,
         )
         Spacer(Modifier.weight(1f))
@@ -205,7 +205,7 @@ fun RestorePasswordScreen() {
                     }
                     is FirebaseEngine.RestoreResult.WrongPassword -> {
                         busy = false
-                        error = "Wrong password — recovery is impossible without the password this journal was created with."
+                        error = "Wrong password — nothing was changed or deleted, and your journal is still saved. Try again with the password you set when you created it."
                     }
                     is FirebaseEngine.RestoreResult.Unavailable -> {
                         busy = false
@@ -429,6 +429,13 @@ fun ProfileSetupScreen() {
                         FirebaseEngine.start(ctx)
                         AppState.go(Screen.Home)
                         AppState.toast("Welcome to Tikuu")
+                    } else if (res.exceptionOrNull() is FirebaseEngine.ExistingJournalException) {
+                        // ROUND 5: this account already has a journal in the
+                        // cloud — setup was refused BEFORE anything could be
+                        // overwritten. The only way forward is the password.
+                        busy = false
+                        AppState.toast("This account already has a journal — enter your password to bring everything back")
+                        AppState.go(Screen.Restore)
                     } else {
                         busy = false
                         AppState.toast(res.exceptionOrNull()?.message ?: "Setup failed")

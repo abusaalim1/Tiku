@@ -105,6 +105,25 @@ object FirebaseEngine : ChatRepo {
         return db.collection(Schema.Users.COLL).document(uid).get().await().exists()
     }
 
+    /**
+     * Tri-state returning-user check (round 5): null = the check itself failed
+     * (offline / server error). Routers must treat null as UNKNOWN and never
+     * as "new user" — routing a returning user into fresh setup is exactly
+     * how a journal gets orphaned, so the create path is entered only on a
+     * definite false.
+     */
+    suspend fun returningUserCheck(): Boolean? =
+        runCatching { isReturningUser() }.getOrNull()
+
+    /**
+     * Thrown by finishNewUser when the account ALREADY has a cloud journal:
+     * fresh setup would overwrite publicKey/keyBackup with a new keypair and
+     * orphan every existing conversation permanently (round 5 hard guard).
+     * The UI routes this to the Restore screen instead of an error toast.
+     */
+    class ExistingJournalException : IllegalStateException(
+        "This account already has a journal — restore it with your password instead of starting over.")
+
     suspend fun backupBlob(): Map<String, String>? {
         if (uid.isEmpty()) return null
         val snap = db.collection(Schema.Users.COLL).document(uid).get().await()
@@ -211,11 +230,32 @@ object FirebaseEngine : ChatRepo {
                 return Result.failure(IllegalStateException(
                     "Setup password missing — go back and set your password again."))
             }
+            // ROUND 5 HARD GUARD: if this account already has a journal in
+            // the cloud (a user doc carrying a public key / key backup), fresh
+            // setup is IMPOSSIBLE — the set() below would overwrite keyBackup
+            // and publicKey with a brand-new keypair, and every existing chat
+            // would become undecryptable forever. Fail closed: even a FAILED
+            // fetch aborts setup (the outer catch turns it into a failure),
+            // never an overwrite on a guess.
+            val existingDoc = db.collection(Schema.Users.COLL).document(uid).get().await()
+            if (existingDoc.exists()) {
+                val hasBackup = existingDoc.get("keyBackup") != null
+                val hasPubKey = !existingDoc.getString("publicKey").isNullOrEmpty()
+                if (hasBackup || hasPubKey) throw ExistingJournalException()
+            }
             val u = username.lowercase()
             db.runTransaction { tx ->
                 val claimRef = db.collection(Schema.Users.USERNAME_CLAIM).document(u)
-                if (tx.get(claimRef).exists()) throw IllegalStateException("@$u is taken")
-                tx.set(claimRef, mapOf("uid" to uid, "at" to FieldValue.serverTimestamp()))
+                val claim = tx.get(claimRef)
+                if (claim.exists()) {
+                    // My OWN claim must never dead-end me (round 5): an earlier
+                    // setup may have claimed the name and stopped before the
+                    // user doc landed. Only someone ELSE's claim is "taken".
+                    if (claim.getString("uid") != uid)
+                        throw IllegalStateException("@$u is taken")
+                } else {
+                    tx.set(claimRef, mapOf("uid" to uid, "at" to FieldValue.serverTimestamp()))
+                }
             }.await()
             val kp = Crypto.generateIdentity()
             val priv = kp.private.encoded
@@ -260,8 +300,13 @@ object FirebaseEngine : ChatRepo {
         } catch (e: Exception) { Result.failure(e) }
     }
 
-    suspend fun usernameTaken(u: String): Boolean =
-        db.collection(Schema.Users.USERNAME_CLAIM).document(u.lowercase()).get().await().exists()
+    /** True only when the name is claimed by SOMEONE ELSE. My own claim must
+     *  never read as "taken" to me (round 5: the same-uid re-claim dead-end —
+     *  the setup screen showed the owner his own username as unavailable). */
+    suspend fun usernameTaken(u: String): Boolean {
+        val claim = db.collection(Schema.Users.USERNAME_CLAIM).document(u.lowercase()).get().await()
+        return claim.exists() && claim.getString("uid") != uid
+    }
 
     suspend fun loadMyProfile() {
         if (uid.isEmpty()) return
@@ -407,6 +452,9 @@ object FirebaseEngine : ChatRepo {
 
     // ================= LISTENERS =================
     private var threadsReg: ListenerRegistration? = null
+    /** Round 5: bounded re-attach attempts when a threads snapshot had to skip
+     *  chats whose peer profile fetch failed transiently (see start()). */
+    private var threadsRetryCount = 0
     private var msgsReg: ListenerRegistration? = null
     private val callsRegs = mutableMapOf<String, ListenerRegistration>()
     private var readPrefs: android.content.SharedPreferences? = null
@@ -428,6 +476,7 @@ object FirebaseEngine : ChatRepo {
             .addSnapshotListener { snap, _ ->
                 scope.launch {
                     runCatching {
+                        var skipped = 0
                         val list = snap?.documents?.mapNotNull { doc ->
                             @Suppress("UNCHECKED_CAST")
                             val parts = doc.get("members") as? List<String> ?: return@mapNotNull null
@@ -436,7 +485,7 @@ object FirebaseEngine : ChatRepo {
                             // transient profile-fetch failure must NOT drop the thread from
                             // under an open ChatScreen — fall back to the known person.
                             val peer = runCatching { fetchPerson(peerUid) }.getOrNull()
-                                ?: existing?.person ?: return@mapNotNull null
+                                ?: existing?.person ?: run { skipped++; return@mapNotNull null }
                             val ts = doc.getTimestamp("updatedAt")?.toDate()?.time ?: 0L
                             ChatThread(id = doc.id, person = peer,
                                 messages = existing?.messages ?: mutableListOf(),
@@ -445,6 +494,20 @@ object FirebaseEngine : ChatRepo {
                                 pinned = existing?.pinned ?: false)
                         } ?: emptyList()
                         AppState.threads.value = list
+                        // ROUND 5: a chat skipped over a transient profile-fetch
+                        // failure must not stay invisible until some unrelated
+                        // write re-fires this listener — on a quiet account that
+                        // reads as "my chats didn't come back" after a restore.
+                        // Re-attach once or twice so the initial snapshot is
+                        // rebuilt with the profile fetch retried.
+                        if (skipped > 0 && threadsRetryCount < 2) {
+                            threadsRetryCount++
+                            Log.w("TikuChat", "threads snapshot skipped $skipped chat(s) " +
+                                "(peer profile fetch failed) — re-attaching listener, retry $threadsRetryCount")
+                            scope.launch { delay(3000); if (ChatSession.unlocked) start(appCtx) }
+                        } else if (skipped == 0) {
+                            threadsRetryCount = 0
+                        }
                         // incoming-call watchers + crash-residue sweep follow the thread set
                         syncCallWatchers(list.map { it.id }.toSet())
                         sweepStaleCalls(list.map { it.id }.toSet())

@@ -343,4 +343,18 @@ class ScreenshotsTest {
         composeRule.waitForIdle()
         shot("25-new-chat-search.png")
     }
+
+    @Test fun shot26_restore() {
+        // ROUND 5 PROOF: the screen a returning user lands on after a reinstall
+        // (sign-in routing → Restore): password field + the copy that says the
+        // password brings EVERYTHING back and that nothing can start over it.
+        frame { RestorePasswordScreen() }
+        composeRule.waitForIdle()
+        org.junit.Assert.assertTrue(
+            "restore screen must promise the full journal comes back",
+            composeRule.onAllNodesWithText("everything comes back", substring = true)
+                .fetchSemanticsNodes().isNotEmpty(),
+        )
+        shot("26-restore.png")
+    }
 }

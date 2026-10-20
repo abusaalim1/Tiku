@@ -102,15 +102,21 @@ class MainActivity : ComponentActivity() {
                 AppState.toast("Sign-in failed. Please try again.")
                 return@launch
             }
+            // ROUND 5: tri-state — a failed account check must never fall
+            // through to the create-password branch (that is how a returning
+            // user could be walked into overwriting their own journal).
+            val returning = FirebaseEngine.returningUserCheck()
             when {
-                FirebaseEngine.isReturningUser() && FirebaseEngine.loadLocalIdentity(this@MainActivity) -> {
+                returning == null ->
+                    AppState.toast("Couldn't check your account — check your connection and try again.")
+                returning == true && FirebaseEngine.loadLocalIdentity(this@MainActivity) -> {
                     getSharedPreferences("tiku_prefs", MODE_PRIVATE).edit().putBoolean("onboarded", true).apply()
                     FirebaseEngine.start(this@MainActivity)
                     FirebaseEngine.loadMyProfile()
                     FirebaseEngine.setPresence(true)
                     AppState.go(Screen.Home)
                 }
-                FirebaseEngine.isReturningUser() -> AppState.go(Screen.Restore)
+                returning == true -> AppState.go(Screen.Restore)
                 else -> AppState.go(Screen.Password)
             }
         }

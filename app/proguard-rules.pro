@@ -11,3 +11,10 @@
 
 -dontwarn org.webrtc.**
 -dontwarn io.getstream.**
+
+# ROUND 5, ITEM 6 — PLAY PROTECT SIGNAL EXPERIMENT: obfuscation OFF, minify
+# (shrinking + optimization) and shrinkResources stay ON. Class/member names
+# remain human-readable throughout the APK. Rationale: Google's own riskware
+# guidance lists obfuscation as a signal; this is the one build-side
+# differentiator with documentary support. EXPERIMENT — not a promised fix.
+-dontobfuscate

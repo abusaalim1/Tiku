@@ -78,6 +78,9 @@ object ChatSession {
             FirebaseEngine.appCtx = c
             val signedIn = FirebaseEngine.signedIn
             val localKey = signedIn && FirebaseEngine.loadLocalIdentity(c)
+            // ROUND 5: tri-state check — a FAILED account check (offline) used
+            // to throw out of this flow; it must never be read as "new user".
+            val returning = if (signedIn) FirebaseEngine.returningUserCheck() else false
             when {
                 !signedIn -> { AppState.go(Screen.Welcome); return }
                 onboarded && localKey -> {
@@ -85,7 +88,11 @@ object ChatSession {
                     FirebaseEngine.loadMyProfile()
                     FirebaseEngine.setPresence(true)
                 }
-                FirebaseEngine.isReturningUser() -> { AppState.go(Screen.Restore); return }
+                returning == true -> { AppState.go(Screen.Restore); return }
+                returning == null -> {
+                    AppState.toast("Couldn't check your account — check your connection and try again")
+                    AppState.go(Screen.Welcome); return
+                }
                 else -> { AppState.go(Screen.Welcome); return }
             }
         }

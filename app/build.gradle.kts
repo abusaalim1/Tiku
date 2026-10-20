@@ -19,6 +19,19 @@ android {
         ndk { abiFilters += listOf("arm64-v8a") }
     }
     buildFeatures { compose = true }
+    packaging {
+        resources {
+            excludes += setOf(
+                // ROUND 5, ITEM 6: leftover metadata traces (round-4 audit).
+                // Neither is read at runtime: DebugProbesKt.bin is consulted
+                // only when kotlinx-coroutines debug probes are explicitly
+                // installed (never in production), and
+                // kotlin-tooling-metadata.json is Kotlin build-tooling metadata.
+                "DebugProbesKt.bin",
+                "kotlin-tooling-metadata.json",
+            )
+        }
+    }
     testOptions {
         unitTests {
             isIncludeAndroidResources = true

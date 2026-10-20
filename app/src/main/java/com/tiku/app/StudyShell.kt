@@ -507,6 +507,9 @@ fun TikGateScreen() {
             else -> {
                 Text("Set up your journal in a minute — notes, formulas and daily questions, all yours.",
                     fontSize = 14.sp, color = TikuTokens.Muted, fontFamily = Manrope)
+                Spacer(Modifier.height(8.dp))
+                Text("Used your journal on another phone before? Tap Get started, sign in with the same Google account, and your password brings everything back on this phone.",
+                    fontSize = 14.sp, color = TikuTokens.Muted, fontFamily = Manrope)
                 Spacer(Modifier.weight(1f))
                 PrimaryButton("Get started", onClick = { ChatSession.unlocked = true; AppState.go(Screen.Welcome) })
             }
