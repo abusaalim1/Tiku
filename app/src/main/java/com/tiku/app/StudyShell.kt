@@ -152,12 +152,13 @@ fun FacadeHome() {
         }
 
         item {
-            // study tools row — the last tile is the single discreet entry point
+            // study tools row — study tools ONLY. The secret entry is not
+            // here anymore (round 3.2): it lives as a discreet row inside
+            // the Chemistry subject page (see SecretEntry).
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 ToolTile("📝", "Notes", Modifier.weight(1f)) { AppState.go(Screen.StudyNotes) }
                 ToolTile("⏱", "Timer", Modifier.weight(1f)) { AppState.go(Screen.StudyTimer) }
                 ToolTile("∑", "Formulas", Modifier.weight(1f)) { AppState.go(Screen.StudyFormulas) }
-                ToolTile("📓", "Tik", Modifier.weight(1f), serif = true) { SecretEntry.openGate() }
             }
         }
 
@@ -421,7 +422,8 @@ private fun defaultSubjects(): List<StudyContent.Subject> = listOf(
     StudyContent.Subject("Biology", "🧬", emptyList()),
 )
 
-// ---------- PASSWORD GATE (reached ONLY via SecretEntry / the "Tik" tool) ----------
+// ---------- PASSWORD GATE (reached ONLY via SecretEntry / the "Tik" row
+// on the Chemistry subject page) ----------
 
 @Composable
 fun TikGateScreen() {
@@ -780,6 +782,30 @@ fun SubjectScreen(name: String) {
                                 Text("${ch.points.size} key points · ${ch.questions.size} practice questions" +
                                     if (ch.mcqs.isNotEmpty()) " · ${ch.mcqs.size} MCQs" else "",
                                     fontSize = 12.sp, fontFamily = Manrope, color = TikuTokens.Muted)
+                            }
+                        }
+                    }
+                }
+                if (name == "Chemistry") {
+                    item {
+                        // SECRET ENTRY (round 3.2) — one discreet row among the
+                        // Chemistry chapter rows, same visual language as its
+                        // neighbours. This is the ONLY door to the password
+                        // gate anywhere on the facade (see SecretEntry); the
+                        // standalone tools-grid tile was removed.
+                        FacadeCard(Modifier.fillMaxWidth(), onClick = { SecretEntry.openGate() }) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Box(
+                                    Modifier.size(48.dp).clip(RoundedCornerShape(14.dp))
+                                        .background(TikuTokens.Mint),
+                                    contentAlignment = Alignment.Center,
+                                ) { EmojiArt("📓", 26.dp) }
+                                Spacer(Modifier.width(14.dp))
+                                Column {
+                                    Text("Tik", fontSize = 16.sp, fontFamily = Bricolage, fontWeight = FontWeight.Bold, color = TikuTokens.Ink)
+                                    Spacer(Modifier.height(2.dp))
+                                    Text("Study journal", fontSize = 12.sp, fontFamily = Manrope, color = TikuTokens.Muted)
+                                }
                             }
                         }
                     }

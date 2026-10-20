@@ -16,6 +16,7 @@ import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.ListenerRegistration
 import com.google.firebase.firestore.Query
+import com.google.firebase.firestore.SetOptions
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
@@ -435,28 +436,47 @@ object FirebaseEngine : ChatRepo {
     }
 
     // ================= CHAT DOC BOOTSTRAP =================
-    // Round-3 root-cause companion fix: message/call writes are gated by rules
-    // on the PARENT chat doc (chats/{id}), so the doc — with members=[me, peer]
-    // — must EXIST and be committed before the first message or call write.
-    // v1 created it fire-and-forget inside startThreadWith; if that write
-    // raced or failed, every later subcollection write was refused. Send and
-    // call paths now AWAIT ensureChatDoc() first (failures surface, never
-    // swallowed), and duplicate ensures are de-duped per chat.
+    // Message/call writes are gated by rules on the PARENT chat doc
+    // (chats/{id}), so the doc — with members=[me, peer] — must EXIST and be
+    // committed before the first message or call write. Send and call paths
+    // AWAIT ensureChatDoc() first; failures rethrow and surface, never
+    // swallowed; duplicate ensures are de-duped per chat.
+    //
+    // ROUND 3.2 — the build-20 ensure was itself the send bug: it probed with
+    // ref.get() and only set() when the snapshot said "missing". But the
+    // chats read rule is `request.auth.uid in resource.data.members`, and for
+    // a doc that does not exist yet `resource` is null — so the PROBE ITSELF
+    // was refused with PERMISSION_DENIED and the create was never attempted
+    // (server probe without the read: create of the same doc/members = 200;
+    // the values were never wrong). Existence can never be probed with get()
+    // under member rules — ensure must WRITE, unconditionally: a merge-set of
+    // members (+ updatedAt, so the orderBy("updatedAt") thread list can see
+    // the doc). Merge keeps an existing doc's other fields; on a missing doc
+    // it is a plain create, checked against request.resource.data.members.
+    // typing / clearedBefore are deliberately NOT written here — they are
+    // created lazily by dot-path updates, so a re-ensure can never wipe a
+    // peer's typing state or a user's clearedBefore watermark.
     private val chatDocJobs = mutableMapOf<String, Deferred<Unit>>()
 
     suspend fun ensureChatDoc(id: String, peerUid: String) {
+        // members are ALWAYS built from the live auth uid + the thread's
+        // stored peer uid — never from display state (names/usernames).
+        val me = uid
+        require(me.isNotEmpty()) { "ensureChatDoc: not signed in (chat $id)" }
+        require(peerUid.isNotEmpty()) { "ensureChatDoc: peer uid missing (chat $id)" }
+        require(peerUid != me) { "ensureChatDoc: peer uid is my own uid (chat $id)" }
         val job = synchronized(chatDocJobs) {
             chatDocJobs.getOrPut(id) {
                 scope.async {
-                    val ref = db.collection(Schema.Chats.COLL).document(id)
-                    if (!ref.get().await().exists()) {
-                        ref.set(mapOf(
-                            "members" to listOf(uid, peerUid),
-                            "typing" to emptyMap<String, Boolean>(),
-                            "clearedBefore" to emptyMap<String, Long>(),
+                    val members = listOf(me, peerUid)
+                    Log.d("TikuSend", "ensureChatDoc merge-set chatId=$id me=$me peer=$peerUid members=$members")
+                    db.collection(Schema.Chats.COLL).document(id)
+                        .set(mapOf(
+                            "members" to members,
                             "updatedAt" to FieldValue.serverTimestamp(),
-                        )).await()
-                    }
+                        ), SetOptions.merge())
+                        .await()
+                    Log.d("TikuSend", "ensureChatDoc ok chatId=$id me=$me peer=$peerUid")
                 }
             }
         }
@@ -464,6 +484,7 @@ object FirebaseEngine : ChatRepo {
             job.await()
         } catch (e: Exception) {
             synchronized(chatDocJobs) { chatDocJobs.remove(id) }
+            Log.e("TikuSend", "ensureChatDoc FAILED chatId=$id me=$me peer=$peerUid", e)
             throw e
         }
     }

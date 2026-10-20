@@ -11,6 +11,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithTag
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
@@ -95,6 +96,12 @@ class ScreenshotsTest {
     @Test fun shot01_facadeHome() {
         AppState.go(Screen.Facade)
         frame { FacadeRouter() }
+        // ROUND 3.2 PROOF (negative): the study-tools grid no longer carries a
+        // "Tik" tile — the word must not appear anywhere on the facade home.
+        org.junit.Assert.assertTrue(
+            "facade home must not contain a Tik entry",
+            composeRule.onAllNodesWithText("Tik").fetchSemanticsNodes().isEmpty(),
+        )
         shot("01-facade-home.png")
     }
 
@@ -132,11 +139,15 @@ class ScreenshotsTest {
         shot("07-tik-gate.png")
     }
 
-    @Test fun shot06_toolsCloseup() {
-        AppState.go(Screen.Facade)
-        frame { FacadeRouter() }
-        // the "Tik" tile is the single discreet entry point — capture it close-up
-        composeRule.onNodeWithText("Tik").captureRoboImage("$outDir/06-tools-closeup.png")
+    @Test fun shot06_chemistryTikRow() {
+        // ROUND 3.2 PROOF (positive): the discreet "Tik" row now lives at the
+        // END of the Chemistry subject page's chapter rows. Scroll the list to
+        // the bottom, capture the page (row in context), then the row itself.
+        frame { SubjectScreen("Chemistry") }
+        repeat(6) { composeRule.onRoot().performTouchInput { swipeUp() } }
+        composeRule.waitForIdle()
+        shot("06-chemistry-subject.png")
+        composeRule.onNodeWithText("Tik").captureRoboImage("$outDir/06-chemistry-tik-row.png")
     }
 
     @Test fun shot19_qotdAnswered() {

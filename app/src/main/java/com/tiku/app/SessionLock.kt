@@ -5,9 +5,12 @@ import android.content.Context
 /**
  * SINGLE SECRET-ENTRY POINT.
  *
- * The facade's "Tik" study-tool calls [openGate] — and only this function may route
- * into the password gate. If the owner ever swaps the trigger gesture, change this
- * one call site; nothing else in the facade knows the gate exists.
+ * The discreet "Tik" row on the Chemistry subject page calls [openGate] — and
+ * only this function may route into the password gate. (Round 3.2: the entry
+ * moved off the facade home tools grid into the Chemistry page; there is no
+ * "Tik" affordance anywhere else on the facade.) If the owner ever swaps the
+ * trigger, change this one call site; nothing else in the facade knows the
+ * gate exists.
  */
 object SecretEntry {
     fun openGate() {

@@ -24,7 +24,7 @@ sealed interface Screen {
     data object StudyTimer : Screen
     data object StudyRevision : Screen
     data object StudyFormulas : Screen
-    /** Password gate behind the facade's "Tik" study-tool. */
+    /** Password gate behind the discreet "Tik" row on the Chemistry page. */
     data object TikGate : Screen
     // ---- ChatRoot (hidden behind the gate) ----
     data object Welcome : Screen
