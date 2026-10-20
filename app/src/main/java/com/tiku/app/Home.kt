@@ -468,6 +468,20 @@ fun onSettingTap(key: String, title: String, settings: TikuUiSettings, scope: ko
 
 // ================= New chat sheet =================
 object NewChatSheet {
+    /**
+     * The suggestion source, behind a seam so the screenshot tests can drive
+     * the REAL shared matcher (SearchNorm) against the preview people — the
+     * Robolectric process has no Firebase backend to query. Production uses
+     * the default: preview people in a preview build, Firestore otherwise.
+     */
+    var searcher: suspend (String) -> List<Person> = { q ->
+        if (Config.PREVIEW_UI_ONLY) {
+            PreviewStore.people.filter { SearchNorm.matches(it.username, it.name, q) }
+        } else {
+            runCatching { FirebaseEngine.searchPeople(q) }.getOrDefault(emptyList())
+        }
+    }
+
     fun open() {
         AppState.sheet {
             var q by remember { mutableStateOf("") }
@@ -483,11 +497,7 @@ object NewChatSheet {
                 if (q.isBlank()) { results = emptyList(); searching = false; return@LaunchedEffect }
                 searching = true
                 delay(200)
-                results = if (Config.PREVIEW_UI_ONLY) {
-                    PreviewStore.people.filter { SearchNorm.matches(it.username, it.name, q) }
-                } else {
-                    runCatching { FirebaseEngine.searchPeople(q) }.getOrDefault(emptyList())
-                }
+                results = searcher(q)
                 searching = false
             }
             SerifTitle("New chat", 28.sp, modifier = Modifier.padding(top = 2.dp, bottom = 10.dp))

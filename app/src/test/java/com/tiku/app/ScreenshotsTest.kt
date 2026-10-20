@@ -325,8 +325,14 @@ class ScreenshotsTest {
 
     @Test fun shot25_newChatLiveSearch() {
         // ITEM 4 PROOF: live suggestions while typing — no Search button.
-        // Typing "riy" in the sheet's field must surface the Riya row from
-        // the preview people via the shared SearchNorm matcher.
+        // Typing "riy" in the sheet's field must surface the Riya row.
+        // The Robolectric process has no Firestore backend, so the sheet's
+        // searcher seam is pointed at the preview people through the REAL
+        // shared matcher (SearchNorm.matches — the same normalization the
+        // Firestore prefix+token query pair implements).
+        NewChatSheet.searcher = { q ->
+            PreviewStore.people.filter { SearchNorm.matches(it.username, it.name, q) }
+        }
         AppState.homeTab = HomeTab.CHATS
         NewChatSheet.open()
         frame { HomeScreen() }
