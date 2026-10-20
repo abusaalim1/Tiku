@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithText
@@ -100,7 +101,9 @@ class ScreenshotsTest {
 
     @Test fun shot03_chapter() {
         frame { ChapterScreen("Physics", 0) }
-        composeRule.onNodeWithText("Tap to reveal answer").performClick()
+        // the four practice questions share the "Tap to reveal answer" label, so click the
+        // first reveal link by position (bottom edge of the visible column)
+        composeRule.onRoot().performTouchInput { click(Offset(300f, 2390f)) }
         composeRule.waitForIdle()
         shot("03-chapter.png")
     }
@@ -120,12 +123,24 @@ class ScreenshotsTest {
         shot("07-tik-gate.png")
     }
 
+    @Test fun shot06_toolsCloseup() {
+        AppState.go(Screen.Facade)
+        frame { FacadeRouter() }
+        // the "Tik" tile is the single discreet entry point — capture it close-up
+        composeRule.onNodeWithText("Tik").captureRoboImage("$outDir/06-tools-closeup.png")
+    }
+
     @Test fun shot19_qotdAnswered() {
         AppState.go(Screen.Facade)
         frame { FacadeRouter() }
         val q = StudyContent.questionOfTheDay()
         if (q != null) {
-            composeRule.onNodeWithText(q.options[q.correct], substring = true).performClick()
+            // the rendered option row label is "A.  <text>" — match it exactly
+            val label = "${"ABCD"[q.correct]}.  ${q.options[q.correct]}"
+            composeRule.onNodeWithText(label).performClick()
+            composeRule.waitForIdle()
+            // bring the answered card into view (options sit below the fold)
+            composeRule.onRoot().performTouchInput { swipeUp() }
             composeRule.waitForIdle()
         }
         shot("19-qotd-answered.png")

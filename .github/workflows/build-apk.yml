@@ -167,9 +167,8 @@ jobs:
         if: always()
         run: |
           SHOTDIR="app/build/outputs/roborazzi/shots"
-          if [ -f "$SHOTDIR/01-facade-home.png" ]; then
-            convert "$SHOTDIR/01-facade-home.png" -crop 1080x420+0+330 +repage "$SHOTDIR/06-tools-closeup.png" || echo "crop failed"
-          fi
+          # 06-tools-closeup is captured directly by ScreenshotsTest (the Tik tile node)
+          if [ ! -f "$SHOTDIR/06-tools-closeup.png" ]; then echo "06-tools-closeup missing"; fi
           python3 - <<'PYEOF2'
           import glob, os, zipfile
           shots = sorted(glob.glob('app/build/outputs/roborazzi/shots/*.png'))
