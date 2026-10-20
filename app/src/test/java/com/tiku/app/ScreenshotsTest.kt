@@ -416,14 +416,15 @@ class ScreenshotsTest {
         // ROUND 7 (P1) PROOF: the LABELLED "Couple theme" row in
         // Me ▸ Appearance, shown in its ON state — round 6 buried the preset
         // as anonymous swatches and the owner reported it missing. Applied
-        // via the toggle's own path, then the Me pane is scrolled so the
-        // Appearance group is in frame.
+        // via the toggle's own path. No scroll: the full Appearance card
+        // fits above the tab bar (proven by 13-me-pane), so the row is
+        // captured visibly in frame — an earlier full swipeUp overshot the
+        // group entirely and the label never appeared in the shot.
         val prevAccent = SettingsStore.state.value.accentIdx
         val prevWp = SettingsStore.state.value.wallpaper
         SettingsStore.setCoupleTheme(true)
         AppState.homeTab = HomeTab.ME
         frame { HomeScreen() }
-        composeRule.onRoot().performTouchInput { swipeUp() }
         composeRule.waitForIdle()
         org.junit.Assert.assertTrue(
             "Appearance must carry a labelled Couple theme row",
