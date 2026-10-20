@@ -247,13 +247,13 @@ private fun ToolTile(glyph: String, label: String, modifier: Modifier = Modifier
         modifier.clip(RoundedCornerShape(24.dp)).background(TikuTokens.Card)
             .border(1.dp, TikuTokens.Line, RoundedCornerShape(24.dp))
             .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) { onClick() }
-            .padding(horizontal = 10.dp, vertical = 14.dp),
+            .padding(horizontal = 8.dp, vertical = 14.dp),
         contentAlignment = Alignment.Center,
     ) {
         Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
             if (EmojiArt.assetName(glyph) != null) EmojiArt(glyph, 26.dp) else Text(glyph, fontSize = 22.sp, fontFamily = if (serif) SerifItalic else Manrope)
             Spacer(Modifier.height(6.dp))
-            Text(label, fontSize = 12.sp, fontFamily = Manrope, fontWeight = FontWeight.SemiBold, color = TikuTokens.Ink,
+            Text(label, fontSize = 11.5.sp, fontFamily = Manrope, fontWeight = FontWeight.SemiBold, color = TikuTokens.Ink,
                 maxLines = 1, textAlign = TextAlign.Center)
         }
     }
