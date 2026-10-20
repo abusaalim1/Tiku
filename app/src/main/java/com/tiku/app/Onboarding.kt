@@ -30,6 +30,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.SolidColor
@@ -295,4 +296,4 @@ fun ProfileSetupScreen() {
 
 
 // bitmap -> Compose ImageBitmap helper
-fun android.graphics.Bitmap.asBmp(): androidx.compose.ui.graphics.ImageBitmap = androidx.compose.ui.graphics.asImageBitmap(this)
+fun android.graphics.Bitmap.asBmp(): androidx.compose.ui.graphics.ImageBitmap = asImageBitmap()

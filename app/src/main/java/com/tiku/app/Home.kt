@@ -5,7 +5,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -24,6 +24,8 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.ChatBubbleOutline
+import androidx.compose.material.icons.outlined.PersonOutline
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.DarkMode
@@ -46,6 +48,7 @@ import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -55,9 +58,9 @@ import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.launch
 
 private val TabsIcons = listOf(
-    androidx.compose.material.icons.outlined.ChatBubbleOutline,
+    Icons.Outlined.ChatBubbleOutline,
     Icons.Filled.Call,
-    androidx.compose.material.icons.outlined.PersonOutline,
+    Icons.Outlined.PersonOutline,
 )
 
 @Composable
@@ -76,12 +79,11 @@ fun HomeScreen() {
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween,
             ) {
+                // discreet quick-exit control: long-press the home title re-locks instantly
                 Box(
-                    Modifier.combinedClickable(
-                        interactionSource = remember { MutableInteractionSource() }, indication = null,
-                        onClick = {},
-                        onLongClick = { ChatSession.quickExit(ctx) },
-                    ),
+                    Modifier.pointerInput(Unit) {
+                        detectTapGestures(onLongPress = { ChatSession.quickExit(ctx) })
+                    },
                 ) { SerifTitle(title, 30.sp) }
                 Row {
                     GlassIconButton(Icons.Filled.DarkMode, label = "Theme") {

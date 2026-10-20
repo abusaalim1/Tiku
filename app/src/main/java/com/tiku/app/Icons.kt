@@ -9,6 +9,32 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
 
+/** Study-journal motif for the re-skinned Welcome orb: an open book in strokes. */
+@Composable
+fun TikuBookIcon(modifier: Modifier = Modifier, tint: Color = Color.White) {
+    Canvas(modifier) {
+        val sx = size.width / 24f
+        val sy = size.height / 24f
+        val stroke = 1.8f * sx
+        fun X(v: Float) = v * sx
+        fun Y(v: Float) = v * sy
+        // cover: rounded rect x4 y4 w16 h16 rx2
+        drawRoundRect(
+            color = tint,
+            topLeft = Offset(X(4f), Y(4f)), size = Size(X(16f), Y(16f)),
+            cornerRadius = CornerRadius(X(2f), Y(2f)),
+            style = Stroke(width = stroke),
+        )
+        // spine
+        drawLine(tint, Offset(X(12f), Y(4f) + stroke / 2), Offset(X(12f), Y(20f) - stroke / 2), stroke)
+        // page lines
+        drawLine(tint, Offset(X(6.8f), Y(8.5f)), Offset(X(10.2f), Y(8.5f)), stroke * 0.8f)
+        drawLine(tint, Offset(X(6.8f), Y(11.5f)), Offset(X(10.2f), Y(11.5f)), stroke * 0.8f)
+        drawLine(tint, Offset(X(13.8f), Y(8.5f)), Offset(X(17.2f), Y(8.5f)), stroke * 0.8f)
+        drawLine(tint, Offset(X(13.8f), Y(11.5f)), Offset(X(17.2f), Y(11.5f)), stroke * 0.8f)
+    }
+}
+
 /** The design's lock glyph, drawn 1:1 (port of the welcome screen's inline SVG). */
 @Composable
 fun TikuLockIcon(modifier: Modifier = Modifier, tint: Color = Color.White) {

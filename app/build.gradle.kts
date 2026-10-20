@@ -1,5 +1,6 @@
 plugins {
     id("com.android.application")
+    id("io.github.takahirom.roborazzi") version "1.36.0"
     id("org.jetbrains.kotlin.android")
     id("org.jetbrains.kotlin.plugin.compose")
     id("com.google.gms.google-services")  // Firebase project tiku-chat
@@ -12,6 +13,12 @@ android {
         minSdk = 26; targetSdk = 35; versionCode = 1; versionName = "1.0"
     }
     buildFeatures { compose = true }
+    testOptions {
+        unitTests {
+            isIncludeAndroidResources = true
+            isReturnDefaultValues = true
+        }
+    }
     signingConfigs {
         // Stable release certificate (tiku.keystore at repo root, alias "tiku").
         // The password arrives from the TIKU_KEYSTORE_PASSWORD repo secret as env.
@@ -54,4 +61,11 @@ dependencies {
     implementation("com.google.android.libraries.identity.googleid:googleid:1.1.1")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-play-services:1.8.1")
     implementation("androidx.security:security-crypto:1.1.0-alpha06")
+    // ---- UI screenshot tests (Roborazzi + Robolectric, headless CI) ----
+    testImplementation("junit:junit:4.13.2")
+    testImplementation("androidx.compose.ui:ui-test-junit4")
+    testImplementation("org.robolectric:robolectric:4.14.1")
+    testRuntimeOnly("org.robolectric:nativeruntime:4.14.1")
+    testImplementation("io.github.takahirom.roborazzi:roborazzi:1.36.0")
+    testImplementation("io.github.takahirom.roborazzi:roborazzi-compose:1.36.0")
 }

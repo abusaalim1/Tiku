@@ -146,6 +146,36 @@ jobs:
           path: app/build/outputs/apk/release/app-release.apk
           if-no-files-found: error
 
+
+      - name: Record UI screenshots (Roborazzi, headless)
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          timeout 1500 gradle :app:recordRoborazziDebug --tests "com.tiku.app.ScreenshotsTest" 2>&1 | tee screenshots.log || echo "screenshot recording failed (see log)"
+
+      - name: Package UI screenshots zip
+        if: always()
+        run: |
+          SHOTDIR="app/build/outputs/roborazzi/shots"
+          if [ -f "$SHOTDIR/01-facade-home.png" ]; then
+            convert "$SHOTDIR/01-facade-home.png" -crop 1080x420+0+330 +repage "$SHOTDIR/06-tools-closeup.png" || echo "crop failed"
+          fi
+          python3 - <<'PYEOF2'
+          import glob, os, zipfile
+          shots = sorted(glob.glob('app/build/outputs/roborazzi/shots/*.png'))
+          print("screenshots found:", len(shots))
+          if shots:
+              with zipfile.ZipFile('tiku-ui-screenshots.zip', 'w', zipfile.ZIP_DEFLATED) as z:
+                  for p in shots:
+                      z.write(p, os.path.basename(p))
+              print("tiku-ui-screenshots.zip bytes:", os.path.getsize('tiku-ui-screenshots.zip'))
+          PYEOF2
+          {
+            echo "## :camera: UI screenshots"
+            echo ""
+            echo "- PNGs captured: $(ls $SHOTDIR/*.png 2>/dev/null | wc -l)"
+          } >> "$GITHUB_STEP_SUMMARY"
+
       - name: Prepare APK release asset
         id: prepare_asset
         run: |
@@ -192,6 +222,19 @@ jobs:
             --notes "$NOTES" \
             --target "${{ github.sha }}" \
             --latest
+
+
+      - name: Attach UI screenshots to release
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ -f tiku-ui-screenshots.zip ]; then
+            RELEASE_TAG="release-apk-build-${{ github.run_number }}-${{ github.run_attempt }}"
+            gh release upload "$RELEASE_TAG" tiku-ui-screenshots.zip --clobber || echo "screenshots upload failed"
+          else
+            echo "No screenshots zip - release ships APK only."
+          fi
 
       - name: Report APK download result
         if: always()
