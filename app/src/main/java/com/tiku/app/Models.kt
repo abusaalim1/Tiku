@@ -6,7 +6,9 @@ import android.graphics.Bitmap
  *  CALL (round 4) is a system event rendered as a centred pill, never a bubble:
  *  an encrypted note that a call happened (missed / declined / ended). The
  *  WebRTC signaling record is still deleted in full — this is a chat message,
- *  not a call log, and the Calls pane stays empty. */
+ *  not a call log. ROUND 6 SUPERSESSION (owner's new rule): the Calls tab now
+ *  aggregates THESE in-chat call-event messages into a history list; that is
+ *  the only call surface that changed — signaling deletion is untouched. */
 enum class MsgKind { TEXT, IMAGE, VOICE, CALL }
 
 /** Delivery state of an outgoing message (round 3: no silent send failures).
@@ -60,7 +62,17 @@ data class ChatThread(
     var pinned: Boolean = false,
     var muted: Boolean = false,
     var clearedBeforeMs: Long = 0L,
-)
+    /** ROUND 6: the peer's nickname in THIS chat (Instagram semantics — set
+     *  by either member from inside the chat, stored on the chat doc as
+     *  `nicknames[peerUid]`, so it shows for BOTH members). Null = no nickname;
+     *  [displayName] then falls back to the profile name. */
+    val nickname: String? = null,
+) {
+    /** What every surface renders as this chat's title: nickname first,
+     *  profile name otherwise. Real name + @username stay visible in the
+     *  chat details sheet. */
+    val displayName: String get() = nickname?.takeIf { it.isNotBlank() } ?: person.name
+}
 
 /** Contact / person. In real mode, username/uid come from Firestore. */
 data class Person(

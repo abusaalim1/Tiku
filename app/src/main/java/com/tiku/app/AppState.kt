@@ -80,7 +80,9 @@ object AppState {
     var pendingPassword: String = ""
 
     // ---- threads ----
-    // NOTE: calls intentionally leave NO trace — there is no call-log store at all.
+    // NOTE: call SIGNALING intentionally leaves NO trace — no call-log store exists.
+    // Round 6: the Calls tab only aggregates the encrypted in-chat call-event
+    // messages; no other call record is kept anywhere.
     val threads = MutableStateFlow<List<ChatThread>>(emptyList())
     /** threadId -> peer is typing (drives the chat header status + typing bubble). */
     val typing = MutableStateFlow<Map<String, Boolean>>(emptyMap())
@@ -168,4 +170,8 @@ interface ChatRepo {
     fun clearChat(id: String)
     fun setTyping(id: String, on: Boolean)
     fun startThreadWith(person: Person): String
+    /** ROUND 6: set (or clear, with null/blank) the PEER's nickname in this
+     *  chat — stored on the chat doc (nicknames map), applies for both
+     *  members. Default no-op keeps test doubles compiling. */
+    fun setNickname(id: String, nickname: String?) {}
 }

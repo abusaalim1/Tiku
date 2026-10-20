@@ -27,12 +27,14 @@ object TikuTokens {
     val PlainPlain = Color(0xFFFFF4EE)     // wallpaper "plain" = var(--bg)
     val PeachTop = Color(0xFFF6D2C4); val PeachBottom = Color(0xFFD9A5A0)
 
-    /** Accent swatch pairs (s1, s2) — exactly the 4 from the prototype. */
+    /** Accent swatch pairs (s1, s2) — the 4 from the prototype, plus ROUND 6:
+     *  the "Couple" rose pair (soft rose → deep rose) for the couple preset. */
     val Accents = listOf(
         Color(0xFFEC8159) to Color(0xFFCC5832),
         Color(0xFFE27A93) to Color(0xFFB53F5C),
         Color(0xFFDDA866) to Color(0xFFA8742F),
         Color(0xFFB0708A) to Color(0xFF7A3A52),
+        Color(0xFFF2A0B5) to Color(0xFFCE4E79), // couple rose
     )
 
     val ToastBg = Color(0xFF3B1519); val ToastText = Color(0xFFFFF4EE)
@@ -40,7 +42,10 @@ object TikuTokens {
     val MeterColors = listOf(Color(0xFFE5484D), Color(0xFFF2A33A), Color(0xFF9BC53D), Color(0xFF7BB661))
 }
 
-enum class WallpaperMode { DEFAULT, PLAIN, PEACH, DOTS }
+/** COUPLE (round 6): soft blush wallpaper with a subtle heart motif drawn
+ *  over it on the chat surface — appended LAST so existing indices never
+ *  shift for users who already picked a wallpaper. */
+enum class WallpaperMode { DEFAULT, PLAIN, PEACH, DOTS, COUPLE }
 
 data class TikuUiSettings(
     val accentIdx: Int = 0,
@@ -48,9 +53,9 @@ data class TikuUiSettings(
     val textSizeSp: Float = 15f,
     val toggles: Map<String, Boolean> = SettingsStore.defaultToggles(),
 ) {
-    val accent: Color get() = TikuTokens.Accents[accentIdx.coerceIn(0, 3)].second
-    val gradTop: Color get() = TikuTokens.Accents[accentIdx.coerceIn(0, 3)].first
-    val gradBottom: Color get() = TikuTokens.Accents[accentIdx.coerceIn(0, 3)].second
+    val accent: Color get() = TikuTokens.Accents[accentIdx.coerceIn(0, TikuTokens.Accents.lastIndex)].second
+    val gradTop: Color get() = TikuTokens.Accents[accentIdx.coerceIn(0, TikuTokens.Accents.lastIndex)].first
+    val gradBottom: Color get() = TikuTokens.Accents[accentIdx.coerceIn(0, TikuTokens.Accents.lastIndex)].second
     val gradBrush: Brush get() = Brush.linearGradient(listOf(gradTop, gradBottom))
     val readReceipts get() = toggles["rr"] == true
     val lastSeen get() = toggles["ls"] == true
@@ -102,7 +107,7 @@ object SettingsStore {
         val keys = defaultToggles().keys
         _state.value = TikuUiSettings(
             accentIdx = prefs.getInt("accent", 0),
-            wallpaper = WallpaperMode.entries[prefs.getInt("wallpaper", 0).coerceIn(0, 3)],
+            wallpaper = WallpaperMode.entries[prefs.getInt("wallpaper", 0).coerceIn(0, WallpaperMode.entries.lastIndex)],
             textSizeSp = prefs.getFloat("textSize", 15f),
             toggles = keys.associateWith { prefs.getBoolean("tg_$it", defaultToggles()[it] == true) },
         )

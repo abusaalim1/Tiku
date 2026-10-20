@@ -28,8 +28,12 @@ import androidx.compose.material.icons.outlined.ChatBubbleOutline
 import androidx.compose.material.icons.outlined.PersonOutline
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Call
+import androidx.compose.material.icons.filled.CallMade
+import androidx.compose.material.icons.filled.CallMissed
+import androidx.compose.material.icons.filled.CallReceived
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.PhotoCamera
+import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material.icons.filled.DarkMode
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.Icon
@@ -170,7 +174,12 @@ fun ChatsPane() {
             }
             MomentsRow()
         }
-        val filtered = threads.filter { it.person.name.contains(query, ignoreCase = true) }
+        // round 6: the list filter matches the DISPLAY name (nickname when
+        // set) and the @username, not just the profile name.
+        val filtered = threads.filter {
+            it.displayName.contains(query, ignoreCase = true) ||
+                it.person.username.contains(query, ignoreCase = true)
+        }
         if (filtered.isEmpty() && !Config.PREVIEW_UI_ONLY) {
             item {
                 Column(Modifier.fillMaxWidth().padding(top = 60.dp), horizontalAlignment = Alignment.CenterHorizontally) {
@@ -240,7 +249,8 @@ fun ChatRow(th: ChatThread) {
         AvatarBox(th.person, 52.dp, 19.dp, 22f)
         Spacer(Modifier.width(13.dp))
         Column(Modifier.weight(1f)) {
-            Text(th.person.name, fontWeight = FontWeight.SemiBold, fontSize = 16.sp, fontFamily = Manrope, color = TikuTokens.Ink)
+            // round 6: nickname replaces the profile name in the list too
+            Text(th.displayName, fontWeight = FontWeight.SemiBold, fontSize = 16.sp, fontFamily = Manrope, color = TikuTokens.Ink)
             Row(verticalAlignment = Alignment.CenterVertically) {
                 // round 4: the row tick follows the real seen state too
                 if (last?.me == true && last.kind != MsgKind.CALL) {
@@ -276,24 +286,80 @@ fun ChatRow(th: ChatThread) {
 }
 
 // ================= Calls pane =================
-// HARD RULE (owner): this pane is permanently an EMPTY STATE — no call
-// entries, no history list. (Round 4: a call leaves only an encrypted event
-// note inside the chat itself; the signaling record is still fully deleted.)
+// ROUND 6 SUPERSESSION (owner's new rule, 2026-10-20): this pane used to be a
+// PERMANENT EMPTY STATE ("calls leave no trace here"). The owner ordered call
+// history here instead — so the Calls tab now aggregates the encrypted
+// call-EVENT messages already stored inside the chats (round 4), newest
+// first; tapping a row opens that chat. What did NOT change: WebRTC
+// signaling docs + ICE are still deleted in full the moment a call resolves,
+// there are still zero notifications, and NO new server data exists for this
+// surface — it renders only the in-chat records. History depth = the loaded
+// message windows (each chat's newest messages, plus full history of any
+// chat opened this session).
 @Composable
 fun CallsPane() {
-    Box(Modifier.fillMaxSize().padding(28.dp), contentAlignment = Alignment.Center) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Text("Calls leave no trace here", fontFamily = SerifItalic,
-                fontStyle = androidx.compose.ui.text.font.FontStyle.Italic,
-                fontSize = 24.sp, color = TikuTokens.Ink,
-                textAlign = androidx.compose.ui.text.style.TextAlign.Center)
-            Spacer(Modifier.height(10.dp))
-            Text("Audio and video calls are end-to-end peer-to-peer. "
-                + "When a call ends, its connection record is deleted at once — "
-                + "inside the chat itself, a small encrypted note marks that a call happened.",
-                fontSize = 14.sp, color = TikuTokens.Muted, fontFamily = Manrope,
-                textAlign = androidx.compose.ui.text.style.TextAlign.Center, lineHeight = 21.sp)
+    val threads by AppState.threads.collectAsState()
+    val events = remember(threads) {
+        threads.flatMap { th -> th.messages.filter { it.kind == MsgKind.CALL }.map { th to it } }
+            .sortedByDescending { it.second.tsMs }
+    }
+    if (events.isEmpty()) {
+        Box(Modifier.fillMaxSize().padding(28.dp), contentAlignment = Alignment.Center) {
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Text("No calls yet", fontFamily = SerifItalic,
+                    fontStyle = androidx.compose.ui.text.font.FontStyle.Italic,
+                    fontSize = 24.sp, color = TikuTokens.Ink,
+                    textAlign = androidx.compose.ui.text.style.TextAlign.Center)
+                Spacer(Modifier.height(10.dp))
+                Text("When you make, miss or decline a call, a note of it appears here — "
+                    + "the same encrypted note that lives inside the chat. "
+                    + "The call's connection record itself is always deleted.",
+                    fontSize = 14.sp, color = TikuTokens.Muted, fontFamily = Manrope,
+                    textAlign = androidx.compose.ui.text.style.TextAlign.Center, lineHeight = 21.sp)
+            }
         }
+        return
+    }
+    LazyColumn(Modifier.fillMaxSize(), contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = 110.dp, top = 6.dp)) {
+        items(events, key = { (th, m) -> th.id + "_" + m.id }) { (th, m) -> CallHistoryRow(th, m) }
+    }
+}
+
+@Composable
+fun CallHistoryRow(th: ChatThread, m: TikuMessage) {
+    // missed = an incoming call that never got answered (my perspective)
+    val missed = m.callOutcome == "noanswer" && !m.callMine
+    val icon = when {
+        missed -> Icons.Filled.CallMissed
+        m.callMine -> Icons.Filled.CallMade
+        else -> Icons.Filled.CallReceived
+    }
+    Row(
+        Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 10.dp)
+            .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {
+                AppState.repo.openThread(th.id)
+                AppState.go(Screen.Chat(th.id))
+            },
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        AvatarBox(th.person, 52.dp, 19.dp, 22f)
+        Spacer(Modifier.width(13.dp))
+        Column(Modifier.weight(1f)) {
+            Text(th.displayName, fontWeight = FontWeight.SemiBold, fontSize = 16.sp, fontFamily = Manrope, color = TikuTokens.Ink)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(icon, null, Modifier.size(14.dp), tint = if (missed) TikuTokens.Red else TikuTokens.Muted)
+                Spacer(Modifier.width(5.dp))
+                // callEventLabel is already perspective-correct and carries
+                // the duration for ended calls ("Call ended · 12:34").
+                Text(callEventLabel(m, m.callMine), fontSize = 14.sp, color = TikuTokens.Muted, fontFamily = Manrope,
+                    maxLines = 1, overflow = TextOverflow.Ellipsis)
+                if (m.callVideo) {
+                    Spacer(Modifier.width(5.dp))
+                    Icon(Icons.Filled.Videocam, null, Modifier.size(14.dp), tint = TikuTokens.Muted)
+                }
+            }
+        }
+        Text(m.time, fontSize = 12.sp, color = TikuTokens.Muted, fontFamily = Manrope)
     }
 }
 
@@ -428,6 +494,9 @@ fun SettingsGroups() {
                                 Brush.verticalGradient(listOf(TikuTokens.PlainPlain, TikuTokens.PlainPlain)),
                                 Brush.linearGradient(listOf(TikuTokens.PeachTop, TikuTokens.PeachBottom)),
                                 Brush.radialGradient(listOf(TikuTokens.Line, Color.Transparent)),
+                                // ROUND 6: Couple blush (WallpaperMode.COUPLE,
+                                // index-aligned with the enum order)
+                                Brush.linearGradient(listOf(Color(0xFFFFF1EA), Color(0xFFF9DAD0))),
                             )
                             items.forEachIndexed { i, brush ->
                                 Box(

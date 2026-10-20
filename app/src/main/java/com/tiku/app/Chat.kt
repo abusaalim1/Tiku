@@ -70,6 +70,7 @@ import androidx.compose.ui.draw.scale
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
@@ -88,6 +89,17 @@ fun ChatWallpaperBrush(settings: TikuUiSettings) = when (settings.wallpaper) {
     WallpaperMode.PLAIN -> Brush.verticalGradient(listOf(TikuTokens.PlainPlain, TikuTokens.PlainPlain))
     WallpaperMode.PEACH -> Brush.verticalGradient(listOf(TikuTokens.PeachTop, TikuTokens.PeachBottom))
     WallpaperMode.DOTS -> Brush.verticalGradient(listOf(TikuTokens.BgTop, TikuTokens.BgBottom))
+    // ROUND 6 couple preset: a slightly pinker blush than the default peach;
+    // the sparse heart motif is drawn over it in ChatContent.
+    WallpaperMode.COUPLE -> Brush.verticalGradient(listOf(Color(0xFFFFF1EA), Color(0xFFF9DAD0)))
+}
+
+/** Tiny heart path centred at (cx, cy), [s] ≈ half-width in px. */
+private fun heartPath(cx: Float, cy: Float, s: Float): Path = Path().apply {
+    moveTo(cx, cy + s * 0.85f)
+    cubicTo(cx - s * 1.35f, cy + s * 0.05f, cx - s * 0.95f, cy - s * 0.95f, cx, cy - s * 0.32f)
+    cubicTo(cx + s * 0.95f, cy - s * 0.95f, cx + s * 1.35f, cy + s * 0.05f, cx, cy + s * 0.85f)
+    close()
 }
 
 @Composable
@@ -190,6 +202,27 @@ private fun ChatContent(thread: ChatThread) {
                 }
             }
         }
+        if (settings.wallpaper == WallpaperMode.COUPLE) {
+            // ROUND 6 couple preset: sparse, very soft hearts over the blush
+            // gradient — same low-key technique as the dots, kept tasteful
+            // and inside the same peach family (light theme only, as locked).
+            Canvas(Modifier.fillMaxSize()) {
+                val spacing = 64.dp.toPx()
+                val s = 6.5.dp.toPx()
+                val rose = Color(0x26CE4E79)
+                var row = 0
+                var y = spacing * 0.5f
+                while (y < size.height + spacing) {
+                    var x = if (row % 2 == 0) spacing * 0.5f else spacing
+                    while (x < size.width + spacing) {
+                        drawPath(heartPath(x, y, s), rose)
+                        x += spacing
+                    }
+                    y += spacing
+                    row++
+                }
+            }
+        }
         Column(Modifier.fillMaxSize()) {
         // glass header (translucent color only — .blur() on this box blurred the
         // header's own content; that was the "bottom stays blurred" class of bug)
@@ -206,7 +239,9 @@ private fun ChatContent(thread: ChatThread) {
             AvatarBox(person, 42.dp, 15.dp, 18f)
             Spacer(Modifier.width(10.dp))
             Column(Modifier.weight(1f)) {
-                Text(person.name, fontFamily = Bricolage, fontWeight = FontWeight.Bold, fontSize = 17.sp, color = TikuTokens.Ink)
+                // ROUND 6: the header title is the chat's display name — the
+                // peer's nickname when one is set, else their profile name.
+                Text(thread.displayName, fontFamily = Bricolage, fontWeight = FontWeight.Bold, fontSize = 17.sp, color = TikuTokens.Ink)
                 Text(statusText, fontSize = 12.sp, color = settings.accent, fontFamily = Manrope)
             }
             GlassIconButton(Icons.Filled.Call, size = 38.dp, iconSize = 18.dp, onClick = { startCall(threadId, false) })
@@ -248,7 +283,7 @@ private fun ChatContent(thread: ChatThread) {
                         TikuLockIcon(Modifier.size(12.dp), tint = TikuTokens.Muted)
                         Spacer(Modifier.width(6.dp))
                         Text(
-                            "Messages are end-to-end encrypted. Only you and ${person.name} can read them.",
+                            "Messages are end-to-end encrypted. Only you and ${thread.displayName} can read them.",
                             fontSize = 12.sp, color = TikuTokens.Muted, fontFamily = Manrope,
                         )
                     }
@@ -538,7 +573,21 @@ fun MessageBubble(
             },
         horizontalArrangement = if (m.me) Arrangement.End else Arrangement.Start,
     ) {
-        Box(Modifier.fillMaxWidth(0.78f)) {
+        // ROUND 6 (bug 1 — bubbles not flush): the 78%-cap box previously had
+        // NO contentAlignment, so the wrap-content bubble Column always sat at
+        // the box's TopStart — own bubbles began at a uniform ~22% offset (a
+        // centre column) instead of hugging the right edge, exactly as the
+        // owner's screenshot showed. contentAlignment now pins the bubble to
+        // its own edge; text bubbles wrap and sit FLUSH right (mine) / left
+        // (theirs), long/media bubbles still cap at 78%. The reactions badge
+        // moved to a wrap box around the bubble itself, so it anchors to the
+        // bubble's real corner at any length (it used to float at the 78%
+        // box's corner, away from short bubbles).
+        Box(
+            Modifier.fillMaxWidth(0.78f),
+            contentAlignment = if (m.me) Alignment.TopEnd else Alignment.TopStart,
+        ) {
+            Box {
             Column(
                 Modifier.scale(scale)
                     .clip(shape)
@@ -590,7 +639,7 @@ fun MessageBubble(
             val reactions = m.reactions.values.distinct()
             if (reactions.isNotEmpty()) {
                 Box(
-                    Modifier.align(Alignment.BottomEnd).offset(x = (-10).dp, y = 10.dp)
+                    Modifier.align(Alignment.BottomEnd).offset(x = 6.dp, y = 8.dp)
                         .clip(RoundedCornerShape(12.dp)).background(TikuTokens.Card)
                         .border(1.dp, TikuTokens.Line, RoundedCornerShape(12.dp))
                         .padding(horizontal = 6.dp, vertical = 1.dp),
@@ -599,6 +648,7 @@ fun MessageBubble(
                         reactions.forEach { EmojiArt(it, 14.dp) }
                     }
                 }
+            }
             }
         }
     }
@@ -733,7 +783,21 @@ object ChatSheets {
 
     fun more(thread: ChatThread, person: Person) {
         AppState.sheet {
-            SerifTitle(person.name, 28.sp, modifier = Modifier.padding(top = 2.dp, bottom = 10.dp))
+            // Details keep the REAL identity (round 6): profile name as the
+            // title + @username under it — the nickname only replaces the
+            // name in the chat header and the chat list.
+            SerifTitle(person.name, 28.sp, modifier = Modifier.padding(top = 2.dp))
+            if (person.username.isNotEmpty()) {
+                Text("@${person.username}", fontSize = 13.sp, color = TikuTokens.Muted,
+                    fontFamily = Manrope, modifier = Modifier.padding(bottom = 10.dp))
+            } else {
+                Spacer(Modifier.height(10.dp))
+            }
+            // ROUND 6 nicknames (IG-style): sets the PEER's nickname for this
+            // chat — applies to both members (stored on the chat doc).
+            SheetAction(if (thread.nickname.isNullOrBlank()) "Set nickname" else "Edit nickname") {
+                nickname(thread)
+            }
             SheetAction("Mute notifications") { AppState.toast("Muted for 8 hours"); AppState.closeSheet() }
             SheetAction("Pin chat") { AppState.toast("Chat pinned"); AppState.closeSheet() }
             SheetAction("Export chat") { AppState.toast("Chat exported (encrypted)"); AppState.closeSheet() }
@@ -741,6 +805,54 @@ object ChatSheets {
                 AppState.repo.clearChat(thread.id); AppState.closeSheet()
             }
             SheetAction("Block") { AppState.toast("Contact blocked"); AppState.closeSheet() }
+        }
+    }
+
+    /** Nickname editor: prefilled with the current nickname; Save writes it
+     *  (blank input clears), Clear removes it and the profile name returns. */
+    fun nickname(thread: ChatThread) {
+        AppState.sheet {
+            var nick by remember { mutableStateOf(thread.nickname ?: "") }
+            SerifTitle("Nickname", 28.sp, modifier = Modifier.padding(top = 2.dp, bottom = 6.dp))
+            Text(
+                "Shown instead of ${thread.person.name} in this chat — for both of you.",
+                fontSize = 13.5.sp, color = TikuTokens.Muted, fontFamily = Manrope,
+                modifier = Modifier.padding(bottom = 12.dp),
+            )
+            Box(
+                Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(TikuTokens.BgTop)
+                    .border(1.dp, TikuTokens.Line, RoundedCornerShape(16.dp))
+                    .padding(horizontal = 14.dp, vertical = 13.dp),
+            ) {
+                BasicTextField(
+                    value = nick,
+                    onValueChange = { nick = it.take(40) },
+                    singleLine = true,
+                    textStyle = TextStyle(fontSize = 16.sp, color = TikuTokens.Ink, fontFamily = Manrope),
+                    cursorBrush = SolidColor(TikuTokens.Ink),
+                    modifier = Modifier.fillMaxWidth(),
+                    decorationBox = { inner ->
+                        if (nick.isEmpty()) {
+                            Text("Nickname", fontSize = 16.sp, color = TikuTokens.Muted, fontFamily = Manrope)
+                        }
+                        inner()
+                    },
+                )
+            }
+            Spacer(Modifier.height(14.dp))
+            PrimaryButton("Save nickname") {
+                AppState.repo.setNickname(thread.id, nick)
+                AppState.closeSheet()
+                AppState.toast(if (nick.isBlank()) "Nickname cleared" else "Nickname saved")
+            }
+            if (!thread.nickname.isNullOrBlank()) {
+                Spacer(Modifier.height(6.dp))
+                SheetAction("Clear nickname") {
+                    AppState.repo.setNickname(thread.id, null)
+                    AppState.closeSheet()
+                    AppState.toast("Nickname cleared")
+                }
+            }
         }
     }
 }

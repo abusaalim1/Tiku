@@ -38,11 +38,15 @@ import javax.crypto.SecretKey
  * media rides inside Firestore via MediaStore chunks). Server holds ciphertext only.
  *   users/{uid} {username, displayName, photoData, publicKey, keyBackup{salt,iv,ct}, online, lastSeen}
  *   usernames/{username} -> {uid}
- *   chats/{chatId} {members:[uidA, uidB], typing:{uid:bool}, clearedBefore:{uid:ms}, updatedAt}
+ *   chats/{chatId} {members:[uidA, uidB], typing:{uid:bool}, clearedBefore:{uid:ms}, updatedAt,
+ *       nicknames:{uid:nickname} (round 6 — IG semantics: key = the nickname OWNER's uid,
+ *       written by either member, rendered by both)}
  *   chats/{chatId}/messages/{id} {senderId, kind, ct, iv, ts, rqCt, rqIv, reaction:{uid:emoji},
  *       starredBy:[], deletedFor:[], seenBy:[], durationMs, amps, mediaChunks}
  *   chats/{chatId}/messages/{id}/chunks/{i} {d: base64 chunk of ciphertext}
- *   chats/{chatId}/calls/{callId} {by, peerUid, kind, direction, at}
+ *   chats/{chatId}/calls/{callId} {kind, caller, callee, state, offer, answer,
+ *       callerCands, calleeCands, createdAt} (WebRTC signaling only — deleted in
+ *       full the moment a call resolves; see Rtc.kt)
  *   moments/{uid}/items/{itemId} {quote, ts}
  */
 object FirebaseEngine : ChatRepo {
@@ -455,8 +459,15 @@ object FirebaseEngine : ChatRepo {
     /** Round 5: bounded re-attach attempts when a threads snapshot had to skip
      *  chats whose peer profile fetch failed transiently (see start()). */
     private var threadsRetryCount = 0
+    /** Round 6: bounded re-attach attempts after a threads-listener ERROR
+     *  (see start() — an errored listener is dead and must never blank state). */
+    private var threadsErrorRetries = 0
     private var msgsReg: ListenerRegistration? = null
     private val callsRegs = mutableMapOf<String, ListenerRegistration>()
+    /** Round 6: per-chat lightweight preview listeners (bug 3, second layer):
+     *  keep every unopened chat's last messages + unread count live so the
+     *  chat list shows a real preview/badge without the chat ever being opened. */
+    private val previewRegs = mutableMapOf<String, ListenerRegistration>()
     private var readPrefs: android.content.SharedPreferences? = null
     private val openChatIds = mutableSetOf<String>()
 
@@ -470,14 +481,42 @@ object FirebaseEngine : ChatRepo {
         readPrefs = ctx.getSharedPreferences("tiku_read", Context.MODE_PRIVATE)
         if (uid.isEmpty()) return
         threadsReg?.remove()
+        // ROUND 6 — BUGS 2+3 SHARED ROOT CAUSE (proven server-side before this
+        // round): this query used to add .orderBy("updatedAt", DESCENDING).
+        // array-contains + orderBy on a DIFFERENT field requires a composite
+        // index; the project has none, and a live probe (Firestore runQuery
+        // executed AS two different users) returned FAILED_PRECONDITION
+        // "The query requires an index" for BOTH. The snapshot listener thus
+        // ERRORED on attach — and the old handler ignored the error param,
+        // treated the null snapshot as "no chats", assigned an EMPTY list and
+        // resynced the call watchers to the empty set. Consequences, exactly
+        // as the owner reported: (bug 3) server chats never reached the list —
+        // only rows inserted locally by search→open survived, (bug 2) no
+        // ringing watcher was ever attached, so incoming calls never rang.
+        // Fix: query on members ONLY (automatic single-field index) and sort
+        // by updatedAt here, client-side. (Creating the composite index via
+        // the Admin API was also attempted — the service account lacks
+        // index-admin permission, HTTP 403 — so the client must not depend
+        // on it anyway.)
         threadsReg = db.collection(Schema.Chats.COLL)
             .whereArrayContains("members", uid)
-            .orderBy("updatedAt", Query.Direction.DESCENDING)
-            .addSnapshotListener { snap, _ ->
+            .addSnapshotListener { snap, err ->
+                if (err != null) {
+                    // An errored listener is REMOVED by Firestore — and an
+                    // error must NEVER blank the list or detach the call
+                    // watchers. Keep current state; re-attach a few times.
+                    Log.e("TikuChat", "threads listener error — keeping current list/watchers", err)
+                    if (threadsErrorRetries < 3) {
+                        threadsErrorRetries++
+                        scope.launch { delay(3000); if (ChatSession.unlocked) start(appCtx) }
+                    }
+                    return@addSnapshotListener
+                }
+                threadsErrorRetries = 0
                 scope.launch {
                     runCatching {
                         var skipped = 0
-                        val list = snap?.documents?.mapNotNull { doc ->
+                        val built = snap?.documents?.mapNotNull { doc ->
                             @Suppress("UNCHECKED_CAST")
                             val parts = doc.get("members") as? List<String> ?: return@mapNotNull null
                             val peerUid = parts.firstOrNull { it != uid } ?: return@mapNotNull null
@@ -487,12 +526,20 @@ object FirebaseEngine : ChatRepo {
                             val peer = runCatching { fetchPerson(peerUid) }.getOrNull()
                                 ?: existing?.person ?: run { skipped++; return@mapNotNull null }
                             val ts = doc.getTimestamp("updatedAt")?.toDate()?.time ?: 0L
-                            ChatThread(id = doc.id, person = peer,
+                            // round 6: the peer's nickname lives on the chat
+                            // doc, keyed by the nickname OWNER's uid (the peer).
+                            @Suppress("UNCHECKED_CAST")
+                            val nickMap = doc.get("nicknames") as? Map<String, Any?>
+                            val nickname = (nickMap?.get(peerUid) as? String)?.takeIf { it.isNotBlank() }
+                            ts to ChatThread(id = doc.id, person = peer,
                                 messages = existing?.messages ?: mutableListOf(),
                                 unread = existing?.unread ?: 0,
                                 time = fmtTime(ts),
-                                pinned = existing?.pinned ?: false)
+                                pinned = existing?.pinned ?: false,
+                                nickname = nickname)
                         } ?: emptyList()
+                        // client-side updatedAt DESC (the query no longer orders)
+                        val list = built.sortedByDescending { it.first }.map { it.second }
                         AppState.threads.value = list
                         // ROUND 5: a chat skipped over a transient profile-fetch
                         // failure must not stay invisible until some unrelated
@@ -509,11 +556,77 @@ object FirebaseEngine : ChatRepo {
                             threadsRetryCount = 0
                         }
                         // incoming-call watchers + crash-residue sweep follow the thread set
-                        syncCallWatchers(list.map { it.id }.toSet())
-                        sweepStaleCalls(list.map { it.id }.toSet())
+                        val ids = list.map { it.id }.toSet()
+                        syncCallWatchers(ids)
+                        syncPreviewListeners(ids)
+                        sweepStaleCalls(ids)
                     }
                 }
             }
+    }
+
+    // ================= CHAT-LIST PREVIEW LISTENERS (round 6, bug 3 layer 2) ====
+    /** One lightweight messages listener per known chat. The threads listener
+     *  alone could only build EMPTY rows (messages were populated solely by
+     *  attachMessages on open) — so even a delivered row had no preview and no
+     *  unread badge until the chat was opened once. These listeners keep the
+     *  newest ≤40 messages of every UNOPENED chat decrypted (light path: media
+     *  payloads are NOT downloaded — a stub carries kind/duration/amps, which
+     *  is all a preview needs) and maintain messages + unread on the thread.
+     *  While a chat is open, attachMessages owns its message list and the
+     *  preview path stays out of the way. */
+    private fun syncPreviewListeners(threadIds: Set<String>) {
+        (previewRegs.keys - threadIds).forEach { previewRegs.remove(it)?.remove() }
+        threadIds.forEach { tid ->
+            if (!previewRegs.containsKey(tid)) {
+                previewRegs[tid] = db.collection(Schema.Chats.COLL).document(tid)
+                    .collection(Schema.Chats.MESSAGES)
+                    .orderBy("ts", Query.Direction.DESCENDING).limit(40)
+                    .addSnapshotListener { snap, err ->
+                        if (err != null) {
+                            Log.e("TikuChat", "preview listener error for chat $tid", err)
+                            return@addSnapshotListener
+                        }
+                        val docs = snap?.documents ?: return@addSnapshotListener
+                        scope.launch { runCatching { applyPreviewSnapshot(tid, docs) } }
+                    }
+            }
+        }
+    }
+
+    private suspend fun applyPreviewSnapshot(
+        id: String,
+        docs: List<com.google.firebase.firestore.DocumentSnapshot>,
+        retry: Boolean = true,
+    ) {
+        if (openChatIds.contains(id)) return // the open-chat listener owns this thread
+        val th = AppState.thread(id) ?: return
+        val peerUid = th.person.uid
+        if (peerUid.isEmpty()) return
+        val key = convKeyOrNull(id, peerUid) ?: run {
+            // keys often land a beat after the first snapshot (fresh chat)
+            if (retry) { delay(1500); applyPreviewSnapshot(id, docs, retry = false) }
+            return
+        }
+        val clearedBefore = runCatching {
+            val cd = db.collection(Schema.Chats.COLL).document(id).get().await()
+                .get("clearedBefore") as? Map<*, *>
+            (cd?.get(uid) as? Number)?.toLong() ?: 0L
+        }.getOrDefault(0L)
+        val dmCutoff = if (SettingsStore.state.value.toggles["dm"] == true)
+            System.currentTimeMillis() - 24L * 3600 * 1000 else 0L
+        val msgs = docs.mapNotNull { d ->
+            runCatching { decryptDoc(id, d, key, peerUid, light = true) }.getOrNull()
+        }.filter { m ->
+            !m.deletedForMe && m.tsMs >= clearedBefore && (dmCutoff == 0L || m.tsMs >= dmCutoff)
+        }.sortedBy { it.tsMs }
+        val lr = lastRead(id)
+        val unread = msgs.count { !it.me && it.kind != MsgKind.CALL && it.tsMs > lr }
+        AppState.threads.value = AppState.threads.value.map { t ->
+            if (t.id == id && !openChatIds.contains(id))
+                t.copy(messages = msgs.toMutableList(), unread = unread)
+            else t
+        }
     }
 
     // ================= CALL SIGNALING WATCHERS =================
@@ -587,6 +700,7 @@ object FirebaseEngine : ChatRepo {
     fun stop() {
         threadsReg?.remove(); msgsReg?.remove()
         callsRegs.values.forEach { it.remove() }; callsRegs.clear()
+        previewRegs.values.forEach { it.remove() }; previewRegs.clear()
     }
 
     // ================= CHAT DOC BOOTSTRAP =================
@@ -793,7 +907,11 @@ object FirebaseEngine : ChatRepo {
             }
     }
 
-    private suspend fun decryptDoc(chatId: String, doc: com.google.firebase.firestore.DocumentSnapshot, key: SecretKey, peerUid: String): TikuMessage {
+    /** [light] (round 6 preview path): text + call payloads decrypt fully,
+     *  but image/voice payloads are NOT downloaded — the message is built as a
+     *  stub (photo/localPath null, duration + waveform from the doc fields).
+     *  A chat-list preview and the Calls tab only need kind/metadata. */
+    private suspend fun decryptDoc(chatId: String, doc: com.google.firebase.firestore.DocumentSnapshot, key: SecretKey, peerUid: String, light: Boolean = false): TikuMessage {
         val sender = doc.getString("senderId") ?: ""
         val kindRaw = doc.getString("kind") ?: "text"
         // ITEM 2: bubble side derives ONLY from the doc's senderId vs the
@@ -833,18 +951,27 @@ object FirebaseEngine : ChatRepo {
                 }
             }
             "image", "voice" -> {
-                val chunkCount = (doc.getLong("mediaChunks") ?: 0L).toInt()
-                val ctBytes = MediaStore.download(db, chatId, doc.id, chunkCount)
-                val plain = Crypto.decrypt(key, doc.getString("iv") ?: "", Crypto.b64(ctBytes))
-                if (kindRaw == "image") {
-                    photo = BitmapFactory.decodeByteArray(plain, 0, plain.size)
+                if (light) {
+                    // preview stub — no chunk download (see decryptDoc doc)
+                    if (kindRaw == "voice") {
+                        durSec = ((doc.getLong("durationMs") ?: 0L) / 1000).toInt()
+                        @Suppress("UNCHECKED_CAST")
+                        amps = (doc.get("amps") as? List<Long>)?.map { it.toInt() } ?: emptyList()
+                    }
                 } else {
-                    durSec = ((doc.getLong("durationMs") ?: 0L) / 1000).toInt()
-                    @Suppress("UNCHECKED_CAST")
-                    amps = (doc.get("amps") as? List<Long>)?.map { it.toInt() } ?: emptyList()
-                    val f = File(appCtx.cacheDir, "dl_${doc.id}.m4a")
-                    if (!f.exists()) f.writeBytes(plain)
-                    localPath = f.absolutePath
+                    val chunkCount = (doc.getLong("mediaChunks") ?: 0L).toInt()
+                    val ctBytes = MediaStore.download(db, chatId, doc.id, chunkCount)
+                    val plain = Crypto.decrypt(key, doc.getString("iv") ?: "", Crypto.b64(ctBytes))
+                    if (kindRaw == "image") {
+                        photo = BitmapFactory.decodeByteArray(plain, 0, plain.size)
+                    } else {
+                        durSec = ((doc.getLong("durationMs") ?: 0L) / 1000).toInt()
+                        @Suppress("UNCHECKED_CAST")
+                        amps = (doc.get("amps") as? List<Long>)?.map { it.toInt() } ?: emptyList()
+                        val f = File(appCtx.cacheDir, "dl_${doc.id}.m4a")
+                        if (!f.exists()) f.writeBytes(plain)
+                        localPath = f.absolutePath
+                    }
                 }
             }
         }
@@ -1020,8 +1147,10 @@ object FirebaseEngine : ChatRepo {
      * like a text message. The doc id is deterministic ("call_<callId>") so
      * BOTH clients writing it converge on ONE event, never a duplicate.
      * This is deliberately separate from signaling: the calls/{callId} doc
-     * (offer/answer/ICE) is still deleted in full at call end, and the Calls
-     * pane stays empty — the event is a chat message, not a call log.
+     * (offer/answer/ICE) is still deleted in full at call end. ROUND 6
+     * SUPERSESSION (owner's new rule): the Calls tab now aggregates these
+     * encrypted in-chat events into its history list — the event remains a
+     * chat message, and no other call record exists anywhere.
      * outcome ∈ "ended" | "declined" | "noanswer". Best-effort by design:
      * a failed event write must never break call teardown.
      */
@@ -1079,6 +1208,33 @@ object FirebaseEngine : ChatRepo {
             db.collection(Schema.Chats.COLL).document(id)
                 .update("clearedBefore.$uid", System.currentTimeMillis()).await()
             AppState.updateThread(id) { it.messages.clear() }
+        }
+    }
+
+    /**
+     * NICKNAME (round 6, IG semantics): set/clear the PEER's nickname in this
+     * chat. Stored on the chat doc as `nicknames[peerUid]` — the key is the
+     * nickname OWNER's uid, the write can be made by either member (the chats
+     * update rule allows member updates), and BOTH members' thread listeners
+     * read the same map, so the nickname applies to both views. Local state
+     * updates optimistically; the threads listener confirms from the doc.
+     * Clearing uses a field delete so no empty-string nickname lingers.
+     */
+    override fun setNickname(id: String, nickname: String?) {
+        val th = AppState.thread(id) ?: return
+        val peerUid = th.person.uid
+        if (peerUid.isEmpty()) return
+        val clean = nickname?.trim()?.takeIf { it.isNotEmpty() }
+        AppState.threads.value = AppState.threads.value.map {
+            if (it.id == id) it.copy(nickname = clean) else it
+        }
+        scope.launch {
+            runCatching {
+                val ref = db.collection(Schema.Chats.COLL).document(id)
+                if (clean == null) ref.update("nicknames.$peerUid", FieldValue.delete()).await()
+                else ref.update("nicknames.$peerUid", clean).await()
+                Log.d("TikuChat", "nickname ${if (clean == null) "cleared" else "set"} in chat $id")
+            }.onFailure { Log.e("TikuChat", "setNickname failed for chat $id", it) }
         }
     }
 

@@ -195,6 +195,9 @@ class ScreenshotsTest {
     }
 
     @Test fun shot12_callsPane() {
+        // ROUND 6: the Calls tab now lists call HISTORY aggregated from the
+        // chats' encrypted call-event messages (seeded: ended / missed /
+        // declined / video) — this shot must show rows, not the old empty state.
         AppState.homeTab = HomeTab.CALLS
         frame { HomeScreen() }
         shot("12-calls-pane.png")
@@ -356,5 +359,70 @@ class ScreenshotsTest {
                 .fetchSemanticsNodes().isNotEmpty(),
         )
         shot("26-restore.png")
+    }
+
+    // ---------- round 6 additions ----------
+    @Test fun shot27_alignmentFlush() {
+        // BUG 1 PROOF: a dedicated thread with a SHORT own message, a LONG own
+        // message and a peer message — own bubbles must end FLUSH at the right
+        // edge, the peer bubble must start FLUSH at the left edge (Instagram
+        // alignment), not the old uniform ~22% centre column.
+        val p = PreviewStore.people[1]
+        val id = PreviewRepo.startThreadWith(p)
+        AppState.upsertMessage(id, TikuMessage(
+            id = "al1", senderUid = "me", kind = MsgKind.TEXT, text = "Ok",
+            time = "9:41", me = true, tsMs = 1))
+        AppState.upsertMessage(id, TikuMessage(
+            id = "al2", senderUid = "me", kind = MsgKind.TEXT,
+            text = "This is a much longer message that stretches close to the width cap and still has to end flush at the right edge",
+            time = "9:41", me = true, tsMs = 2))
+        AppState.upsertMessage(id, TikuMessage(
+            id = "al3", senderUid = p.uid, kind = MsgKind.TEXT, text = "Hey!",
+            time = "9:42", me = false, tsMs = 3))
+        frame { ChatScreen(id) }
+        composeRule.waitForIdle()
+        shot("27-alignment-flush.png")
+    }
+
+    @Test fun shot28_incomingRinging() {
+        // BUG 2 PROOF (harness state): drive CallController.onIncoming exactly
+        // as the callee's ringing watcher does after the round-6 fix — the
+        // incoming-call screen must render with accept / reject.
+        val th = AppState.threads.value.first()
+        CallController.onIncoming(th.id, "shot-ring-1", "video", th.person)
+        frame { CallScreen(th.id, true) }
+        composeRule.waitForIdle()
+        shot("28-incoming-ringing.png")
+        CallController.endSilently()
+    }
+
+    @Test fun shot29_coupleTheme() {
+        // FEATURE 5a PROOF: Couple wallpaper (blush + hearts) + rose accent
+        // applied to the chat surface. Settings are restored afterwards.
+        val prevAccent = SettingsStore.state.value.accentIdx
+        val prevWp = SettingsStore.state.value.wallpaper
+        SettingsStore.setAccent(TikuTokens.Accents.lastIndex)
+        SettingsStore.setWallpaper(WallpaperMode.COUPLE.ordinal)
+        val th = AppState.threads.value.first()
+        frame { ChatScreen(th.id) }
+        composeRule.waitForIdle()
+        shot("29-couple-theme.png")
+        SettingsStore.setAccent(prevAccent)
+        SettingsStore.setWallpaper(prevWp.ordinal)
+    }
+
+    @Test fun shot30_chatDetailsNickname() {
+        // FEATURE 5b PROOF: the chat details sheet shows the REAL name +
+        // @username and the nickname action (the seeded first thread already
+        // has nickname "Aaru" — header/list shots 11/14 show it in place).
+        val th = AppState.threads.value.first()
+        frame { ChatScreen(th.id) }
+        ChatSheets.more(th, th.person)
+        composeRule.waitForIdle()
+        org.junit.Assert.assertTrue(
+            "details sheet must offer nickname editing",
+            composeRule.onAllNodesWithText("Edit nickname").fetchSemanticsNodes().isNotEmpty(),
+        )
+        shot("30-chat-details-nickname.png")
     }
 }

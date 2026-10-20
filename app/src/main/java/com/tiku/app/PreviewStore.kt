@@ -44,15 +44,32 @@ object PreviewStore {
             // …a call event pill (centred, not a bubble)…
             msg("", time = "9:39", kind = MsgKind.CALL)
                 .copy(callCallerUid = "me", callOutcome = "ended",
-                    callDurationSec = 754, callVideo = false, callMine = true),
+                    callDurationSec = 754, callVideo = false, callMine = true, tsMs = 6000),
             msg("Aaj shaam milte hain? ✨", time = "9:41"),
             // …and an own message NOT yet seen (single ✓)
             msg("On my way!", me = true, time = "9:41"))
-        add(1, 0, "8:12", msg("Thanks for the font suggestions!", time = "8:12"))
+        // ROUND 6 seeds: more call events (Calls tab history proof) — a missed
+        // incoming call, a declined outgoing call, an ended incoming video call.
+        add(1, 0, "8:12",
+            msg("Thanks for the font suggestions!", time = "8:12"),
+            msg("", time = "8:14", kind = MsgKind.CALL)
+                .copy(callCallerUid = "p-meera", callOutcome = "noanswer",
+                    callMine = false, tsMs = 5000))
         add(2, 5, "Yesterday", msg("Final deck goes out at 6", time = "Yesterday"))
         add(3, 0, "Yesterday", msg("", time = "Yesterday", kind = MsgKind.VOICE, voiceDurSec = 12))
-        add(4, 1, "Mon", msg("Playlist updated 🎧", time = "Mon"))
-        add(5, 0, "Sun", msg("See you at the café!", time = "Sun"))
+        add(4, 1, "Mon",
+            msg("Playlist updated 🎧", time = "Mon"),
+            msg("", time = "Mon", kind = MsgKind.CALL)
+                .copy(callCallerUid = "me", callOutcome = "declined",
+                    callMine = true, tsMs = 4000))
+        add(5, 0, "Sun",
+            msg("See you at the café!", time = "Sun"),
+            msg("", time = "Sun", kind = MsgKind.CALL)
+                .copy(callCallerUid = "p-riya", callOutcome = "ended",
+                    callDurationSec = 125, callVideo = true, callMine = false, tsMs = 3000))
+        // ROUND 6 seed: the first thread carries a nickname for its peer —
+        // header + chat list must show "Aaru", details keep the real name.
+        if (t.isNotEmpty()) t[0] = t[0].copy(nickname = "Aaru")
         return t
     }
 
@@ -144,6 +161,14 @@ object PreviewRepo : ChatRepo {
             voiceDurSec = durSec, amps = amps.ifEmpty { List(22) { 8 } },
             localPath = audioFile?.absolutePath))
         simulateReply(id)
+    }
+
+    /** Preview nickname: local-only (the real engine writes nicknames.<peerUid>
+     *  on the chat doc). */
+    override fun setNickname(id: String, nickname: String?) {
+        AppState.threads.value = AppState.threads.value.map {
+            if (it.id == id) it.copy(nickname = nickname?.trim()?.takeIf { n -> n.isNotEmpty() }) else it
+        }
     }
 
     override fun react(id: String, msgId: String, emoji: String?) {
