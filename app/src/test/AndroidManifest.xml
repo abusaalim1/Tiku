@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!--
+        Unit-test manifest for Robolectric headless UI runs.
+        createComposeRule() (Compose ui-test 1.7) hosts its content in
+        androidx.activity.ComponentActivity; Robolectric's strict activity
+        resolver (>= 4.11, see robolectric/robolectric#4736) needs this entry
+        in the merged unit-test manifest, otherwise every test fails with
+        "Unable to resolve activity for Intent ... ComponentActivity".
+    -->
+    <application>
+        <activity android:name="androidx.activity.ComponentActivity" android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>
