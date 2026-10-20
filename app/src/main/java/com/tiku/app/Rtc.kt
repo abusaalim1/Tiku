@@ -182,6 +182,24 @@ class RtcSession(
     val eglContext: EglBase.Context get() = RtcFactory.egl.eglBaseContext
     private var disposed = false
 
+    // ROUND 7: remote candidates that arrive before the remote description
+    // is set must QUEUE, not drop — addIceCandidate against a peer connection
+    // with no remote description is a classic silent connect-killer. The
+    // queue flushes the moment setRemoteDescription succeeds (either role).
+    private val candLock = Any()
+    private var remoteDescReady = false
+    private val queuedRemoteCands = mutableListOf<IceCandidate>()
+
+    private fun markRemoteDescReady() {
+        val drain: List<IceCandidate>
+        synchronized(candLock) {
+            remoteDescReady = true
+            drain = queuedRemoteCands.toList()
+            queuedRemoteCands.clear()
+        }
+        drain.forEach { c -> runCatching { pc?.addIceCandidate(c) } }
+    }
+
     init {
         RtcFactory.ensure(ctx)
         val iceServers = Config.ICE_SERVERS.map { cfg ->
@@ -288,6 +306,7 @@ class RtcSession(
         conn.setRemoteDescription(sdpObserver(
             onCreated = {},
             onDone = {
+                markRemoteDescReady()
                 conn.createAnswer(sdpObserver(
                     onCreated = { answer ->
                         conn.setLocalDescription(sdpObserver(
@@ -309,12 +328,20 @@ class RtcSession(
         if (conn == null) { if (cont.isActive) cont.resume(Unit); return@suspendCancellableCoroutine }
         conn.setRemoteDescription(sdpObserver(
             onCreated = {},
-            onDone = { if (cont.isActive) cont.resume(Unit) },
+            onDone = { markRemoteDescReady(); if (cont.isActive) cont.resume(Unit) },
             onError = { if (cont.isActive) cont.resume(Unit) }, // best-effort: ICE state drives failure anyway
         ), answer)
     }
 
-    fun addRemoteCandidate(c: IceCandidate) { runCatching { pc?.addIceCandidate(c) } }
+    fun addRemoteCandidate(c: IceCandidate) {
+        // ROUND 7: queue until the remote description is actually set —
+        // applying a candidate earlier silently fails inside WebRTC and the
+        // call then never connects even though signaling looked perfect.
+        val applyNow = synchronized(candLock) {
+            if (remoteDescReady) true else { queuedRemoteCands += c; false }
+        }
+        if (applyNow) runCatching { pc?.addIceCandidate(c) }
+    }
     fun setMicEnabled(on: Boolean) { runCatching { audioTrack?.setEnabled(on) } }
     fun setCameraEnabled(on: Boolean) { runCatching { videoTrack?.setEnabled(on) } }
     fun switchCamera() { runCatching { videoCapturer?.switchCamera(null) } }
@@ -397,6 +424,36 @@ object CallController {
      *  (both sides write the same deterministic doc; this just avoids
      *  redundant local rewrites across multiple resolution paths). */
     private var eventRecordedCallId: String? = null
+    /** ROUND 7 — the offer SDP captured from the ringing snapshot itself.
+     *  The watcher doc ALREADY carries the offer; caching it here means
+     *  accept() never depends on re-reading a doc that later signaling
+     *  updates (ICE arrayUnion writes) can disturb. Cleared on teardown. */
+    private var pendingOffer: SessionDescription? = null
+    private var pendingOfferCallId: String? = null
+
+    /** ROUND 7 — ICE egress gate (caller side). The caller's PeerConnection
+     *  starts gathering the instant its local description is set — inside
+     *  createOffer(), BEFORE CallSignal.createCall() has written the call
+     *  doc. pushCandidate() update()s that doc; an update on a doc that does
+     *  not exist yet fails (NOT_FOUND) and was swallowed by runCatching —
+     *  the caller's earliest candidates (often the host/srflx pair that
+     *  would have connected) vanished silently. While the gate is closed,
+     *  outgoing candidates buffer as deferred pushes and flush the moment
+     *  the doc exists. The callee's doc provably exists (its watcher saw
+     *  it), so accept() opens the gate immediately. */
+    private var iceGateOpen = false
+    private val iceBuffer = mutableListOf<suspend () -> Unit>()
+
+    private fun openIceGate() {
+        iceGateOpen = true
+        val pending = iceBuffer.toList(); iceBuffer.clear()
+        pending.forEach { push -> scope.launch { push() } }
+    }
+
+    /** The callId of the currently active/ringing call, if any — used by the
+     *  incoming-call watcher to recognise re-fires for the SAME call and
+     *  leave that call's signaling doc completely alone. */
+    fun activeCallId(): String? = ids(state.value)?.second
 
     /**
      * Record the call's outcome as an encrypted event inside the chat
@@ -447,6 +504,8 @@ object CallController {
         state.value = CallUiState.Idle
         answerApplied = false; processedCallerCands = 0; processedCalleeCands = 0
         curCallerUid = ""; eventRecordedCallId = null
+        pendingOffer = null; pendingOfferCallId = null
+        iceGateOpen = false; iceBuffer.clear()
         if (realMode && cur != null) {
             scope.launch { CallSignal.deleteCallTree(cur.first, cur.second) }
         }
@@ -465,6 +524,7 @@ object CallController {
         // initialized and a bare FirebaseEngine.uid would throw synchronously
         curCallerUid = runCatching { FirebaseEngine.uid }.getOrDefault("")
         eventRecordedCallId = null
+        iceGateOpen = false; iceBuffer.clear()
         state.value = CallUiState.Outgoing(threadId, callId, video, person, System.currentTimeMillis())
         armRingTimeout(threadId, callId)
         scope.launch {
@@ -482,6 +542,9 @@ object CallController {
                 val offer = s.createOffer()
                 CallSignal.createCall(threadId, callId, if (video) "video" else "audio",
                     FirebaseEngine.uid, peer.uid, offer)
+                // the call doc exists NOW — release any ICE candidates that
+                // gathered while the offer was being created (see ice gate)
+                openIceGate()
                 attachDocListener(threadId, callId, role = "caller")
             } catch (e: Exception) {
                 Log.e("TikuCall", "startCall failed for chat $threadId", e)
@@ -508,11 +571,15 @@ object CallController {
     }
 
     // ---------- incoming ----------
-    fun onIncoming(chatId: String, callId: String, kind: String, person: Person) {
+    fun onIncoming(chatId: String, callId: String, kind: String, person: Person, offerEnc: String? = null) {
         if (state.value !is CallUiState.Idle) return
         val video = kind == "video"
         curCallerUid = person.uid
         eventRecordedCallId = null
+        // ROUND 7: cache the offer straight from the ringing snapshot — the
+        // single most reliable copy (server-confirmed, already in hand).
+        pendingOffer = offerEnc?.let { runCatching { decodeSdp(it) }.getOrNull() }
+        pendingOfferCallId = if (pendingOffer != null) callId else null
         state.value = CallUiState.Incoming(chatId, callId, video, person, System.currentTimeMillis())
         armRingTimeout(chatId, callId)
         AppState.go(Screen.Call(chatId, video))
@@ -529,19 +596,47 @@ object CallController {
         val settings = SettingsStore.state.value
         scope.launch {
             try {
-                val offer = CallSignal.readOffer(st.threadId, st.callId)
-                    ?: throw IllegalStateException("Offer missing")
-                val s = RtcSession(ctx, hasVideo = st.video,
-                    cameraOn = settings.cameraDefaultOn, speakerOn = settings.speakerDefaultOn)
-                wireEvents(s, st.threadId, st.callId, role = "callee")
-                session = s
-                val answer = s.acceptOffer(offer)
-                CallSignal.acceptCall(st.threadId, st.callId, answer)
-                attachDocListener(st.threadId, st.callId, role = "callee")
-                state.value = CallUiState.Connected(st.threadId, st.callId, st.video, st.person,
-                    System.currentTimeMillis(), speakerOn = settings.speakerDefaultOn,
-                    cameraOn = settings.cameraDefaultOn)
-                ringJob?.cancel(); ringJob = null
+                // ROUND 7: prefer the offer cached from the ringing snapshot.
+                // Fallback: re-read with bounded retries instead of failing
+                // on the first null — a one-shot get() raced the caller's
+                // ICE-candidate writes and produced "Offer missing" on
+                // receive even though the call was perfectly valid. The wait
+                // also stops the moment this call resolves any other way.
+                var offer = pendingOffer?.takeIf { pendingOfferCallId == st.callId }
+                var attempt = 0
+                while (offer == null && attempt < 15) {
+                    val now = state.value
+                    if (now !is CallUiState.Incoming || now.callId != st.callId) return@launch
+                    offer = CallSignal.readOffer(st.threadId, st.callId)
+                    if (offer == null) { attempt++; delay(400) }
+                }
+                val offerSdp = offer
+                if (offerSdp == null) {
+                    // ROUND 7 (b)+(d): the offer never materialised. With the
+                    // atomic createCall, a ringing doc either carries its
+                    // offer or is gone entirely (the caller vanished
+                    // mid-ring) — that is a NO-ANSWER, not a failure: record
+                    // it as one and leave quietly. The user must never see a
+                    // fake "Call failed — Offer missing" again.
+                    recordOutcome("noanswer")
+                    CallSignal.markEnded(st.threadId, st.callId)
+                    finish(st.threadId, deleteDocs = true, quiet = true)
+                } else {
+                    // the callee's call doc provably exists (the watcher saw
+                    // it ringing) — ICE egress needs no gate on this side.
+                    iceGateOpen = true; iceBuffer.clear()
+                    val s = RtcSession(ctx, hasVideo = st.video,
+                        cameraOn = settings.cameraDefaultOn, speakerOn = settings.speakerDefaultOn)
+                    wireEvents(s, st.threadId, st.callId, role = "callee")
+                    session = s
+                    val answer = s.acceptOffer(offerSdp)
+                    CallSignal.acceptCall(st.threadId, st.callId, answer)
+                    attachDocListener(st.threadId, st.callId, role = "callee")
+                    state.value = CallUiState.Connected(st.threadId, st.callId, st.video, st.person,
+                        System.currentTimeMillis(), speakerOn = settings.speakerDefaultOn,
+                        cameraOn = settings.cameraDefaultOn)
+                    ringJob?.cancel(); ringJob = null
+                }
             } catch (e: Exception) {
                 Log.e("TikuCall", "accept failed for call ${st.callId}", e)
                 failCall(st.threadId, FirebaseEngine.sendFailureReason(e))
@@ -578,7 +673,8 @@ object CallController {
     private fun wireEvents(s: RtcSession, threadId: String, callId: String, role: String) {
         s.events = object : RtcSession.Events {
             override fun onIceCandidate(c: IceCandidate) {
-                scope.launch { CallSignal.pushCandidate(threadId, callId, role, c) }
+                val push: suspend () -> Unit = { CallSignal.pushCandidate(threadId, callId, role, c) }
+                scope.launch { if (iceGateOpen) push() else iceBuffer += push }
             }
             override fun onMediaConnected() {
                 // media is flowing — if we are still "Outgoing" (caller side),
@@ -703,6 +799,8 @@ object CallController {
         callDocReg?.remove(); callDocReg = null
         session?.dispose(); session = null
         answerApplied = false; processedCallerCands = 0; processedCalleeCands = 0
+        pendingOffer = null; pendingOfferCallId = null
+        iceGateOpen = false; iceBuffer.clear()
         state.value = CallUiState.Failed(threadId, callId, video, person, reason)
         AppState.go(Screen.Call(threadId, video))
         scope.launch {
@@ -724,6 +822,8 @@ object CallController {
         state.value = CallUiState.Idle
         answerApplied = false; processedCallerCands = 0; processedCalleeCands = 0
         curCallerUid = ""; eventRecordedCallId = null
+        pendingOffer = null; pendingOfferCallId = null
+        iceGateOpen = false; iceBuffer.clear()
         if (deleteDocs && realMode && callId != null) {
             scope.launch { CallSignal.deleteCallTree(threadId, callId) }
         }

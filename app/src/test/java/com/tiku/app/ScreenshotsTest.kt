@@ -398,15 +398,38 @@ class ScreenshotsTest {
 
     @Test fun shot29_coupleTheme() {
         // FEATURE 5a PROOF: Couple wallpaper (blush + hearts) + rose accent
-        // applied to the chat surface. Settings are restored afterwards.
+        // applied to the chat surface — round 7 drives it through the SAME
+        // preset entry the owner taps (SettingsStore.setCoupleTheme, the
+        // labelled Me ▸ Appearance toggle). Settings are restored after.
         val prevAccent = SettingsStore.state.value.accentIdx
         val prevWp = SettingsStore.state.value.wallpaper
-        SettingsStore.setAccent(TikuTokens.Accents.lastIndex)
-        SettingsStore.setWallpaper(WallpaperMode.COUPLE.ordinal)
+        SettingsStore.setCoupleTheme(true)
         val th = AppState.threads.value.first()
         frame { ChatScreen(th.id) }
         composeRule.waitForIdle()
         shot("29-couple-theme.png")
+        SettingsStore.setAccent(prevAccent)
+        SettingsStore.setWallpaper(prevWp.ordinal)
+    }
+
+    @Test fun shot31_coupleThemeSettings() {
+        // ROUND 7 (P1) PROOF: the LABELLED "Couple theme" row in
+        // Me ▸ Appearance, shown in its ON state — round 6 buried the preset
+        // as anonymous swatches and the owner reported it missing. Applied
+        // via the toggle's own path, then the Me pane is scrolled so the
+        // Appearance group is in frame.
+        val prevAccent = SettingsStore.state.value.accentIdx
+        val prevWp = SettingsStore.state.value.wallpaper
+        SettingsStore.setCoupleTheme(true)
+        AppState.homeTab = HomeTab.ME
+        frame { HomeScreen() }
+        composeRule.onRoot().performTouchInput { swipeUp() }
+        composeRule.waitForIdle()
+        org.junit.Assert.assertTrue(
+            "Appearance must carry a labelled Couple theme row",
+            composeRule.onAllNodesWithText("Couple theme").fetchSemanticsNodes().isNotEmpty(),
+        )
+        shot("31-couple-theme-settings.png")
         SettingsStore.setAccent(prevAccent)
         SettingsStore.setWallpaper(prevWp.ordinal)
     }

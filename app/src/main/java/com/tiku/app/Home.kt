@@ -413,6 +413,11 @@ fun SettingsGroups() {
             RowDef("tg", "Dark mode", "Easy on the eyes", "dk"),
             RowDef("sw", "Accent", "Pick your glow", "ac"),
             RowDef("sw", "Chat wallpaper", "Behind your messages", "wp"),
+            // ROUND 7: the couple preset gets ONE clearly labelled row of its
+            // own — round 6 shipped it as anonymous swatches and the owner
+            // never found it ("theme add nhi kia"). Its toggle applies /
+            // restores the full preset (see SettingsStore.setCoupleTheme).
+            RowDef("tg", "Couple theme", "Blush hearts + rose glow", "ct"),
             RowDef("rg", "Text size", "Message font size", "fs"),
         ),
         "Privacy" to listOf(
@@ -474,6 +479,17 @@ fun SettingsGroups() {
                             if (r.key == "dk") {
                                 // dark mode: locked to light — visual stays off, toast only
                                 ToggleSwitch(false) { AppState.toast("Light mode is Tikuu’s home") }
+                            } else if (r.key == "ct") {
+                                // ROUND 7: derived state — ON exactly when the
+                                // rose accent AND the couple wallpaper are both
+                                // active, however they were set, so this toggle
+                                // and the swatch rows never disagree.
+                                val coupleOn = settings.accentIdx == TikuTokens.Accents.lastIndex &&
+                                    settings.wallpaper == WallpaperMode.COUPLE
+                                ToggleSwitch(coupleOn) { on ->
+                                    SettingsStore.setCoupleTheme(on)
+                                    AppState.toast("Couple theme " + if (on) "on" else "off")
+                                }
                             } else {
                                 ToggleSwitch(settings.toggles[r.key] == true) { on ->
                                     SettingsStore.setToggle(r.key, on)
@@ -531,7 +547,7 @@ fun onSettingTap(key: String, title: String, settings: TikuUiSettings, scope: ko
             if (Config.PREVIEW_UI_ONLY) AppState.toast("Password change opens here")
             else ChangePasswordSheet.open(ctx, scope)
         }
-        "fs", "ac", "wp", "dk" -> { /* handled by their own controls */ }
+        "fs", "ac", "wp", "dk", "ct" -> { /* handled by their own controls */ }
     }
 }
 

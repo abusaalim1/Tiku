@@ -115,6 +115,24 @@ object SettingsStore {
 
     fun setAccent(i: Int) { _state.value = _state.value.copy(accentIdx = i); prefs.edit().putInt("accent", i).apply() }
     fun setWallpaper(i: Int) { _state.value = _state.value.copy(wallpaper = WallpaperMode.entries[i]); prefs.edit().putInt("wallpaper", i).apply() }
+
+    /** ROUND 7: the labelled "Couple theme" preset (Me ▸ Appearance). ON
+     *  applies the full couple look at once — rose accent (the last swatch)
+     *  + COUPLE wallpaper; OFF restores the defaults (default accent +
+     *  default wallpaper). Both go through the normal setters, so the choice
+     *  persists like any other appearance setting. The toggle's on/off state
+     *  in the UI is DERIVED from the current settings (accent == rose &&
+     *  wallpaper == COUPLE), so the individual swatch rows stay consistent
+     *  with it automatically, whichever control the user touched last. */
+    fun setCoupleTheme(on: Boolean) {
+        if (on) {
+            setAccent(TikuTokens.Accents.lastIndex)
+            setWallpaper(WallpaperMode.COUPLE.ordinal)
+        } else {
+            setAccent(0)
+            setWallpaper(WallpaperMode.DEFAULT.ordinal)
+        }
+    }
     fun setTextSize(sp: Float) { _state.value = _state.value.copy(textSizeSp = sp); prefs.edit().putFloat("textSize", sp).apply() }
     fun setToggle(key: String, on: Boolean) {
         _state.value = _state.value.copy(toggles = _state.value.toggles + (key to on))

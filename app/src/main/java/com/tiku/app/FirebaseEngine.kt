@@ -653,20 +653,35 @@ object FirebaseEngine : ChatRepo {
     private fun handleIncomingCall(chatId: String, callId: String, doc: com.google.firebase.firestore.DocumentSnapshot) {
         val caller = doc.getString("caller") ?: return
         if (caller == uid) return // my own outgoing call echo
+        // ROUND 7 ROOT FIX ("Offer missing" on receive): this watcher re-fires
+        // on EVERY update to the ringing doc — and the caller pushes ICE
+        // candidates (arrayUnion writes) continuously from the moment the
+        // call is created. Once the callee was ringing, state was no longer
+        // Idle, so the re-fire fell into the "busy" branch below and DELETED
+        // the very call doc it was ringing for — offer included. When the
+        // callee then tapped Accept, readOffer() found nothing. A re-fire
+        // for the call I am already ringing / in is ALWAYS a no-op now.
+        if (CallController.activeCallId() == callId) return
         val kind = doc.getString("kind") ?: "audio"
+        val offerEnc = doc.getString("offer")
         val createdAt = doc.getTimestamp("createdAt")?.toDate()?.time ?: System.currentTimeMillis()
         scope.launch {
             runCatching {
+                // re-check inside the coroutine: the state may have become
+                // this very call while fetchPerson was in flight elsewhere.
+                if (CallController.activeCallId() == callId) return@runCatching
                 when {
                     // stale ringing doc (caller crashed) — sweep it silently
                     System.currentTimeMillis() - createdAt > Config.CALL_RING_TIMEOUT_MS ->
                         CallSignal.deleteCallTree(chatId, callId)
-                    // already in a call: clear the new one (busy), no ringing
+                    // already in a DIFFERENT call: clear the new one (busy)
                     CallController.state.value !is CallUiState.Idle ->
                         CallSignal.deleteCallTree(chatId, callId)
                     ChatSession.unlocked && ChatSession.foreground -> {
                         val person = fetchPerson(caller)
-                        CallController.onIncoming(chatId, callId, kind, person)
+                        // ROUND 7: hand the offer from THIS snapshot to the
+                        // controller — accept() uses the cached copy first.
+                        CallController.onIncoming(chatId, callId, kind, person, offerEnc)
                     }
                     // not inside Tik right now: the call simply never rings;
                     // it times out and deletes itself on the caller's side.
