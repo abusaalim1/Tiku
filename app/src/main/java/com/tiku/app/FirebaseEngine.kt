@@ -49,7 +49,7 @@ object FirebaseEngine : ChatRepo {
     val uid: String get() = auth.currentUser?.uid ?: ""
     val signedIn: Boolean get() = auth.currentUser != null
 
-    val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate + TikuEngineHandler)
 
     // ---------- identity ----------
     private var myPrivBytes: ByteArray? = null
@@ -213,9 +213,20 @@ object FirebaseEngine : ChatRepo {
         return key
     }
 
+    /**
+     * Non-throwing conversation-key derivation. The v1 crash: this derivation ran
+     * unguarded inside the messages snapshot listener on a handler-less Main scope —
+     * the first failure (peer key not cached yet for a brand-new searched chat, a
+     * transient fetch error, undecryptable key material) killed the whole process.
+     * Callers must treat null as "keys not ready yet", never as fatal.
+     */
+    private suspend fun convKeyOrNull(chatId: String, peerUid: String): SecretKey? =
+        runCatching { convKey(chatId, peerUid) }.getOrNull()
+
     // ================= LISTENERS =================
     private var threadsReg: ListenerRegistration? = null
     private var msgsReg: ListenerRegistration? = null
+    private val callsRegs = mutableMapOf<String, ListenerRegistration>()
     private var readPrefs: android.content.SharedPreferences? = null
     private val openChatIds = mutableSetOf<String>()
 
@@ -234,31 +245,107 @@ object FirebaseEngine : ChatRepo {
             .orderBy("updatedAt", Query.Direction.DESCENDING)
             .addSnapshotListener { snap, _ ->
                 scope.launch {
-                    val list = snap?.documents?.mapNotNull { doc ->
-                        @Suppress("UNCHECKED_CAST")
-                        val parts = doc.get("members") as? List<String> ?: return@mapNotNull null
-                        val peerUid = parts.firstOrNull { it != uid } ?: return@mapNotNull null
-                        val peer = runCatching { fetchPerson(peerUid) }.getOrNull() ?: return@mapNotNull null
-                        val ts = doc.getTimestamp("updatedAt")?.toDate()?.time ?: 0L
-                        val existing = AppState.thread(doc.id)
-                        ChatThread(id = doc.id, person = peer,
-                            messages = existing?.messages ?: mutableListOf(),
-                            unread = existing?.unread ?: 0,
-                            time = fmtTime(ts),
-                            pinned = existing?.pinned ?: false)
-                    } ?: emptyList()
-                    AppState.threads.value = list
+                    runCatching {
+                        val list = snap?.documents?.mapNotNull { doc ->
+                            @Suppress("UNCHECKED_CAST")
+                            val parts = doc.get("members") as? List<String> ?: return@mapNotNull null
+                            val peerUid = parts.firstOrNull { it != uid } ?: return@mapNotNull null
+                            val existing = AppState.thread(doc.id)
+                            // transient profile-fetch failure must NOT drop the thread from
+                            // under an open ChatScreen — fall back to the known person.
+                            val peer = runCatching { fetchPerson(peerUid) }.getOrNull()
+                                ?: existing?.person ?: return@mapNotNull null
+                            val ts = doc.getTimestamp("updatedAt")?.toDate()?.time ?: 0L
+                            ChatThread(id = doc.id, person = peer,
+                                messages = existing?.messages ?: mutableListOf(),
+                                unread = existing?.unread ?: 0,
+                                time = fmtTime(ts),
+                                pinned = existing?.pinned ?: false)
+                        } ?: emptyList()
+                        AppState.threads.value = list
+                        // incoming-call watchers + crash-residue sweep follow the thread set
+                        syncCallWatchers(list.map { it.id }.toSet())
+                        sweepStaleCalls(list.map { it.id }.toSet())
+                    }
                 }
             }
     }
 
+    // ================= CALL SIGNALING WATCHERS =================
+    /** One ringing-listener per chat I belong to. A ringing call only ever rings
+     *  when I'm unlocked AND foregrounded (checked in handleIncomingCall) — there
+     *  are no notifications, by design. */
+    private fun syncCallWatchers(threadIds: Set<String>) {
+        (callsRegs.keys - threadIds).forEach { callsRegs.remove(it)?.remove() }
+        threadIds.forEach { tid ->
+            if (!callsRegs.containsKey(tid)) {
+                callsRegs[tid] = db.collection(Schema.Chats.COLL).document(tid).collection("calls")
+                    .whereEqualTo("state", "ringing")
+                    .addSnapshotListener { snap, err ->
+                        if (err != null) return@addSnapshotListener
+                        snap?.documents?.forEach { doc -> handleIncomingCall(tid, doc.id, doc) }
+                    }
+            }
+        }
+    }
+
+    private fun handleIncomingCall(chatId: String, callId: String, doc: com.google.firebase.firestore.DocumentSnapshot) {
+        val caller = doc.getString("caller") ?: return
+        if (caller == uid) return // my own outgoing call echo
+        val kind = doc.getString("kind") ?: "audio"
+        val createdAt = doc.getTimestamp("createdAt")?.toDate()?.time ?: System.currentTimeMillis()
+        scope.launch {
+            runCatching {
+                when {
+                    // stale ringing doc (caller crashed) — sweep it silently
+                    System.currentTimeMillis() - createdAt > Config.CALL_RING_TIMEOUT_MS ->
+                        CallSignal.deleteCallTree(chatId, callId)
+                    // already in a call: clear the new one (busy), no ringing
+                    CallController.state.value !is CallUiState.Idle ->
+                        CallSignal.deleteCallTree(chatId, callId)
+                    ChatSession.unlocked && ChatSession.foreground -> {
+                        val person = fetchPerson(caller)
+                        CallController.onIncoming(chatId, callId, kind, person)
+                    }
+                    // not inside Tik right now: the call simply never rings;
+                    // it times out and deletes itself on the caller's side.
+                }
+            }
+        }
+    }
+
+    /** Crash-residue cleanup: delete ended calls and anything older than 2 hours. */
+    private var sweepDoneFor: Set<String> = emptySet()
+    private fun sweepStaleCalls(threadIds: Set<String>) {
+        val fresh = threadIds - sweepDoneFor
+        if (fresh.isEmpty()) return
+        sweepDoneFor = sweepDoneFor + fresh
+        scope.launch {
+            runCatching {
+                val cutoff = System.currentTimeMillis() - 2L * 3600 * 1000
+                fresh.forEach { tid ->
+                    val docs = db.collection(Schema.Chats.COLL).document(tid).collection("calls")
+                        .get().await().documents
+                    docs.forEach { doc ->
+                        val st = doc.getString("state") ?: ""
+                        val ts = doc.getTimestamp("createdAt")?.toDate()?.time ?: 0L
+                        if (st == "ended" || ts < cutoff) CallSignal.deleteCallTree(tid, doc.id)
+                    }
+                }
+            }
+        }
+    }
+
     fun stop() {
         threadsReg?.remove(); msgsReg?.remove()
+        callsRegs.values.forEach { it.remove() }; callsRegs.clear()
     }
 
     /** INSTANT RE-LOCK: stop listeners, zeroize the private key + conversation keys in RAM,
      *  drop all caches. After this the session is cryptographically dead. */
     fun lock() {
+        // any live call ends with the session — and its signaling docs are deleted
+        CallController.endSilently()
         stop()
         threadsReg = null; msgsReg = null
         runCatching { myPrivBytes?.fill(0) }
@@ -283,14 +370,16 @@ object FirebaseEngine : ChatRepo {
         attachMessages(id)
         if (SettingsStore.state.value.readReceipts) {
             scope.launch {
-                val unseen = db.collection(Schema.Chats.COLL).document(id)
-                    .collection(Schema.Chats.MESSAGES)
-                    .whereNotEqualTo("senderId", uid).get().await()
-                    .documents.filter { !((it.get("seenBy") as? List<*>) ?: emptyList<Any>()).contains(uid) }
-                if (unseen.isNotEmpty()) {
-                    val batch = db.batch()
-                    unseen.forEach { batch.update(it.reference, "seenBy", FieldValue.arrayUnion(uid)) }
-                    batch.commit().await()
+                runCatching {
+                    val unseen = db.collection(Schema.Chats.COLL).document(id)
+                        .collection(Schema.Chats.MESSAGES)
+                        .whereNotEqualTo("senderId", uid).get().await()
+                        .documents.filter { !((it.get("seenBy") as? List<*>) ?: emptyList<Any>()).contains(uid) }
+                    if (unseen.isNotEmpty()) {
+                        val batch = db.batch()
+                        unseen.forEach { batch.update(it.reference, "seenBy", FieldValue.arrayUnion(uid)) }
+                        batch.commit().await()
+                    }
                 }
             }
         }
@@ -305,8 +394,16 @@ object FirebaseEngine : ChatRepo {
             .addSnapshotListener { snap, _ ->
                 val chatDocId = id
                 scope.launch {
+                    // EVERYTHING in this listener is failure-tolerant: a key that is not
+                    // ready (fresh searched chat), a transient fetch error, or a broken
+                    // doc must degrade to "no messages yet", never crash the process.
+                    runCatching {
                     val peer = fetchPerson(peerUid)
-                    val key = convKey(id, peerUid)
+                    val key = convKeyOrNull(id, peerUid) ?: run {
+                        // one delayed retry — the profile/key often lands a beat later
+                        delay(1500)
+                        convKeyOrNull(id, peerUid)
+                    } ?: return@runCatching
                     val clearedBefore = runCatching {
                         val cd = db.collection(Schema.Chats.COLL).document(id).get().await()
                             .get("clearedBefore") as? Map<*, *>
@@ -334,6 +431,7 @@ object FirebaseEngine : ChatRepo {
                     }
                     if (openChatIds.contains(id)) markRead(id)
                     @Suppress("UNUSED_VARIABLE") val unused = peer
+                    } // end runCatching guard — failure = "no messages yet", never a crash
                 }
             }
     }
@@ -383,7 +481,8 @@ object FirebaseEngine : ChatRepo {
     override fun sendText(id: String, text: String, quote: String?) {
         scope.launch {
             val th = AppState.thread(id) ?: return@launch
-            val key = convKey(id, th.person.uid)
+            val key = convKeyOrNull(id, th.person.uid)
+                ?: return@launch.also { AppState.toast("Couldn't send — encryption key not ready") }
             val (iv, ct) = Crypto.encryptText(key, text)
             val (rqIv, rqCt) = if (quote != null) Crypto.encryptText(key, quote) else ("" to "")
             db.collection(Schema.Chats.COLL).document(id).collection(Schema.Chats.MESSAGES).add(mapOf(
@@ -400,7 +499,8 @@ object FirebaseEngine : ChatRepo {
 
     private suspend fun sendMedia(id: String, kind: String, plainBytes: ByteArray, durMs: Int = 0, amps: List<Int> = emptyList()) {
         val th = AppState.thread(id) ?: return
-        val key = convKey(id, th.person.uid)
+        val key = convKeyOrNull(id, th.person.uid)
+            ?: return.also { AppState.toast("Couldn't send — encryption key not ready") }
         val (iv, ctB64) = Crypto.encrypt(key, plainBytes)
         val ctBytes = Crypto.unb64(ctB64)
         val msgRef = db.collection(Schema.Chats.COLL).document(id)
@@ -482,53 +582,24 @@ object FirebaseEngine : ChatRepo {
         }
     }
 
-    /** Call logs live INSIDE the chat (chats/{chatId}/calls) — per the rules contract. */
-    override fun logCall(id: String, video: Boolean) {
-        scope.launch {
-            val th = AppState.thread(id) ?: return@launch
-            db.collection(Schema.Chats.COLL).document(id).collection("calls").add(mapOf(
-                "by" to uid, "peerUid" to th.person.uid,
-                "kind" to if (video) "video" else "voice",
-                "direction" to "outgoing", "at" to FieldValue.serverTimestamp(),
-            )).await()
-            refreshCallLogs()
-        }
-    }
-
-    fun refreshCallLogs() {
-        if (uid.isEmpty()) return
-        scope.launch {
-            val all = mutableListOf<CallLog>()
-            for (th in AppState.threads.value) {
-                val docs = runCatching {
-                    db.collection(Schema.Chats.COLL).document(th.id).collection("calls")
-                        .orderBy("at", Query.Direction.DESCENDING).limit(20).get().await()
-                }.getOrNull()?.documents ?: continue
-                docs.forEach { doc ->
-                    val ts = doc.getTimestamp("at")?.toDate()?.time ?: 0L
-                    all += CallLog(th.person, doc.getString("kind") ?: "voice",
-                        doc.getString("direction") ?: "outgoing", fmtTime(ts), ts, th.id)
-                }
-            }
-            AppState.callLogs.value = all.sortedByDescending { it.tsMs }
-        }
-    }
-
     override fun startThreadWith(person: Person): String {
         val id = chatIdFor(uid, person.uid)
+        // v1 crash fix: surface the thread SYNCHRONOUSLY so the Chat screen that
+        // opens right after always finds it (the Firestore create runs async below).
+        if (AppState.thread(id) == null) {
+            AppState.threads.value = listOf(ChatThread(id = id, person = person, time = "now")) + AppState.threads.value
+        }
         scope.launch {
-            val ref = db.collection(Schema.Chats.COLL).document(id)
-            if (!ref.get().await().exists()) {
-                ref.set(mapOf(
-                    "members" to listOf(uid, person.uid),
-                    "typing" to emptyMap<String, Boolean>(),
-                    "clearedBefore" to emptyMap<String, Long>(),
-                    "updatedAt" to FieldValue.serverTimestamp(),
-                )).await()
-            }
-            // surface the new thread locally right away
-            if (AppState.thread(id) == null) {
-                AppState.threads.value = listOf(ChatThread(id = id, person = person, time = "now")) + AppState.threads.value
+            runCatching {
+                val ref = db.collection(Schema.Chats.COLL).document(id)
+                if (!ref.get().await().exists()) {
+                    ref.set(mapOf(
+                        "members" to listOf(uid, person.uid),
+                        "typing" to emptyMap<String, Boolean>(),
+                        "clearedBefore" to emptyMap<String, Long>(),
+                        "updatedAt" to FieldValue.serverTimestamp(),
+                    )).await()
+                }
             }
         }
         return id
@@ -574,7 +645,7 @@ object FirebaseEngine : ChatRepo {
         auth.signOut()
         myPrivBytes = null
         convKeyCache.clear(); profileCache.clear(); publicKeyCache.clear()
-        AppState.threads.value = emptyList(); AppState.callLogs.value = emptyList()
+        AppState.threads.value = emptyList()
         ctx.getSharedPreferences("tiku_prefs", Context.MODE_PRIVATE).edit().putBoolean("onboarded", false).apply()
         AppState.go(Screen.Welcome)
     }

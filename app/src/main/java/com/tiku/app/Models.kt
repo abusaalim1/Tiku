@@ -49,15 +49,6 @@ data class Person(
     val lastSeenMs: Long = 0L,
 )
 
-data class CallLog(
-    val person: Person,
-    val kind: String,      // "voice" | "video"
-    val direction: String, // "outgoing" | "missed"
-    val dateLabel: String,
-    val tsMs: Long = 0L,   // for sorting (real mode)
-    val threadId: String = "",
-)
-
 /** Firestore schema mirrors (real mode). */
 object Schema {
     object Users {

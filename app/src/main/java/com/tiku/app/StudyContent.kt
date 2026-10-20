@@ -19,7 +19,13 @@ import org.json.JSONObject
  */
 object StudyContent {
     data class QA(val q: String, val a: String, val src: String? = null)
-    data class Chapter(val title: String, val points: List<String>, val questions: List<QA>)
+    /** Content v2 adds per-chapter `mcqs` (same shape as DailyQ) and wraps key terms
+     *  in points strings with **double asterisks** for highlight rendering.
+     *  Both are optional — the loader tolerates their absence (v1 pack). */
+    data class Chapter(
+        val title: String, val points: List<String>, val questions: List<QA>,
+        val mcqs: List<DailyQ> = emptyList(),
+    )
     data class Subject(val name: String, val icon: String, val chapters: List<Chapter>)
     data class DailyQ(
         val subject: String, val q: String, val options: List<String>,
@@ -52,7 +58,20 @@ object StudyContent {
                         val o = qs!!.getJSONObject(qi)
                         QA(o.getString("q"), o.getString("a"), o.optString("src").takeIf { it.isNotEmpty() })
                     }
-                    Chapter(ch.getString("title"), pts, qa)
+                    val mc = ch.optJSONArray("mcqs")
+                    val mcqList = (0 until (mc?.length() ?: 0)).mapNotNull { mi ->
+                        runCatching {
+                            val o = mc!!.getJSONObject(mi)
+                            val opts = o.getJSONArray("options")
+                            DailyQ(
+                                s.optString("name"), o.getString("q"),
+                                (0 until opts.length()).map { opts.getString(it) },
+                                o.getInt("correct"), o.optString("why"),
+                                o.optString("src").takeIf { it.isNotEmpty() },
+                            )
+                        }.getOrNull()
+                    }
+                    Chapter(ch.getString("title"), pts, qa, mcqList)
                 }
                 Subject(s.getString("name"), s.optString("icon", "📘"), chapters)
             }

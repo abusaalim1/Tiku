@@ -48,13 +48,6 @@ object PreviewStore {
         return t
     }
 
-    /** Call log rows over the same seeded threads (HTML: C.slice(0,5) pattern). */
-    fun seedCallLogsFor(threads: List<ChatThread>): List<CallLog> =
-        threads.take(5).mapIndexed { i, th ->
-            CallLog(th.person, if (i % 2 == 1) "video" else "voice",
-                if (i % 2 == 1) "missed" else "outgoing", th.time, threadId = th.id)
-        }
-
     /** Last-message preview exactly like the prototype: ✓✓ / 🎙 / 📷. */
     fun previewLine(th: ChatThread): String {
         val m = th.messages.lastOrNull { !it.deletedForMe } ?: return ""
@@ -166,11 +159,6 @@ object PreviewRepo : ChatRepo {
     }
 
     override fun setTyping(id: String, on: Boolean) = AppState.setTyping(id, on)
-
-    override fun logCall(id: String, video: Boolean) {
-        val th = AppState.thread(id) ?: return
-        AppState.callLogs.value = listOf(CallLog(th.person, if (video) "video" else "voice", "outgoing", "now")) + AppState.callLogs.value
-    }
 
     override fun startThreadWith(person: Person): String {
         val existing = AppState.threads.value.firstOrNull { it.person.uid == person.uid }

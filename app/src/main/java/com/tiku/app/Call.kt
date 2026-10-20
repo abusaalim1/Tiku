@@ -1,5 +1,9 @@
 package com.tiku.app
 
+import android.Manifest
+import android.content.pm.PackageManager
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
@@ -25,14 +29,22 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Call
+import androidx.compose.material.icons.filled.CallEnd
+import androidx.compose.material.icons.filled.Cameraswitch
 import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.MicOff
 import androidx.compose.material.icons.filled.Videocam
+import androidx.compose.material.icons.filled.VideocamOff
 import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.material3.Icon
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -43,56 +55,203 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.viewinterop.AndroidView
+import androidx.core.content.ContextCompat
 import kotlinx.coroutines.delay
+import org.webrtc.RendererCommon
+import org.webrtc.SurfaceViewRenderer
 
 /**
- * Call screen — the designed dark-gradient UI. WebRTC engine is OUT OF SCOPE this
- * round: this screen shows the "Calling…" state, writes a real call-log entry, and
- * shows the design's toast after ~1.2s ("Calls are coming in the next round").
+ * Call entry points ask for mic/camera ONLY at the moment a call starts
+ * (runtime permissions at point of use — never at install or app start).
+ */
+@Composable
+fun rememberCallStarter(): (threadId: String, video: Boolean) -> Unit {
+    val ctx = LocalContext.current
+    var pending by remember { mutableStateOf<Pair<String, Boolean>?>(null) }
+    val launcher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions(),
+    ) { grants ->
+        val req = pending ?: return@rememberLauncherForActivityResult
+        pending = null
+        val needed = if (req.second) listOf(Manifest.permission.RECORD_AUDIO, Manifest.permission.CAMERA)
+            else listOf(Manifest.permission.RECORD_AUDIO)
+        if (needed.all { grants[it] == true }) {
+            CallController.startCall(ctx, req.first, req.second)
+            AppState.go(Screen.Call(req.first, req.second))
+        } else {
+            AppState.toast(if (req.second) "Microphone and camera are needed for calls" else "Microphone is needed for calls")
+        }
+    }
+    return { threadId, video ->
+        if (Config.PREVIEW_UI_ONLY) {
+            CallController.startCall(ctx, threadId, video)
+            AppState.go(Screen.Call(threadId, video))
+        } else {
+            val needed = (if (video) arrayOf(Manifest.permission.RECORD_AUDIO, Manifest.permission.CAMERA)
+                else arrayOf(Manifest.permission.RECORD_AUDIO))
+                .filter { ContextCompat.checkSelfPermission(ctx, it) != PackageManager.PERMISSION_GRANTED }
+            if (needed.isEmpty()) {
+                CallController.startCall(ctx, threadId, video)
+                AppState.go(Screen.Call(threadId, video))
+            } else {
+                pending = threadId to video
+                launcher.launch(needed.toTypedArray())
+            }
+        }
+    }
+}
+
+/** WebRTC video surface (local PiP or remote full-screen). Preview mode never
+ *  reaches here — org.webrtc classes must not load under Robolectric. */
+@Composable
+private fun RtcVideoView(local: Boolean, modifier: Modifier) {
+    val session = CallController.currentSession() ?: return
+    AndroidView(
+        factory = { c ->
+            SurfaceViewRenderer(c).apply {
+                init(session.eglContext, null)
+                setMirror(local)
+                setScalingType(RendererCommon.ScalingType.SCALE_ASPECT_FILL)
+                setEnableHardwareScaler(true)
+                if (local) { setZOrderMediaOverlay(true); session.bindLocalView(this) }
+                else session.bindRemoteView(this)
+            }
+        },
+        onRelease = { v ->
+            if (local) session.unbindLocalView(v) else session.unbindRemoteView(v)
+            runCatching { v.release() }
+        },
+        modifier = modifier,
+    )
+}
+
+@Composable
+private fun CallToggle(icon: androidx.compose.ui.graphics.vector.ImageVector, active: Boolean, onClick: () -> Unit) {
+    Box(
+        Modifier.size(62.dp).clip(CircleShape)
+            .background(if (active) Color.White else Color(0x22FFFFFF))
+            .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null, onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(icon, null, Modifier.size(22.dp), tint = if (active) Color(0xFF1F0E0D) else Color.White)
+    }
+}
+
+@Composable
+private fun CallEndButton(onClick: () -> Unit) {
+    Box(
+        Modifier.size(62.dp).clip(CircleShape).background(TikuTokens.Red)
+            .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null, onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(Icons.Filled.CallEnd, null, Modifier.size(26.dp), tint = Color.White)
+    }
+}
+
+/**
+ * Call screen — the designed dark-gradient UI, now wired to the REAL WebRTC
+ * engine (Rtc.kt). Ringing only ever happens here: inside ChatRoot, unlocked,
+ * app foregrounded — there are no call notifications anywhere by design.
  */
 @Composable
 fun CallScreen(threadId: String, video: Boolean) {
-    androidx.activity.compose.BackHandler { AppState.go(Screen.Home) }
-    val thread = AppState.threads.value.firstOrNull { it.id == threadId }
-    val person = thread?.person ?: Person(name = "Unknown")
-    var secs by remember { mutableIntStateOf(-3) }
-    var toggled by remember { mutableStateOf(setOf<String>()) }
+    val ctx = LocalContext.current
+    val callState by CallController.state.collectAsState()
+    val rtcSession by CallController.sessionState.collectAsState()
 
-    LaunchedEffect(threadId) {
-        AppState.repo.logCall(threadId, video)
-        delay(1200)
-        AppState.toast("Calls are coming in the next round")
-        delay(1600)
-        AppState.go(Screen.Chat(threadId))
+    // accept-side permission gate (mic, plus camera for video calls)
+    var pendingAccept by remember { mutableStateOf<CallUiState.Incoming?>(null) }
+    val acceptLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions(),
+    ) { grants ->
+        val inc = pendingAccept ?: return@rememberLauncherForActivityResult
+        pendingAccept = null
+        val needed = if (inc.video) listOf(Manifest.permission.RECORD_AUDIO, Manifest.permission.CAMERA)
+            else listOf(Manifest.permission.RECORD_AUDIO)
+        if (needed.all { grants[it] == true }) CallController.accept(ctx)
+        else { AppState.toast("Permission needed to answer"); CallController.reject() }
     }
-    LaunchedEffect(Unit) {
-        while (true) { delay(1000); secs++ }
+    fun acceptWithPerms() {
+        val inc = callState as? CallUiState.Incoming ?: return
+        if (Config.PREVIEW_UI_ONLY) { CallController.accept(ctx); return }
+        val needed = (if (inc.video) arrayOf(Manifest.permission.RECORD_AUDIO, Manifest.permission.CAMERA)
+            else arrayOf(Manifest.permission.RECORD_AUDIO))
+            .filter { ContextCompat.checkSelfPermission(ctx, it) != PackageManager.PERMISSION_GRANTED }
+        if (needed.isEmpty()) CallController.accept(ctx)
+        else { pendingAccept = inc; acceptLauncher.launch(needed.toTypedArray()) }
     }
 
-    val status = if (secs < 0) "Calling…" else "%d:%02d".format(secs / 60, secs % 60)
+    androidx.activity.compose.BackHandler {
+        if (callState is CallUiState.Incoming) CallController.reject() else CallController.hangup()
+    }
+
+    // no active call for this screen -> back to the chat / home
+    LaunchedEffect(callState) {
+        if (callState is CallUiState.Idle) {
+            if (AppState.thread(threadId) != null) AppState.go(Screen.Chat(threadId)) else AppState.go(Screen.Home)
+        }
+    }
+
+    val (person, status, isVideo) = when (val s = callState) {
+        is CallUiState.Outgoing -> Triple(s.person, "Calling…", s.video)
+        is CallUiState.Incoming -> Triple(s.person, if (s.video) "Incoming video call…" else "Incoming voice call…", s.video)
+        is CallUiState.Connected -> Triple(s.person, "", s.video)
+        CallUiState.Idle -> Triple(Person(name = ""), "", video)
+    }
+    val connected = callState as? CallUiState.Connected
+    val incoming = callState as? CallUiState.Incoming
+
+    // connected-call clock
+    var nowMs by remember { mutableLongStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(connected?.callId) {
+        if (connected == null) return@LaunchedEffect
+        while (true) { delay(500); nowMs = System.currentTimeMillis() }
+    }
+    val statusText = if (connected != null) {
+        val secs = ((nowMs - connected.atMs) / 1000).coerceAtLeast(0).toInt()
+        "%d:%02d".format(secs / 60, secs % 60)
+    } else status
+
     val inf = rememberInfiniteTransition(label = "callfloat")
     val fy by inf.animateFloat(0f, -8f, infiniteRepeatable(tween(2000), RepeatMode.Reverse), label = "fy")
 
     Box(
         Modifier.fillMaxSize()
             .background(Brush.linearGradient(listOf(Color(0xFF5A1F1A), Color(0xFF1F0E0D))))
-            .then(if (video) Modifier.background(
+            .then(if (isVideo) Modifier.background(
                 Brush.radialGradient(listOf(Color(0x66F0885B), Color.Transparent)),
             ) else Modifier),
         contentAlignment = Alignment.Center,
     ) {
-        if (video) {
-            Box(Modifier.fillMaxSize().padding(top = 60.dp, end = 20.dp)) {
-                Box(
-                    Modifier.size(92.dp, 130.dp).align(Alignment.TopEnd)
-                        .clip(RoundedCornerShape(22.dp))
-                        .background(Color(0x1FFFFFFF)),
-                    contentAlignment = Alignment.Center,
-                ) { Text("You", fontSize = 12.sp, color = Color.White) }
+        // remote video (real mode, video call, once media exists)
+        if (isVideo && connected != null && !Config.PREVIEW_UI_ONLY) {
+            key(connected.tick) {
+                RtcVideoView(local = false, modifier = Modifier.fillMaxSize())
+            }
+        }
+        // self-view PiP (top-end, as designed)
+        if (isVideo) {
+            Box(Modifier.fillMaxSize().padding(top = 24.dp, end = 20.dp)) {
+                if (!Config.PREVIEW_UI_ONLY && rtcSession != null && (connected != null || callState is CallUiState.Outgoing)) {
+                    RtcVideoView(
+                        local = true,
+                        modifier = Modifier.size(92.dp, 130.dp).align(Alignment.TopEnd)
+                            .clip(RoundedCornerShape(22.dp)),
+                    )
+                } else {
+                    Box(
+                        Modifier.size(92.dp, 130.dp).align(Alignment.TopEnd)
+                            .clip(RoundedCornerShape(22.dp))
+                            .background(Color(0x1FFFFFFF)),
+                        contentAlignment = Alignment.Center,
+                    ) { Text("You", fontSize = 12.sp, color = Color.White) }
+                }
             }
         }
         Column(
@@ -101,13 +260,15 @@ fun CallScreen(threadId: String, video: Boolean) {
             verticalArrangement = Arrangement.SpaceBetween,
         ) {
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                Box(Modifier.offset(y = fy.dp)) {
-                    AvatarBox(person, 120.dp, 44.dp, 48f)
+                if (!(isVideo && connected != null && !Config.PREVIEW_UI_ONLY)) {
+                    Box(Modifier.offset(y = fy.dp)) {
+                        AvatarBox(person, 120.dp, 44.dp, 48f)
+                    }
+                    Spacer(Modifier.height(18.dp))
                 }
-                Spacer(Modifier.height(18.dp))
                 SerifTitle(person.name, 30.sp, Color.White)
                 Spacer(Modifier.height(6.dp))
-                Text(status, fontSize = 15.sp, color = Color.White.copy(alpha = 0.7f), fontFamily = Manrope)
+                Text(statusText, fontSize = 15.sp, color = Color.White.copy(alpha = 0.7f), fontFamily = Manrope)
             }
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -116,28 +277,29 @@ fun CallScreen(threadId: String, video: Boolean) {
                     Text("End-to-end encrypted", fontSize = 13.sp, color = Color.White.copy(alpha = 0.6f), fontFamily = Manrope)
                 }
                 Spacer(Modifier.height(18.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                    listOf(Icons.Filled.Mic to "m", Icons.Filled.VolumeUp to "s", Icons.Filled.Videocam to "c").forEach { (icon, key) ->
-                        val on = toggled.contains(key)
+                if (incoming != null) {
+                    // ringing: accept / reject — rejecting deletes the call record entirely
+                    Row(horizontalArrangement = Arrangement.spacedBy(28.dp)) {
+                        CallEndButton { CallController.reject() }
                         Box(
-                            Modifier.size(62.dp).clip(CircleShape)
-                                .background(if (on) Color.White else Color(0x22FFFFFF))
-                                .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {
-                                    toggled = if (on) toggled - key else toggled + key
-                                },
+                            Modifier.size(62.dp).clip(CircleShape).background(Color(0xFF2E9E5B))
+                                .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) { acceptWithPerms() },
                             contentAlignment = Alignment.Center,
                         ) {
-                            Icon(icon, null, Modifier.size(22.dp), tint = if (on) Color(0xFF1F0E0D) else Color.White)
+                            Icon(Icons.Filled.Call, null, Modifier.size(26.dp), tint = Color.White)
                         }
                     }
-                    Box(
-                        Modifier.size(62.dp).clip(CircleShape).background(TikuTokens.Red)
-                            .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {
-                                AppState.go(Screen.Chat(threadId))
-                            },
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Text("✕", fontSize = 22.sp, color = Color.White)
+                } else {
+                    Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                        if (connected != null) {
+                            CallToggle(if (connected.muted) Icons.Filled.MicOff else Icons.Filled.Mic, connected.muted) { CallController.toggleMute() }
+                            CallToggle(Icons.Filled.VolumeUp, connected.speakerOn) { CallController.toggleSpeaker() }
+                            if (connected.video) {
+                                CallToggle(if (connected.cameraOn) Icons.Filled.Videocam else Icons.Filled.VideocamOff, !connected.cameraOn) { CallController.toggleCamera() }
+                                CallToggle(Icons.Filled.Cameraswitch, false) { CallController.switchCamera() }
+                            }
+                        }
+                        CallEndButton { CallController.hangup() }
                     }
                 }
             }

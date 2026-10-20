@@ -47,7 +47,7 @@ class ScreenshotsTest {
         AppState.repo = PreviewRepo
         val seeded = PreviewStore.seedThreads()
         AppState.threads.value = seeded
-        AppState.callLogs.value = PreviewStore.seedCallLogsFor(seeded)
+        CallController.endSilently() // calls have no store at all — just reset the controller
         AppState.typing.value = emptyMap()
         AppState.homeTab = HomeTab.CHATS
         AppState.sheetContent = null
@@ -211,7 +211,11 @@ class ScreenshotsTest {
 
     @Test fun shot16_callScreen() {
         val th = AppState.threads.value.first()
+        // preview fake call: "Calling…" then connects — no WebRTC classes load here
+        CallController.startCall(ctx, th.id, false)
         frame { CallScreen(th.id, false) }
+        composeRule.mainClock.advanceBy(2000)
+        composeRule.waitForIdle()
         shot("16-call-screen.png")
     }
 
@@ -225,5 +229,40 @@ class ScreenshotsTest {
         )
         frame { StoryScreen() }
         shot("17-story-viewer.png")
+    }
+
+    // ---------- round 2 additions ----------
+    @Test fun shot20_chapterMcq() {
+        // first chapter that carries a per-chapter MCQ section (content v2);
+        // falls back to a plain chapter page if the pack has none
+        val target = StudyContent.subjects.firstNotNullOfOrNull { s ->
+            s.chapters.indexOfFirst { it.mcqs.isNotEmpty() }.takeIf { it >= 0 }?.let { s.name to it }
+        }
+        if (target != null) {
+            frame { ChapterScreen(target.first, target.second) }
+            composeRule.onRoot().performTouchInput { swipeUp(); swipeUp() }
+            composeRule.waitForIdle()
+        } else {
+            frame { ChapterScreen("Physics", 0) }
+        }
+        shot("20-chapter-mcq.png")
+    }
+
+    @Test fun shot21_additionalSettings() {
+        AppState.homeTab = HomeTab.ME
+        frame { HomeScreen() }
+        composeRule.onRoot()
+            .performTouchInput { swipeUp(); swipeUp(); swipeUp(); swipeUp() }
+        composeRule.waitForIdle()
+        shot("21-additional-settings.png")
+    }
+
+    @Test fun shot22_inCallVideo() {
+        val th = AppState.threads.value.first()
+        CallController.startCall(ctx, th.id, true)
+        frame { CallScreen(th.id, true) }
+        composeRule.mainClock.advanceBy(2000)
+        composeRule.waitForIdle()
+        shot("22-in-call-video.png")
     }
 }

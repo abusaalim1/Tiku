@@ -39,8 +39,13 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.withStyle
+import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.Dispatchers
@@ -240,6 +245,49 @@ fun FacadeHome() {
     }
 }
 
+// ---------- DESIGN D typography helpers ----------
+/**
+ * Renders study body text with **highlight** spans (content v2) as Instrument
+ * Serif italic + accent + SemiBold inside the Manrope body. The ** markers are
+ * stripped. Strings without markers render as plain Manrope.
+ */
+@Composable
+fun HighlightedText(text: String, fontSize: TextUnit, color: Color) {
+    val settings = tikuSettings().value
+    val annotated = remember(text, settings.accent) {
+        buildAnnotatedString {
+            var i = 0
+            while (i < text.length) {
+                val start = text.indexOf("**", i)
+                if (start < 0) { append(text.substring(i)); break }
+                val end = text.indexOf("**", start + 2)
+                if (end < 0) { append(text.substring(i)); break }
+                append(text.substring(i, start))
+                withStyle(SpanStyle(
+                    fontFamily = SerifItalic, fontStyle = FontStyle.Italic,
+                    fontWeight = FontWeight.SemiBold, color = settings.accent,
+                )) { append(text.substring(start + 2, end)) }
+                i = end + 2
+            }
+        }
+    }
+    Text(annotated, fontSize = fontSize, fontFamily = Manrope, color = color)
+}
+
+/** Small "ANSWER" label chip over revealed answers. */
+@Composable
+fun AnswerChip() {
+    val settings = tikuSettings().value
+    Box(
+        Modifier.clip(RoundedCornerShape(6.dp))
+            .background(settings.accent.copy(alpha = 0.13f))
+            .padding(horizontal = 7.dp, vertical = 3.dp),
+    ) {
+        Text("ANSWER", fontSize = 10.sp, fontFamily = Manrope, fontWeight = FontWeight.Bold,
+            color = settings.accent, letterSpacing = 1.sp)
+    }
+}
+
 @Composable
 private fun ToolTile(glyph: String, label: String, modifier: Modifier = Modifier, serif: Boolean = false, onClick: () -> Unit) {
     // same card look as FacadeCard but tighter padding: 4-across tiles have ~72dp each
@@ -279,7 +327,9 @@ private fun QuestionOfTheDayCard() {
             } else {
                 var picked by remember(q.q) { mutableStateOf<Int?>(null) }
                 Column {
-                    Text(q.q, fontSize = 16.sp, fontFamily = Manrope, fontWeight = FontWeight.SemiBold, color = TikuTokens.Ink)
+                    // stems are Bricolage SemiBold; options are Manrope Medium in pills —
+                    // the two roles are visually distinct by design.
+                    Text(q.q, fontSize = 17.sp, fontFamily = Bricolage, fontWeight = FontWeight.SemiBold, color = TikuTokens.Ink)
                     Spacer(Modifier.height(12.dp))
                     q.options.forEachIndexed { i, opt ->
                         val isPicked = picked == i
@@ -302,16 +352,17 @@ private fun QuestionOfTheDayCard() {
                                 .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) { picked = i }
                                 .padding(horizontal = 14.dp, vertical = 11.dp),
                         ) {
-                            Text("${"ABCD"[i]}.  $opt", fontSize = 14.sp, fontFamily = Manrope, color = TikuTokens.Ink)
+                            Text("${"ABCD"[i]}.  $opt", fontSize = 14.sp, fontFamily = Manrope, fontWeight = FontWeight.Medium, color = TikuTokens.Ink)
                         }
                     }
                     if (picked != null) {
-                        Spacer(Modifier.height(8.dp))
-                        Text(if (picked == q.correct) "✓ Correct" else "✗ Not quite — the correct answer is ${"ABCD"[q.correct]}",
+                        Spacer(Modifier.height(10.dp))
+                        AnswerChip()
+                        Spacer(Modifier.height(6.dp))
+                        Text(if (picked == q.correct) "✓ Correct — " else "✗ Not quite — the correct answer is ${"ABCD"[q.correct]}. ",
                             fontSize = 13.sp, fontFamily = Manrope, fontWeight = FontWeight.SemiBold,
                             color = if (picked == q.correct) Color(0xFF4E7C4E) else settings.accent)
-                        Spacer(Modifier.height(4.dp))
-                        Text(q.why, fontSize = 13.sp, fontFamily = Manrope, color = TikuTokens.Muted)
+                        Text(q.why, fontSize = 13.sp, fontFamily = Manrope, color = TikuTokens.Muted.copy(alpha = 0.85f))
                         SrcTag(q.src)
                     }
                 }
@@ -622,7 +673,8 @@ fun SubjectScreen(name: String) {
                             Column {
                                 Text(ch.title, fontSize = 16.sp, fontFamily = Bricolage, fontWeight = FontWeight.Bold, color = TikuTokens.Ink)
                                 Spacer(Modifier.height(2.dp))
-                                Text("${ch.points.size} key points · ${ch.questions.size} practice questions",
+                                Text("${ch.points.size} key points · ${ch.questions.size} practice questions" +
+                                    if (ch.mcqs.isNotEmpty()) " · ${ch.mcqs.size} MCQs" else "",
                                     fontSize = 12.sp, fontFamily = Manrope, color = TikuTokens.Muted)
                             }
                         }
@@ -653,7 +705,7 @@ fun ChapterScreen(subjectName: String, index: Int, revealFirst: Boolean = false)
                     chapter.points.forEach { pt ->
                         Row(Modifier.padding(vertical = 4.dp)) {
                             Text("• ", fontSize = 14.sp, fontFamily = Manrope, color = TikuTokens.Ink)
-                            Text(pt, fontSize = 14.sp, fontFamily = Manrope, color = TikuTokens.Ink)
+                            Box(Modifier.weight(1f)) { HighlightedText(pt, 14.sp, TikuTokens.Ink) }
                         }
                     }
                 }
@@ -663,6 +715,15 @@ fun ChapterScreen(subjectName: String, index: Int, revealFirst: Boolean = false)
                     Text("Practice questions", fontFamily = SerifItalic, fontSize = 21.sp, color = TikuTokens.Ink)
                     Spacer(Modifier.height(10.dp))
                     chapter.questions.forEachIndexed { qi, qa -> PracticeQuestion(qa, initiallyRevealed = revealFirst && qi == 0) }
+                }
+            }
+            if (chapter.mcqs.isNotEmpty()) {
+                item {
+                    Column {
+                        Text("MCQs", fontFamily = SerifItalic, fontSize = 21.sp, color = TikuTokens.Ink)
+                        Spacer(Modifier.height(10.dp))
+                        chapter.mcqs.forEach { mq -> ChapterMcq(mq) }
+                    }
                 }
             }
             item { Spacer(Modifier.height(16.dp)) }
@@ -676,14 +737,67 @@ private fun PracticeQuestion(qa: StudyContent.QA, initiallyRevealed: Boolean = f
     var open by remember(qa.q) { mutableStateOf(initiallyRevealed) }
     FacadeCard(Modifier.fillMaxWidth().padding(vertical = 5.dp)) {
         Column {
-            Text(qa.q, fontSize = 15.sp, fontFamily = Manrope, fontWeight = FontWeight.SemiBold, color = TikuTokens.Ink)
+            // question stem: Bricolage SemiBold, ink
+            Text(qa.q, fontSize = 16.sp, fontFamily = Bricolage, fontWeight = FontWeight.SemiBold, color = TikuTokens.Ink)
             Spacer(Modifier.height(8.dp))
             if (!open) {
                 Text("Tap to reveal answer", fontSize = 13.sp, fontFamily = Manrope, fontWeight = FontWeight.SemiBold, color = settings.accent,
                     modifier = Modifier.clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) { open = true })
             } else {
-                Text(qa.a, fontSize = 14.sp, fontFamily = Manrope, color = TikuTokens.Ink)
+                AnswerChip()
+                Spacer(Modifier.height(6.dp))
+                Text(qa.a, fontSize = 14.sp, fontFamily = Manrope, color = TikuTokens.Ink.copy(alpha = 0.85f))
                 SrcTag(qa.src)
+            }
+        }
+    }
+}
+
+/** Per-chapter MCQ (content v2) — same D typography as Question of the Day. */
+@Composable
+fun ChapterMcq(mq: StudyContent.DailyQ) {
+    val settings = tikuSettings().value
+    var picked by remember(mq.q) { mutableStateOf<Int?>(null) }
+    FacadeCard(Modifier.fillMaxWidth().padding(vertical = 5.dp)) {
+        Column {
+            Text(mq.q, fontSize = 16.sp, fontFamily = Bricolage, fontWeight = FontWeight.SemiBold, color = TikuTokens.Ink)
+            Spacer(Modifier.height(10.dp))
+            mq.options.forEachIndexed { i, opt ->
+                val isPicked = picked == i
+                val isRight = i == mq.correct
+                val bg = when {
+                    picked == null -> TikuTokens.Bubble
+                    isRight -> Color(0xFFE7F4E4)
+                    isPicked -> Color(0xFFFBE3DC)
+                    else -> TikuTokens.Bubble
+                }
+                val borderC = when {
+                    picked != null && isRight -> Color(0xFF7CB87C)
+                    isPicked && !isRight -> Color(0xFFD9603A)
+                    else -> TikuTokens.Line
+                }
+                Box(
+                    Modifier.fillMaxWidth().padding(vertical = 4.dp)
+                        .clip(RoundedCornerShape(14.dp)).background(bg)
+                        .border(1.dp, borderC, RoundedCornerShape(14.dp))
+                        .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) { picked = i }
+                        .padding(horizontal = 14.dp, vertical = 11.dp),
+                ) {
+                    Text("${"ABCD"[i]}.  $opt", fontSize = 14.sp, fontFamily = Manrope, fontWeight = FontWeight.Medium, color = TikuTokens.Ink)
+                }
+            }
+            if (picked != null) {
+                Spacer(Modifier.height(10.dp))
+                AnswerChip()
+                Spacer(Modifier.height(6.dp))
+                Text(if (picked == mq.correct) "✓ Correct" else "✗ Not quite — the correct answer is ${"ABCD"[mq.correct]}",
+                    fontSize = 13.sp, fontFamily = Manrope, fontWeight = FontWeight.SemiBold,
+                    color = if (picked == mq.correct) Color(0xFF4E7C4E) else settings.accent)
+                if (mq.why.isNotEmpty()) {
+                    Spacer(Modifier.height(3.dp))
+                    Text(mq.why, fontSize = 13.sp, fontFamily = Manrope, color = TikuTokens.Muted.copy(alpha = 0.85f))
+                }
+                SrcTag(mq.src)
             }
         }
     }
@@ -727,7 +841,7 @@ fun FormulasScreen() {
                             ch?.points?.forEach { pt ->
                                 Row(Modifier.padding(vertical = 5.dp)) {
                                     Text("• ", fontSize = 14.sp, fontFamily = Manrope, color = TikuTokens.Ink)
-                                    Text(pt, fontSize = 14.sp, fontFamily = Manrope, color = TikuTokens.Ink)
+                                    Box(Modifier.weight(1f)) { HighlightedText(pt, 14.sp, TikuTokens.Ink) }
                                 }
                             }
                         }

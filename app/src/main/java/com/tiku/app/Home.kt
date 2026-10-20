@@ -44,7 +44,6 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
@@ -109,7 +108,10 @@ fun HomeScreen() {
                 .align(Alignment.BottomCenter)
                 .height(64.dp)
                 .clip(RoundedCornerShape(26.dp))
-                .background(TikuTokens.Glass).blur(24.dp)
+                // NOTE: no .blur() here — blurring this box blurred its OWN icons/labels
+                // (the "Tik bottom stays blurred" bug); the translucent Glass color is
+                // what gives the frosted-glass look.
+                .background(TikuTokens.Glass)
                 .border(1.dp, TikuTokens.Line, RoundedCornerShape(26.dp))
                 .shadow(20.dp, RoundedCornerShape(26.dp)),
             horizontalArrangement = Arrangement.spacedBy(4.dp),
@@ -267,30 +269,21 @@ fun ChatRow(th: ChatThread) {
 }
 
 // ================= Calls pane =================
+// HARD RULE (owner): calls leave NO trace. No call entries, no history — this pane is
+// permanently an empty state, and calls are started from inside a chat only.
 @Composable
 fun CallsPane() {
-    val logs by AppState.callLogs.collectAsState()
-    LazyColumn(Modifier.fillMaxSize(), contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = 110.dp)) {
-        items(logs) { log ->
-            Row(
-                Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 10.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                AvatarBox(log.person, 52.dp, 19.dp, 22f)
-                Spacer(Modifier.width(13.dp))
-                Column(Modifier.weight(1f)) {
-                    Text(log.person.name, fontWeight = FontWeight.SemiBold, fontSize = 16.sp, fontFamily = Manrope, color = TikuTokens.Ink)
-                    Text((if (log.direction == "missed") "↙ Missed" else "↗ Outgoing") + " · " +
-                        log.kind.replaceFirstChar { it.uppercase() },
-                        fontSize = 14.sp, color = TikuTokens.Muted, fontFamily = Manrope)
-                }
-                GlassIconButton(Icons.Filled.Call, label = "Call", onClick = {
-                    val tid = log.threadId.ifEmpty {
-                        AppState.threads.value.firstOrNull { it.person.uid == log.person.uid }?.id ?: ""
-                    }
-                    if (tid.isNotEmpty()) AppState.go(Screen.Call(tid, log.kind == "video"))
-                })
-            }
+    Box(Modifier.fillMaxSize().padding(28.dp), contentAlignment = Alignment.Center) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Text("Calls leave no trace here", fontFamily = SerifItalic,
+                fontStyle = androidx.compose.ui.text.font.FontStyle.Italic,
+                fontSize = 24.sp, color = TikuTokens.Ink,
+                textAlign = androidx.compose.ui.text.style.TextAlign.Center)
+            Spacer(Modifier.height(10.dp))
+            Text("Audio and video calls are end-to-end peer-to-peer. "
+                + "When a call ends, every record of it is deleted — nothing is ever stored.",
+                fontSize = 14.sp, color = TikuTokens.Muted, fontFamily = Manrope,
+                textAlign = androidx.compose.ui.text.style.TextAlign.Center, lineHeight = 21.sp)
         }
     }
 }
@@ -370,6 +363,13 @@ fun SettingsGroups() {
             RowDef("bt", "Linked devices", "Manage where Tikuu is open", "ld"),
             RowDef("bt", "Change password", "Update your lock password", "cp"),
             RowDef("bt", "Log out", "", "lo"),
+        ),
+        // NEW (round 2): the very last group, styled exactly like the others.
+        "Additional settings" to listOf(
+            RowDef("tg", "Allow screenshots", "While on, recent-apps previews can show your chats", "as"),
+            RowDef("tg", "Camera on for video calls", "Front camera starts enabled on outgoing calls", "vcd", true),
+            RowDef("tg", "Speaker for video calls", "Audio through the speaker on video calls", "vsp", true),
+            RowDef("tg", "Enter to send", "Pressing Enter sends the message", "ets"),
         ),
     )
 

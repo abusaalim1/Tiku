@@ -40,9 +40,18 @@ sealed interface Screen {
 
 enum class HomeTab { CHATS, CALLS, ME }
 
+/** Engine-wide crash guard: no engine coroutine may ever kill the process with an
+ *  uncaught exception (this was the crash vector on the chat-open path). */
+val TikuEngineHandler = kotlinx.coroutines.CoroutineExceptionHandler { _, e ->
+    android.util.Log.e("TikuEngine", "unguarded engine coroutine failed", e)
+}
+
 /** Single UI state hub: navigation, toast, bottom sheet, profile, preview plumbing. */
 object AppState {
-    val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate + TikuEngineHandler)
+
+    /** Application context, set once by MainActivity (for MediaStore saves, etc.). */
+    lateinit var appCtx: android.content.Context
 
     var screen by mutableStateOf<Screen>(Screen.Welcome)
     var homeTab by mutableStateOf(HomeTab.CHATS)
@@ -57,9 +66,9 @@ object AppState {
      *  consumed by profile setup / engine bootstrap; never persisted in plaintext). */
     var pendingPassword: String = ""
 
-    // ---- threads / calls ----
+    // ---- threads ----
+    // NOTE: calls intentionally leave NO trace — there is no call-log store at all.
     val threads = MutableStateFlow<List<ChatThread>>(emptyList())
-    val callLogs = MutableStateFlow<List<CallLog>>(emptyList())
     /** threadId -> peer is typing (drives the chat header status + typing bubble). */
     val typing = MutableStateFlow<Map<String, Boolean>>(emptyMap())
 
@@ -125,6 +134,5 @@ interface ChatRepo {
     fun deleteForMe(id: String, msgId: String)
     fun clearChat(id: String)
     fun setTyping(id: String, on: Boolean)
-    fun logCall(id: String, video: Boolean)
     fun startThreadWith(person: Person): String
 }

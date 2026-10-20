@@ -220,7 +220,7 @@ jobs:
           - **Build**: GitHub Actions
           - **Firebase project**: tiku-chat (Auth + Firestore; free Spark plan — no Storage)
           - **Mode**: Real app — Google sign-in works, chats are end-to-end encrypted (ECDH P-256 + AES-256-GCM)
-          - **Calls**: engine comes in the next round; the call screen ships as UI in this build
+          - **Calls**: REAL audio + video calls (WebRTC, peer-to-peer). Calls leave zero traces — the signaling record is deleted the moment a call ends, and there is no call history anywhere in the app.
 
           > **Note**: This is the real-mode build. Sign in with Google, create your password (it also backs up your private key), pick a username, and start chatting.
           EOF

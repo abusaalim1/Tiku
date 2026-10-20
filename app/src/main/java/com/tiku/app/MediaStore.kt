@@ -88,3 +88,65 @@ object MediaStore {
         BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
     } catch (e: Exception) { null }
 }
+
+/**
+ * MediaSaver — the ONLY way chat media leaves the app (owner rule, round 2):
+ * NOTHING auto-saves to the gallery / public storage. Received photos live in
+ * memory; received voice notes live in app-private cache. Only an explicit
+ * "Save to device" tap on a message copies the DECRYPTED bytes out:
+ * photos -> Pictures/Tiku, voice -> Music/Tiku (MediaStore on API 29+).
+ */
+object MediaSaver {
+    fun saveToDevice(ctx: android.content.Context, m: TikuMessage): Boolean = when (m.kind) {
+        MsgKind.IMAGE -> {
+            val bmp = m.photo ?: return false
+            writeImage(ctx, bmp, "tiku_${m.id}.jpg")
+        }
+        MsgKind.VOICE -> {
+            val path = m.localPath ?: return false
+            val f = java.io.File(path)
+            if (!f.exists()) false else writeAudio(ctx, f, "tiku_voice_${m.id}.m4a")
+        }
+        else -> false
+    }
+
+    private fun writeImage(ctx: android.content.Context, bmp: Bitmap, name: String): Boolean = runCatching {
+        if (android.os.Build.VERSION.SDK_INT >= 29) {
+            val values = android.content.ContentValues().apply {
+                put(android.provider.MediaStore.Images.Media.DISPLAY_NAME, name)
+                put(android.provider.MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
+                put(android.provider.MediaStore.Images.Media.RELATIVE_PATH,
+                    android.os.Environment.DIRECTORY_PICTURES + "/Tiku")
+            }
+            val uri = ctx.contentResolver.insert(android.provider.MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
+                ?: return false
+            ctx.contentResolver.openOutputStream(uri)?.use { out ->
+                bmp.compress(Bitmap.CompressFormat.JPEG, 92, out)
+            } ?: return false
+            true
+        } else {
+            val dir = java.io.File(ctx.getExternalFilesDir(android.os.Environment.DIRECTORY_PICTURES), "Tiku").apply { mkdirs() }
+            java.io.File(dir, name).outputStream().use { out -> bmp.compress(Bitmap.CompressFormat.JPEG, 92, out) }
+            true
+        }
+    }.getOrDefault(false)
+
+    private fun writeAudio(ctx: android.content.Context, src: java.io.File, name: String): Boolean = runCatching {
+        if (android.os.Build.VERSION.SDK_INT >= 29) {
+            val values = android.content.ContentValues().apply {
+                put(android.provider.MediaStore.Audio.Media.DISPLAY_NAME, name)
+                put(android.provider.MediaStore.Audio.Media.MIME_TYPE, "audio/mp4")
+                put(android.provider.MediaStore.Audio.Media.RELATIVE_PATH,
+                    android.os.Environment.DIRECTORY_MUSIC + "/Tiku")
+            }
+            val uri = ctx.contentResolver.insert(android.provider.MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, values)
+                ?: return false
+            ctx.contentResolver.openOutputStream(uri)?.use { out -> src.inputStream().use { it.copyTo(out) } } ?: return false
+            true
+        } else {
+            val dir = java.io.File(ctx.getExternalFilesDir(android.os.Environment.DIRECTORY_MUSIC), "Tiku").apply { mkdirs() }
+            src.copyTo(java.io.File(dir, name), overwrite = true)
+            true
+        }
+    }.getOrDefault(false)
+}

@@ -27,6 +27,10 @@ object SecretEntry {
 object ChatSession {
     @Volatile var unlocked: Boolean = false
 
+    /** True while MainActivity is resumed — used to gate incoming-call ringing
+     *  (calls ring ONLY inside an unlocked, foregrounded ChatRoot). */
+    @Volatile var foreground: Boolean = false
+
     /** Set right before launching an external picker (photo) so onStop doesn't
      *  re-lock mid-pick; consumed by the very next onStop. */
     @Volatile var expectExternalActivity: Boolean = false
@@ -40,7 +44,6 @@ object ChatSession {
         if (!Config.PREVIEW_UI_ONLY) FirebaseEngine.lock()
         // decrypted state must not be reconstructible after exit
         AppState.threads.value = emptyList()
-        AppState.callLogs.value = emptyList()
         AppState.typing.value = emptyMap()
         unlocked = false
         if (!AppState.isFacade(AppState.screen)) AppState.instantGo(Screen.Facade)
@@ -66,7 +69,6 @@ object ChatSession {
         if (Config.PREVIEW_UI_ONLY) {
             val seeded = PreviewStore.seedThreads()
             AppState.threads.value = seeded
-            AppState.callLogs.value = PreviewStore.seedCallLogsFor(seeded)
             AppState.typing.value = emptyMap()
         } else {
             AppState.repo = FirebaseEngine
@@ -78,7 +80,6 @@ object ChatSession {
                 onboarded && localKey -> {
                     FirebaseEngine.start(c)
                     FirebaseEngine.loadMyProfile()
-                    FirebaseEngine.refreshCallLogs()
                     FirebaseEngine.setPresence(true)
                 }
                 FirebaseEngine.isReturningUser() -> { AppState.go(Screen.Restore); return }

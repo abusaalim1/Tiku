@@ -61,7 +61,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
-import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.geometry.Offset
@@ -89,12 +88,28 @@ fun ChatWallpaperBrush(settings: TikuUiSettings) = when (settings.wallpaper) {
 
 @Composable
 fun ChatScreen(threadId: String) {
+    // CRASH FIX (owner bug A): the thread can be momentarily absent (search -> open,
+    // listener refire) or flicker null<->present. This wrapper runs ONLY the threads
+    // collection; the full screen (with all its hooks) composes only when the thread
+    // exists, so hook order can never break across the flicker.
     androidx.activity.compose.BackHandler { AppState.go(Screen.Home) }
+    val threads by AppState.threads.collectAsState()
+    val thread = threads.firstOrNull { it.id == threadId }
+    if (thread == null) {
+        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            Text("Chat unavailable", color = TikuTokens.Muted, fontFamily = Manrope)
+        }
+        return
+    }
+    ChatContent(thread)
+}
+
+@Composable
+private fun ChatContent(thread: ChatThread) {
+    val threadId = thread.id
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
     val settings by SettingsStore.state.collectAsState()
-    val threads by AppState.threads.collectAsState()
-    val thread = threads.firstOrNull { it.id == threadId }
     val typingMap by AppState.typing.collectAsState()
     val peerTyping = typingMap[threadId] == true
 
@@ -138,12 +153,6 @@ fun ChatScreen(threadId: String) {
         }
     }
 
-    if (thread == null) {
-        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            Text("Chat unavailable", color = TikuTokens.Muted, fontFamily = Manrope)
-        }
-        return
-    }
     val person = thread.person
 
     val statusText = when {
@@ -178,10 +187,12 @@ fun ChatScreen(threadId: String) {
             }
         }
         Column(Modifier.fillMaxSize()) {
-        // glass header
+        // glass header (translucent color only — .blur() on this box blurred the
+        // header's own content; that was the "bottom stays blurred" class of bug)
+        val startCall = rememberCallStarter()
         Row(
             Modifier.fillMaxWidth()
-                .background(TikuTokens.Glass).blur(20.dp)
+                .background(TikuTokens.Glass)
                 .border(0.5.dp, TikuTokens.Line)
                 .padding(horizontal = 14.dp, vertical = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
@@ -194,9 +205,9 @@ fun ChatScreen(threadId: String) {
                 Text(person.name, fontFamily = Bricolage, fontWeight = FontWeight.Bold, fontSize = 17.sp, color = TikuTokens.Ink)
                 Text(statusText, fontSize = 12.sp, color = settings.accent, fontFamily = Manrope)
             }
-            GlassIconButton(Icons.Filled.Call, size = 38.dp, iconSize = 18.dp, onClick = { AppState.go(Screen.Call(threadId, false)) })
+            GlassIconButton(Icons.Filled.Call, size = 38.dp, iconSize = 18.dp, onClick = { startCall(threadId, false) })
             Spacer(Modifier.width(8.dp))
-            GlassIconButton(Icons.Filled.Videocam, size = 38.dp, iconSize = 18.dp, onClick = { AppState.go(Screen.Call(threadId, true)) })
+            GlassIconButton(Icons.Filled.Videocam, size = 38.dp, iconSize = 18.dp, onClick = { startCall(threadId, true) })
             Spacer(Modifier.width(8.dp))
             GlassIconButton(Icons.Filled.MoreHoriz, size = 38.dp, iconSize = 18.dp, onClick = { ChatSheets.more(thread, person) })
         }
@@ -343,6 +354,13 @@ fun ChatScreen(threadId: String) {
                         textStyle = TextStyle(fontSize = settings.textSizeSp.sp, fontFamily = Manrope, color = TikuTokens.Ink),
                         cursorBrush = SolidColor(settings.accent),
                         singleLine = true,
+                        keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+                            imeAction = if (settings.enterToSend) androidx.compose.ui.text.input.ImeAction.Send
+                            else androidx.compose.ui.text.input.ImeAction.Default,
+                        ),
+                        keyboardActions = androidx.compose.foundation.text.KeyboardActions(
+                            onSend = { if (settings.enterToSend) sendCurrent() },
+                        ),
                         modifier = Modifier.weight(1f),
                         decorationBox = { inner ->
                             if (input.isEmpty()) Text("Message", fontSize = settings.textSizeSp.sp, color = TikuTokens.Muted, fontFamily = Manrope)
@@ -600,6 +618,19 @@ object ChatSheets {
             SheetAction(if (m.starredByMe) "Unstar" else "Star") {
                 AppState.repo.toggleStar(threadId, m.id)
                 AppState.toast("Star updated"); AppState.closeSheet()
+            }
+            // Media rule (owner): NOTHING auto-saves to the gallery. This explicit tap
+            // is the only exit — decrypted photo -> Pictures/Tiku, voice -> Music/Tiku.
+            if (m.kind == MsgKind.IMAGE || m.kind == MsgKind.VOICE) {
+                SheetAction("Save to device") {
+                    if (Config.PREVIEW_UI_ONLY) {
+                        AppState.toast("Saved to device")
+                    } else {
+                        val ok = MediaSaver.saveToDevice(AppState.appCtx, m)
+                        AppState.toast(if (ok) "Saved to device" else "Couldn't save")
+                    }
+                    AppState.closeSheet()
+                }
             }
             SheetAction("Delete") {
                 AppState.repo.deleteForMe(threadId, m.id); AppState.closeSheet()

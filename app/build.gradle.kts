@@ -71,6 +71,8 @@ dependencies {
     implementation("com.google.android.libraries.identity.googleid:googleid:1.1.1")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-play-services:1.8.1")
     implementation("androidx.security:security-crypto:1.1.0-alpha06")
+    // Real audio+video calls: maintained WebRTC fork (org.webrtc API), Maven Central.
+    implementation("io.getstream:stream-webrtc-android:1.1.1")
     // ---- UI screenshot tests (Roborazzi + Robolectric, headless CI) ----
     testImplementation("junit:junit:4.13.2")
     testImplementation("androidx.compose.ui:ui-test-junit4")

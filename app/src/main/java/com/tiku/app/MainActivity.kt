@@ -16,9 +16,14 @@ import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.systemBars
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.platform.LocalContext
@@ -37,6 +42,7 @@ class TikuApp : Application() {
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        AppState.appCtx = applicationContext
         // The APK always opens to the study facade; ChatRoot is reachable only via the gate.
         AppState.repo = if (Config.PREVIEW_UI_ONLY) PreviewRepo else FirebaseEngine
         StudyContent.load(this)
@@ -46,6 +52,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
+        ChatSession.foreground = true
         // presence reflects being INSIDE ChatRoot only — never the facade
         if (!Config.PREVIEW_UI_ONLY && ChatSession.unlocked && FirebaseEngine.signedIn && isOnboarded()) {
             FirebaseEngine.setPresence(true)
@@ -54,6 +61,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onPause() {
         super.onPause()
+        ChatSession.foreground = false
         if (!Config.PREVIEW_UI_ONLY && ChatSession.unlocked && FirebaseEngine.signedIn) {
             FirebaseEngine.setPresence(false)
         }
@@ -93,7 +101,6 @@ class MainActivity : ComponentActivity() {
                     getSharedPreferences("tiku_prefs", MODE_PRIVATE).edit().putBoolean("onboarded", true).apply()
                     FirebaseEngine.start(this@MainActivity)
                     FirebaseEngine.loadMyProfile()
-                    FirebaseEngine.refreshCallLogs()
                     FirebaseEngine.setPresence(true)
                     AppState.go(Screen.Home)
                 }
@@ -109,7 +116,11 @@ fun TikuRoot(onGoogleClick: () -> Unit) {
     // app-wide light gradient (the design's .s background)
     val bgBrush = Brush.verticalGradient(listOf(TikuTokens.BgTop, TikuTokens.BgBottom))
     val screen = AppState.screen
+    // EDGE-TO-EDGE (owner bug fix): the gradient stays full-bleed, but EVERY piece of
+    // interactive content lives in an inner box padded by the system-bar insets, so
+    // nothing renders under the status bar or the gesture nav bar on any screen.
     Box(Modifier.fillMaxSize().background(bgBrush)) {
+      Box(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.systemBars)) {
         val kind = when (screen) {
             is Screen.Welcome, is Screen.Password, is Screen.Restore, is Screen.ProfileSetup -> "gate"
             is Screen.Facade, is Screen.StudySubject, is Screen.StudyChapter, is Screen.StudyNotes,
@@ -152,15 +163,19 @@ fun TikuRoot(onGoogleClick: () -> Unit) {
         }
         DesignToast()
         BottomSheetHost()
+      }
     }
 
     // FLAG_SECURE hook: set while ANY ChatRoot destination is visible (blocks screenshots +
     // the Android recents preview of gated content); cleared on the study facade.
+    // "Allow screenshots" (Additional settings, default OFF) suspends it inside ChatRoot
+    // only — and applies immediately when the toggle flips.
     val activity = LocalContext.current as? ComponentActivity
-    LaunchedEffect(screen) {
+    val innerSettings by SettingsStore.state.collectAsState()
+    LaunchedEffect(screen, innerSettings.allowScreenshots) {
         AppState.instantNav = false
         val w = activity?.window
-        if (AppState.isChatRoot(screen)) {
+        if (AppState.isChatRoot(screen) && !innerSettings.allowScreenshots) {
             w?.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
         } else {
             w?.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
