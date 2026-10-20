@@ -1,80 +1,46 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
+    function signedIn() { return request.auth != null; }
 
-    function signedIn() {
-      return request.auth != null;
-    }
-    function isUser(uid) {
-      return signedIn() && request.auth.uid == uid;
-    }
-    // Membership for SUBCOLLECTION rules only: reads the PARENT chat doc via
-    // get(). The chat doc's own rules below must never call this — they read
-    // `members` straight from resource / request.resource. (Round-3 root
-    // cause: the chat doc's get rule used to call a get()-based membership
-    // helper on the chat doc ITSELF, which recursed inside the rules engine
-    // and made every member-gated read/write evaluate to DENY — messages
-    // never sent and calls never connected on device.)
-    function isChatMember(chatId) {
-      return signedIn() && request.auth.uid in
-        get(/databases/$(database)/documents/chats/$(chatId)).data.members;
-    }
-
-    // ---- Users: profile/publicKey/keyBackup/presence. Readable by any
-    // signed-in user; writable ONLY by the doc's owner. ----
     match /users/{uid} {
       allow read: if signedIn();
-      allow write: if isUser(uid);
+      allow write: if signedIn() && request.auth.uid == uid;
     }
 
-    // ---- Username claims: create-only, exactly once per name, and a claim
-    // may only point at the claimer's own uid. ----
-    match /usernames/{username} {
-      allow get: if signedIn();
-      allow list: if false;
+    match /usernames/{name} {
+      allow read: if signedIn();
       allow create: if signedIn() && request.resource.data.uid == request.auth.uid;
       allow update, delete: if false;
     }
 
-    // ---- Chats: gated on the members array (both uids, exactly 2).
-    // The chat doc's OWN rules read members from resource/request.resource —
-    // no get() here, so no recursion. ----
     match /chats/{chatId} {
-      allow get, list: if signedIn() && request.auth.uid in resource.data.members;
-      allow create: if signedIn()
-        && request.auth.uid in request.resource.data.members
-        && request.resource.data.members.size() == 2;
-      allow update: if signedIn() && request.auth.uid in resource.data.members;
-      allow delete: if false;
+      allow create: if signedIn() && request.auth.uid in request.resource.data.members;
+      allow read, update, delete: if signedIn() && request.auth.uid in resource.data.members;
 
-      // ---- messages + their media chunks + per-chat call signaling:
-      // members only (checked against the parent chat doc). ----
       match /messages/{msgId} {
-        allow read, write: if isChatMember(chatId);
+        allow read, write: if signedIn() && request.auth.uid in
+          get(/databases/$(database)/documents/chats/$(chatId)).data.members;
 
-        match /chunks/{index} {
-          allow read, write: if isChatMember(chatId);
+        match /chunks/{chunkId} {
+          allow read, write: if signedIn() && request.auth.uid in
+            get(/databases/$(database)/documents/chats/$(chatId)).data.members;
         }
       }
+
       match /calls/{callId} {
-        allow read, write: if isChatMember(chatId);
+        allow read, write: if signedIn() && request.auth.uid in
+          get(/databases/$(database)/documents/chats/$(chatId)).data.members;
       }
     }
 
-    // ---- Moments: owner writes, signed-in users read. ----
     match /moments/{uid} {
       allow read: if signedIn();
-      allow write: if isUser(uid);
-
+      allow write: if signedIn() && request.auth.uid == uid;
       match /items/{itemId} {
         allow read: if signedIn();
-        allow write: if isUser(uid);
+        allow write: if signedIn() && request.auth.uid == uid;
       }
-    }
-
-    // ---- Default deny: nothing outside this contract. ----
-    match /{document=**} {
-      allow read, write: if false;
     }
   }
 }
