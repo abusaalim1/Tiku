@@ -39,6 +39,16 @@ android {
     compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
     kotlinOptions { jvmTarget = "17" }
 }
+tasks.withType<Test>().configureEach {
+    // diagnostics for the Roborazzi screenshot suite: full stacks in the CI log
+    testLogging {
+        showExceptions = true
+        showStackTraces = true
+        exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL
+        events = setOf(org.gradle.api.tasks.testing.logging.TestLogEvent.FAILED)
+    }
+}
+
 dependencies {
     val bom = platform("androidx.compose:compose-bom:2024.09.00")
     implementation(bom)

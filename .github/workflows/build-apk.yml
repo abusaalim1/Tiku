@@ -153,6 +153,16 @@ jobs:
           set -o pipefail
           timeout 1500 gradle :app:recordRoborazziDebug --tests "com.tiku.app.ScreenshotsTest" 2>&1 | tee screenshots.log || echo "screenshot recording failed (see log)"
 
+      - name: Upload screenshot test reports (diagnostics)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: roborazzi-test-reports
+          if-no-files-found: warn
+          path: |
+            app/build/test-results/testDebugUnitTest/
+            app/build/reports/tests/testDebugUnitTest/
+
       - name: Package UI screenshots zip
         if: always()
         run: |
