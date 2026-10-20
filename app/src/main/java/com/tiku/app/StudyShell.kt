@@ -242,11 +242,15 @@ fun FacadeHome() {
 
 @Composable
 private fun ToolTile(glyph: String, label: String, modifier: Modifier = Modifier, serif: Boolean = false, onClick: () -> Unit) {
-    FacadeCard(modifier, onClick = onClick) {
-        Column(
-            Modifier.fillMaxWidth().padding(vertical = 2.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-        ) {
+    // same card look as FacadeCard but tighter padding: 4-across tiles have ~72dp each
+    Box(
+        modifier.clip(RoundedCornerShape(24.dp)).background(TikuTokens.Card)
+            .border(1.dp, TikuTokens.Line, RoundedCornerShape(24.dp))
+            .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) { onClick() }
+            .padding(horizontal = 10.dp, vertical = 14.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
             if (EmojiArt.assetName(glyph) != null) EmojiArt(glyph, 26.dp) else Text(glyph, fontSize = 22.sp, fontFamily = if (serif) SerifItalic else Manrope)
             Spacer(Modifier.height(6.dp))
             Text(label, fontSize = 12.sp, fontFamily = Manrope, fontWeight = FontWeight.SemiBold, color = TikuTokens.Ink,
@@ -631,7 +635,7 @@ fun SubjectScreen(name: String) {
 }
 
 @Composable
-fun ChapterScreen(subjectName: String, index: Int) {
+fun ChapterScreen(subjectName: String, index: Int, revealFirst: Boolean = false) {
     val chapter = StudyContent.subject(subjectName)?.chapters?.getOrNull(index)
     BackHandler { AppState.go(Screen.StudySubject(subjectName)) }
     Column(Modifier.fillMaxSize().padding(horizontal = 20.dp)) {
@@ -658,7 +662,7 @@ fun ChapterScreen(subjectName: String, index: Int) {
                 Column {
                     Text("Practice questions", fontFamily = SerifItalic, fontSize = 21.sp, color = TikuTokens.Ink)
                     Spacer(Modifier.height(10.dp))
-                    chapter.questions.forEach { qa -> PracticeQuestion(qa) }
+                    chapter.questions.forEachIndexed { qi, qa -> PracticeQuestion(qa, initiallyRevealed = revealFirst && qi == 0) }
                 }
             }
             item { Spacer(Modifier.height(16.dp)) }
@@ -667,9 +671,9 @@ fun ChapterScreen(subjectName: String, index: Int) {
 }
 
 @Composable
-private fun PracticeQuestion(qa: StudyContent.QA) {
+private fun PracticeQuestion(qa: StudyContent.QA, initiallyRevealed: Boolean = false) {
     val settings = tikuSettings().value
-    var open by remember(qa.q) { mutableStateOf(false) }
+    var open by remember(qa.q) { mutableStateOf(initiallyRevealed) }
     FacadeCard(Modifier.fillMaxWidth().padding(vertical = 5.dp)) {
         Column {
             Text(qa.q, fontSize = 15.sp, fontFamily = Manrope, fontWeight = FontWeight.SemiBold, color = TikuTokens.Ink)

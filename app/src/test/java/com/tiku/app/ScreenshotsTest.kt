@@ -6,7 +6,6 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithText
@@ -100,14 +99,10 @@ class ScreenshotsTest {
     }
 
     @Test fun shot03_chapter() {
-        frame { ChapterScreen("Physics", 0) }
-        // the four practice questions share the "Tap to reveal answer" label, so tap the
-        // first reveal link by position (bottom edge of the visible column)
-        composeRule.onRoot().performTouchInput {
-            val p = Offset(300f, 2390f)
-            down(0, p)
-            up(0)
-        }
+        // revealFirst opens the first practice answer (deterministic for the preview)
+        frame { ChapterScreen("Physics", 0, revealFirst = true) }
+        // scroll the first (revealed) question into view
+        composeRule.onRoot().performTouchInput { swipeUp() }
         composeRule.waitForIdle()
         shot("03-chapter.png")
     }
@@ -139,11 +134,15 @@ class ScreenshotsTest {
         frame { FacadeRouter() }
         val q = StudyContent.questionOfTheDay()
         if (q != null) {
+            // the QOTD card starts below the fold — scroll it into view FIRST
+            // (a tap on a composed-but-off-screen node lands outside the surface)
+            composeRule.onRoot().performTouchInput { swipeUp() }
+            composeRule.waitForIdle()
             // the rendered option row label is "A.  <text>" — match it exactly
             val label = "${"ABCD"[q.correct]}.  ${q.options[q.correct]}"
             composeRule.onNodeWithText(label).performClick()
             composeRule.waitForIdle()
-            // bring the answered card into view (options sit below the fold)
+            // bring the explanation under the options into view
             composeRule.onRoot().performTouchInput { swipeUp() }
             composeRule.waitForIdle()
         }
