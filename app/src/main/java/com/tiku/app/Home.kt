@@ -345,7 +345,7 @@ fun SettingsGroups() {
             RowDef("tg", "Disappearing messages", "Vanish after 24 hours", "dm"),
             RowDef("tg", "Read receipts", "Show ✓✓ when seen", "rr", true),
             RowDef("tg", "Last seen", "Let contacts see when you were online", "ls", true),
-            RowDef("tg", "Block screenshots", "Hide chats in app switcher", "bs"),
+            RowDef("tg", "Block screenshots", "Block screenshots & app-switcher previews of chats", "bs", true),
             RowDef("tg", "Hide typing status", "Don’t show “typing…”", "ht"),
         ),
         "Notifications" to listOf(
@@ -365,8 +365,9 @@ fun SettingsGroups() {
             RowDef("bt", "Log out", "", "lo"),
         ),
         // NEW (round 2): the very last group, styled exactly like the others.
+        // Round 3: the duplicate "Allow screenshots" switch was REMOVED from here —
+        // Privacy ▸ "Block screenshots" is the single screenshot control.
         "Additional settings" to listOf(
-            RowDef("tg", "Allow screenshots", "While on, recent-apps previews can show your chats", "as"),
             RowDef("tg", "Camera on for video calls", "Front camera starts enabled on outgoing calls", "vcd", true),
             RowDef("tg", "Speaker for video calls", "Audio through the speaker on video calls", "vsp", true),
             RowDef("tg", "Enter to send", "Pressing Enter sends the message", "ets"),

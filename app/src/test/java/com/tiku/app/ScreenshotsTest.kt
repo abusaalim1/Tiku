@@ -3,16 +3,21 @@ package com.tiku.app
 import android.content.Context
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onAllNodesWithTag
+import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.swipeUp
+import androidx.compose.ui.unit.dp
 import androidx.test.core.app.ApplicationProvider
 import com.github.takahirom.roborazzi.captureRoboImage
 import org.junit.Before
@@ -138,9 +143,8 @@ class ScreenshotsTest {
             // (a tap on a composed-but-off-screen node lands outside the surface)
             composeRule.onRoot().performTouchInput { swipeUp() }
             composeRule.waitForIdle()
-            // the rendered option row label is "A.  <text>" — match it exactly
-            val label = "${"ABCD"[q.correct]}.  ${q.options[q.correct]}"
-            composeRule.onNodeWithText(label).performClick()
+            // options are full-width rows tagged mcq_option_<i> (item 5 layout)
+            composeRule.onNodeWithTag("mcq_option_${q.correct}").performClick()
             composeRule.waitForIdle()
             // bring the explanation under the options into view
             composeRule.onRoot().performTouchInput { swipeUp() }
@@ -242,10 +246,34 @@ class ScreenshotsTest {
             frame { ChapterScreen(target.first, target.second) }
             composeRule.onRoot().performTouchInput { swipeUp(); swipeUp() }
             composeRule.waitForIdle()
+            // pick one option if the rows are composed (reveals correct/wrong states)
+            if (composeRule.onAllNodesWithTag("mcq_option_1").fetchSemanticsNodes().isNotEmpty()) {
+                runCatching { composeRule.onNodeWithTag("mcq_option_1").performClick() }
+                composeRule.waitForIdle()
+            }
         } else {
             frame { ChapterScreen("Physics", 0) }
         }
         shot("20-chapter-mcq.png")
+    }
+
+    // ---------- round 3 additions ----------
+    @Test fun shot23_chapterMcqOptions() {
+        // ITEM 5 PROOF: one chapter MCQ rendered alone — options must appear as a
+        // VERTICAL list of full-width rows (letter chip + wrapping text). A wrong
+        // pick is clicked so the correct (green) + wrong (red) states both show.
+        val mq = StudyContent.subjects.firstNotNullOfOrNull { s ->
+            s.chapters.firstNotNullOfOrNull { ch -> ch.mcqs.firstOrNull() }
+        }
+        if (mq != null) {
+            frame { Column(Modifier.fillMaxSize().padding(20.dp)) { ChapterMcq(mq) } }
+            val wrongIdx = (mq.correct + 1) % mq.options.size
+            composeRule.onNodeWithTag("mcq_option_$wrongIdx").performClick()
+            composeRule.waitForIdle()
+        } else {
+            frame { ChapterScreen("Physics", 0) }
+        }
+        shot("23-chapter-mcq-options.png")
     }
 
     @Test fun shot21_additionalSettings() {

@@ -31,6 +31,9 @@ sealed interface Screen {
     data object Password : Screen
     /** Returning user on a new device: enter the backup password to restore the key. */
     data object Restore : Screen
+    /** Rescue (owner Bug 0): local key present but verifier missing/corrupt —
+     *  re-auth the same Google account, then re-wrap the key under a new password. */
+    data object PasswordReset : Screen
     data object ProfileSetup : Screen
     data object Home : Screen
     data class Chat(val threadId: String) : Screen
@@ -48,6 +51,16 @@ val TikuEngineHandler = kotlinx.coroutines.CoroutineExceptionHandler { _, e ->
 
 /** Single UI state hub: navigation, toast, bottom sheet, profile, preview plumbing. */
 object AppState {
+
+    /** True while the user is inside the first-run / gate flow (welcome, create
+     *  password, profile setup, restore, reset, the gate itself). Backgrounding
+     *  there is NOT a ChatRoot exit: the instant re-lock must not yank the user
+     *  out of onboarding (owner Bug 0). */
+    fun isSetupFlow(s: Screen): Boolean = when (s) {
+        is Screen.Welcome, is Screen.Password, is Screen.ProfileSetup,
+        is Screen.Restore, is Screen.PasswordReset, is Screen.TikGate -> true
+        else -> false
+    }
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate + TikuEngineHandler)
 
     /** Application context, set once by MainActivity (for MediaStore saves, etc.). */
@@ -73,6 +86,24 @@ object AppState {
     val typing = MutableStateFlow<Map<String, Boolean>>(emptyMap())
 
     fun thread(id: String): ChatThread? = threads.value.firstOrNull { it.id == id }
+
+    /** Insert or replace a (local optimistic) message in a thread, keyed by id. */
+    fun upsertMessage(threadId: String, msg: TikuMessage) {
+        threads.value = threads.value.map { t ->
+            if (t.id != threadId) t
+            else t.copy(messages = (t.messages.filter { it.id != msg.id } + msg).toMutableList())
+        }
+    }
+
+    /** Flip the delivery state of one message (round 3 send-state surfacing). */
+    fun setMessageStatus(threadId: String, msgId: String, status: SendStatus) {
+        threads.value = threads.value.map { t ->
+            if (t.id != threadId) t
+            else t.copy(messages = t.messages.map { m ->
+                if (m.id == msgId) m.copy(status = status) else m
+            }.toMutableList())
+        }
+    }
 
     fun updateThread(id: String, block: (ChatThread) -> Unit) {
         val cur = threads.value.map { if (it.id == id) it.copy().also { c -> block(c) } else it }
@@ -127,6 +158,8 @@ interface ChatRepo {
     fun openThread(id: String)
     fun closeThread(id: String) {}
     fun sendText(id: String, text: String, quote: String?)
+    /** Re-attempt a FAILED outgoing message (tap-to-retry on the bubble). */
+    fun retrySend(id: String, msgId: String) {}
     fun sendPhoto(id: String, bmp: Bitmap)
     fun sendVoice(id: String, audioFile: java.io.File?, durSec: Int, amps: List<Int>)
     fun react(id: String, msgId: String, emoji: String?)

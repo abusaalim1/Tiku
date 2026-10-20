@@ -18,6 +18,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.systemBars
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.runtime.Composable
@@ -77,6 +78,11 @@ class MainActivity : ComponentActivity() {
             ChatSession.expectExternalActivity = false
             return
         }
+        // …but NOT during the first-run / gate flow: backgrounding mid-onboarding
+        // (e.g. the system avatar picker) yanked setup back to the facade and
+        // desynced password creation (owner Bug 0). There is no unlocked
+        // ChatRoot session to protect yet.
+        if (AppState.isSetupFlow(AppState.screen)) return
         if (ChatSession.unlocked) ChatSession.lock(this)
     }
 
@@ -120,9 +126,10 @@ fun TikuRoot(onGoogleClick: () -> Unit) {
     // interactive content lives in an inner box padded by the system-bar insets, so
     // nothing renders under the status bar or the gesture nav bar on any screen.
     Box(Modifier.fillMaxSize().background(bgBrush)) {
-      Box(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.systemBars)) {
+      Box(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.systemBars).imePadding()) {
         val kind = when (screen) {
-            is Screen.Welcome, is Screen.Password, is Screen.Restore, is Screen.ProfileSetup -> "gate"
+            is Screen.Welcome, is Screen.Password, is Screen.Restore, is Screen.ProfileSetup,
+            is Screen.PasswordReset -> "gate"
             is Screen.Facade, is Screen.StudySubject, is Screen.StudyChapter, is Screen.StudyNotes,
             is Screen.StudyTimer, is Screen.StudyRevision, is Screen.StudyFormulas, is Screen.TikGate -> "facade"
             else -> "home"
@@ -141,6 +148,7 @@ fun TikuRoot(onGoogleClick: () -> Unit) {
                     is Screen.Welcome -> WelcomeScreen(onGoogleClick)
                     is Screen.Password -> CreatePasswordScreen()
                     is Screen.Restore -> RestorePasswordScreen()
+                    is Screen.PasswordReset -> ResetPasswordScreen()
                     is Screen.ProfileSetup -> ProfileSetupScreen()
                     else -> WelcomeScreen(onGoogleClick)
                 }
@@ -168,14 +176,16 @@ fun TikuRoot(onGoogleClick: () -> Unit) {
 
     // FLAG_SECURE hook: set while ANY ChatRoot destination is visible (blocks screenshots +
     // the Android recents preview of gated content); cleared on the study facade.
-    // "Allow screenshots" (Additional settings, default OFF) suspends it inside ChatRoot
-    // only — and applies immediately when the toggle flips.
+    // ROUND 3 — single source of truth: Privacy ▸ "Block screenshots"
+    // (SettingsStore key "bs", default ON). This effect reads the LIVE settings
+    // state (not just the destination), so flipping the switch while standing in
+    // the Me pane applies/lifts FLAG_SECURE immediately, with no navigation.
     val activity = LocalContext.current as? ComponentActivity
     val innerSettings by SettingsStore.state.collectAsState()
-    LaunchedEffect(screen, innerSettings.allowScreenshots) {
+    LaunchedEffect(screen, innerSettings.blockScreenshots) {
         AppState.instantNav = false
         val w = activity?.window
-        if (AppState.isChatRoot(screen) && !innerSettings.allowScreenshots) {
+        if (AppState.isChatRoot(screen) && innerSettings.blockScreenshots) {
             w?.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
         } else {
             w?.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)

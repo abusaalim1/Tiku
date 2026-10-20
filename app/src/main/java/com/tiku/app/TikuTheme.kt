@@ -59,9 +59,11 @@ data class TikuUiSettings(
     val sounds get() = toggles["sn"] == true
     val vibration get() = toggles["vb"] == true
     val appLock get() = toggles["al"] == true
-    // ---- Additional settings (ChatRoot only) ----
-    /** "Allow screenshots" (key as): default OFF. ON clears FLAG_SECURE in ChatRoot. */
-    val allowScreenshots get() = toggles["as"] == true
+    // ---- Privacy (ChatRoot) ----
+    /** "Block screenshots" (key bs): THE single screenshot switch, owned by the
+     *  Privacy group. Default ON = FLAG_SECURE applied inside ChatRoot (chats
+     *  blocked from screenshots + app-switcher previews); OFF lifts it. */
+    val blockScreenshots get() = toggles["bs"] != false
     /** Video calls: front camera on by default (key vcd, default ON). */
     val cameraDefaultOn get() = toggles["vcd"] != false
     /** Video calls: speaker on by default (key vsp, default ON). */
@@ -77,7 +79,7 @@ object SettingsStore {
         "dm" to false, // disappearing messages (stored; engine skips in v1)
         "rr" to true,  // read receipts
         "ls" to true,  // last seen
-        "bs" to false, // block screenshots
+        "bs" to true,  // block screenshots (default ON — the one screenshot switch)
         "ht" to false, // hide typing status
         "sn" to true,  // sounds
         "vb" to true,  // vibration
@@ -85,7 +87,6 @@ object SettingsStore {
         "qh" to false, // quiet hours
         "ds" to false, // data saver
         "ad" to true,  // auto-download photos
-        "as" to false, // additional: allow screenshots inside Tik (default OFF = FLAG_SECURE)
         "vcd" to true, // additional: video calls start with camera on
         "vsp" to true, // additional: video calls start on speaker
         "ets" to false, // additional: Enter key sends the message

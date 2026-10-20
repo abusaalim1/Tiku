@@ -4,6 +4,7 @@ import android.app.Activity
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.util.Log
 import androidx.credentials.CredentialManager
 import androidx.credentials.CustomCredential
 import androidx.credentials.GetCredentialRequest
@@ -16,8 +17,10 @@ import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.ListenerRegistration
 import com.google.firebase.firestore.Query
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
@@ -105,26 +108,94 @@ object FirebaseEngine : ChatRepo {
         } catch (e: Exception) { false }
     }
 
+    /** Restore outcomes — kept distinct so the UI never reports an internal
+     *  failure (no backup, server refusal, offline) as a wrong password. */
+    sealed interface RestoreResult {
+        data object Ok : RestoreResult
+        data object WrongPassword : RestoreResult
+        data class Unavailable(val why: String) : RestoreResult
+    }
+
     /**
-     * Restore identity from the password-wrapped backup. Wrong password -> false
-     * (recovery is impossible without the backup password, by design).
+     * Restore identity from the password-wrapped backup. A genuinely wrong
+     * password -> [RestoreResult.WrongPassword] (recovery without it is
+     * impossible, by design); a missing backup or a failed fetch ->
+     * [RestoreResult.Unavailable] with the plain reason (owner Bug 0).
      */
-    suspend fun restoreFromBackup(ctx: Context, password: String): Boolean {
-        val blob = backupBlob() ?: return false
+    suspend fun restoreFromBackup(ctx: Context, password: String): RestoreResult {
+        val blob = try {
+            backupBlob()
+        } catch (e: Exception) {
+            Log.e("TikuGate", "restore: backup fetch failed", e)
+            return RestoreResult.Unavailable(sendFailureReason(e))
+        } ?: return RestoreResult.Unavailable("no backup was found for this account")
+        val priv = try {
+            Crypto.backupUnwrap(blob, password)
+        } catch (e: Exception) {
+            return RestoreResult.WrongPassword
+        }
         return try {
-            val priv = Crypto.backupUnwrap(blob, password)
             Crypto.privateKeyFromPkcs8(priv) // validates the key material
             myPrivBytes = priv
             val (iv, ct) = Crypto.deviceWrap(priv)
             securePrefs(ctx).edit().putString("idk_iv", iv).putString("idk_ct", ct)
+                .putString("idk_uid", uid)
                 .putString("pw_hash", Crypto.passwordHash(password)).apply()
-            true
-        } catch (e: Exception) { false }
+            RestoreResult.Ok
+        } catch (e: Exception) {
+            Log.e("TikuGate", "restore: local save failed", e)
+            RestoreResult.Unavailable("the backup opened but couldn't be saved on this phone")
+        }
+    }
+
+    /** True when this device holds a Keystore-wrapped identity — the
+     *  precondition for the Google-gated password reset (owner Bug 0). */
+    fun hasLocalIdentity(ctx: Context): Boolean {
+        val sp = securePrefs(ctx)
+        return sp.getString("idk_iv", null) != null && sp.getString("idk_ct", null) != null
+    }
+
+    /** The uid the local identity was created for ("" for pre-round-3 installs). */
+    fun localIdentityUid(ctx: Context): String =
+        securePrefs(ctx).getString("idk_uid", "") ?: ""
+
+    /**
+     * RESCUE PATH (owner Bug 0): re-wrap the EXISTING local identity under a
+     * new password and re-upload the cloud backup. The caller (reset screen)
+     * must already have re-authenticated the SAME Google account and checked
+     * the uid against this identity. The local key is device-Keystore wrapped
+     * — password-independent — so history survives the reset intact.
+     * Returns the cloud-backup update success as the value.
+     */
+    suspend fun resetBackupPassword(ctx: Context, newPassword: String): Result<Boolean> {
+        return try {
+            if (myPrivBytes == null) loadLocalIdentity(ctx)
+            val priv = myPrivBytes ?: return Result.failure(
+                IllegalStateException("No journal key found on this phone."))
+            val blob = Crypto.backupWrap(priv, newPassword)
+            val hash = Crypto.passwordHash(newPassword)
+            securePrefs(ctx).edit().putString("pw_hash", hash)
+                .putString("idk_uid", uid).apply()
+            // self-verify the just-saved verifier before claiming success
+            val stored = securePrefs(ctx).getString("pw_hash", null)
+            if (stored != hash || !Crypto.passwordVerify(newPassword, hash)) {
+                return Result.failure(
+                    IllegalStateException("Couldn't save the new password on this phone."))
+            }
+            val cloudOk = runCatching {
+                db.collection(Schema.Users.COLL).document(uid).update("keyBackup", blob).await()
+            }.isSuccess
+            Result.success(cloudOk)
+        } catch (e: Exception) { Result.failure(e) }
     }
 
     /** New user: generate identity, claim username, write user doc + backup. */
     suspend fun finishNewUser(ctx: Context, password: String, username: String, avatarBytes: ByteArray?): Result<Unit> {
         return try {
+            if (password.isEmpty()) {
+                return Result.failure(IllegalStateException(
+                    "Setup password missing — go back and set your password again."))
+            }
             val u = username.lowercase()
             db.runTransaction { tx ->
                 val claimRef = db.collection(Schema.Users.USERNAME_CLAIM).document(u)
@@ -136,8 +207,27 @@ object FirebaseEngine : ChatRepo {
             myPrivBytes = priv
             val blob = Crypto.backupWrap(priv, password)
             val (iv, ct) = Crypto.deviceWrap(priv)
-            securePrefs(ctx).edit().putString("idk_iv", iv).putString("idk_ct", ct)
-                .putString("pw_hash", Crypto.passwordHash(password)).apply()
+            val sp = securePrefs(ctx)
+            // BUG-0 GUARD: the create-password step already saved + self-verified
+            // a verifier for THIS password. Never silently overwrite it with a
+            // hash of a different string — if the handed-over password doesn't
+            // match the saved verifier, setup stops loudly instead of bricking
+            // the account behind a "wrong password" the user never chose.
+            val priorHash = sp.getString("pw_hash", null)
+            if (priorHash != null && Crypto.hashWellFormed(priorHash) &&
+                !Crypto.passwordVerify(password, priorHash)) {
+                return Result.failure(IllegalStateException(
+                    "Setup password mismatch — go back and set your password again."))
+            }
+            val newHash = Crypto.passwordHash(password)
+            sp.edit().putString("idk_iv", iv).putString("idk_ct", ct)
+                .putString("idk_uid", uid)
+                .putString("pw_hash", newHash).apply()
+            if (sp.getString("pw_hash", null) != newHash ||
+                !Crypto.passwordVerify(password, newHash)) {
+                return Result.failure(IllegalStateException(
+                    "Couldn't save your password on this phone — please try again."))
+            }
             val photoData = avatarBytes?.let {
                 BitmapFactory.decodeByteArray(it, 0, it.size)?.let { b -> MediaStore.compressAvatar(b) }
             } ?: ""
@@ -282,7 +372,10 @@ object FirebaseEngine : ChatRepo {
                 callsRegs[tid] = db.collection(Schema.Chats.COLL).document(tid).collection("calls")
                     .whereEqualTo("state", "ringing")
                     .addSnapshotListener { snap, err ->
-                        if (err != null) return@addSnapshotListener
+                        if (err != null) {
+                            Log.e("TikuCall", "incoming-call watcher failed for chat $tid", err)
+                            return@addSnapshotListener
+                        }
                         snap?.documents?.forEach { doc -> handleIncomingCall(tid, doc.id, doc) }
                     }
             }
@@ -341,12 +434,61 @@ object FirebaseEngine : ChatRepo {
         callsRegs.values.forEach { it.remove() }; callsRegs.clear()
     }
 
+    // ================= CHAT DOC BOOTSTRAP =================
+    // Round-3 root-cause companion fix: message/call writes are gated by rules
+    // on the PARENT chat doc (chats/{id}), so the doc — with members=[me, peer]
+    // — must EXIST and be committed before the first message or call write.
+    // v1 created it fire-and-forget inside startThreadWith; if that write
+    // raced or failed, every later subcollection write was refused. Send and
+    // call paths now AWAIT ensureChatDoc() first (failures surface, never
+    // swallowed), and duplicate ensures are de-duped per chat.
+    private val chatDocJobs = mutableMapOf<String, Deferred<Unit>>()
+
+    suspend fun ensureChatDoc(id: String, peerUid: String) {
+        val job = synchronized(chatDocJobs) {
+            chatDocJobs.getOrPut(id) {
+                scope.async {
+                    val ref = db.collection(Schema.Chats.COLL).document(id)
+                    if (!ref.get().await().exists()) {
+                        ref.set(mapOf(
+                            "members" to listOf(uid, peerUid),
+                            "typing" to emptyMap<String, Boolean>(),
+                            "clearedBefore" to emptyMap<String, Long>(),
+                            "updatedAt" to FieldValue.serverTimestamp(),
+                        )).await()
+                    }
+                }
+            }
+        }
+        try {
+            job.await()
+        } catch (e: Exception) {
+            synchronized(chatDocJobs) { chatDocJobs.remove(id) }
+            throw e
+        }
+    }
+
+    /** Plain-language reason for a failed send/call write (toast + bubble). */
+    fun sendFailureReason(e: Throwable): String {
+        val fe = e as? com.google.firebase.firestore.FirebaseFirestoreException
+        return when (fe?.code) {
+            com.google.firebase.firestore.FirebaseFirestoreException.Code.PERMISSION_DENIED ->
+                "the server refused the write (check the Firestore rules are published)"
+            com.google.firebase.firestore.FirebaseFirestoreException.Code.UNAVAILABLE ->
+                "no connection to the server"
+            com.google.firebase.firestore.FirebaseFirestoreException.Code.NOT_FOUND ->
+                "the chat isn't set up on the server yet"
+            else -> e.message?.take(70) ?: "unknown error"
+        }
+    }
+
     /** INSTANT RE-LOCK: stop listeners, zeroize the private key + conversation keys in RAM,
      *  drop all caches. After this the session is cryptographically dead. */
     fun lock() {
         // any live call ends with the session — and its signaling docs are deleted
         CallController.endSilently()
         stop()
+        synchronized(chatDocJobs) { chatDocJobs.clear() }
         threadsReg = null; msgsReg = null
         runCatching { myPrivBytes?.fill(0) }
         myPrivBytes = null
@@ -366,6 +508,13 @@ object FirebaseEngine : ChatRepo {
 
     override fun openThread(id: String) {
         markRead(id)
+        // opening a chat also tops up the parent doc guarantee (async, logged)
+        AppState.thread(id)?.person?.uid?.takeIf { it.isNotEmpty() }?.let { peerUid ->
+            scope.launch {
+                runCatching { ensureChatDoc(id, peerUid) }
+                    .onFailure { Log.e("TikuSend", "ensureChatDoc on open failed for $id", it) }
+            }
+        }
         openChatIds += id
         attachMessages(id)
         if (SettingsStore.state.value.readReceipts) {
@@ -411,11 +560,18 @@ object FirebaseEngine : ChatRepo {
                     }.getOrDefault(0L)
                     val dmCutoff = if (SettingsStore.state.value.toggles["dm"] == true)
                         System.currentTimeMillis() - 24L * 3600 * 1000 else 0L
-                    val msgs = snap?.documents?.mapNotNull { doc ->
+                    val serverMsgs = snap?.documents?.mapNotNull { doc ->
                         runCatching { decryptDoc(id, doc, key) }.getOrNull()
                     }?.filter { m ->
                         !m.deletedForMe && m.tsMs >= clearedBefore && (dmCutoff == 0L || m.tsMs >= dmCutoff)
                     } ?: emptyList()
+                    // round 3: keep my local optimistic copies the server hasn't
+                    // confirmed yet (SENDING) and the ones it refused (FAILED —
+                    // tap-to-retry). Server copies win by id once they land.
+                    val serverIds = serverMsgs.map { it.id }.toHashSet()
+                    val localOnly = (AppState.thread(id)?.messages ?: emptyList())
+                        .filter { it.id !in serverIds && it.status != SendStatus.SENT }
+                    val msgs = (serverMsgs + localOnly).sortedBy { it.tsMs }
                     // peer typing indicator -> chat header status
                     runCatching {
                         val chatDoc = db.collection(Schema.Chats.COLL).document(chatDocId).get().await()
@@ -478,14 +634,36 @@ object FirebaseEngine : ChatRepo {
             photo, replyQuote, reactions, starredBy.contains(uid), deletedFor.contains(uid), tsMs, localPath)
     }
 
+    // ================= SEND PATH (round 3: optimistic + NO silent failures) ====
+    // v1's sendText awaited a Firestore add() inside the engine scope with no
+    // try/catch and no local echo: when the write was refused (the recursive
+    // rules bug), the exception died in the CoroutineExceptionHandler and the
+    // message simply never appeared — not on the sender's screen, not anywhere.
+    // Now: the bubble appears instantly as SENDING with a client-chosen doc id
+    // (so the server snapshot replaces it 1:1), the write is awaited, and any
+    // failure flips the bubble to FAILED + toast + Logcat "TikuSend".
+
+    private fun newLocalId() = "m" + UUID.randomUUID().toString().replace("-", "")
+
     override fun sendText(id: String, text: String, quote: String?) {
-        scope.launch {
-            val th = AppState.thread(id) ?: return@launch
-            val key = convKeyOrNull(id, th.person.uid)
-                ?: return@launch.also { AppState.toast("Couldn't send — encryption key not ready") }
-            val (iv, ct) = Crypto.encryptText(key, text)
-            val (rqIv, rqCt) = if (quote != null) Crypto.encryptText(key, quote) else ("" to "")
-            db.collection(Schema.Chats.COLL).document(id).collection(Schema.Chats.MESSAGES).add(mapOf(
+        val th = AppState.thread(id) ?: return
+        val local = TikuMessage(
+            id = newLocalId(), senderUid = uid, kind = MsgKind.TEXT, text = text,
+            time = fmtTime(System.currentTimeMillis()), me = true, replyQuote = quote,
+            tsMs = System.currentTimeMillis(), status = SendStatus.SENDING,
+        )
+        AppState.upsertMessage(id, local)
+        scope.launch { deliverText(id, th.person.uid, local) }
+    }
+
+    private suspend fun deliverText(id: String, peerUid: String, local: TikuMessage) {
+        try {
+            ensureChatDoc(id, peerUid)
+            val key = convKeyOrNull(id, peerUid)
+                ?: throw IllegalStateException("encryption key not ready — the other person may not have finished setting up")
+            val (iv, ct) = Crypto.encryptText(key, local.text)
+            val (rqIv, rqCt) = if (local.replyQuote != null) Crypto.encryptText(key, local.replyQuote) else ("" to "")
+            msgRef(id, local.id).set(mapOf(
                 "senderId" to uid, "kind" to "text", "ct" to ct, "iv" to iv,
                 "ts" to FieldValue.serverTimestamp(),
                 "rqCt" to rqCt, "rqIv" to rqIv,
@@ -493,41 +671,108 @@ object FirebaseEngine : ChatRepo {
                 "deletedFor" to emptyList<String>(), "seenBy" to listOf(uid),
                 "durationMs" to 0, "amps" to emptyList<Int>(), "mediaChunks" to 0,
             )).await()
+            AppState.setMessageStatus(id, local.id, SendStatus.SENT)
             touchChat(id)
+        } catch (e: Exception) {
+            Log.e("TikuSend", "text send failed in chat $id (msg ${local.id})", e)
+            AppState.setMessageStatus(id, local.id, SendStatus.FAILED)
+            AppState.toast("Couldn't send — ${sendFailureReason(e)}")
         }
     }
 
-    private suspend fun sendMedia(id: String, kind: String, plainBytes: ByteArray, durMs: Int = 0, amps: List<Int> = emptyList()) {
-        val th = AppState.thread(id) ?: return
-        val key = convKeyOrNull(id, th.person.uid)
-            ?: return.also { AppState.toast("Couldn't send — encryption key not ready") }
-        val (iv, ctB64) = Crypto.encrypt(key, plainBytes)
-        val ctBytes = Crypto.unb64(ctB64)
-        val msgRef = db.collection(Schema.Chats.COLL).document(id)
-            .collection(Schema.Chats.MESSAGES).document()
-        msgRef.set(mapOf(
-            "senderId" to uid, "kind" to kind, "ct" to "", "iv" to iv,
-            "ts" to FieldValue.serverTimestamp(),
-            "rqCt" to "", "rqIv" to "",
-            "reaction" to emptyMap<String, String>(), "starredBy" to emptyList<String>(),
-            "deletedFor" to emptyList<String>(), "seenBy" to listOf(uid),
-            "durationMs" to durMs, "amps" to amps, "mediaChunks" to 0,
-        )).await()
-        val chunks = MediaStore.upload(db, id, msgRef.id, ctBytes)
-        msgRef.update("mediaChunks", chunks).await()
-        touchChat(id)
-    }
-
-    /** Photo pipeline: downscale <=1280px -> JPEG q80 -> encrypt -> chunk-upload. */
     override fun sendPhoto(id: String, bmp: Bitmap) {
-        scope.launch { sendMedia(id, "image", MediaStore.compressPhoto(bmp)) }
+        val th = AppState.thread(id) ?: return
+        val local = TikuMessage(
+            id = newLocalId(), senderUid = uid, kind = MsgKind.IMAGE,
+            time = fmtTime(System.currentTimeMillis()), me = true, photo = bmp,
+            tsMs = System.currentTimeMillis(), status = SendStatus.SENDING,
+        )
+        AppState.upsertMessage(id, local)
+        scope.launch { deliverMedia(id, th.person.uid, local, MediaStore.compressPhoto(bmp)) }
     }
 
     override fun sendVoice(id: String, audioFile: File?, durSec: Int, amps: List<Int>) {
+        val th = AppState.thread(id) ?: return
+        if (audioFile == null || !audioFile.exists()) {
+            AppState.toast("Couldn't send the voice note — recording missing")
+            return
+        }
+        val local = TikuMessage(
+            id = newLocalId(), senderUid = uid, kind = MsgKind.VOICE,
+            time = fmtTime(System.currentTimeMillis()), me = true,
+            voiceDurSec = durSec, amps = amps, localPath = audioFile.absolutePath,
+            tsMs = System.currentTimeMillis(), status = SendStatus.SENDING,
+        )
+        AppState.upsertMessage(id, local)
         scope.launch {
-            if (audioFile == null || !audioFile.exists()) return@launch
-            try { sendMedia(id, "voice", audioFile.readBytes(), durSec * 1000, amps) }
-            finally { audioFile.delete() }
+            val bytes = runCatching { audioFile.readBytes() }.getOrNull()
+            if (bytes == null) {
+                Log.e("TikuSend", "voice send failed in chat $id: recording unreadable")
+                AppState.setMessageStatus(id, local.id, SendStatus.FAILED)
+                AppState.toast("Couldn't send — the recording couldn't be read")
+            } else {
+                deliverMedia(id, th.person.uid, local, bytes)
+            }
+        }
+    }
+
+    /** Shared media delivery: encrypt -> doc under the LOCAL id -> chunk upload. */
+    private suspend fun deliverMedia(id: String, peerUid: String, local: TikuMessage, plainBytes: ByteArray) {
+        val kind = if (local.kind == MsgKind.IMAGE) "image" else "voice"
+        try {
+            ensureChatDoc(id, peerUid)
+            val key = convKeyOrNull(id, peerUid)
+                ?: throw IllegalStateException("encryption key not ready — the other person may not have finished setting up")
+            val (iv, ctB64) = Crypto.encrypt(key, plainBytes)
+            val ctBytes = Crypto.unb64(ctB64)
+            val ref = msgRef(id, local.id)
+            ref.set(mapOf(
+                "senderId" to uid, "kind" to kind, "ct" to "", "iv" to iv,
+                "ts" to FieldValue.serverTimestamp(),
+                "rqCt" to "", "rqIv" to "",
+                "reaction" to emptyMap<String, String>(), "starredBy" to emptyList<String>(),
+                "deletedFor" to emptyList<String>(), "seenBy" to listOf(uid),
+                "durationMs" to local.voiceDurSec * 1000, "amps" to local.amps, "mediaChunks" to 0,
+            )).await()
+            val chunks = MediaStore.upload(db, id, local.id, ctBytes)
+            ref.update("mediaChunks", chunks).await()
+            AppState.setMessageStatus(id, local.id, SendStatus.SENT)
+            // the recording temp file is only cleaned up once delivery landed —
+            // a FAILED voice note keeps its file so tap-to-retry can resend it.
+            if (local.kind == MsgKind.VOICE) local.localPath?.let { runCatching { File(it).delete() } }
+            touchChat(id)
+        } catch (e: Exception) {
+            Log.e("TikuSend", "$kind send failed in chat $id (msg ${local.id})", e)
+            AppState.setMessageStatus(id, local.id, SendStatus.FAILED)
+            AppState.toast("Couldn't send — ${sendFailureReason(e)}")
+        }
+    }
+
+    /** Tap-to-retry on a FAILED bubble: same doc id, same content, fresh attempt. */
+    override fun retrySend(id: String, msgId: String) {
+        val th = AppState.thread(id) ?: return
+        val m = th.messages.firstOrNull { it.id == msgId } ?: return
+        if (m.status != SendStatus.FAILED) return
+        AppState.setMessageStatus(id, msgId, SendStatus.SENDING)
+        scope.launch {
+            when (m.kind) {
+                MsgKind.TEXT -> deliverText(id, th.person.uid, m)
+                MsgKind.IMAGE -> {
+                    val bmp = m.photo
+                    if (bmp == null) {
+                        AppState.setMessageStatus(id, msgId, SendStatus.FAILED)
+                        AppState.toast("Couldn't resend — the photo is gone from this device")
+                    } else deliverMedia(id, th.person.uid, m, MediaStore.compressPhoto(bmp))
+                }
+                MsgKind.VOICE -> {
+                    val f = m.localPath?.let { File(it) }
+                    val bytes = f?.takeIf { it.exists() }?.let { runCatching { it.readBytes() }.getOrNull() }
+                    if (bytes == null) {
+                        AppState.setMessageStatus(id, msgId, SendStatus.FAILED)
+                        AppState.toast("Couldn't resend — the recording is gone from this device")
+                    } else deliverMedia(id, th.person.uid, m, bytes)
+                }
+            }
         }
     }
 
@@ -589,17 +834,12 @@ object FirebaseEngine : ChatRepo {
         if (AppState.thread(id) == null) {
             AppState.threads.value = listOf(ChatThread(id = id, person = person, time = "now")) + AppState.threads.value
         }
-        scope.launch {
-            runCatching {
-                val ref = db.collection(Schema.Chats.COLL).document(id)
-                if (!ref.get().await().exists()) {
-                    ref.set(mapOf(
-                        "members" to listOf(uid, person.uid),
-                        "typing" to emptyMap<String, Boolean>(),
-                        "clearedBefore" to emptyMap<String, Long>(),
-                        "updatedAt" to FieldValue.serverTimestamp(),
-                    )).await()
-                }
+        // the parent chat doc is created through the SAME awaited path the send
+        // and call flows use — and a failure here is logged, never silent.
+        if (person.uid.isNotEmpty()) {
+            scope.launch {
+                runCatching { ensureChatDoc(id, person.uid) }
+                    .onFailure { Log.e("TikuSend", "ensureChatDoc failed for new thread $id", it) }
             }
         }
         return id

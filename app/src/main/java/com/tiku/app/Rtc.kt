@@ -2,6 +2,7 @@ package com.tiku.app
 
 import android.content.Context
 import android.media.AudioManager
+import android.util.Log
 import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.ListenerRegistration
@@ -363,6 +364,12 @@ sealed interface CallUiState {
         /** bumped when the remote video track arrives (forces the UI to rebind sinks) */
         val tick: Int = 0,
     ) : CallUiState
+    /** Round 3: a failed call is a VISIBLE state ("Call failed — <reason>"),
+     *  shown before the signaling trace is deleted — never a silent hangup. */
+    data class Failed(
+        val threadId: String, val callId: String, val video: Boolean,
+        val person: Person, val reason: String,
+    ) : CallUiState
 }
 
 object CallController {
@@ -385,6 +392,7 @@ object CallController {
         is CallUiState.Outgoing -> st.threadId to st.callId
         is CallUiState.Incoming -> st.threadId to st.callId
         is CallUiState.Connected -> st.threadId to st.callId
+        is CallUiState.Failed -> st.threadId to st.callId
         CallUiState.Idle -> null
     }
 
@@ -414,20 +422,24 @@ object CallController {
         state.value = CallUiState.Outgoing(threadId, callId, video, person, System.currentTimeMillis())
         armRingTimeout(threadId, callId)
         scope.launch {
-            val ok = runCatching {
+            try {
+                val peer = AppState.thread(threadId)?.person ?: person
+                // signaling lives UNDER the chat doc (rules gate it on the
+                // parent's members) — the doc must exist first, AWAITED. In
+                // round 2 this create raced the thread bootstrap and the rules
+                // refusal was invisible (generic toast, instant teardown).
+                FirebaseEngine.ensureChatDoc(threadId, peer.uid)
                 val s = RtcSession(ctx, hasVideo = video,
                     cameraOn = settings.cameraDefaultOn, speakerOn = settings.speakerDefaultOn)
                 wireEvents(s, threadId, callId, role = "caller")
                 session = s
                 val offer = s.createOffer()
-                val peer = AppState.thread(threadId)?.person ?: person
                 CallSignal.createCall(threadId, callId, if (video) "video" else "audio",
                     FirebaseEngine.uid, peer.uid, offer)
                 attachDocListener(threadId, callId, role = "caller")
-            }.isSuccess
-            if (!ok) {
-                AppState.toast("Couldn't start the call")
-                finish(threadId, deleteDocs = true, quiet = true)
+            } catch (e: Exception) {
+                Log.e("TikuCall", "startCall failed for chat $threadId", e)
+                failCall(threadId, FirebaseEngine.sendFailureReason(e))
             }
         }
     }
@@ -466,7 +478,7 @@ object CallController {
         }
         val settings = SettingsStore.state.value
         scope.launch {
-            val ok = runCatching {
+            try {
                 val offer = CallSignal.readOffer(st.threadId, st.callId)
                     ?: throw IllegalStateException("Offer missing")
                 val s = RtcSession(ctx, hasVideo = st.video,
@@ -480,10 +492,9 @@ object CallController {
                     System.currentTimeMillis(), speakerOn = settings.speakerDefaultOn,
                     cameraOn = settings.cameraDefaultOn)
                 ringJob?.cancel(); ringJob = null
-            }.isSuccess
-            if (!ok) {
-                AppState.toast("Couldn't answer the call")
-                finish(st.threadId, deleteDocs = true, quiet = true)
+            } catch (e: Exception) {
+                Log.e("TikuCall", "accept failed for call ${st.callId}", e)
+                failCall(st.threadId, FirebaseEngine.sendFailureReason(e))
             }
         }
     }
@@ -513,7 +524,10 @@ object CallController {
                 // signaling marks connected; nothing extra needed here.
             }
             override fun onFailed() {
-                scope.launch { finish(threadId, deleteDocs = true, quiet = false, remoteEnded = true) }
+                scope.launch {
+                    Log.e("TikuCall", "ICE connection failed for call $callId")
+                    failCall(threadId, "the connection failed")
+                }
             }
             override fun onRemoteVideo() {
                 // tick bump forces CallScreen recomposition so it rebinds the remote sink
@@ -579,6 +593,42 @@ object CallController {
             if (cur != null && cur.second == callId && st !is CallUiState.Connected) {
                 CallSignal.markEnded(threadId, callId)
                 AppState.toast("No answer")
+                finish(threadId, deleteDocs = true, quiet = true)
+            }
+        }
+    }
+
+    /**
+     * Failure path (round 3): surface a plain "Call failed — <reason>" state and
+     * hold it on screen briefly; ONLY THEN tear down and delete the signaling
+     * trace (finish). A call must never fail silently again.
+     */
+    private fun failCall(threadId: String, reason: String) {
+        val st = state.value
+        if (st is CallUiState.Failed) return
+        ids(st) ?: return
+        val person = when (st) {
+            is CallUiState.Outgoing -> st.person
+            is CallUiState.Incoming -> st.person
+            is CallUiState.Connected -> st.person
+            else -> AppState.thread(threadId)?.person ?: return
+        }
+        val video = when (st) {
+            is CallUiState.Outgoing -> st.video
+            is CallUiState.Incoming -> st.video
+            is CallUiState.Connected -> st.video
+            else -> false
+        }
+        val callId = ids(st)!!.second
+        ringJob?.cancel(); ringJob = null
+        callDocReg?.remove(); callDocReg = null
+        session?.dispose(); session = null
+        answerApplied = false; processedCallerCands = 0; processedCalleeCands = 0
+        state.value = CallUiState.Failed(threadId, callId, video, person, reason)
+        AppState.go(Screen.Call(threadId, video))
+        scope.launch {
+            delay(2600)
+            if (state.value is CallUiState.Failed) {
                 finish(threadId, deleteDocs = true, quiet = true)
             }
         }

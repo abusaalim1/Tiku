@@ -202,6 +202,7 @@ fun CallScreen(threadId: String, video: Boolean) {
         is CallUiState.Outgoing -> Triple(s.person, "Calling…", s.video)
         is CallUiState.Incoming -> Triple(s.person, if (s.video) "Incoming video call…" else "Incoming voice call…", s.video)
         is CallUiState.Connected -> Triple(s.person, "", s.video)
+        is CallUiState.Failed -> Triple(s.person, "Call failed — ${s.reason}", s.video)
         CallUiState.Idle -> Triple(Person(name = ""), "", video)
     }
     val connected = callState as? CallUiState.Connected

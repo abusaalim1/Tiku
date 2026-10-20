@@ -11,6 +11,12 @@ android {
     defaultConfig {
         applicationId = "tiku.app"
         minSdk = 26; targetSdk = 35; versionCode = 1; versionName = "1.0"
+        // ROUND 3, ITEM 6: arm64-v8a ONLY. The owner's + partner's phones are
+        // arm64-class; shipping the other ABIs' WebRTC natives was dead weight.
+        // TRADEOFF: 32-bit-only phones cannot install this APK (stated in the
+        // release notes). ABI filter (NOT splits) keeps the single
+        // app-release.apk output path the CI expects.
+        ndk { abiFilters += listOf("arm64-v8a") }
     }
     buildFeatures { compose = true }
     testOptions {
@@ -32,8 +38,15 @@ android {
     buildTypes {
         release {
             signingConfig = signingConfigs.getByName("stable")
-            isMinifyEnabled = false
-            isShrinkResources = false
+            // ROUND 3, ITEM 6: R8 minify + resource shrinking. Keep rules cover
+            // WebRTC + the app itself (app/proguard-rules.pro); Firebase /
+            // Credential / Coil ship their own consumer rules. The Roborazzi
+            // screenshot suite is the smoke check — if R8 breaks something it
+            // can't catch, this reverts to minify OFF (ABI cut alone is an
+            // acceptable result).
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
         }
     }
     compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }

@@ -39,14 +39,19 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardCapitalization
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /** .form scaffold: 56dp top padding, 24dp sides, h2 serif title + muted sub. */
 @Composable
@@ -74,6 +79,14 @@ fun PasswordField(value: String, onValue: (String) -> Unit, placeholder: String)
             textStyle = TextStyle(fontSize = 16.sp, fontFamily = Manrope, color = TikuTokens.Ink),
             cursorBrush = SolidColor(TikuTokens.Ink),
             visualTransformation = if (shown) VisualTransformation.None else PasswordVisualTransformation(),
+            // OWNER BUG 0: a password field MUST present a password IME — plain-text
+            // keyboards auto-correct / auto-capitalize / suggest, so the string the
+            // phone commits at creation can differ from the string at the gate.
+            keyboardOptions = KeyboardOptions(
+                keyboardType = KeyboardType.Password,
+                capitalization = KeyboardCapitalization.None,
+                autoCorrect = false,
+            ),
             singleLine = true,
             modifier = Modifier.fillMaxWidth().align(Alignment.CenterStart)
                 .padding(start = 18.dp, end = 56.dp),
@@ -103,9 +116,12 @@ fun CreatePasswordScreen() {
     val settings = tikuSettings().value
     var p1 by remember { mutableStateOf("") }
     var p2 by remember { mutableStateOf("") }
+    var busy by remember { mutableStateOf(false) }
+    var saveError by remember { mutableStateOf("") }
     val n = strengthOf(p1)
     val match = p2.isNotEmpty() && p1 == p2
     val ctx = LocalContext.current
+    val scope = rememberCoroutineScope()
     FormScaffold("Lock your study journal", "Set a password only you know — your journal, notes and progress stay yours.") {
         PasswordField(p1, { p1 = it }, "Password")
         Spacer(Modifier.height(14.dp))
@@ -125,11 +141,34 @@ fun CreatePasswordScreen() {
         Spacer(Modifier.height(6.dp))
         val mText = if (p2.isEmpty()) "" else if (match) "✓ Passwords match" else "Passwords don’t match yet"
         Text(mText, fontSize = 13.sp, color = if (match) settings.accent else TikuTokens.Muted, fontFamily = Manrope)
+        if (saveError.isNotEmpty()) {
+            Text(saveError, fontSize = 13.sp, color = TikuTokens.Red, fontFamily = Manrope)
+            Spacer(Modifier.height(8.dp))
+        }
         Spacer(Modifier.weight(1f))
-        PrimaryButton("Continue", enabled = p1.length >= 8 && match, modifier = Modifier.fillMaxWidth()) {
-            AppState.pendingPassword = p1
-            SettingsStore.savePasswordHash(ctx, Crypto.passwordHash(p1))
-            AppState.go(Screen.ProfileSetup)
+        PrimaryButton(if (busy) "Saving…" else "Continue", enabled = p1.length >= 8 && match && !busy, modifier = Modifier.fillMaxWidth()) {
+            busy = true
+            saveError = ""
+            scope.launch {
+                // OWNER BUG 0 — PERSIST + SELF-VERIFY BEFORE PROCEEDING: the
+                // verifier saved on this phone must accept THIS password, or
+                // setup stops HERE with a plain error. Onboarding must never
+                // reach a gate that rejects the password just set.
+                val ok = withContext(Dispatchers.Default) {
+                    val hash = Crypto.passwordHash(p1)
+                    SettingsStore.savePasswordHash(ctx, hash)
+                    val stored = SettingsStore.passwordHash(ctx)
+                    stored == hash && Crypto.hashWellFormed(stored) &&
+                        Crypto.passwordVerify(p1, stored)
+                }
+                if (ok) {
+                    AppState.pendingPassword = p1
+                    AppState.go(Screen.ProfileSetup)
+                } else {
+                    busy = false
+                    saveError = "Couldn't save your password on this phone — please try again."
+                }
+            }
         }
     }
 }
@@ -153,17 +192,115 @@ fun RestorePasswordScreen() {
         PrimaryButton(if (busy) "Restoring…" else "Restore my journal", enabled = pw.isNotEmpty() && !busy, modifier = Modifier.fillMaxWidth()) {
             busy = true
             scope.launch {
-                val ok = FirebaseEngine.restoreFromBackup(ctx, pw)
-                if (ok) {
-                    ctx.getSharedPreferences("tiku_prefs", android.content.Context.MODE_PRIVATE)
-                        .edit().putBoolean("onboarded", true).apply()
-                    FirebaseEngine.start(ctx)
-                    FirebaseEngine.loadMyProfile()
-                    FirebaseEngine.setPresence(true)
-                    AppState.go(Screen.Home)
-                } else {
-                    busy = false
-                    error = "Couldn’t open the journal. Wrong password — recovery is impossible without it."
+                // outcomes are DISTINCT (owner Bug 0): a genuinely wrong password
+                // is never confused with a missing backup / server refusal.
+                when (val r = FirebaseEngine.restoreFromBackup(ctx, pw)) {
+                    is FirebaseEngine.RestoreResult.Ok -> {
+                        ctx.getSharedPreferences("tiku_prefs", android.content.Context.MODE_PRIVATE)
+                            .edit().putBoolean("onboarded", true).apply()
+                        FirebaseEngine.start(ctx)
+                        FirebaseEngine.loadMyProfile()
+                        FirebaseEngine.setPresence(true)
+                        AppState.go(Screen.Home)
+                    }
+                    is FirebaseEngine.RestoreResult.WrongPassword -> {
+                        busy = false
+                        error = "Wrong password — recovery is impossible without the password this journal was created with."
+                    }
+                    is FirebaseEngine.RestoreResult.Unavailable -> {
+                        busy = false
+                        error = "Couldn't restore right now (${r.why}) — check your connection and try again. This is not a password problem."
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * RESCUE (owner Bug 0): this phone still holds the journal key (device-Keystore
+ * wrapped, password-independent) but the password verifier is missing/damaged.
+ * The user re-authenticates the SAME Google account, then sets a new password —
+ * the existing local key is re-wrapped under it and the cloud backup re-uploaded.
+ * Never offered while a valid verifier exists, so it can never bypass a password.
+ */
+@Composable
+fun ResetPasswordScreen() {
+    androidx.activity.compose.BackHandler { AppState.go(Screen.TikGate) }
+    val ctx = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var stage by remember { mutableStateOf(0) }
+    var busy by remember { mutableStateOf(false) }
+    var note by remember { mutableStateOf("") }
+    var p1 by remember { mutableStateOf("") }
+    var p2 by remember { mutableStateOf("") }
+    val match = p2.isNotEmpty() && p1 == p2
+    // captured ONCE: the account this device's journal belongs to — a mistaken
+    // account switch during re-auth must not be able to move these goalposts
+    val expectedUid = remember { FirebaseEngine.uid }
+    val boundUid = remember { FirebaseEngine.localIdentityUid(ctx) }
+    FormScaffold("Reset your password",
+        "Your journal key is still safe on this phone. Confirm your Google account, then choose a new password.") {
+        if (stage == 0) {
+            Text("Sign in with the same Google account this journal was created with. Your phone plus your Google account together unlock this reset — without them it can't happen.",
+                fontSize = 14.sp, fontFamily = Manrope, color = TikuTokens.Muted)
+            if (note.isNotEmpty()) {
+                Spacer(Modifier.height(10.dp))
+                Text(note, fontSize = 13.sp, color = TikuTokens.Red, fontFamily = Manrope)
+            }
+            Spacer(Modifier.weight(1f))
+            PrimaryButton(if (busy) "Checking…" else "Verify with Google", enabled = !busy, modifier = Modifier.fillMaxWidth()) {
+                val act = ctx as? android.app.Activity
+                if (act == null) { note = "Something went wrong — go back and try again."; return@PrimaryButton }
+                busy = true
+                note = ""
+                scope.launch {
+                    val res = FirebaseEngine.googleSignIn(act)
+                    val freshUid = FirebaseEngine.uid
+                    when {
+                        res.isFailure -> { busy = false; note = "Google sign-in didn't complete. Try again." }
+                        expectedUid.isNotEmpty() && freshUid != expectedUid -> {
+                            busy = false
+                            note = "That's a different Google account — use the one this journal was created with."
+                        }
+                        boundUid.isNotEmpty() && freshUid != boundUid -> {
+                            busy = false
+                            note = "That's a different Google account — use the one this journal was created with."
+                        }
+                        else -> { busy = false; stage = 1 }
+                    }
+                }
+            }
+        } else {
+            PasswordField(p1, { p1 = it }, "New password")
+            Spacer(Modifier.height(14.dp))
+            PasswordField(p2, { p2 = it }, "Confirm new password")
+            Spacer(Modifier.height(6.dp))
+            val mText = when {
+                note.isNotEmpty() -> note
+                p2.isEmpty() -> ""
+                match -> "✓ Passwords match"
+                else -> "Passwords don’t match yet"
+            }
+            Text(mText, fontSize = 13.sp,
+                color = if (note.isNotEmpty()) TikuTokens.Red else TikuTokens.Muted, fontFamily = Manrope)
+            Spacer(Modifier.weight(1f))
+            PrimaryButton(if (busy) "Resetting…" else "Set new password",
+                enabled = p1.length >= 8 && match && !busy, modifier = Modifier.fillMaxWidth()) {
+                busy = true
+                note = ""
+                scope.launch {
+                    val r = FirebaseEngine.resetBackupPassword(ctx, p1)
+                    if (r.isSuccess) {
+                        ctx.getSharedPreferences("tiku_prefs", android.content.Context.MODE_PRIVATE)
+                            .edit().putBoolean("onboarded", true).apply()
+                        AppState.toast(if (r.getOrNull() == true) "Password reset — welcome back"
+                            else "Password reset on this phone — the cloud backup updates when you're back online")
+                        ChatSession.unlockFlow(ctx)
+                    } else {
+                        busy = false
+                        note = r.exceptionOrNull()?.message ?: "Couldn't reset. Try again."
+                    }
                 }
             }
         }
@@ -213,6 +350,10 @@ fun ProfileSetupScreen() {
                     .clip(RoundedCornerShape(40.dp))
                     .background(TikuTokens.Mint)
                     .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {
+                        // opening the system picker backgrounds the app — without
+                        // this flag the instant re-lock yanked onboarding to the
+                        // facade mid-setup (owner Bug 0)
+                        ChatSession.expectExternalActivity = true
                         pick.launch("image/*")
                     },
                 contentAlignment = Alignment.Center,

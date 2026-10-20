@@ -5,6 +5,11 @@ import android.graphics.Bitmap
 /** UI-side message kind, mirrored by the Firestore `kind` field. */
 enum class MsgKind { TEXT, IMAGE, VOICE }
 
+/** Delivery state of an outgoing message (round 3: no silent send failures).
+ *  Local optimistic copies start SENDING; the Firestore write landing flips
+ *  them SENT; any failure flips them FAILED and the bubble offers tap-to-retry. */
+enum class SendStatus { SENDING, SENT, FAILED }
+
 /** One chat message, plaintext on-device (always stored/decrypted on-device only). */
 data class TikuMessage(
     val id: String = "",
@@ -22,6 +27,7 @@ data class TikuMessage(
     val deletedForMe: Boolean = false,
     val tsMs: Long = 0L,                // server timestamp (ms) for read watermarks
     val localPath: String? = null,      // decrypted voice file in app-private cache
+    val status: SendStatus = SendStatus.SENT, // outgoing delivery state (mine only)
 )
 
 /** One 1:1 conversation. */

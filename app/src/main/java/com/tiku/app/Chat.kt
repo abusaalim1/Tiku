@@ -21,6 +21,8 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
@@ -217,6 +219,14 @@ private fun ChatContent(thread: ChatThread) {
         LaunchedEffect(visibleMessages.size, peerTyping) {
             if (visibleMessages.isNotEmpty()) listState.animateScrollToItem(visibleMessages.size - 1 + if (peerTyping) 1 else 0)
         }
+        // keyboard open/close: the root's imePadding shrinks this column, and the
+        // last message must stay visible above the keyboard (owner bug 2).
+        val imeBottomPx = WindowInsets.ime.getBottom(androidx.compose.ui.platform.LocalDensity.current)
+        LaunchedEffect(imeBottomPx) {
+            if (imeBottomPx > 0 && visibleMessages.isNotEmpty()) {
+                listState.scrollToItem(visibleMessages.size - 1 + if (peerTyping) 1 else 0)
+            }
+        }
         LazyColumn(
             Modifier.weight(1f).fillMaxWidth().padding(horizontal = 14.dp),
             state = listState,
@@ -264,6 +274,7 @@ private fun ChatContent(thread: ChatThread) {
                         val cur = m.reactions.values.firstOrNull()
                         AppState.repo.react(threadId, m.id, if (cur == emoji) null else emoji)
                     },
+                    onRetry = { AppState.repo.retrySend(threadId, m.id) },
                     onLongPress = {
                         ChatSheets.context(threadId, m) { q -> replyTo = q }
                     },
@@ -453,6 +464,7 @@ fun MessageBubble(
     onPlayToggle: () -> Unit,
     onReact: (String) -> Unit,
     onLongPress: () -> Unit,
+    onRetry: () -> Unit = {},
 ) {
     var appeared by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) { appeared = true }
@@ -506,7 +518,11 @@ fun MessageBubble(
                 }
                 Row(Modifier.align(Alignment.End).padding(top = 2.dp)) {
                     Text(
-                        (if (m.starredByMe) "★ " else "") + m.time + if (m.me) " ✓✓" else "",
+                        when {
+                            m.me && m.status == SendStatus.SENDING -> "Sending…"
+                            m.me && m.status == SendStatus.FAILED -> "Not sent"
+                            else -> (if (m.starredByMe) "★ " else "") + m.time + if (m.me) " ✓✓" else ""
+                        },
                         fontSize = 11.sp, color = textColor.copy(alpha = 0.7f), fontFamily = Manrope,
                     )
                 }
@@ -524,6 +540,23 @@ fun MessageBubble(
                     }
                 }
             }
+        }
+    }
+    // FAILED outgoing bubble: plain reason + tap-to-retry (round 3 — a failed
+    // send must never be invisible again).
+    if (m.me && m.status == SendStatus.FAILED) {
+        Row(
+            Modifier.fillMaxWidth().padding(top = 3.dp, end = 4.dp),
+            horizontalArrangement = Arrangement.End,
+        ) {
+            Text(
+                "⚠ Couldn't send — tap to retry",
+                fontSize = 12.sp, fontWeight = FontWeight.SemiBold,
+                color = TikuTokens.Red, fontFamily = Manrope,
+                modifier = Modifier.clickable(
+                    interactionSource = remember { MutableInteractionSource() }, indication = null,
+                ) { onRetry() },
+            )
         }
     }
     Spacer(Modifier.height(2.dp))

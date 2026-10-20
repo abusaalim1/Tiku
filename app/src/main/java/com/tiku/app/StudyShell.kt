@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -38,7 +39,9 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontStyle
@@ -48,6 +51,7 @@ import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import io.coil.compose.AsyncImage
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -307,6 +311,62 @@ private fun ToolTile(glyph: String, label: String, modifier: Modifier = Modifier
     }
 }
 
+/**
+ * ONE MCQ option renderer for the whole facade (owner round-3 item 5): a
+ * VERTICAL list of full-width option rows — each its own rounded card with a
+ * circular A/B/C/D letter chip and Manrope Medium text that wraps freely over
+ * two lines when long. Never a horizontal pill row, never one compressed line.
+ */
+@Composable
+fun McqOptions(options: List<String>, picked: Int?, correct: Int, onPick: (Int) -> Unit) {
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        options.forEachIndexed { i, opt ->
+            val isPicked = picked == i
+            val isRight = i == correct
+            val bg = when {
+                picked == null -> TikuTokens.Bubble
+                isRight -> Color(0xFFE7F4E4)
+                isPicked -> Color(0xFFFBE3DC)
+                else -> TikuTokens.Bubble
+            }
+            val borderC = when {
+                picked != null && isRight -> Color(0xFF7CB87C)
+                isPicked && !isRight -> Color(0xFFD9603A)
+                else -> TikuTokens.Line
+            }
+            val revealed = picked != null && (isRight || isPicked)
+            val chipBg = when {
+                picked != null && isRight -> Color(0xFF7CB87C)
+                isPicked && !isRight -> Color(0xFFD9603A)
+                else -> TikuTokens.Mint
+            }
+            Row(
+                Modifier.fillMaxWidth().testTag("mcq_option_$i")
+                    .clip(RoundedCornerShape(16.dp)).background(bg)
+                    .border(1.dp, borderC, RoundedCornerShape(16.dp))
+                    .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) { onPick(i) }
+                    .padding(horizontal = 14.dp, vertical = 14.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Box(
+                    Modifier.size(30.dp).clip(CircleShape).background(chipBg),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        "${"ABCD"[i]}", fontSize = 13.sp, fontFamily = Bricolage,
+                        fontWeight = FontWeight.Bold,
+                        color = if (revealed) Color.White else TikuTokens.Ink,
+                    )
+                }
+                Spacer(Modifier.width(12.dp))
+                // wraps to as many lines as the text needs — never compressed
+                Text(opt, fontSize = 14.5.sp, fontFamily = Manrope, fontWeight = FontWeight.Medium,
+                    color = TikuTokens.Ink, modifier = Modifier.weight(1f))
+            }
+        }
+    }
+}
+
 @Composable
 private fun QuestionOfTheDayCard() {
     val settings = tikuSettings().value
@@ -331,30 +391,7 @@ private fun QuestionOfTheDayCard() {
                     // the two roles are visually distinct by design.
                     Text(q.q, fontSize = 17.sp, fontFamily = Bricolage, fontWeight = FontWeight.SemiBold, color = TikuTokens.Ink)
                     Spacer(Modifier.height(12.dp))
-                    q.options.forEachIndexed { i, opt ->
-                        val isPicked = picked == i
-                        val isRight = i == q.correct
-                        val bg = when {
-                            picked == null -> TikuTokens.Bubble
-                            isRight -> Color(0xFFE7F4E4)
-                            isPicked -> Color(0xFFFBE3DC)
-                            else -> TikuTokens.Bubble
-                        }
-                        val borderC = when {
-                            picked != null && isRight -> Color(0xFF7CB87C)
-                            isPicked && !isRight -> Color(0xFFD9603A)
-                            else -> TikuTokens.Line
-                        }
-                        Box(
-                            Modifier.fillMaxWidth().padding(vertical = 4.dp)
-                                .clip(RoundedCornerShape(14.dp)).background(bg)
-                                .border(1.dp, borderC, RoundedCornerShape(14.dp))
-                                .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) { picked = i }
-                                .padding(horizontal = 14.dp, vertical = 11.dp),
-                        ) {
-                            Text("${"ABCD"[i]}.  $opt", fontSize = 14.sp, fontFamily = Manrope, fontWeight = FontWeight.Medium, color = TikuTokens.Ink)
-                        }
-                    }
+                    McqOptions(q.options, picked, q.correct) { picked = it }
                     if (picked != null) {
                         Spacer(Modifier.height(10.dp))
                         AnswerChip()
@@ -393,41 +430,67 @@ fun TikGateScreen() {
     var pw by remember { mutableStateOf("") }
     var error by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
-    val hasHash = remember { SettingsStore.passwordHash(ctx) != null }
+    // BUG-0: the gate distinguishes THREE states — a verifiable password, a
+    // missing verifier, and a DAMAGED verifier. Only the first may ever produce
+    // the words "Wrong password"; missing/damaged data routes to the Google-
+    // gated rescue instead (offered only when this phone still holds the key).
+    val storedHash = remember { SettingsStore.passwordHash(ctx) }
+    val hasHash = storedHash != null
+    val hashDamaged = hasHash && !Crypto.hashWellFormed(storedHash)
+    val rescuable = remember {
+        !Config.PREVIEW_UI_ONLY && FirebaseEngine.hasLocalIdentity(ctx)
+    }
 
     BackHandler { AppState.go(Screen.Facade) }
     FormScaffold("Your journal is locked", "Enter your password to open your study journal.") {
-        if (hasHash) {
-            PasswordField(pw, { pw = it; error = "" }, "Password")
-            Spacer(Modifier.height(6.dp))
-            Text(error, fontSize = 13.sp, color = TikuTokens.Red, fontFamily = Manrope)
-            Spacer(Modifier.weight(1f))
-            PrimaryButton(if (busy) "Opening…" else "Open journal", enabled = pw.isNotEmpty() && !busy, modifier = Modifier.fillMaxWidth()) {
-                busy = true
-                scope.launch {
-                    val hash = SettingsStore.passwordHash(ctx)
-                    val ok = hash != null && withContext(Dispatchers.Default) { Crypto.passwordVerify(pw, hash) }
-                    if (ok) {
-                        // first unlock in preview = run onboarding before the home
-                        val onboarded = ctx.getSharedPreferences("tiku_prefs", android.content.Context.MODE_PRIVATE)
-                            .getBoolean("onboarded", false)
-                        if (Config.PREVIEW_UI_ONLY && !onboarded) {
-                            ChatSession.unlocked = true
-                            AppState.go(Screen.Welcome)
+        when {
+            hasHash && !hashDamaged -> {
+                PasswordField(pw, { pw = it; error = "" }, "Password")
+                Spacer(Modifier.height(6.dp))
+                Text(error, fontSize = 13.sp, color = TikuTokens.Red, fontFamily = Manrope)
+                Spacer(Modifier.weight(1f))
+                PrimaryButton(if (busy) "Opening…" else "Open journal", enabled = pw.isNotEmpty() && !busy, modifier = Modifier.fillMaxWidth()) {
+                    busy = true
+                    scope.launch {
+                        val hash = SettingsStore.passwordHash(ctx)
+                        val ok = hash != null && Crypto.hashWellFormed(hash) &&
+                            withContext(Dispatchers.Default) { Crypto.passwordVerify(pw, hash) }
+                        if (ok) {
+                            // first unlock in preview = run onboarding before the home
+                            val onboarded = ctx.getSharedPreferences("tiku_prefs", android.content.Context.MODE_PRIVATE)
+                                .getBoolean("onboarded", false)
+                            if (Config.PREVIEW_UI_ONLY && !onboarded) {
+                                ChatSession.unlocked = true
+                                AppState.go(Screen.Welcome)
+                            } else {
+                                ChatSession.unlockFlow(ctx)
+                            }
                         } else {
-                            ChatSession.unlockFlow(ctx)
+                            error = "Wrong password — try again."
                         }
-                    } else {
-                        error = "Wrong password — try again."
+                        busy = false
                     }
-                    busy = false
                 }
             }
-        } else {
-            Text("Set up your journal in a minute — notes, formulas and daily questions, all yours.",
-                fontSize = 14.sp, color = TikuTokens.Muted, fontFamily = Manrope)
-            Spacer(Modifier.weight(1f))
-            PrimaryButton("Get started", onClick = { ChatSession.unlocked = true; AppState.go(Screen.Welcome) })
+            rescuable -> {
+                Text(
+                    if (hashDamaged) "Your saved lock data on this phone looks damaged, so your password can't be checked here."
+                    else "This phone still holds your journal key, but its password record is missing.",
+                    fontSize = 14.sp, color = TikuTokens.Muted, fontFamily = Manrope)
+                Spacer(Modifier.height(8.dp))
+                Text("You can reset the password with the Google account this journal was created with — your notes and chats stay intact.",
+                    fontSize = 14.sp, color = TikuTokens.Muted, fontFamily = Manrope)
+                Spacer(Modifier.weight(1f))
+                PrimaryButton("Reset password with Google", modifier = Modifier.fillMaxWidth()) {
+                    AppState.go(Screen.PasswordReset)
+                }
+            }
+            else -> {
+                Text("Set up your journal in a minute — notes, formulas and daily questions, all yours.",
+                    fontSize = 14.sp, color = TikuTokens.Muted, fontFamily = Manrope)
+                Spacer(Modifier.weight(1f))
+                PrimaryButton("Get started", onClick = { ChatSession.unlocked = true; AppState.go(Screen.Welcome) })
+            }
         }
     }
 }
@@ -659,6 +722,18 @@ fun SubjectScreen(name: String) {
     Column(Modifier.fillMaxSize().padding(horizontal = 20.dp)) {
         FacadeBackRow(name) { AppState.go(Screen.Facade) }
         Spacer(Modifier.height(8.dp))
+        // subject hero (item 7): one of the 4 subject heroes from the art
+        // manifest — shown only when the manifest actually lists this subject
+        val hero = StudyArt.subjectArt(name)
+        if (hero != null && subj != null && subj.chapters.isNotEmpty()) {
+            AsyncImage(
+                model = StudyArt.assetModel(hero),
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxWidth().aspectRatio(16f / 9f).clip(RoundedCornerShape(24.dp)),
+            )
+            Spacer(Modifier.height(16.dp))
+        }
         if (subj == null || subj.chapters.isEmpty()) {
             Text("Chapter notes for $name arrive with the content update. Meanwhile, keep your own notes in My notes.",
                 fontSize = 14.sp, fontFamily = Manrope, color = TikuTokens.Muted)
@@ -668,7 +743,19 @@ fun SubjectScreen(name: String) {
                     val ch = subj.chapters[i]
                     FacadeCard(Modifier.fillMaxWidth(), onClick = { AppState.go(Screen.StudyChapter(name, i)) }) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text("${i + 1}", fontSize = 15.sp, fontFamily = SerifItalic, color = TikuTokens.Muted)
+                            // rows for chapters WITH art get a thumbnail; the
+                            // rest stay plain numbered rows (item 7 final scope)
+                            val thumb = StudyArt.chapterArt(name, ch.title)
+                            if (thumb != null) {
+                                AsyncImage(
+                                    model = StudyArt.assetModel(thumb),
+                                    contentDescription = null,
+                                    contentScale = ContentScale.Crop,
+                                    modifier = Modifier.size(48.dp).clip(RoundedCornerShape(14.dp)),
+                                )
+                            } else {
+                                Text("${i + 1}", fontSize = 15.sp, fontFamily = SerifItalic, color = TikuTokens.Muted)
+                            }
                             Spacer(Modifier.width(14.dp))
                             Column {
                                 Text(ch.title, fontSize = 16.sp, fontFamily = Bricolage, fontWeight = FontWeight.Bold, color = TikuTokens.Ink)
@@ -686,6 +773,39 @@ fun SubjectScreen(name: String) {
     }
 }
 
+/**
+ * One key point as a designed note card (owner round-3 item 7): soft card
+ * background, a small numbered gradient marker; formula-heavy points
+ * (containing =, ^ or √) get an inset "formula strip"; **term** highlights
+ * keep rendering inside both.
+ */
+@Composable
+private fun PointCard(num: Int, point: String) {
+    val settings = tikuSettings().value
+    val formulaHeavy = point.contains('=') || point.contains('^') || point.contains('√')
+    FacadeCard(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+        Row {
+            Box(
+                Modifier.size(24.dp).clip(CircleShape).background(settings.gradBrush),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text("$num", fontSize = 11.sp, fontFamily = Manrope, fontWeight = FontWeight.Bold, color = Color.White)
+            }
+            Spacer(Modifier.width(10.dp))
+            if (formulaHeavy) {
+                Box(
+                    Modifier.weight(1f).clip(RoundedCornerShape(12.dp))
+                        .background(TikuTokens.BgTop)
+                        .border(1.dp, TikuTokens.Line, RoundedCornerShape(12.dp))
+                        .padding(horizontal = 12.dp, vertical = 10.dp),
+                ) { HighlightedText(point, 14.sp, TikuTokens.Ink) }
+            } else {
+                Box(Modifier.weight(1f)) { HighlightedText(point, 14.sp, TikuTokens.Ink) }
+            }
+        }
+    }
+}
+
 @Composable
 fun ChapterScreen(subjectName: String, index: Int, revealFirst: Boolean = false) {
     val chapter = StudyContent.subject(subjectName)?.chapters?.getOrNull(index)
@@ -697,17 +817,25 @@ fun ChapterScreen(subjectName: String, index: Int, revealFirst: Boolean = false)
             Text("This chapter is not available yet.", fontSize = 14.sp, fontFamily = Manrope, color = TikuTokens.Muted)
             return@Column
         }
+        // chapter hero (item 7): banner below the title, ONLY for chapters with
+        // art in the manifest (final scope: Physics 1–10 + Biology 1–10);
+        // no hero and no fallback otherwise — the cards stay clean
+        val hero = StudyArt.chapterArt(subjectName, chapter.title)
+        if (hero != null) {
+            AsyncImage(
+                model = StudyArt.assetModel(hero),
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxWidth().aspectRatio(1.5f).clip(RoundedCornerShape(24.dp)),
+            )
+            Spacer(Modifier.height(14.dp))
+        }
         LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(16.dp)) {
             item {
                 Column {
                     Text("Key points", fontFamily = SerifItalic, fontSize = 21.sp, color = TikuTokens.Ink)
                     Spacer(Modifier.height(10.dp))
-                    chapter.points.forEach { pt ->
-                        Row(Modifier.padding(vertical = 4.dp)) {
-                            Text("• ", fontSize = 14.sp, fontFamily = Manrope, color = TikuTokens.Ink)
-                            Box(Modifier.weight(1f)) { HighlightedText(pt, 14.sp, TikuTokens.Ink) }
-                        }
-                    }
+                    chapter.points.forEachIndexed { pi, pt -> PointCard(pi + 1, pt) }
                 }
             }
             item {
@@ -762,30 +890,7 @@ fun ChapterMcq(mq: StudyContent.DailyQ) {
         Column {
             Text(mq.q, fontSize = 16.sp, fontFamily = Bricolage, fontWeight = FontWeight.SemiBold, color = TikuTokens.Ink)
             Spacer(Modifier.height(10.dp))
-            mq.options.forEachIndexed { i, opt ->
-                val isPicked = picked == i
-                val isRight = i == mq.correct
-                val bg = when {
-                    picked == null -> TikuTokens.Bubble
-                    isRight -> Color(0xFFE7F4E4)
-                    isPicked -> Color(0xFFFBE3DC)
-                    else -> TikuTokens.Bubble
-                }
-                val borderC = when {
-                    picked != null && isRight -> Color(0xFF7CB87C)
-                    isPicked && !isRight -> Color(0xFFD9603A)
-                    else -> TikuTokens.Line
-                }
-                Box(
-                    Modifier.fillMaxWidth().padding(vertical = 4.dp)
-                        .clip(RoundedCornerShape(14.dp)).background(bg)
-                        .border(1.dp, borderC, RoundedCornerShape(14.dp))
-                        .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) { picked = i }
-                        .padding(horizontal = 14.dp, vertical = 11.dp),
-                ) {
-                    Text("${"ABCD"[i]}.  $opt", fontSize = 14.sp, fontFamily = Manrope, fontWeight = FontWeight.Medium, color = TikuTokens.Ink)
-                }
-            }
+            McqOptions(mq.options, picked, mq.correct) { picked = it }
             if (picked != null) {
                 Spacer(Modifier.height(10.dp))
                 AnswerChip()

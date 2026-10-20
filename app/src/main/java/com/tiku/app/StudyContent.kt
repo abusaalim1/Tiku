@@ -42,6 +42,9 @@ object StudyContent {
     fun load(ctx: Context) {
         if (loaded) return
         loaded = true
+        // chapter art is independent of the content pack (bundled at build time
+        // from ~/workspace/tiku/art) — load it first, tolerate its absence
+        StudyArt.load(ctx)
         val json = runCatching {
             ctx.assets.open("study-content.json").bufferedReader().use { it.readText() }
         }.getOrNull() ?: return
@@ -108,4 +111,47 @@ object StudyContent {
         val idx = java.util.Calendar.getInstance().get(java.util.Calendar.DAY_OF_YEAR) % flashcards.size
         return flashcards[idx]
     }
+}
+
+/**
+ * Chapter art index (owner round-3 item 7): compressed WebP heroes copied into
+ * `assets/art/` at build time from ~/workspace/tiku/art, driven ENTIRELY by
+ * `assets/art/manifest.json`. Manifest keys:
+ *   "Subject|Chapter title" -> chapter hero file
+ *   "Subject" (or "subject:Subject") -> subject-page header hero file
+ * Any key/file the manifest doesn't list is ignored; chapters without art
+ * render the upgraded card layout with NO hero and NO fallback — clean.
+ */
+object StudyArt {
+    private var chapterFiles: Map<String, String> = emptyMap()
+    private var subjectFiles: Map<String, String> = emptyMap()
+
+    fun load(ctx: Context) {
+        runCatching {
+            val text = ctx.assets.open("art/manifest.json").bufferedReader().use { it.readText() }
+            val json = JSONObject(text)
+            val ch = mutableMapOf<String, String>()
+            val su = mutableMapOf<String, String>()
+            val keys = json.keys()
+            while (keys.hasNext()) {
+                val k = keys.next()
+                val file = json.optString(k)
+                if (file.isEmpty()) continue
+                if ('|' in k) ch[k] = file
+                else su[k.removePrefix("subject:")] = file
+            }
+            chapterFiles = ch
+            subjectFiles = su
+        }.onFailure {
+            chapterFiles = emptyMap(); subjectFiles = emptyMap()
+        }
+    }
+
+    /** Hero for exactly this chapter (no fallbacks — final item-7 scope). */
+    fun chapterArt(subject: String, title: String): String? = chapterFiles["$subject|$title"]
+
+    /** Header hero for the subject page (4 subject heroes live in the manifest). */
+    fun subjectArt(subject: String): String? = subjectFiles[subject]
+
+    fun assetModel(file: String) = "file:///android_asset/art/$file"
 }

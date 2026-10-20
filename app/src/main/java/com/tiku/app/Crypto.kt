@@ -130,6 +130,23 @@ object Crypto {
         false
     }
 
+    /**
+     * Structural check of a stored verifier: "iters:b64(16-byte salt):b64(32-byte
+     * hash)" with a sane iteration count. The gate uses this to tell a GENUINELY
+     * wrong password apart from missing/corrupted lock data (owner Bug 0 —
+     * corruption must never be reported as "wrong password").
+     */
+    fun hashWellFormed(stored: String?): Boolean {
+        if (stored.isNullOrEmpty()) return false
+        return try {
+            val parts = stored.split(":")
+            parts.size == 3 && parts[0].toInt() in 10_000..2_000_000 &&
+                unb64(parts[1]).size == 16 && unb64(parts[2]).size == 32
+        } catch (e: Exception) {
+            false
+        }
+    }
+
     // ---------- Conversation key: ECDH + HKDF-SHA256 ----------
     fun conversationKey(
         myPrivatePkcs8: ByteArray,
