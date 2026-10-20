@@ -2,8 +2,12 @@ package com.tiku.app
 
 import android.graphics.Bitmap
 
-/** UI-side message kind, mirrored by the Firestore `kind` field. */
-enum class MsgKind { TEXT, IMAGE, VOICE }
+/** UI-side message kind, mirrored by the Firestore `kind` field.
+ *  CALL (round 4) is a system event rendered as a centred pill, never a bubble:
+ *  an encrypted note that a call happened (missed / declined / ended). The
+ *  WebRTC signaling record is still deleted in full — this is a chat message,
+ *  not a call log, and the Calls pane stays empty. */
+enum class MsgKind { TEXT, IMAGE, VOICE, CALL }
 
 /** Delivery state of an outgoing message (round 3: no silent send failures).
  *  Local optimistic copies start SENDING; the Firestore write landing flips
@@ -28,6 +32,18 @@ data class TikuMessage(
     val tsMs: Long = 0L,                // server timestamp (ms) for read watermarks
     val localPath: String? = null,      // decrypted voice file in app-private cache
     val status: SendStatus = SendStatus.SENT, // outgoing delivery state (mine only)
+    // ---- round 4 ----
+    /** True only when the PEER's uid is in the doc's seenBy — drives ✓ vs ✓✓.
+     *  Derived from the Firestore field on every snapshot, never local state,
+     *  so it survives re-entry / restore / a second device. */
+    val seenByPeer: Boolean = false,
+    /** CALL events: who placed the call, how it resolved, how long it lasted.
+     *  outcome ∈ "ended" | "declined" | "noanswer". The pill renders
+     *  perspective-correct copy by comparing callCallerUid to my uid. */
+    val callCallerUid: String = "",
+    val callOutcome: String = "",
+    val callDurationSec: Int = 0,
+    val callVideo: Boolean = false,
 )
 
 /** One 1:1 conversation. */
@@ -55,6 +71,34 @@ data class Person(
     val lastSeenMs: Long = 0L,
 )
 
+/** Username search normalization (round 4, item 4). Pure + shared by the real
+ *  engine (Firestore field writes + queries) and the preview store.
+ *  norm(): lowercase, letters/digits only — "Abu Saalim", "abu_saalim" and
+ *  "ABU_SAALIM" all collapse to "abusaalim".
+ *  tokens(): the name-parts of username + display name (split on anything
+ *  non-alphanumeric) plus the full norm — so "saalim" alone finds abu_saalim
+ *  through an array-contains query on the tokens field. */
+object SearchNorm {
+    fun norm(s: String): String = s.lowercase().filter { it.isLetterOrDigit() }
+
+    fun tokens(username: String, displayName: String): List<String> {
+        val parts = "$username $displayName".lowercase()
+            .split(Regex("[^a-z0-9]+")).filter { it.isNotEmpty() }
+        return (parts + norm(username)).distinct()
+    }
+
+    /** Local matcher mirroring the Firestore query pair (prefix on norm +
+     *  token membership), used by preview mode. */
+    fun matches(username: String, displayName: String, rawQuery: String): Boolean {
+        val q = norm(rawQuery)
+        if (q.isEmpty()) return false
+        if (norm(username).startsWith(q)) return true
+        val toks = tokens(username, displayName)
+        val parts = rawQuery.lowercase().split(Regex("[^a-z0-9]+")).filter { it.length >= 2 }
+        return parts.any { it in toks }
+    }
+}
+
 /** Firestore schema mirrors (real mode). */
 object Schema {
     object Users {
@@ -64,6 +108,9 @@ object Schema {
             val username: String = "", val displayName: String = "", val photoUrl: String = "",
             val publicKey: String = "", val keyBackup: Map<String, String> = emptyMap(),
             val online: Boolean = false, val lastSeen: Any? = null,
+            /** Round 4 search fields (see SearchNorm): usernameNorm powers the
+             *  prefix range query, nameTokens the array-contains query. */
+            val usernameNorm: String = "", val nameTokens: List<String> = emptyList(),
         )
     }
     object Chats {

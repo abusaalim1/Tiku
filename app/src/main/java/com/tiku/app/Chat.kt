@@ -41,6 +41,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Call
+import androidx.compose.material.icons.filled.CallEnd
+import androidx.compose.material.icons.filled.CallMissed
 import androidx.compose.material.icons.filled.ChevronLeft
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Image
@@ -253,6 +255,10 @@ private fun ChatContent(thread: ChatThread) {
                 }
             }
             items(visibleMessages, key = { it.id }) { m ->
+                if (m.kind == MsgKind.CALL) {
+                    // round 4: call events are centred system pills, never bubbles
+                    CallEventPill(m)
+                } else {
                 MessageBubble(
                     m = m, threadId = threadId, settings = settings,
                     playing = playingId == m.id,
@@ -279,6 +285,7 @@ private fun ChatContent(thread: ChatThread) {
                         ChatSheets.context(threadId, m) { q -> replyTo = q }
                     },
                 )
+                }
             }
             if (peerTyping) {
                 item { TypingBubble() }
@@ -454,6 +461,58 @@ fun TypingBubble() {
     }
 }
 
+// ================= call events (round 4) =================
+/** My uid for UI-side perspective decisions (real: the engine's established
+ *  uid incl. the restored-identity fallback; preview: the "me" sentinel the
+ *  preview store stamps on its own call events). */
+fun myUidForUi(): String = if (Config.PREVIEW_UI_ONLY) "me" else FirebaseEngine.myUid()
+
+/** Perspective-correct label for a call event. [iAmCaller] = the viewer is
+ *  the one who placed the call. Owner's copy rules: no answer → caller sees
+ *  "No answer", callee sees "Missed call"; declined → both see it; ended →
+ *  "Call ended · duration" on both sides. */
+fun callEventLabel(m: TikuMessage, iAmCaller: Boolean): String {
+    val kindWord = if (m.callVideo) "Video call" else "Call"
+    return when (m.callOutcome) {
+        "ended" -> {
+            val base = "$kindWord ended"
+            if (m.callDurationSec > 0) "$base · ${"%d:%02d".format(m.callDurationSec / 60, m.callDurationSec % 60)}" else base
+        }
+        "declined" -> if (iAmCaller) "Call declined" else "You declined the call"
+        "noanswer" -> if (iAmCaller) "No answer" else if (m.callVideo) "Missed video call" else "Missed call"
+        else -> kindWord
+    }
+}
+
+/** Centred system pill for a call event — same visual family as the E2EE
+ *  banner above the messages. Never a bubble, never side-aligned. */
+@Composable
+fun CallEventPill(m: TikuMessage) {
+    val iAmCaller = m.callCallerUid == myUidForUi()
+    val icon = when {
+        m.callOutcome == "noanswer" && !iAmCaller -> Icons.Filled.CallMissed
+        m.callOutcome == "declined" -> Icons.Filled.CallEnd
+        else -> Icons.Filled.Call
+    }
+    Row(
+        Modifier.fillMaxWidth().padding(vertical = 2.dp),
+        horizontalArrangement = Arrangement.Center,
+    ) {
+        Row(
+            Modifier.clip(RoundedCornerShape(12.dp)).background(TikuTokens.Mint)
+                .padding(horizontal = 12.dp, vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(icon, null, Modifier.size(13.dp), tint = TikuTokens.Muted)
+            Spacer(Modifier.width(6.dp))
+            Text(
+                "${callEventLabel(m, iAmCaller)} · ${m.time}",
+                fontSize = 12.sp, color = TikuTokens.Muted, fontFamily = Manrope,
+            )
+        }
+    }
+}
+
 // ================= message bubble =================
 @Composable
 fun MessageBubble(
@@ -521,7 +580,13 @@ fun MessageBubble(
                         when {
                             m.me && m.status == SendStatus.SENDING -> "Sending…"
                             m.me && m.status == SendStatus.FAILED -> "Not sent"
-                            else -> (if (m.starredByMe) "★ " else "") + m.time + if (m.me) " ✓✓" else ""
+                            // ROUND 4 (item 1): single ✓ until the peer has
+                            // actually SEEN the message (their uid in the
+                            // doc's seenBy); ✓✓ only after. seenByPeer is
+                            // re-derived from Firestore on every snapshot, so
+                            // this survives re-entry / restore / 2nd device.
+                            else -> (if (m.starredByMe) "★ " else "") + m.time +
+                                if (m.me) (if (m.seenByPeer) " ✓✓" else " ✓") else ""
                         },
                         fontSize = 11.sp, color = textColor.copy(alpha = 0.7f), fontFamily = Manrope,
                     )

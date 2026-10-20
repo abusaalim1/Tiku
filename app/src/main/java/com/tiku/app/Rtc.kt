@@ -388,6 +388,44 @@ object CallController {
     private var processedCalleeCands = 0
     val realMode get() = !Config.PREVIEW_UI_ONLY
 
+    // ---- round 4: call-event bookkeeping ----
+    /** Uid of whoever placed the current call (mine on outgoing, the peer's
+     *  on incoming) — stored in the encrypted chat event so each side renders
+     *  perspective-correct copy. */
+    private var curCallerUid: String = ""
+    /** The callId whose chat event has already been written by THIS client
+     *  (both sides write the same deterministic doc; this just avoids
+     *  redundant local rewrites across multiple resolution paths). */
+    private var eventRecordedCallId: String? = null
+
+    /**
+     * Record the call's outcome as an encrypted event inside the chat
+     * (round 4, item 3). Must be called while the call state is still
+     * readable (before finish/teardown resets it). Duration derives from
+     * the Connected state's connect timestamp. Preview mode appends the
+     * same pill locally so the UI path is identical.
+     */
+    private fun recordOutcome(outcome: String) {
+        val st = state.value
+        val (threadId, callId) = ids(st) ?: return
+        if (eventRecordedCallId == callId) return
+        eventRecordedCallId = callId
+        val video = when (st) {
+            is CallUiState.Outgoing -> st.video
+            is CallUiState.Incoming -> st.video
+            is CallUiState.Connected -> st.video
+            is CallUiState.Failed -> st.video
+            CallUiState.Idle -> false
+        }
+        val durSec = if (st is CallUiState.Connected)
+            ((System.currentTimeMillis() - st.atMs) / 1000).toInt().coerceAtLeast(0) else 0
+        val caller = curCallerUid
+        scope.launch {
+            if (realMode) FirebaseEngine.recordCallEvent(threadId, callId, caller, video, outcome, durSec)
+            else PreviewRepo.appendCallEvent(threadId, caller, video, outcome, durSec)
+        }
+    }
+
     private fun ids(st: CallUiState): Pair<String, String>? = when (st) {
         is CallUiState.Outgoing -> st.threadId to st.callId
         is CallUiState.Incoming -> st.threadId to st.callId
@@ -399,12 +437,16 @@ object CallController {
     /** Reset for preview/test hygiene. */
     fun endSilently() {
         val st = state.value
+        // round 4: locking mid-call still leaves the chat event (written
+        // BEFORE FirebaseEngine.lock zeroizes the keys — it calls us first)
+        if (st is CallUiState.Connected) recordOutcome("ended")
         val cur = ids(st)
         ringJob?.cancel(); ringJob = null
         callDocReg?.remove(); callDocReg = null
         session?.dispose(); session = null
         state.value = CallUiState.Idle
         answerApplied = false; processedCallerCands = 0; processedCalleeCands = 0
+        curCallerUid = ""; eventRecordedCallId = null
         if (realMode && cur != null) {
             scope.launch { CallSignal.deleteCallTree(cur.first, cur.second) }
         }
@@ -419,6 +461,8 @@ object CallController {
         if (!realMode) { startFakeCall(threadId, video, person); return }
         val settings = SettingsStore.state.value
         val callId = UUID.randomUUID().toString()
+        curCallerUid = FirebaseEngine.uid
+        eventRecordedCallId = null
         state.value = CallUiState.Outgoing(threadId, callId, video, person, System.currentTimeMillis())
         armRingTimeout(threadId, callId)
         scope.launch {
@@ -446,6 +490,8 @@ object CallController {
 
     private fun startFakeCall(threadId: String, video: Boolean, person: Person) {
         val callId = "preview-call"
+        curCallerUid = "me"
+        eventRecordedCallId = null
         state.value = CallUiState.Outgoing(threadId, callId, video, person, System.currentTimeMillis())
         scope.launch {
             delay(1400)
@@ -463,6 +509,8 @@ object CallController {
     fun onIncoming(chatId: String, callId: String, kind: String, person: Person) {
         if (state.value !is CallUiState.Idle) return
         val video = kind == "video"
+        curCallerUid = person.uid
+        eventRecordedCallId = null
         state.value = CallUiState.Incoming(chatId, callId, video, person, System.currentTimeMillis())
         armRingTimeout(chatId, callId)
         AppState.go(Screen.Call(chatId, video))
@@ -501,6 +549,9 @@ object CallController {
 
     fun reject() {
         val st = state.value as? CallUiState.Incoming ?: return
+        // round 4: the decline is a chat event both sides can see (the caller
+        // records the same event when its doc listener sees the end mark)
+        recordOutcome("declined")
         scope.launch { CallSignal.markEnded(st.threadId, st.callId) }
         finish(st.threadId, deleteDocs = true, quiet = true)
     }
@@ -509,6 +560,14 @@ object CallController {
     fun hangup() {
         val st = state.value
         val cur = ids(st) ?: return
+        // round 4: connected → "ended" (+duration); still ringing out →
+        // "noanswer" (the callee renders it as a missed call)
+        when (st) {
+            is CallUiState.Connected -> recordOutcome("ended")
+            is CallUiState.Outgoing -> recordOutcome("noanswer")
+            is CallUiState.Incoming -> recordOutcome("declined")
+            else -> {}
+        }
         scope.launch { CallSignal.markEnded(cur.first, cur.second) }
         finish(cur.first, deleteDocs = true, quiet = false)
     }
@@ -544,7 +603,17 @@ object CallController {
             val mine = ids(st)?.second == callId
             if (!mine) return@listen
             if (data == null || data["state"] == "ended") {
-                // remote side ended / deleted the record
+                // remote side ended / deleted the record. Round 4 — record
+                // the chat event from MY perspective before teardown:
+                // connected → the call ended; I was ringing out and the doc
+                // ended → the callee declined; I was being rung and the doc
+                // vanished → missed (caller cancelled / timed out / busy).
+                when (st) {
+                    is CallUiState.Connected -> recordOutcome("ended")
+                    is CallUiState.Outgoing -> recordOutcome("declined")
+                    is CallUiState.Incoming -> recordOutcome("noanswer")
+                    else -> {}
+                }
                 if (st !is CallUiState.Idle) finish(threadId, deleteDocs = true, quiet = false, remoteEnded = true)
                 return@listen
             }
@@ -591,6 +660,10 @@ object CallController {
             val st = state.value
             val cur = ids(st)
             if (cur != null && cur.second == callId && st !is CallUiState.Connected) {
+                // round 4: ring timeout is a resolved call attempt — the
+                // caller records "noanswer"; a callee whose ring timed out
+                // records the same event (rendered there as a missed call)
+                recordOutcome("noanswer")
                 CallSignal.markEnded(threadId, callId)
                 AppState.toast("No answer")
                 finish(threadId, deleteDocs = true, quiet = true)
@@ -607,6 +680,10 @@ object CallController {
         val st = state.value
         if (st is CallUiState.Failed) return
         ids(st) ?: return
+        // round 4: a call that HAD connected still leaves its "ended" event
+        // even when it dies by ICE failure; a call that never connected
+        // leaves none here (the peer's own resolution path records theirs)
+        if (st is CallUiState.Connected) recordOutcome("ended")
         val person = when (st) {
             is CallUiState.Outgoing -> st.person
             is CallUiState.Incoming -> st.person
@@ -644,6 +721,7 @@ object CallController {
         session?.dispose(); session = null
         state.value = CallUiState.Idle
         answerApplied = false; processedCallerCands = 0; processedCalleeCands = 0
+        curCallerUid = ""; eventRecordedCallId = null
         if (deleteDocs && realMode && callId != null) {
             scope.launch { CallSignal.deleteCallTree(threadId, callId) }
         }

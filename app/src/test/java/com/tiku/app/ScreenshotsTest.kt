@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onAllNodesWithText
@@ -16,6 +17,7 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.swipeUp
 import androidx.compose.ui.unit.dp
@@ -308,5 +310,31 @@ class ScreenshotsTest {
         composeRule.mainClock.advanceTimeBy(2000)
         composeRule.waitForIdle()
         shot("22-in-call-video.png")
+    }
+
+    // ---------- round 4 additions ----------
+    @Test fun shot24_chatTicksCallEvent() {
+        // ITEM 1 + 3 PROOF: the seeded first thread carries an own message the
+        // peer has SEEN (✓✓), a centred call-event pill ("Call ended · 12:34"),
+        // and an own message NOT yet seen (single ✓) — all in one chat.
+        val th = AppState.threads.value.first()
+        frame { ChatScreen(th.id) }
+        composeRule.waitForIdle()
+        shot("24-chat-ticks-call-event.png")
+    }
+
+    @Test fun shot25_newChatLiveSearch() {
+        // ITEM 4 PROOF: live suggestions while typing — no Search button.
+        // Typing "riy" in the sheet's field must surface the Riya row from
+        // the preview people via the shared SearchNorm matcher.
+        AppState.homeTab = HomeTab.CHATS
+        NewChatSheet.open()
+        frame { HomeScreen() }
+        val fields = composeRule.onAllNodes(hasSetTextAction()).fetchSemanticsNodes()
+        org.junit.Assert.assertTrue("expected at least the sheet search field", fields.isNotEmpty())
+        composeRule.onAllNodes(hasSetTextAction())[fields.size - 1].performTextInput("riy")
+        composeRule.mainClock.advanceTimeBy(800) // debounce 200 ms + render
+        composeRule.waitForIdle()
+        shot("25-new-chat-search.png")
     }
 }

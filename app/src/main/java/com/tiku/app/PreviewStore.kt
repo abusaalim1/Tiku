@@ -38,8 +38,16 @@ object PreviewStore {
         }
         add(0, 2, "9:41",
             msg("Sent you the new moodboard", time = "9:30"),
-            msg("Ooh, the sage tones are perfect 😍", me = true, time = "9:38"),
-            msg("Aaj shaam milte hain? ✨", time = "9:41"))
+            // round 4 proof seed: an own message the peer HAS seen (✓✓)…
+            msg("Ooh, the sage tones are perfect 😍", me = true, time = "9:38")
+                .copy(seenByPeer = true),
+            // …a call event pill (centred, not a bubble)…
+            msg("", time = "9:39", kind = MsgKind.CALL)
+                .copy(callCallerUid = "me", callOutcome = "ended",
+                    callDurationSec = 754, callVideo = false),
+            msg("Aaj shaam milte hain? ✨", time = "9:41"),
+            // …and an own message NOT yet seen (single ✓)
+            msg("On my way!", me = true, time = "9:41"))
         add(1, 0, "8:12", msg("Thanks for the font suggestions!", time = "8:12"))
         add(2, 5, "Yesterday", msg("Final deck goes out at 6", time = "Yesterday"))
         add(3, 0, "Yesterday", msg("", time = "Yesterday", kind = MsgKind.VOICE, voiceDurSec = 12))
@@ -48,15 +56,19 @@ object PreviewStore {
         return t
     }
 
-    /** Last-message preview exactly like the prototype: ✓✓ / 🎙 / 📷. */
+    /** Last-message preview exactly like the prototype: ✓✓ / 🎙 / 📷.
+     *  Round 4: the tick prefix follows the real seen state (single ✓ until
+     *  the peer has seen it); call events preview as their pill label. */
     fun previewLine(th: ChatThread): String {
         val m = th.messages.lastOrNull { !it.deletedForMe } ?: return ""
         val body = when (m.kind) {
             MsgKind.VOICE -> "🎙 Voice message"
             MsgKind.IMAGE -> "📷 Photo"
+            MsgKind.CALL -> callEventLabel(m, m.callCallerUid == "me")
             else -> m.text
         }
-        return (if (m.me) "✓✓ " else "") + body
+        val tick = if (m.me && m.kind != MsgKind.CALL) (if (m.seenByPeer) "✓✓ " else "✓ ") else ""
+        return tick + body
     }
 
     val storyQuotes = listOf(
@@ -166,5 +178,18 @@ object PreviewRepo : ChatRepo {
         val th = ChatThread(UUID.randomUUID().toString(), person)
         AppState.threads.value = listOf(th) + AppState.threads.value
         return th.id
+    }
+
+    /** Preview sink for CallController.recordOutcome: appends the same centred
+     *  call-event pill the real engine writes as an encrypted kind="call"
+     *  message (owner round 4, item 3). */
+    fun appendCallEvent(threadId: String, callerUid: String, video: Boolean, outcome: String, durSec: Int) {
+        AppState.upsertMessage(threadId, TikuMessage(
+            id = "call_preview_${System.currentTimeMillis()}",
+            senderUid = callerUid, kind = MsgKind.CALL, text = "",
+            time = "now", me = false, tsMs = System.currentTimeMillis(),
+            callCallerUid = callerUid, callOutcome = outcome,
+            callDurationSec = durSec, callVideo = video,
+        ))
     }
 }

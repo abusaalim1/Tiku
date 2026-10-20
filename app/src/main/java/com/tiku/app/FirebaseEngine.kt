@@ -53,6 +53,20 @@ object FirebaseEngine : ChatRepo {
     val uid: String get() = auth.currentUser?.uid ?: ""
     val signedIn: Boolean get() = auth.currentUser != null
 
+    /**
+     * The session's established my-uid (round 4, item 2): the live Auth uid,
+     * falling back to the uid the on-device identity was created for
+     * (`idk_uid` in the secure prefs). Bubble side (mine vs theirs) is ALWAYS
+     * derived as `senderId == myUid()` — on the listener path, the history
+     * path and after a restore — never from a local optimistic flag. The
+     * fallback covers the window where a snapshot lands before Firebase Auth
+     * has finished restoring its persisted user (auth uid momentarily "").
+     */
+    fun myUid(): String {
+        uid.takeIf { it.isNotEmpty() }?.let { return it }
+        return if (::appCtx.isInitialized) localIdentityUid(appCtx) else ""
+    }
+
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate + TikuEngineHandler)
 
     // ---------- identity ----------
@@ -238,6 +252,9 @@ object FirebaseEngine : ChatRepo {
                 "username" to u, "displayName" to u, "photoData" to photoData,
                 "publicKey" to Crypto.publicKeyB64(kp), "keyBackup" to blob,
                 "online" to true, "lastSeen" to FieldValue.serverTimestamp(),
+                // round 4: live username search fields (prefix + token queries)
+                "usernameNorm" to SearchNorm.norm(u),
+                "nameTokens" to SearchNorm.tokens(u, u),
             )).await()
             Result.success(Unit)
         } catch (e: Exception) { Result.failure(e) }
@@ -259,6 +276,22 @@ object FirebaseEngine : ChatRepo {
             )
             AppState.myUsername = myPerson.username
             AppState.myAvatar = myPerson.photoBitmap
+            // ROUND 4 SELF-HEAL: accounts created before live search have no
+            // usernameNorm/nameTokens on their doc, so prefix/token queries
+            // can't find them. The owner write is rule-allowed (users/{uid}
+            // write = own uid), so top the fields up on sign-in if missing.
+            val uname = snap.getString("username").orEmpty()
+            if (uname.isNotEmpty() && snap.getString("usernameNorm") == null) {
+                scope.launch {
+                    runCatching {
+                        db.collection(Schema.Users.COLL).document(uid).update(mapOf(
+                            "usernameNorm" to SearchNorm.norm(uname),
+                            "nameTokens" to SearchNorm.tokens(uname, snap.getString("displayName").orEmpty()),
+                        )).await()
+                        Log.d("TikuSearch", "self-healed search fields for @$uname")
+                    }
+                }
+            }
         }
     }
 
@@ -267,6 +300,64 @@ object FirebaseEngine : ChatRepo {
         val peerUid = claim.getString("uid") ?: return null
         if (peerUid == uid) return null
         return fetchPerson(peerUid)
+    }
+
+    /** Build a Person from a users/{uid} snapshot (shared by fetch + search);
+     *  keeps the profile and public-key caches in sync, like fetchPerson. */
+    private fun personFromDoc(doc: com.google.firebase.firestore.DocumentSnapshot): Person {
+        val peerUid = doc.id
+        val photoData = doc.getString("photoData").orEmpty()
+        val p = Person(
+            uid = peerUid,
+            name = doc.getString("displayName").orEmpty().ifEmpty { doc.getString("username").orEmpty() },
+            username = doc.getString("username").orEmpty(),
+            emoji = "🙂",
+            colorArgb = avatarColorFor(peerUid),
+            photoBitmap = photoData.takeIf { it.isNotEmpty() }?.let { MediaStore.decodeBitmap(it) },
+            online = doc.getBoolean("online") == true,
+            lastSeenMs = doc.getTimestamp("lastSeen")?.toDate()?.time ?: 0L,
+        )
+        doc.getString("publicKey")?.let { if (it.isNotEmpty()) publicKeyCache[peerUid] = it }
+        profileCache[peerUid] = p
+        return p
+    }
+
+    /**
+     * LIVE USERNAME SEARCH (round 4, item 4). Two Firestore queries, merged +
+     * deduped, self excluded:
+     *  1. prefix range on usernameNorm — "abu" finds abu, abu_saalim, … and
+     *     the normalized full form makes "abu saalim" / "ABU_SAALIM" hit
+     *     abu_saalim exactly (norm strips spaces/underscores/case).
+     *  2. array-contains on nameTokens for each typed word-part — "saalim"
+     *     alone finds abu_saalim by its name token.
+     * Exact-normalized matches rank first, then prefix hits, then token-only
+     * hits. Empty normalized query returns NOTHING (never a user dump).
+     * Rules: users docs are readable by any signed-in user — no rules change.
+     */
+    suspend fun searchPeople(raw: String): List<Person> {
+        val q = SearchNorm.norm(raw)
+        if (q.isEmpty() || uid.isEmpty()) return emptyList()
+        val byId = LinkedHashMap<String, Person>()
+        runCatching {
+            val snap = db.collection(Schema.Users.COLL)
+                .whereGreaterThanOrEqualTo("usernameNorm", q)
+                .whereLessThanOrEqualTo("usernameNorm", q + "\uf8ff")
+                .limit(12).get().await()
+            snap.documents.forEach { d -> if (d.id != uid) byId[d.id] = personFromDoc(d) }
+        }.onFailure { Log.e("TikuSearch", "prefix query failed for '$raw'", it) }
+        val parts = raw.lowercase().split(Regex("[^a-z0-9]+")).filter { it.length >= 2 }
+        for (part in parts) {
+            runCatching {
+                val snap = db.collection(Schema.Users.COLL)
+                    .whereArrayContains("nameTokens", part)
+                    .limit(12).get().await()
+                snap.documents.forEach { d -> if (d.id != uid && d.id !in byId) byId[d.id] = personFromDoc(d) }
+            }.onFailure { Log.e("TikuSearch", "token query failed for part '$part'", it) }
+        }
+        return byId.values.sortedWith(
+            compareByDescending<Person> { SearchNorm.norm(it.username) == q }
+                .thenBy { it.username },
+        ).take(15)
     }
 
     private suspend fun fetchPerson(peerUid: String): Person {
@@ -528,6 +619,34 @@ object FirebaseEngine : ChatRepo {
     // ================= CHATREPO =================
     override fun closeThread(id: String) { openChatIds -= id }
 
+    /**
+     * SEEN MARKING (round 4, item 1): the recipient adds their uid to a
+     * message doc's seenBy. Called with the docs of the open chat — once at
+     * open (openThread) and again on EVERY messages snapshot while the chat
+     * is open (attachMessages), so a message that arrives while I'm looking
+     * at the chat is marked seen immediately, not on the next entry. The
+     * sender's client derives ✓✓ purely from this field (decryptDoc →
+     * seenByPeer), so ticks survive re-entry/restore. Call events are
+     * excluded — seen doesn't apply to them. Batched; a snapshot that finds
+     * nothing unseen writes nothing (no listener write-loop).
+     */
+    private fun markIncomingSeen(id: String, docs: List<com.google.firebase.firestore.DocumentSnapshot>) {
+        if (!SettingsStore.state.value.readReceipts) return
+        val unseen = docs.filter { d ->
+            d.getString("senderId") != uid && d.getString("kind") != "call" &&
+                !((d.get("seenBy") as? List<*>) ?: emptyList<Any>()).contains(uid)
+        }
+        if (unseen.isEmpty()) return
+        scope.launch {
+            runCatching {
+                val batch = db.batch()
+                unseen.forEach { batch.update(it.reference, "seenBy", FieldValue.arrayUnion(uid)) }
+                batch.commit().await()
+                Log.d("TikuChat", "marked ${unseen.size} message(s) seen in chat $id")
+            }.onFailure { Log.e("TikuChat", "markIncomingSeen failed for chat $id", it) }
+        }
+    }
+
     override fun openThread(id: String) {
         markRead(id)
         // opening a chat also tops up the parent doc guarantee (async, logged)
@@ -539,19 +658,13 @@ object FirebaseEngine : ChatRepo {
         }
         openChatIds += id
         attachMessages(id)
-        if (SettingsStore.state.value.readReceipts) {
-            scope.launch {
-                runCatching {
-                    val unseen = db.collection(Schema.Chats.COLL).document(id)
-                        .collection(Schema.Chats.MESSAGES)
-                        .whereNotEqualTo("senderId", uid).get().await()
-                        .documents.filter { !((it.get("seenBy") as? List<*>) ?: emptyList<Any>()).contains(uid) }
-                    if (unseen.isNotEmpty()) {
-                        val batch = db.batch()
-                        unseen.forEach { batch.update(it.reference, "seenBy", FieldValue.arrayUnion(uid)) }
-                        batch.commit().await()
-                    }
-                }
+        // seen-marking for everything already in the chat (the listener keeps
+        // it current from here on — see markIncomingSeen)
+        scope.launch {
+            runCatching {
+                val docs = db.collection(Schema.Chats.COLL).document(id)
+                    .collection(Schema.Chats.MESSAGES).get().await().documents
+                markIncomingSeen(id, docs)
             }
         }
     }
@@ -564,6 +677,9 @@ object FirebaseEngine : ChatRepo {
             .orderBy("ts", Query.Direction.ASCENDING)
             .addSnapshotListener { snap, _ ->
                 val chatDocId = id
+                // round 4: while this chat is OPEN on screen, incoming messages
+                // are marked seen as they land (drives the sender's ✓✓ live).
+                if (openChatIds.contains(id)) snap?.documents?.let { markIncomingSeen(id, it) }
                 scope.launch {
                     // EVERYTHING in this listener is failure-tolerant: a key that is not
                     // ready (fresh searched chat), a transient fetch error, or a broken
@@ -583,7 +699,7 @@ object FirebaseEngine : ChatRepo {
                     val dmCutoff = if (SettingsStore.state.value.toggles["dm"] == true)
                         System.currentTimeMillis() - 24L * 3600 * 1000 else 0L
                     val serverMsgs = snap?.documents?.mapNotNull { doc ->
-                        runCatching { decryptDoc(id, doc, key) }.getOrNull()
+                        runCatching { decryptDoc(id, doc, key, peerUid) }.getOrNull()
                     }?.filter { m ->
                         !m.deletedForMe && m.tsMs >= clearedBefore && (dmCutoff == 0L || m.tsMs >= dmCutoff)
                     } ?: emptyList()
@@ -614,16 +730,22 @@ object FirebaseEngine : ChatRepo {
             }
     }
 
-    private suspend fun decryptDoc(chatId: String, doc: com.google.firebase.firestore.DocumentSnapshot, key: SecretKey): TikuMessage {
+    private suspend fun decryptDoc(chatId: String, doc: com.google.firebase.firestore.DocumentSnapshot, key: SecretKey, peerUid: String): TikuMessage {
         val sender = doc.getString("senderId") ?: ""
         val kindRaw = doc.getString("kind") ?: "text"
-        val me = sender == uid
+        // ITEM 2: bubble side derives ONLY from the doc's senderId vs the
+        // session's established my-uid — every path (fresh send echo, history
+        // load, restored session, second device) funnels through here.
+        val my = myUid()
+        val me = sender == my
         @Suppress("UNCHECKED_CAST")
         val reactions = (doc.get("reaction") as? Map<String, String>) ?: emptyMap()
         @Suppress("UNCHECKED_CAST")
         val starredBy = (doc.get("starredBy") as? List<String>) ?: emptyList<String>()
         @Suppress("UNCHECKED_CAST")
         val deletedFor = (doc.get("deletedFor") as? List<String>) ?: emptyList<String>()
+        @Suppress("UNCHECKED_CAST")
+        val seenBy = (doc.get("seenBy") as? List<String>) ?: emptyList<String>()
         val tsMs = doc.getTimestamp("ts")?.toDate()?.time ?: 0L
         val replyQuote = doc.getString("rqCt")?.takeIf { it.isNotEmpty() }?.let {
             runCatching { Crypto.decryptText(key, doc.getString("rqIv") ?: "", it) }.getOrNull()
@@ -633,8 +755,20 @@ object FirebaseEngine : ChatRepo {
         var durSec = 0
         var amps: List<Int> = emptyList()
         var localPath: String? = null
+        // round 4 call-event payload (decrypted JSON from the ct field)
+        var callCallerUid = ""; var callOutcome = ""; var callDurSec = 0; var callVideo = false
         when (kindRaw) {
             "text" -> text = Crypto.decryptText(key, doc.getString("iv") ?: "", doc.getString("ct") ?: "")
+            "call" -> {
+                val payload = Crypto.decryptText(key, doc.getString("iv") ?: "", doc.getString("ct") ?: "")
+                runCatching {
+                    val j = org.json.JSONObject(payload)
+                    callCallerUid = j.optString("caller")
+                    callOutcome = j.optString("outcome")
+                    callDurSec = j.optInt("dur")
+                    callVideo = j.optBoolean("video")
+                }
+            }
             "image", "voice" -> {
                 val chunkCount = (doc.getLong("mediaChunks") ?: 0L).toInt()
                 val ctBytes = MediaStore.download(db, chatId, doc.id, chunkCount)
@@ -651,9 +785,15 @@ object FirebaseEngine : ChatRepo {
                 }
             }
         }
-        val kind = when (kindRaw) { "image" -> MsgKind.IMAGE; "voice" -> MsgKind.VOICE; else -> MsgKind.TEXT }
+        val kind = when (kindRaw) {
+            "image" -> MsgKind.IMAGE; "voice" -> MsgKind.VOICE; "call" -> MsgKind.CALL
+            else -> MsgKind.TEXT
+        }
         return TikuMessage(doc.id, sender, kind, text, fmtTime(tsMs), me, durSec, amps,
-            photo, replyQuote, reactions, starredBy.contains(uid), deletedFor.contains(uid), tsMs, localPath)
+            photo, replyQuote, reactions, starredBy.contains(my), deletedFor.contains(my), tsMs, localPath,
+            seenByPeer = seenBy.contains(peerUid),
+            callCallerUid = callCallerUid, callOutcome = callOutcome,
+            callDurationSec = callDurSec, callVideo = callVideo)
     }
 
     // ================= SEND PATH (round 3: optimistic + NO silent failures) ====
@@ -794,6 +934,8 @@ object FirebaseEngine : ChatRepo {
                         AppState.toast("Couldn't resend — the recording is gone from this device")
                     } else deliverMedia(id, th.person.uid, m, bytes)
                 }
+                // call events are system-written, never optimistic/FAILED
+                MsgKind.CALL -> AppState.setMessageStatus(id, msgId, SendStatus.SENT)
             }
         }
     }
@@ -806,6 +948,46 @@ object FirebaseEngine : ChatRepo {
 
     private fun msgRef(id: String, msgId: String) =
         db.collection(Schema.Chats.COLL).document(id).collection(Schema.Chats.MESSAGES).document(msgId)
+
+    /**
+     * CALL EVENT (round 4, item 3): when a call resolves, a small E2EE note is
+     * written INTO the chat's messages — kind="call", the payload (caller uid,
+     * outcome, duration, video?) encrypted with the conversation key exactly
+     * like a text message. The doc id is deterministic ("call_<callId>") so
+     * BOTH clients writing it converge on ONE event, never a duplicate.
+     * This is deliberately separate from signaling: the calls/{callId} doc
+     * (offer/answer/ICE) is still deleted in full at call end, and the Calls
+     * pane stays empty — the event is a chat message, not a call log.
+     * outcome ∈ "ended" | "declined" | "noanswer". Best-effort by design:
+     * a failed event write must never break call teardown.
+     */
+    suspend fun recordCallEvent(chatId: String, callId: String, callerUid: String,
+                                video: Boolean, outcome: String, durationSec: Int) {
+        runCatching {
+            val peerUid = AppState.thread(chatId)?.person?.uid
+                ?.takeIf { it.isNotEmpty() } ?: run {
+                    Log.e("TikuCall", "call event skipped: peer unknown for chat $chatId"); return
+                }
+            ensureChatDoc(chatId, peerUid)
+            val key = convKeyOrNull(chatId, peerUid)
+                ?: run { Log.e("TikuCall", "call event skipped: key not ready for chat $chatId"); return }
+            val payload = org.json.JSONObject().apply {
+                put("v", 1); put("caller", callerUid); put("outcome", outcome)
+                put("dur", durationSec); put("video", video)
+            }.toString()
+            val (iv, ct) = Crypto.encryptText(key, payload)
+            msgRef(chatId, "call_$callId").set(mapOf(
+                "senderId" to uid, "kind" to "call", "ct" to ct, "iv" to iv,
+                "ts" to FieldValue.serverTimestamp(),
+                "rqCt" to "", "rqIv" to "",
+                "reaction" to emptyMap<String, String>(), "starredBy" to emptyList<String>(),
+                "deletedFor" to emptyList<String>(), "seenBy" to listOf(uid),
+                "durationMs" to 0, "amps" to emptyList<Int>(), "mediaChunks" to 0,
+            )).await()
+            touchChat(chatId)
+            Log.d("TikuCall", "call event recorded chat=$chatId call=$callId outcome=$outcome dur=${durationSec}s")
+        }.onFailure { Log.e("TikuCall", "call event write failed for chat $chatId call $callId", it) }
+    }
 
     override fun react(id: String, msgId: String, emoji: String?) {
         scope.launch {

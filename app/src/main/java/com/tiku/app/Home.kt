@@ -36,6 +36,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -56,6 +57,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 private val TabsIcons = listOf(
@@ -223,6 +225,8 @@ fun ChatRow(th: ChatThread) {
         last == null -> ""
         last.kind == MsgKind.VOICE -> "Voice message"
         last.kind == MsgKind.IMAGE -> "Photo"
+        // round 4: call events preview as their pill label, never raw text
+        last.kind == MsgKind.CALL -> callEventLabel(last, last.callCallerUid == myUidForUi())
         else -> last.text
     }
     Row(
@@ -238,7 +242,10 @@ fun ChatRow(th: ChatThread) {
         Column(Modifier.weight(1f)) {
             Text(th.person.name, fontWeight = FontWeight.SemiBold, fontSize = 16.sp, fontFamily = Manrope, color = TikuTokens.Ink)
             Row(verticalAlignment = Alignment.CenterVertically) {
-                if (last?.me == true) Text("✓✓ ", fontSize = 14.sp, color = TikuTokens.Muted, fontFamily = Manrope)
+                // round 4: the row tick follows the real seen state too
+                if (last?.me == true && last.kind != MsgKind.CALL) {
+                    Text(if (last.seenByPeer) "✓✓ " else "✓ ", fontSize = 14.sp, color = TikuTokens.Muted, fontFamily = Manrope)
+                }
                 val pvIcon = when {
                     last == null -> null
                     last.kind == MsgKind.VOICE -> Icons.Filled.Mic
@@ -269,8 +276,9 @@ fun ChatRow(th: ChatThread) {
 }
 
 // ================= Calls pane =================
-// HARD RULE (owner): calls leave NO trace. No call entries, no history — this pane is
-// permanently an empty state, and calls are started from inside a chat only.
+// HARD RULE (owner): this pane is permanently an EMPTY STATE — no call
+// entries, no history list. (Round 4: a call leaves only an encrypted event
+// note inside the chat itself; the signaling record is still fully deleted.)
 @Composable
 fun CallsPane() {
     Box(Modifier.fillMaxSize().padding(28.dp), contentAlignment = Alignment.Center) {
@@ -281,7 +289,8 @@ fun CallsPane() {
                 textAlign = androidx.compose.ui.text.style.TextAlign.Center)
             Spacer(Modifier.height(10.dp))
             Text("Audio and video calls are end-to-end peer-to-peer. "
-                + "When a call ends, every record of it is deleted — nothing is ever stored.",
+                + "When a call ends, its connection record is deleted at once — "
+                + "inside the chat itself, a small encrypted note marks that a call happened.",
                 fontSize = 14.sp, color = TikuTokens.Muted, fontFamily = Manrope,
                 textAlign = androidx.compose.ui.text.style.TextAlign.Center, lineHeight = 21.sp)
         }
@@ -460,90 +469,75 @@ fun onSettingTap(key: String, title: String, settings: TikuUiSettings, scope: ko
 // ================= New chat sheet =================
 object NewChatSheet {
     fun open() {
-        if (Config.PREVIEW_UI_ONLY) {
-            AppState.sheet {
-                SerifTitle("New chat", 28.sp, modifier = Modifier.padding(top = 2.dp, bottom = 10.dp))
-                PreviewStore.people.forEach { p ->
-                    Row(
-                        Modifier.fillMaxWidth().padding(vertical = 8.dp)
-                            .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {
-                                val id = AppState.repo.startThreadWith(p)
-                                AppState.closeSheet()
-                                AppState.repo.openThread(id)
-                                AppState.go(Screen.Chat(id))
-                            },
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        AvatarBox(p, 52.dp, 19.dp, 22f)
-                        Spacer(Modifier.width(13.dp))
-                        Column(Modifier.weight(1f)) {
-                            Text(p.name, fontWeight = FontWeight.SemiBold, fontSize = 16.sp, fontFamily = Manrope)
-                            Text("on Tikuu", fontSize = 13.sp, color = TikuTokens.Muted, fontFamily = Manrope)
-                        }
-                    }
+        AppState.sheet {
+            var q by remember { mutableStateOf("") }
+            var results by remember { mutableStateOf<List<Person>>(emptyList()) }
+            var searching by remember { mutableStateOf(false) }
+            // LIVE SUGGESTIONS (round 4, item 4) — YouTube-style: every
+            // keystroke, debounced ~200 ms, refreshes the results from the
+            // forgiving matcher (prefix on the normalized username + name
+            // tokens — see FirebaseEngine.searchPeople / SearchNorm). No
+            // Search button, no exact-full-username requirement. An empty
+            // query shows NOTHING — never a dump of all users.
+            LaunchedEffect(q) {
+                if (q.isBlank()) { results = emptyList(); searching = false; return@LaunchedEffect }
+                searching = true
+                delay(200)
+                results = if (Config.PREVIEW_UI_ONLY) {
+                    PreviewStore.people.filter { SearchNorm.matches(it.username, it.name, q) }
+                } else {
+                    runCatching { FirebaseEngine.searchPeople(q) }.getOrDefault(emptyList())
                 }
+                searching = false
             }
-        } else {
-            var q by mutableStateOf("")
-            var result by mutableStateOf<Person?>(null)
-            var busy by mutableStateOf(false)
-            var note by mutableStateOf("")
-            AppState.sheet {
-                SerifTitle("New chat", 28.sp, modifier = Modifier.padding(top = 2.dp, bottom = 10.dp))
-                Box(
-                    Modifier.fillMaxWidth().height(56.dp)
-                        .clip(RoundedCornerShape(18.dp)).background(TikuTokens.Glass)
-                        .border(1.dp, TikuTokens.Line, RoundedCornerShape(18.dp))
-                        .padding(horizontal = 18.dp),
-                    contentAlignment = Alignment.CenterStart,
+            SerifTitle("New chat", 28.sp, modifier = Modifier.padding(top = 2.dp, bottom = 10.dp))
+            Box(
+                Modifier.fillMaxWidth().height(56.dp)
+                    .clip(RoundedCornerShape(18.dp)).background(TikuTokens.Glass)
+                    .border(1.dp, TikuTokens.Line, RoundedCornerShape(18.dp))
+                    .padding(horizontal = 18.dp),
+                contentAlignment = Alignment.CenterStart,
+            ) {
+                Text("@", color = TikuTokens.Muted, fontSize = 16.sp, fontFamily = Manrope,
+                    modifier = Modifier.padding(start = 2.dp))
+                BasicTextField(
+                    value = q,
+                    onValueChange = { q = it.take(30) },
+                    textStyle = TextStyle(fontSize = 16.sp, fontFamily = Manrope, color = TikuTokens.Ink),
+                    cursorBrush = SolidColor(TikuTokens.Ink), singleLine = true,
+                    modifier = Modifier.fillMaxWidth().padding(start = 18.dp),
+                    decorationBox = { inner ->
+                        if (q.isEmpty()) Text("name or username", fontSize = 16.sp, color = TikuTokens.Muted, fontFamily = Manrope)
+                        inner()
+                    },
+                )
+            }
+            Spacer(Modifier.height(10.dp))
+            when {
+                q.isBlank() ->
+                    Text("Start typing — matches appear as you type. You don't need the exact username.",
+                        fontSize = 13.sp, color = TikuTokens.Muted, fontFamily = Manrope)
+                searching && results.isEmpty() ->
+                    Text("Searching…", fontSize = 13.sp, color = TikuTokens.Muted, fontFamily = Manrope)
+                results.isEmpty() ->
+                    Text("No one found for “${q.trim()}”", fontSize = 13.sp, color = TikuTokens.Muted, fontFamily = Manrope)
+            }
+            results.forEach { p ->
+                Row(
+                    Modifier.fillMaxWidth().padding(vertical = 8.dp)
+                        .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {
+                            val id = AppState.repo.startThreadWith(p)
+                            AppState.closeSheet()
+                            AppState.repo.openThread(id)
+                            AppState.go(Screen.Chat(id))
+                        },
+                    verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Text("@", color = TikuTokens.Muted, fontSize = 16.sp, fontFamily = Manrope,
-                        modifier = Modifier.padding(start = 2.dp))
-                    BasicTextField(
-                        value = q,
-                        onValueChange = {
-                            q = it.lowercase().filter { c -> c.isLetterOrDigit() || c == '.' || c == '_' }.take(20)
-                            result = null; note = ""
-                        },
-                        textStyle = TextStyle(fontSize = 16.sp, fontFamily = Manrope, color = TikuTokens.Ink),
-                        cursorBrush = SolidColor(TikuTokens.Ink), singleLine = true,
-                        modifier = Modifier.fillMaxWidth().padding(start = 18.dp),
-                        decorationBox = { inner ->
-                            if (q.isEmpty()) Text("username", fontSize = 16.sp, color = TikuTokens.Muted, fontFamily = Manrope)
-                            inner()
-                        },
-                    )
-                }
-                Spacer(Modifier.height(10.dp))
-                val scope = rememberCoroutineScope()
-                PrimaryButton(if (busy) "Searching…" else "Search", enabled = q.length >= 3 && !busy,
-                    modifier = Modifier.fillMaxWidth()) {
-                    busy = true
-                    scope.launch {
-                        result = runCatching { FirebaseEngine.lookupPerson(q) }.getOrNull()
-                        note = if (result == null) "No user found for @$q" else ""
-                        busy = false
-                    }
-                }
-                if (note.isNotEmpty()) {
-                    Spacer(Modifier.height(8.dp))
-                    Text(note, fontSize = 13.sp, color = TikuTokens.Muted, fontFamily = Manrope)
-                }
-                result?.let { p ->
-                    Spacer(Modifier.height(6.dp))
-                    Row(
-                        Modifier.fillMaxWidth().padding(vertical = 8.dp)
-                            .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {
-                                val id = AppState.repo.startThreadWith(p)
-                                AppState.closeSheet()
-                                AppState.repo.openThread(id)
-                                AppState.go(Screen.Chat(id))
-                            },
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        AvatarBox(p, 52.dp, 19.dp, 22f)
-                        Spacer(Modifier.width(13.dp))
-                        Text(p.name, fontWeight = FontWeight.SemiBold, fontSize = 16.sp, fontFamily = Manrope)
+                    AvatarBox(p, 52.dp, 19.dp, 22f)
+                    Spacer(Modifier.width(13.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text(p.name, fontWeight = FontWeight.SemiBold, fontSize = 16.sp, fontFamily = Manrope, color = TikuTokens.Ink)
+                        Text("@" + p.username, fontSize = 13.sp, color = TikuTokens.Muted, fontFamily = Manrope)
                     }
                 }
             }

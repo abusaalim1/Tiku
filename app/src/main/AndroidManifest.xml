@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.CAMERA" />
@@ -8,6 +9,18 @@
     <uses-feature android:name="android.hardware.camera" android:required="false" />
     <application android:name=".TikuApp" android:label="Tiku" android:theme="@style/Theme.Tiku" android:allowBackup="false"
         android:icon="@mipmap/ic_launcher" android:roundIcon="@mipmap/ic_launcher_round">
+        <!-- Round 4 / Play Protect differential audit: strip the AndroidX
+             ProfileInstaller broadcast receiver from the merged manifest.
+             It is exported and guarded by the signature-level DUMP
+             permission, exists in every Compose app, and serves only
+             Play/adb-triggered profile operations — a sideloaded app never
+             receives those. The startup INITIALIZER stays, so the baseline
+             profile bundled in assets/dexopt still installs locally at
+             first run; only the externally-triggerable receiver is removed
+             to keep the install surface as small as possible. -->
+        <receiver
+            android:name="androidx.profileinstaller.ProfileInstallReceiver"
+            tools:node="remove" />
         <activity android:name=".MainActivity" android:exported="true"
             android:windowSoftInputMode="adjustResize">
             <intent-filter>
