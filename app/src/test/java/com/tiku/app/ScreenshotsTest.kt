@@ -101,9 +101,13 @@ class ScreenshotsTest {
 
     @Test fun shot03_chapter() {
         frame { ChapterScreen("Physics", 0) }
-        // the four practice questions share the "Tap to reveal answer" label, so click the
+        // the four practice questions share the "Tap to reveal answer" label, so tap the
         // first reveal link by position (bottom edge of the visible column)
-        composeRule.onRoot().performTouchInput { click(Offset(300f, 2390f)) }
+        composeRule.onRoot().performTouchInput {
+            val p = Offset(300f, 2390f)
+            down(0, p)
+            up(0)
+        }
         composeRule.waitForIdle()
         shot("03-chapter.png")
     }
