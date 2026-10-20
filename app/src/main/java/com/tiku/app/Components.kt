@@ -67,7 +67,11 @@ fun AvatarBox(
                     contentScale = androidx.compose.ui.layout.ContentScale.Crop)
             }
             else -> {
-                Text(person.emoji, fontSize = fontSizeSp.sp, fontFamily = Manrope)
+                if (EmojiArt.assetName(person.emoji) != null) {
+                    EmojiArt(person.emoji, (fontSizeSp * 1.2f).dp)
+                } else {
+                    Text(person.name.take(1).uppercase(), fontSize = fontSizeSp.sp, fontFamily = Bricolage, fontWeight = FontWeight.Bold, color = Color.White)
+                }
             }
         }
     }

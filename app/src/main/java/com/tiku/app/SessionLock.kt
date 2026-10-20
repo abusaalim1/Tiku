@@ -49,7 +49,7 @@ object ChatSession {
     /** Discreet quick exit from inside ChatRoot — identical to lock(). */
     fun quickExit(ctx: Context) {
         lock(ctx)
-        AppState.toast("Back to study mode 🌿")
+        AppState.toast("Back to study mode")
     }
 
     /**

@@ -185,11 +185,15 @@ fun FacadeHome() {
                     Column {
                         Text("Focus timer", fontSize = 17.sp, fontFamily = Bricolage, fontWeight = FontWeight.Bold, color = TikuTokens.Ink)
                         Spacer(Modifier.height(3.dp))
-                        Text(
-                            if (streak > 0) "🔥 $streak day streak — keep it going."
-                            else "Start your first session today.",
-                            fontSize = 13.sp, fontFamily = Manrope, color = TikuTokens.Muted,
-                        )
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            if (streak > 0) {
+                                EmojiArt("🔥", 15.dp)
+                                Spacer(Modifier.width(5.dp))
+                                Text("$streak day streak — keep it going.", fontSize = 13.sp, fontFamily = Manrope, color = TikuTokens.Muted)
+                            } else {
+                                Text("Start your first session today.", fontSize = 13.sp, fontFamily = Manrope, color = TikuTokens.Muted)
+                            }
+                        }
                         Spacer(Modifier.height(8.dp))
                         Box(
                             Modifier.clip(RoundedCornerShape(12.dp)).background(settings.gradBrush)
@@ -211,7 +215,7 @@ fun FacadeHome() {
                         pair.forEach { subj ->
                             FacadeCard(Modifier.weight(1f), onClick = { AppState.go(Screen.StudySubject(subj.name)) }) {
                                 Column {
-                                    Text(subj.icon, fontSize = 26.sp)
+                                    SubjectArt(subj.name, 30.dp)
                                     Spacer(Modifier.height(8.dp))
                                     Text(subj.name, fontSize = 16.sp, fontFamily = Bricolage, fontWeight = FontWeight.Bold, color = TikuTokens.Ink)
                                     Spacer(Modifier.height(2.dp))
@@ -243,7 +247,7 @@ private fun ToolTile(glyph: String, label: String, modifier: Modifier = Modifier
             Modifier.fillMaxWidth().padding(vertical = 2.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            Text(glyph, fontSize = 22.sp, fontFamily = if (serif) SerifItalic else Manrope)
+            if (EmojiArt.assetName(glyph) != null) EmojiArt(glyph, 26.dp) else Text(glyph, fontSize = 22.sp, fontFamily = if (serif) SerifItalic else Manrope)
             Spacer(Modifier.height(6.dp))
             Text(label, fontSize = 13.sp, fontFamily = Manrope, fontWeight = FontWeight.SemiBold, color = TikuTokens.Ink)
         }
@@ -391,7 +395,7 @@ fun TimerScreen() {
             finished = true
             running = false
             StudyStore.addFocusMinutes(ctx, totalSec / 60)
-            AppState.toast("Focus session complete 🎉")
+            AppState.toast("Focus session complete")
         }
     }
 
@@ -741,7 +745,7 @@ fun FormulasScreen() {
                     items(subjects, key = { it.name }) { s ->
                         FacadeCard(Modifier.fillMaxWidth(), onClick = { subject = s.name }) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
-                                Text(s.icon, fontSize = 22.sp)
+                                SubjectArt(s.name, 30.dp)
                                 Spacer(Modifier.width(12.dp))
                                 Text(s.name, fontSize = 16.sp, fontFamily = Bricolage, fontWeight = FontWeight.Bold, color = TikuTokens.Ink)
                             }

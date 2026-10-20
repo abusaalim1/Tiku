@@ -20,6 +20,10 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Visibility
+import androidx.compose.material.icons.filled.VisibilityOff
+import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -83,7 +87,7 @@ fun PasswordField(value: String, onValue: (String) -> Unit, placeholder: String)
                 .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) { shown = !shown },
             contentAlignment = Alignment.Center,
         ) {
-            Text(if (shown) "🙈" else "👁", fontSize = 18.sp)
+            Icon(if (shown) Icons.Filled.VisibilityOff else Icons.Filled.Visibility, null, Modifier.size(20.dp), tint = TikuTokens.Muted)
         }
     }
 }
@@ -218,7 +222,7 @@ fun ProfileSetupScreen() {
                     androidx.compose.foundation.Image(bmp.asBmp(), null, Modifier.fillMaxSize(),
                         contentScale = androidx.compose.ui.layout.ContentScale.Crop)
                 } else {
-                    Text("🙂", fontSize = 38.sp)
+                    EmojiArt("🙂", 40.dp)
                 }
             }
             Box(
@@ -267,7 +271,7 @@ fun ProfileSetupScreen() {
                 ctx.getSharedPreferences("tiku_prefs", android.content.Context.MODE_PRIVATE)
                     .edit().putBoolean("onboarded", true).apply()
                 AppState.go(Screen.Home)
-                AppState.toast("Welcome to Tikuu 🌿")
+                AppState.toast("Welcome to Tikuu")
             } else {
                 busy = true
                 scope.launch {
@@ -283,7 +287,7 @@ fun ProfileSetupScreen() {
                             .edit().putBoolean("onboarded", true).apply()
                         FirebaseEngine.start(ctx)
                         AppState.go(Screen.Home)
-                        AppState.toast("Welcome to Tikuu 🌿")
+                        AppState.toast("Welcome to Tikuu")
                     } else {
                         busy = false
                         AppState.toast(res.exceptionOrNull()?.message ?: "Setup failed")

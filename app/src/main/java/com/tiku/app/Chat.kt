@@ -133,7 +133,7 @@ fun ChatScreen(threadId: String) {
                 val f = recorder.stop(true)
                 recording = false
                 if (f != null) AppState.repo.sendVoice(threadId, f, 180, recorder.normalizedAmps())
-                AppState.toast("Voice notes are capped at 3 minutes 🎙")
+                AppState.toast("Voice notes are capped at 3 minutes")
             }
         }
     }
@@ -217,13 +217,18 @@ fun ChatScreen(threadId: String) {
                     Modifier.fillMaxWidth().padding(bottom = 8.dp),
                     contentAlignment = Alignment.Center,
                 ) {
-                    Text(
-                        "🔒 Messages are end-to-end encrypted. Only you and ${person.name} can read them.",
-                        fontSize = 12.sp, color = TikuTokens.Muted, fontFamily = Manrope,
-                        textAlign = androidx.compose.ui.text.style.TextAlign.Center,
-                        modifier = Modifier.clip(RoundedCornerShape(12.dp)).background(TikuTokens.Mint)
+                    Row(
+                        Modifier.clip(RoundedCornerShape(12.dp)).background(TikuTokens.Mint)
                             .padding(horizontal = 12.dp, vertical = 6.dp),
-                    )
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        TikuLockIcon(Modifier.size(12.dp), tint = TikuTokens.Muted)
+                        Spacer(Modifier.width(6.dp))
+                        Text(
+                            "Messages are end-to-end encrypted. Only you and ${person.name} can read them.",
+                            fontSize = 12.sp, color = TikuTokens.Muted, fontFamily = Manrope,
+                        )
+                    }
                 }
             }
             items(visibleMessages, key = { it.id }) { m ->
@@ -279,17 +284,21 @@ fun ChatScreen(threadId: String) {
                 .padding(horizontal = 14.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            listOf("👋 Hey!", "😂 Haha", "📍 Let’s meet", "❤️ Love it").forEach { chip ->
+            listOf("👋" to "Hey!", "😂" to "Haha", "📍" to "Let’s meet", "❤️" to "Love it").forEach { (emoji, label) ->
                 Box(
                     Modifier.clip(RoundedCornerShape(16.dp)).background(TikuTokens.Card)
                         .border(1.dp, TikuTokens.Line, RoundedCornerShape(16.dp))
                         .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {
-                            AppState.repo.sendText(threadId, chip.replace(Regex("^\\S+\\s"), ""), replyTo)
+                            AppState.repo.sendText(threadId, label, replyTo)
                             replyTo = null
                         }
                         .padding(horizontal = 13.dp, vertical = 7.dp),
                 ) {
-                    Text(chip, fontSize = 13.sp, fontFamily = Manrope, color = TikuTokens.Ink)
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        EmojiArt(emoji, 16.dp)
+                        Spacer(Modifier.width(5.dp))
+                        Text(label, fontSize = 13.sp, fontFamily = Manrope, color = TikuTokens.Ink)
+                    }
                 }
             }
         }
@@ -345,7 +354,7 @@ fun ChatScreen(threadId: String) {
                             ChatSheets.emoji { e -> input += e }
                         },
                     ) {
-                        Text("🙂", fontSize = 18.sp)
+                        EmojiArt("🙂", 20.dp)
                     }
                 }
                 Spacer(Modifier.width(8.dp))
@@ -492,7 +501,9 @@ fun MessageBubble(
                         .border(1.dp, TikuTokens.Line, RoundedCornerShape(12.dp))
                         .padding(horizontal = 6.dp, vertical = 1.dp),
                 ) {
-                    Text(reactions.joinToString(""), fontSize = 13.sp)
+                    Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+                        reactions.forEach { EmojiArt(it, 14.dp) }
+                    }
                 }
             }
         }
@@ -549,7 +560,7 @@ object ChatSheets {
                                         onPick(e); AppState.closeSheet()
                                     },
                                 contentAlignment = Alignment.Center,
-                            ) { Text(e, fontSize = 28.sp) }
+                            ) { EmojiArt(e, 30.dp) }
                         }
                     }
                 }
@@ -575,7 +586,7 @@ object ChatSheets {
                                 AppState.closeSheet()
                             },
                         contentAlignment = Alignment.Center,
-                    ) { Text(e, fontSize = 26.sp) }
+                    ) { EmojiArt(e, 27.dp) }
                 }
             }
             Spacer(Modifier.height(10.dp))

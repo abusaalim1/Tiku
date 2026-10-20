@@ -7,9 +7,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
-import androidx.compose.ui.test.hasScrollAction
 import androidx.compose.ui.test.junit4.createComposeRule
-import androidx.compose.ui.test.onNode
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
@@ -171,7 +169,7 @@ class ScreenshotsTest {
     @Test fun shot18_meSettingsScrolled() {
         AppState.homeTab = HomeTab.ME
         frame { HomeScreen() }
-        composeRule.onNode(hasScrollAction())
+        composeRule.onRoot()
             .performTouchInput { swipeUp(); swipeUp() }
         composeRule.waitForIdle()
         shot("18-me-settings-scrolled.png")

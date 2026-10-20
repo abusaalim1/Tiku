@@ -28,6 +28,8 @@ import androidx.compose.material.icons.outlined.ChatBubbleOutline
 import androidx.compose.material.icons.outlined.PersonOutline
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Call
+import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.PhotoCamera
 import androidx.compose.material.icons.filled.DarkMode
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.Icon
@@ -87,7 +89,7 @@ fun HomeScreen() {
                 ) { SerifTitle(title, 30.sp) }
                 Row {
                     GlassIconButton(Icons.Filled.DarkMode, label = "Theme") {
-                        AppState.toast("Light mode is Tikuu’s home 🌿")
+                        AppState.toast("Light mode is Tikuu’s home")
                     }
                     Spacer(Modifier.width(8.dp))
                     GlassIconButton(Icons.Filled.Add, label = "New chat") { NewChatSheet.open() }
@@ -217,8 +219,8 @@ fun ChatRow(th: ChatThread) {
     val last = th.messages.lastOrNull { !it.deletedForMe }
     val preview = when {
         last == null -> ""
-        last.kind == MsgKind.VOICE -> "🎙 Voice message"
-        last.kind == MsgKind.IMAGE -> "📷 Photo"
+        last.kind == MsgKind.VOICE -> "Voice message"
+        last.kind == MsgKind.IMAGE -> "Photo"
         else -> last.text
     }
     Row(
@@ -233,8 +235,20 @@ fun ChatRow(th: ChatThread) {
         Spacer(Modifier.width(13.dp))
         Column(Modifier.weight(1f)) {
             Text(th.person.name, fontWeight = FontWeight.SemiBold, fontSize = 16.sp, fontFamily = Manrope, color = TikuTokens.Ink)
-            Text((if (last?.me == true) "✓✓ " else "") + preview, fontSize = 14.sp, color = TikuTokens.Muted,
-                fontFamily = Manrope, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                if (last?.me == true) Text("✓✓ ", fontSize = 14.sp, color = TikuTokens.Muted, fontFamily = Manrope)
+                val pvIcon = when {
+                    last == null -> null
+                    last.kind == MsgKind.VOICE -> Icons.Filled.Mic
+                    last.kind == MsgKind.IMAGE -> Icons.Filled.PhotoCamera
+                    else -> null
+                }
+                if (pvIcon != null) {
+                    Icon(pvIcon, null, Modifier.size(14.dp), tint = TikuTokens.Muted)
+                    Spacer(Modifier.width(3.dp))
+                }
+                Text(preview, fontSize = 14.sp, color = TikuTokens.Muted, fontFamily = Manrope, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
         }
         Column(horizontalAlignment = Alignment.End) {
             Text(th.time, fontSize = 12.sp, color = TikuTokens.Muted, fontFamily = Manrope)
@@ -305,7 +319,7 @@ fun MePane() {
                         androidx.compose.foundation.Image(bmp.asBmp(), null, Modifier.fillMaxSize(),
                             contentScale = androidx.compose.ui.layout.ContentScale.Crop)
                     } else {
-                        Text("🙂", fontSize = 38.sp)
+                        EmojiArt("🙂", 40.dp)
                     }
                 }
                 Spacer(Modifier.height(10.dp))
@@ -383,7 +397,7 @@ fun SettingsGroups() {
                         "tg" -> {
                             if (r.key == "dk") {
                                 // dark mode: locked to light — visual stays off, toast only
-                                ToggleSwitch(false) { AppState.toast("Light mode is Tikuu’s home 🌿") }
+                                ToggleSwitch(false) { AppState.toast("Light mode is Tikuu’s home") }
                             } else {
                                 ToggleSwitch(settings.toggles[r.key] == true) { on ->
                                     SettingsStore.setToggle(r.key, on)

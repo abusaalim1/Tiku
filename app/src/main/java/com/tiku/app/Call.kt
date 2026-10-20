@@ -24,6 +24,11 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.Videocam
+import androidx.compose.material.icons.filled.VolumeUp
+import androidx.compose.material3.Icon
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -47,7 +52,7 @@ import kotlinx.coroutines.delay
 /**
  * Call screen — the designed dark-gradient UI. WebRTC engine is OUT OF SCOPE this
  * round: this screen shows the "Calling…" state, writes a real call-log entry, and
- * shows the design's toast after ~1.2s ("Calls are coming in the next round 📞").
+ * shows the design's toast after ~1.2s ("Calls are coming in the next round").
  */
 @Composable
 fun CallScreen(threadId: String, video: Boolean) {
@@ -60,7 +65,7 @@ fun CallScreen(threadId: String, video: Boolean) {
     LaunchedEffect(threadId) {
         AppState.repo.logCall(threadId, video)
         delay(1200)
-        AppState.toast("Calls are coming in the next round 📞")
+        AppState.toast("Calls are coming in the next round")
         delay(1600)
         AppState.go(Screen.Chat(threadId))
     }
@@ -105,10 +110,14 @@ fun CallScreen(threadId: String, video: Boolean) {
                 Text(status, fontSize = 15.sp, color = Color.White.copy(alpha = 0.7f), fontFamily = Manrope)
             }
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                Text("🔒 End-to-end encrypted", fontSize = 13.sp, color = Color.White.copy(alpha = 0.6f), fontFamily = Manrope)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    TikuLockIcon(Modifier.size(12.dp), tint = Color.White.copy(alpha = 0.6f))
+                    Spacer(Modifier.width(5.dp))
+                    Text("End-to-end encrypted", fontSize = 13.sp, color = Color.White.copy(alpha = 0.6f), fontFamily = Manrope)
+                }
                 Spacer(Modifier.height(18.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                    listOf("🎙" to "m", "🔊" to "s", "📷" to "c").forEach { (emoji, key) ->
+                    listOf(Icons.Filled.Mic to "m", Icons.Filled.VolumeUp to "s", Icons.Filled.Videocam to "c").forEach { (icon, key) ->
                         val on = toggled.contains(key)
                         Box(
                             Modifier.size(62.dp).clip(CircleShape)
@@ -118,7 +127,7 @@ fun CallScreen(threadId: String, video: Boolean) {
                                 },
                             contentAlignment = Alignment.Center,
                         ) {
-                            Text(emoji, fontSize = 22.sp, color = if (on) Color(0xFF1F0E0D) else Color.White)
+                            Icon(icon, null, Modifier.size(22.dp), tint = if (on) Color(0xFF1F0E0D) else Color.White)
                         }
                     }
                     Box(
@@ -203,8 +212,11 @@ fun StoryScreen() {
             Spacer(Modifier.weight(1f))
             SerifTitle(quote, 52.sp, Color.White)
             Spacer(Modifier.weight(1f))
-            Text("Tap to continue · 🔒 Encrypted", fontSize = 13.sp, color = Color.White.copy(alpha = 0.8f),
-                fontFamily = Manrope, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
+                Text("Tap to continue · ", fontSize = 13.sp, color = Color.White.copy(alpha = 0.8f), fontFamily = Manrope)
+                TikuLockIcon(Modifier.size(12.dp), tint = Color.White.copy(alpha = 0.8f))
+                Text(" Encrypted", fontSize = 13.sp, color = Color.White.copy(alpha = 0.8f), fontFamily = Manrope)
+            }
         }
     }
 }
