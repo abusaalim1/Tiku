@@ -427,6 +427,7 @@ private fun defaultSubjects(): List<StudyContent.Subject> = listOf(
 fun TikGateScreen() {
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
+    val settings = tikuSettings().value
     var pw by remember { mutableStateOf("") }
     var error by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
@@ -448,6 +449,22 @@ fun TikGateScreen() {
                 PasswordField(pw, { pw = it; error = "" }, "Password")
                 Spacer(Modifier.height(6.dp))
                 Text(error, fontSize = 13.sp, color = TikuTokens.Red, fontFamily = Manrope)
+                if (rescuable) {
+                    // ROUND 3.1: the rescue is offered whenever this phone holds
+                    // the journal key — NOT only when the verifier is missing or
+                    // damaged. A well-formed hash can still encode a string its
+                    // owner never chose (IME-mangled at setup; Bug 0's real case),
+                    // which reads as "Wrong password" forever. Visibility widens;
+                    // the reset itself stays exactly as gated as before (Google
+                    // re-auth + uid binding inside ResetPasswordScreen).
+                    Spacer(Modifier.height(10.dp))
+                    Text("Forgot password? Reset with Google",
+                        fontSize = 14.sp, fontFamily = Manrope, fontWeight = FontWeight.SemiBold,
+                        color = settings.accent,
+                        modifier = Modifier.clickable(
+                            interactionSource = remember { MutableInteractionSource() }, indication = null,
+                        ) { AppState.go(Screen.PasswordReset) })
+                }
                 Spacer(Modifier.weight(1f))
                 PrimaryButton(if (busy) "Opening…" else "Open journal", enabled = pw.isNotEmpty() && !busy, modifier = Modifier.fillMaxWidth()) {
                     busy = true

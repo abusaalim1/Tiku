@@ -123,6 +123,11 @@ class ScreenshotsTest {
     }
 
     @Test fun shot07_tikGate() {
+        // ROUND 3.1: seed a stand-in local identity (hasLocalIdentity only
+        // null-checks idk_iv/idk_ct) so the gate renders in the state the owner
+        // actually hits — password field PLUS the always-offered Google reset.
+        ctx.getSharedPreferences("tiku_secure", android.content.Context.MODE_PRIVATE)
+            .edit().putString("idk_iv", "shot").putString("idk_ct", "shot").apply()
         frame { TikGateScreen() }
         shot("07-tik-gate.png")
     }
