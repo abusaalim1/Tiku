@@ -477,6 +477,7 @@ object FirebaseEngine : ChatRepo {
                         ), SetOptions.merge())
                         .await()
                     Log.d("TikuSend", "ensureChatDoc ok chatId=$id me=$me peer=$peerUid")
+                    Unit // keep the async Deferred<Unit> — Log.d returns Int
                 }
             }
         }
