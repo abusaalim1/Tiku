@@ -214,7 +214,7 @@ class ScreenshotsTest {
         // preview fake call: "Calling…" then connects — no WebRTC classes load here
         CallController.startCall(ctx, th.id, false)
         frame { CallScreen(th.id, false) }
-        composeRule.mainClock.advanceBy(2000)
+        composeRule.mainClock.advanceTimeBy(2000)
         composeRule.waitForIdle()
         shot("16-call-screen.png")
     }
@@ -261,7 +261,7 @@ class ScreenshotsTest {
         val th = AppState.threads.value.first()
         CallController.startCall(ctx, th.id, true)
         frame { CallScreen(th.id, true) }
-        composeRule.mainClock.advanceBy(2000)
+        composeRule.mainClock.advanceTimeBy(2000)
         composeRule.waitForIdle()
         shot("22-in-call-video.png")
     }
