@@ -19,20 +19,24 @@
           ],
           "questions": [
             {
-              "q": "What is the dimensional formula of energy?",
-              "a": "Energy has dimensions [M L^2 T^-2], the same as work and torque."
+              "q": "Fill in the blanks: (a) The volume of a cube of side 1 cm is equal to _____ m^3.",
+              "a": "(a) 10^-6 m^3 (since 1 cm = 10^-2 m, volume = (10^-2)^3 = 10^-6 m^3).",
+              "src": "NCERT Exercise"
             },
             {
-              "q": "A measurement is recorded as 2.340 cm using a vernier callipers of least count 0.01 cm. How many significant figures?",
-              "a": "Four significant figures (2, 3, 4, 0). The trailing zero after the decimal counts because it shows the precision of the instrument."
+              "q": "The number of significant figures in 0.06900 is: (a) 5 (b) 4 (c) 2 (d) 3",
+              "a": "(b) 4. The zeros to the left of the first non-zero digit are not counted, but the trailing zeros are significant.",
+              "src": "NCERT Exemplar"
             },
             {
-              "q": "The period of a pendulum depends on length l and g. Using dimensions, find the form of T.",
-              "a": "T = k x sqrt(l/g), where k is a dimensionless constant (actually 2pi). T proportional to l^(1/2) g^(-1/2)."
+              "q": "The period of oscillation of a simple pendulum is assumed to depend on the length l and the acceleration due to gravity g. Derive the form of the period T by the method of dimensions.",
+              "a": "T = k x sqrt(l/g), where k is a dimensionless constant (actually 2pi). T is proportional to l^(1/2) g^(-1/2).",
+              "src": "NCERT Exemplar"
             },
             {
-              "q": "Convert 1 N into dyne using dimensional analysis.",
-              "a": "1 N = 10^5 dyne, since 1 kg = 10^3 g and 1 m = 10^2 cm, so 1 kg m/s^2 = 10^5 g cm/s^2."
+              "q": "Convert 1 kg m^2 s^-2 into g cm^2 s^-2.",
+              "a": "1 kg m^2 s^-2 = (10^3 g)(10^2 cm)^2 s^-2 = 10^7 g cm^2 s^-2.",
+              "src": "NCERT Exercise"
             }
           ]
         },
@@ -49,20 +53,24 @@
           ],
           "questions": [
             {
-              "q": "A car travels 100 m in 5 s from rest with uniform acceleration. Find its acceleration.",
-              "a": "s = (1/2)at^2 gives 100 = (1/2)a(25), so a = 8 m/s^2."
+              "q": "Can the following be treated as point objects: (a) a railway carriage moving smoothly between two stations, (b) a spinning cricket ball that turns sharply on hitting the ground? Give reasons.",
+              "a": "(a) Yes - the size of the carriage is negligible compared with the distance between stations. (b) No - the ball's size is comparable with the distance over which it changes direction, and its spin matters.",
+              "src": "NCERT Exercise"
             },
             {
-              "q": "A ball is thrown vertically up at 20 m/s. Find the maximum height reached (g = 10 m/s^2).",
-              "a": "h = u^2/(2g) = 400/20 = 20 m."
+              "q": "A ball is thrown vertically upwards with a velocity of 20 m/s from the top of a building 25 m above the ground. (a) How high does the ball rise above the ground? (b) How long before it hits the ground? (g = 9.8 m/s^2)",
+              "a": "(a) It rises u^2/(2g) = 400/19.6 = 20.4 m above the top, i.e. 45.4 m above the ground. (b) Solving 25 = -20t + 4.9t^2 gives t = about 5.1 s.",
+              "src": "NCERT Exercise"
             },
             {
-              "q": "What does the area under an acceleration-time graph give?",
-              "a": "It gives the change in velocity (delta v) over that time interval."
+              "q": "A particle moves with x(t) = x0(1 - e^-gt), t >= 0, x0 > 0. Where does it start, and with what velocity?",
+              "a": "At t = 0, x = x0(1 - 1) = 0. Velocity v = dx/dt = x0 g e^-gt, so v(0) = x0 g. It starts at the origin with speed x0 g.",
+              "src": "NCERT Exemplar"
             },
             {
-              "q": "A body covers equal distances in equal intervals of time in straight line motion. What can you say?",
-              "a": "It moves with uniform (constant) velocity, so its acceleration is zero."
+              "q": "A particle in one-dimensional motion has zero speed at an instant. Can it have non-zero acceleration at that instant? Give an example.",
+              "a": "Yes. A ball thrown vertically upward has zero velocity at its highest point, but the acceleration there is still g downward.",
+              "src": "NCERT Exercise"
             }
           ]
         },
@@ -78,20 +86,24 @@
           ],
           "questions": [
             {
-              "q": "A projectile is fired at 30 m/s at 30 degrees to the horizontal. Find its range (g = 10 m/s^2).",
-              "a": "R = u^2 sin 2theta / g = 900 x sin 60 / 10 = 90 x 0.866 = 77.9 m (about 78 m)."
+              "q": "State which of the following are scalars and which are vectors: volume, speed, density, acceleration, velocity, angular velocity.",
+              "a": "Scalars: volume, speed, density. Vectors: acceleration, velocity, displacement, angular velocity.",
+              "src": "NCERT Exercise"
             },
             {
-              "q": "Two vectors of magnitudes 3 and 4 act at 90 degrees to each other. Find the resultant.",
-              "a": "R = sqrt(3^2 + 4^2) = 5 units, at an angle tan^-1(4/3) = 53 degrees from the 3-unit vector."
+              "q": "A cyclist rides at 27 km/h and, approaching a circular turn of radius 80 m, brakes, reducing his speed at 0.50 m/s^2. Find the magnitude and direction of the net acceleration on the turn.",
+              "a": "v = 7.5 m/s. Centripetal acceleration = v^2/r = 0.70 m/s^2. Net acceleration = sqrt(0.70^2 + 0.50^2) = 0.86 m/s^2 at an angle tan^-1(0.7/0.5) = about 54.5 deg to the direction of velocity.",
+              "src": "NCERT Exercise"
             },
             {
-              "q": "Why is the work done by centripetal force zero?",
-              "a": "Centripetal force is always perpendicular to the displacement (tangent), so the dot product F. s = Fs cos 90 = 0."
+              "q": "'The net acceleration of a particle in circular motion is always along the radius towards the centre.' True or false? Give a reason.",
+              "a": "False. It is true only for uniform circular motion. If the speed changes there is also a tangential component of acceleration.",
+              "src": "NCERT Exercise"
             },
             {
-              "q": "At what angle is the range of a projectile equal for two different projections?",
-              "a": "For complementary angles theta and (90 - theta), sin 2theta is the same, so the ranges are equal."
+              "q": "A fighter plane flies horizontally at 1.5 km altitude with speed 720 km/h, passing over an anti-aircraft gun. At what angle from the vertical should the gun (muzzle speed 600 m/s) be fired to hit the plane, and above what altitude would the plane be safe?",
+              "a": "(a) The shell must have the plane's horizontal speed: sin(theta) = 200/600, so theta = about 19.5 deg from the vertical. (b) The plane must fly higher than the shell's maximum height, about 16 km.",
+              "src": "NCERT Exercise"
             }
           ]
         },
@@ -108,20 +120,24 @@
           ],
           "questions": [
             {
-              "q": "A 2 kg body moving at 5 m/s is stopped in 0.1 s. Find the average retarding force.",
-              "a": "Impulse = change in momentum = 2 x 5 = 10 kg m/s. F = 10 / 0.1 = 100 N."
+              "q": "Give the magnitude and direction of the net force acting on a stone of mass 0.1 kg just after it is dropped from a window.",
+              "a": "Only gravity acts: F = mg = 0.1 x 10 = 1 N vertically downward.",
+              "src": "NCERT Exercise"
             },
             {
-              "q": "A gun of mass 10 kg fires a bullet of 0.05 kg at 200 m/s. Find the recoil velocity of the gun.",
-              "a": "By momentum conservation: 10 x V = 0.05 x 200 = 10, so V = 1 m/s opposite to the bullet."
+              "q": "A constant retarding force of 50 N is applied to a body of mass 20 kg moving initially with a speed of 15 m/s. How long does the body take to stop?",
+              "a": "Retardation a = F/m = 50/20 = 2.5 m/s^2. Time t = v/a = 15/2.5 = 6 s.",
+              "src": "NCERT Exercise"
             },
             {
-              "q": "Why are roadways banked at curves?",
-              "a": "Banking tilts the normal reaction so its horizontal component provides the centripetal force, reducing dependence on friction and tyre wear."
+              "q": "A body of mass 5 kg is acted upon by two perpendicular forces 8 N and 6 N. Give the magnitude and direction of its acceleration.",
+              "a": "Net force = sqrt(8^2 + 6^2) = 10 N, so acceleration = 10/5 = 2 m/s^2, at an angle tan^-1(6/8) = about 36.9 deg to the 8 N force.",
+              "src": "NCERT Exercise"
             },
             {
-              "q": "A block rests on a surface with mu_s = 0.5. Find the angle of repose.",
-              "a": "Angle of repose theta = tan^-1(mu_s) = tan^-1(0.5) = about 26.6 degrees."
+              "q": "A shell of mass 0.020 kg is fired by a gun of mass 100 kg. If the muzzle speed of the shell is 80 m/s, what is the recoil speed of the gun?",
+              "a": "By momentum conservation: 100 x V = 0.020 x 80 = 1.6, so V = 1.6 x 10^-2 m/s in the opposite direction.",
+              "src": "NCERT Exercise"
             }
           ]
         },
@@ -138,20 +154,24 @@
           ],
           "questions": [
             {
-              "q": "A force of 10 N displaces a body by 5 m at 60 degrees to the force. Find the work done.",
-              "a": "W = Fs cos theta = 10 x 5 x cos 60 = 50 x 0.5 = 25 J."
+              "q": "State carefully whether the following quantities are positive or negative: (a) work done by a man in lifting a bucket out of a well, (b) work done by gravity in that case, (c) work done by friction on a body sliding down an incline, (d) work done by the resistive force of air on a vibrating pendulum.",
+              "a": "(a) Positive (force and displacement both upward). (b) Negative (gravity acts downward, displacement upward). (c) Negative (friction opposes motion). (d) Negative (air resistance opposes the velocity).",
+              "src": "NCERT Exercise"
             },
             {
-              "q": "A 1 kg body falls freely from 10 m. Find its kinetic energy just before hitting the ground (g = 10 m/s^2).",
-              "a": "By energy conservation, K = mgh = 1 x 10 x 10 = 100 J."
+              "q": "A body of mass 2 kg initially at rest moves under an applied horizontal force of 7 N on a table with coefficient of kinetic friction 0.1. In 10 s, compute (a) work done by the applied force, (b) work done by friction, (c) work done by the net force, (d) change in kinetic energy.",
+              "a": "Net acceleration = (7 - 0.1x2x9.8)/2 = 2.52 m/s^2; distance in 10 s = 126 m. (a) 7 x 126 = 882 J. (b) -1.96 x 126 = -247 J. (c) 882 - 247 = 635 J. (d) Change in KE = 635 J - verifying the work-energy theorem.",
+              "src": "NCERT Exercise"
             },
             {
-              "q": "If the momentum of a body is doubled, what happens to its kinetic energy?",
-              "a": "K = p^2/(2m), so doubling p makes K four times the original."
+              "q": "A body is initially at rest and undergoes one-dimensional motion with constant acceleration. The power delivered to it at time t is proportional to: (i) t^1/2 (ii) t (iii) t^3/2 (iv) t^2",
+              "a": "(ii) t. Power P = F x v = (ma)(at) = ma^2 t, which is proportional to t.",
+              "src": "NCERT Exercise"
             },
             {
-              "q": "A motor lifts 200 kg of water to 10 m in 20 s. Find its power (g = 10 m/s^2).",
-              "a": "P = mgh/t = 200 x 10 x 10 / 20 = 1000 W = 1 kW."
+              "q": "A body moves unidirectionally under the influence of a source of constant power. Its displacement in time t is proportional to: (i) t^1/2 (ii) t (iii) t^3/2 (iv) t^2",
+              "a": "(iii) t^3/2. Constant power gives v dv/dx = constant, leading to x proportional to t^3/2.",
+              "src": "NCERT Exercise"
             }
           ]
         },
@@ -168,20 +188,24 @@
           ],
           "questions": [
             {
-              "q": "Two masses 2 kg and 3 kg are placed at x = 1 m and x = 4 m. Find the centre of mass.",
-              "a": "x_cm = (2x1 + 3x4)/(2+3) = (2 + 12)/5 = 2.8 m from the origin."
+              "q": "Give the location of the centre of mass of (i) a sphere, (ii) a cylinder, (iii) a ring and (iv) a cube, each of uniform mass density. Does the centre of mass of a body necessarily lie inside the body?",
+              "a": "All four have their centre of mass at their geometric centre. No - e.g. the centre of mass of a ring lies at its centre, in empty space outside the material.",
+              "src": "NCERT Exercise"
             },
             {
-              "q": "Find the moment of inertia of a disc of mass 2 kg and radius 0.5 m about its central axis.",
-              "a": "I = (1/2)MR^2 = (1/2)(2)(0.25) = 0.25 kg m^2."
+              "q": "A child sits stationary at one end of a long trolley moving uniformly with speed V on a smooth horizontal floor. If the child gets up and runs about on the trolley in any manner, what is the speed of the centre of mass of the (trolley + child) system?",
+              "a": "Still V. There is no net external horizontal force, so the velocity of the centre of mass of the system cannot change.",
+              "src": "NCERT Exercise"
             },
             {
-              "q": "A torque of 10 N m acts on a wheel of I = 2 kg m^2. Find its angular acceleration.",
-              "a": "alpha = tau/I = 10/2 = 5 rad/s^2."
+              "q": "A child stands at the centre of a turntable with arms outstretched, rotating at 40 rev/min. He folds his hands back, reducing his moment of inertia to 2/5 of its initial value. (a) What is his new angular speed? (b) Show that the new kinetic energy of rotation is more than the initial, and account for the increase.",
+              "a": "(a) By conservation of angular momentum: 40 x I = omega' x (2/5)I, so omega' = 100 rev/min. (b) KE scales as I x omega^2, so it becomes 2.5 times larger; the extra energy comes from the work done by the child's muscles in folding his arms.",
+              "src": "NCERT Exercise"
             },
             {
-              "q": "Why does a ballet dancer spin faster when she folds her arms?",
-              "a": "Folding arms reduces the moment of inertia; since angular momentum L = I omega is conserved, omega increases."
+              "q": "Why does a solid sphere have a smaller moment of inertia than a hollow cylinder of the same mass and radius, about an axis through their axes of symmetry?",
+              "a": "In the solid sphere the mass is distributed from the centre out to R, so the average r^2 is smaller; in the hollow cylinder all the mass is concentrated at distance R from the axis, giving a larger moment of inertia.",
+              "src": "NCERT Exemplar"
             }
           ]
         },
@@ -198,20 +222,24 @@
           ],
           "questions": [
             {
-              "q": "Find the escape velocity from Earth if orbital velocity near the surface is 7.9 km/s.",
-              "a": "v_e = sqrt(2) x v_o = 1.414 x 7.9 = about 11.2 km/s."
+              "q": "Answer the following: (a) Can you shield a body from the gravitational influence of nearby matter by putting it inside a hollow sphere? (b) An astronaut in a small spaceship orbiting Earth cannot detect gravity. If the station were very large, could he detect gravity? (c) The Sun pulls Earth more strongly than the Moon does, yet the Moon's tidal effect is larger. Why?",
+              "a": "(a) No - gravity cannot be shielded by any material. (b) Yes - tidal (differential gravity) effects become detectable across a large station. (c) Tides depend on the difference of gravitational pull across Earth, which falls as 1/r^3; the Moon is much closer, so its tidal effect dominates.",
+              "src": "NCERT Exercise"
             },
             {
-              "q": "At what height above Earth's surface does g become one-fourth of its surface value?",
-              "a": "g' = g(R/(R+h))^2 = g/4 gives R+h = 2R, so h = R = 6400 km."
+              "q": "A rocket is fired from the Earth towards the Sun. At what distance from Earth's centre is the gravitational force on the rocket zero? (Mass of Sun = 2 x 10^30 kg, mass of Earth = 6 x 10^24 kg, Earth-Sun distance = 1.5 x 10^11 m.)",
+              "a": "At distance r from Earth: GMe/r^2 = GMs/(R - r)^2 gives (R - r)/r = sqrt(Ms/Me) = 577, so r = R/578 = about 2.6 x 10^8 m from Earth's centre.",
+              "src": "NCERT Exercise"
             },
             {
-              "q": "State Kepler's third law.",
-              "a": "The square of the orbital period of a planet is directly proportional to the cube of the semi-major axis of its orbit: T^2 proportional to r^3."
+              "q": "Both Earth and Moon are subject to the gravitational force of the Sun. As observed from the Sun, the orbit of the Moon: (a) will be elliptical, (b) will not be strictly elliptical because the total gravitational force on it is not central, (c) is not elliptical but will necessarily be a closed curve, (d) deviates considerably from being elliptical due to influence of other planets.",
+              "a": "(b) The total gravitational force on the Moon (Sun + Earth) is not central, so its orbit is not strictly elliptical.",
+              "src": "NCERT Exemplar"
             },
             {
-              "q": "Why is there no atmosphere on the Moon?",
-              "a": "The Moon's escape velocity (about 2.3 km/s) is less than the rms speed of gas molecules at its surface temperature, so gases escaped over time."
+              "q": "A Saturn year is 29.5 times the Earth year. How far is Saturn from the Sun if Earth is 1.50 x 10^8 km away from the Sun?",
+              "a": "By Kepler's third law: r_s = r_e x (29.5)^(2/3) = 1.50 x 10^8 x 9.55 = about 1.43 x 10^9 km.",
+              "src": "NCERT Exercise"
             }
           ]
         },
@@ -227,20 +255,24 @@
           ],
           "questions": [
             {
-              "q": "A wire of length 2 m and area 1 mm^2 stretches by 1 mm under a load. Find the strain.",
-              "a": "Strain = delta L / L = 0.001 / 2 = 5 x 10^-4 (dimensionless)."
+              "q": "A steel wire of length 4.7 m and cross-sectional area 3.0 x 10^-5 m^2 stretches by the same amount as a copper wire of length 3.5 m and area 4.0 x 10^-5 m^2 under the same load. What is the ratio of the Young's modulus of steel to that of copper?",
+              "a": "Y_s/Y_c = (L_s/L_c) x (A_c/A_s) = (4.7/3.5) x (4.0/3.0) = 1.343 x 1.333 = about 1.8.",
+              "src": "NCERT Exercise"
             },
             {
-              "q": "Steel has Young modulus 2 x 10^11 N/m^2. A stress of 10^8 N/m^2 is applied. Find the strain produced.",
-              "a": "Strain = stress / Y = 10^8 / (2 x 10^11) = 5 x 10^-4."
+              "q": "The edge of an aluminium cube is 10 cm long. One face is fixed to a vertical wall and a mass of 100 kg is attached to the opposite face. The shear modulus of aluminium is 25 GPa. What is the vertical deflection of this face?",
+              "a": "Shear strain = F/(A x eta) = (100 x 10)/(0.01 x 25 x 10^9) = 4 x 10^-6. Deflection = strain x edge length = 4 x 10^-6 x 0.1 = 4 x 10^-7 m.",
+              "src": "NCERT Exercise"
             },
             {
-              "q": "Why are steel girders used in bridges rather than aluminium of the same size?",
-              "a": "Steel has a much higher Young modulus and higher ultimate strength, so it deforms less under load and carries greater stress before failure."
+              "q": "Two identical steel cubes (mass 50 g, side 1 cm) collide head-on face to face, each with speed 10 cm/s. Find the maximum compression of each. (Young's modulus of steel Y = 2 x 10^11 N/m^2.)",
+              "a": "Initial KE = 2 x (1/2)mv^2 = 5 x 10^-4 J becomes elastic PE 2 x (1/2)K(delta L)^2 with K = YA/L = 2 x 10^11 x 0.01. Compression delta L = sqrt(5 x 10^-4/(2 x 10^11 x 0.1)) = about 1.58 x 10^-7 m.",
+              "src": "NCERT Exemplar"
             },
             {
-              "q": "What is the SI unit of Young modulus?",
-              "a": "Pascal (N/m^2) - the same as stress, since strain is dimensionless."
+              "q": "A copper piece with rectangular cross-section 15.2 mm x 19.1 mm is pulled in tension with a force of 44,500 N, producing only elastic deformation. Calculate the resulting strain. (Y_cu = 110 GPa.)",
+              "a": "Stress = 44,500/(15.2 x 19.1 x 10^-6) = 1.53 x 10^8 Pa. Strain = stress/Y = 1.53 x 10^8/110 x 10^9 = about 1.39 x 10^-3.",
+              "src": "NCERT Exercise"
             }
           ]
         },
@@ -257,20 +289,24 @@
           ],
           "questions": [
             {
-              "q": "Find the pressure at a depth of 10 m in water (rho = 1000 kg/m^3, g = 10 m/s^2, atmospheric pressure 10^5 Pa).",
-              "a": "P = 10^5 + 1000 x 10 x 10 = 2 x 10^5 Pa (about 2 atmospheres)."
+              "q": "Streamline flow is more likely for liquids with: (a) high density (b) high viscosity (c) low density (d) low viscosity",
+              "a": "Both (b) and (c). High viscosity keeps the flow lines distinct, and low density keeps the Reynolds number (rvd/eta) low, both favouring streamline flow.",
+              "src": "NCERT Exemplar"
             },
             {
-              "q": "A soap bubble has twice the radius of another. Compare the excess pressure inside them.",
-              "a": "Excess pressure = 4S/R, inversely proportional to R. The bigger bubble has half the excess pressure of the smaller one (ratio 1:2)."
+              "q": "Iceberg floats in water with part of it submerged. What fraction of the volume of the iceberg is submerged if the density of ice is 0.917 g/cm^3?",
+              "a": "Fraction submerged = density of ice / density of water = 0.917/1 = 0.917.",
+              "src": "NCERT Exemplar"
             },
             {
-              "q": "Why does a deep-sea diver wear a special suit?",
-              "a": "Pressure increases by about 1 atmosphere every 10 m of depth, so at great depths the huge water pressure would crush the body; the suit balances it."
+              "q": "Why is the blood pressure in humans greater at the feet than at the brain?",
+              "a": "Pressure in a fluid column is P = rho g h; the feet lie below the heart, so they carry the pressure of a taller column of blood than the brain does.",
+              "src": "NCERT Exercise"
             },
             {
-              "q": "Water flows at 2 m/s through a pipe of area 4 cm^2 into a section of area 2 cm^2. Find the new speed.",
-              "a": "By continuity A1v1 = A2v2: 4 x 2 = 2 x v2, so v2 = 4 m/s."
+              "q": "A 50 kg girl wearing high heel shoes balances on a single heel. The heel is circular with diameter 1.0 cm. What is the pressure exerted by the heel on the horizontal floor?",
+              "a": "P = F/A = (50 x 9.8)/(pi x 0.25 x 10^-4) = 490/7.85 x 10^-5 = about 6.2 x 10^6 Pa.",
+              "src": "NCERT Exercise"
             }
           ]
         },
@@ -287,20 +323,24 @@
           ],
           "questions": [
             {
-              "q": "How much heat is needed to raise 0.5 kg of water from 20 deg C to 60 deg C? (c = 4200 J/kg K)",
-              "a": "Q = mc delta T = 0.5 x 4200 x 40 = 84,000 J = 84 kJ."
+              "q": "The triple points of neon and carbon dioxide are 24.57 K and 216.55 K respectively. Express these temperatures on the Celsius and Fahrenheit scales.",
+              "a": "Neon: -248.58 deg C and -415.44 deg F. Carbon dioxide: -56.60 deg C and -69.88 deg F.",
+              "src": "NCERT Exercise"
             },
             {
-              "q": "A metal rod of length 1 m expands by 1.2 mm when heated by 100 deg C. Find alpha.",
-              "a": "alpha = delta L / (L delta T) = 0.0012 / (1 x 100) = 1.2 x 10^-5 per degree C."
+              "q": "Two absolute scales A and B have triple points of water defined to be 200 A and 350 B. What is the relation between T_A and T_B?",
+              "a": "200 A = 350 B = 273.16 K, so T_A/T_B = 350/200 = 7/4, i.e. T_A = (7/4) T_B.",
+              "src": "NCERT Exercise"
             },
             {
-              "q": "Why does steam cause more severe burns than boiling water?",
-              "a": "Steam carries extra latent heat of vaporisation (about 22.6 x 10^5 J/kg) which it releases on condensing on the skin, in addition to cooling from 100 deg C."
+              "q": "A brass wire 1.8 m long at 27 deg C is held taut with little tension between two rigid supports. If the wire is cooled to -39 deg C, what is the tension developed in the wire, if its diameter is 2.0 mm? (alpha_brass = 2.0 x 10^-5 per deg C, Y_brass = 0.91 x 10^11 Pa.)",
+              "a": "Thermal strain = alpha x delta T = 1.32 x 10^-3. Tension = Y x A x strain = 0.91 x 10^11 x pi x 10^-6 x 1.32 x 10^-3 = about 3.8 x 10^2 N.",
+              "src": "NCERT Exercise"
             },
             {
-              "q": "Two rods of same material but lengths 1 m and 2 m are heated equally. Which expands more in length?",
-              "a": "The 2 m rod expands twice as much in absolute length, since delta L is proportional to original length L (strain is the same for both)."
+              "q": "A body cools from 80 deg C to 50 deg C in 5 minutes. Calculate the time it takes to cool from 60 deg C to 30 deg C. The temperature of the surroundings is 20 deg C.",
+              "a": "By Newton's law of cooling, the rate constant K = (30/5)/(65 - 20) = 0.133 per min. Then (30/t) = K x (45 - 20), giving t = 9 minutes.",
+              "src": "NCERT Exercise"
             }
           ]
         },
@@ -317,20 +357,24 @@
           ],
           "questions": [
             {
-              "q": "A gas absorbs 500 J of heat and does 200 J of work. Find the change in internal energy.",
-              "a": "delta U = delta Q - delta W = 500 - 200 = 300 J."
+              "q": "A geyser heats water flowing at the rate of 3.0 litres per minute from 27 deg C to 77 deg C. If the geyser operates on a gas burner, what is the rate of consumption of fuel if its heat of combustion is 4.0 x 10^4 J/g?",
+              "a": "Heat needed per minute = 3 x 4200 x 50 = 6.3 x 10^5 J. Fuel rate = 6.3 x 10^5/4.0 x 10^4 = about 16 g per minute.",
+              "src": "NCERT Exercise"
             },
             {
-              "q": "Find the efficiency of a Carnot engine working between 400 K and 300 K.",
-              "a": "eta = 1 - 300/400 = 0.25, i., 25%."
+              "q": "What amount of heat must be supplied to 2.0 x 10^-2 kg of nitrogen (at room temperature) to raise its temperature by 45 deg C at constant pressure? (Molecular mass of N2 = 28; R = 8.3 J/mol K.)",
+              "a": "n = 20/28 = 0.714 mol. Q = n C_p delta T = 0.714 x (7/2 x 8.3) x 45 = about 934 J.",
+              "src": "NCERT Exercise"
             },
             {
-              "q": "In an adiabatic expansion, a gas does work. What happens to its temperature?",
-              "a": "With Q = 0, the work comes from internal energy, so U and hence temperature decrease - the gas cools."
+              "q": "A refrigerator is to maintain eatables kept inside at 9 deg C. If the room temperature is 36 deg C, calculate the coefficient of performance.",
+              "a": "COP = T_cold/(T_hot - T_cold) = 282/(309 - 282) = 282/27 = about 10.4.",
+              "src": "NCERT Exercise"
             },
             {
-              "q": "For a monoatomic ideal gas, what are C_v and C_p?",
-              "a": "C_v = (3/2)R and C_p = (5/2)R, so gamma = 5/3 = 1.67."
+              "q": "A steam engine delivers 5.4 x 10^8 J of work per minute and services 3.6 x 10^9 J of heat per minute from its boiler. What is the efficiency of the engine? How much heat is wasted per minute?",
+              "a": "Efficiency = 5.4 x 10^8/3.6 x 10^9 = 0.15, i.e. 15%. Heat wasted = 3.6 x 10^9 - 5.4 x 10^8 = 3.06 x 10^9 J per minute.",
+              "src": "NCERT Exercise"
             }
           ]
         },
@@ -346,20 +390,24 @@
           ],
           "questions": [
             {
-              "q": "Find the rms speed of oxygen molecules at 300 K (M = 0.032 kg/mol, R = 8.31 J/mol K).",
-              "a": "c_rms = sqrt(3 x 8.31 x 300 / 0.032) = sqrt(233,700) = about 483 m/s."
+              "q": "Estimate the fraction of the molecular volume to the actual volume occupied by oxygen gas at STP. Take the diameter of an oxygen molecule to be 3 Angstrom.",
+              "a": "Molecular volume per mole = (4/3)pi(1.5 x 10^-10)^3 x N_A = about 8.5 x 10^-6 m^3. Molar volume at STP = 2.24 x 10^-2 m^3. Fraction = about 4 x 10^-4.",
+              "src": "NCERT Exercise"
             },
             {
-              "q": "What is the average kinetic energy of a gas molecule at 300 K? (k_B = 1.38 x 10^-23 J/K)",
-              "a": "KE = (3/2) k_B T = 1.5 x 1.38 x 10^-23 x 300 = 6.21 x 10^-21 J."
+              "q": "At what temperature is the root mean square speed of an atom in an argon gas cylinder equal to the rms speed of a helium gas atom at -20 deg C? (Atomic mass of Ar = 39.9 u, of He = 4.0 u.)",
+              "a": "c_rms proportional to sqrt(T/M): T_Ar = 253 x (39.9/4.0) = about 2.52 x 10^3 K.",
+              "src": "NCERT Exercise"
             },
             {
-              "q": "At what temperature will the rms speed of hydrogen molecules equal that of oxygen at 300 K?",
-              "a": "c_rms proportional to sqrt(T/M). For equal speeds T_H2 / M_H2 = T_O2 / M_O2, so T_H2 = 300 x (2/32) = 18.75 K."
+              "q": "A flask contains argon and chlorine in the ratio 2:1 by mass. The temperature of the mixture is 27 deg C. Obtain the ratio of (i) average kinetic energy per molecule, and (ii) root mean square speed of the molecules of the two gases. (Ar = 39.9 u, Cl2 = 70.9 u.)",
+              "a": "(i) 1:1 - average kinetic energy depends only on temperature. (ii) v_Ar/v_Cl = sqrt(70.9/39.9) = about 1.33.",
+              "src": "NCERT Exercise"
             },
             {
-              "q": "How many degrees of freedom does a diatomic gas have at room temperature?",
-              "a": "Five: 3 translational and 2 rotational (vibrational modes are inactive at room temperature)."
+              "q": "A cubic vessel (with faces horizontal and vertical) contains an ideal gas at NTP. The vessel is carried by a rocket moving at 500 m/s in the vertical direction. What is the pressure of the gas inside the vessel as observed from the ground?",
+              "a": "It remains the same. Motion of the vessel as a whole does not change the relative motion of the gas molecules with respect to the walls, which is what causes pressure.",
+              "src": "NCERT Exemplar"
             }
           ]
         },
@@ -375,20 +423,24 @@
           ],
           "questions": [
             {
-              "q": "A simple pendulum has length 1 m. Find its time period (g = 9.8 m/s^2).",
-              "a": "T = 2pi sqrt(l/g) = 2pi sqrt(1/9.8) = about 2.0 s (a 'seconds pendulum')."
+              "q": "Which of the following represent periodic motion: (a) a swimmer completing one return trip from one bank of a river to the other and back, (b) a freely suspended bar magnet displaced from its N-S direction and released, (c) a hydrogen molecule rotating about its centre of mass, (d) an arrow released from a bow?",
+              "a": "(b) and (c). The magnet oscillates about its equilibrium direction and the molecule rotates periodically; the swimmer's trip and the arrow's flight are not repeated motions.",
+              "src": "NCERT Exercise"
             },
             {
-              "q": "A particle in SHM has amplitude 5 cm and period 2 s. Find its maximum velocity.",
-              "a": "v_max = A omega = 0.05 x (2pi/2) = 0.05pi = 0.157 m/s."
+              "q": "Which of the following represent nearly SHM and which represent periodic but not SHM: (a) rotation of Earth about its axis, (b) motion of an oscillating mercury column in a U-tube, (c) motion of a ball bearing inside a smooth curved bowl released slightly above the lowest point, (d) general vibrations of a polyatomic molecule about its equilibrium position?",
+              "a": "Nearly SHM: (b) and (d) - the restoring force is nearly proportional to displacement. Periodic but not SHM: (a) and (c).",
+              "src": "NCERT Exercise"
             },
             {
-              "q": "A mass of 0.5 kg on a spring of k = 50 N/m oscillates. Find the frequency.",
-              "a": "nu = (1/2pi) sqrt(k/m) = (1/2pi) sqrt(100) = 10/(2pi) = about 1.59 Hz."
+              "q": "A spring of force constant k is clamped rigidly at one end with a mass m at the free end; a force F stretches it. The same spring has both ends free with a mass m at each end, and each end is stretched by the same force F. (a) What is the maximum extension in the two cases? (b) If the mass(es) are released, what is the period of oscillation in each case?",
+              "a": "(a) F/k in both cases. (b) First case: T = 2pi sqrt(m/k). Second case: the reduced mass is m/2, so T = 2pi sqrt(m/2k).",
+              "src": "NCERT Exercise"
             },
             {
-              "q": "At what displacement is the KE of an SHM particle half its total energy?",
-              "a": "KE = (1/2)E means (A^2 - x^2) = A^2/2, so x = A/sqrt(2) = 0.707 A."
+              "q": "A spring balance has a scale that reads from 0 to 50 kg. The length of the scale is 20 cm. A body suspended from this balance, when displaced and released, oscillates with a period of 0.6 s. What is the weight of the body?",
+              "a": "k = (50 x 9.8)/0.2 = 2450 N/m. From T = 2pi sqrt(m/k): m = kT^2/4pi^2 = about 22.3 kg, so the weight is about 2.19 x 10^2 N.",
+              "src": "NCERT Exercise"
             }
           ]
         },
@@ -405,20 +457,24 @@
           ],
           "questions": [
             {
-              "q": "A wave of frequency 500 Hz travels at 350 m/s. Find its wavelength.",
-              "a": "lambda = v/nu = 350/500 = 0.7 m."
+              "q": "You have learnt that a travelling wave in one dimension is represented by y = f(x +- vt). Is the converse true? Examine whether these can possibly represent a travelling wave: (a) (x - vt)^2, (b) log[(x + vt)/x0], (c) 1/(x + vt).",
+              "a": "Yes to all three. Any function of (x +- vt) keeps its shape while moving with speed v, so each can represent a travelling wave.",
+              "src": "NCERT Exercise"
             },
             {
-              "q": "Two tuning forks of 256 Hz and 260 Hz sound together. How many beats per second are heard?",
-              "a": "Beat frequency = |260 - 256| = 4 beats per second."
+              "q": "A steel wire has a length of 12.0 m and a mass of 2.10 kg. What should be the tension in the wire so that the speed of a transverse wave on the wire equals the speed of sound in dry air at 20 deg C (343 m/s)?",
+              "a": "mu = 2.10/12 = 0.175 kg/m. T = v^2 x mu = 343^2 x 0.175 = about 2.06 x 10^4 N.",
+              "src": "NCERT Exercise"
             },
             {
-              "q": "A string of length 1 m and mass 5 g is under tension 80 N. Find the wave speed on it.",
-              "a": "mu = 0.005 kg/m. v = sqrt(T/mu) = sqrt(80/0.005) = sqrt(16000) = about 126.5 m/s."
+              "q": "A hospital uses an ultrasonic scanner to locate tumours in a tissue. What is the wavelength of sound in the tissue in which the speed of sound is 1.7 km/s? The operating frequency of the scanner is 4.2 MHz.",
+              "a": "lambda = v/f = 1700/4.2 x 10^6 = about 4.0 x 10^-4 m, i.e. about 0.4 mm.",
+              "src": "NCERT Exercise"
             },
             {
-              "q": "A closed organ pipe and an open pipe have the same length. Compare their fundamental frequencies.",
-              "a": "Closed pipe fundamental = v/(4L); open pipe = v/(2L). The open pipe's fundamental is twice that of the closed pipe."
+              "q": "With the propagation of longitudinal waves through a medium, the quantity transmitted is: (a) matter, (b) energy, (c) energy and matter, (d) energy, matter and momentum.",
+              "a": "(b) Energy. The particles of the medium only oscillate about their mean positions; they are not carried along with the wave.",
+              "src": "NCERT Exemplar"
             }
           ]
         }
@@ -441,20 +497,24 @@
           ],
           "questions": [
             {
-              "q": "How many molecules are present in 11 g of CO2? (M = 44 g/mol)",
-              "a": "Moles = 11/44 = 0.25 mol. Molecules = 0.25 x 6.022 x 10^23 = 1.505 x 10^23."
+              "q": "Calculate the molar mass of the following: (i) H2O (ii) CO2 (iii) CH4.",
+              "a": "(i) 18.02 g/mol, (ii) 44.01 g/mol, (iii) 16.04 g/mol.",
+              "src": "NCERT Exercise"
             },
             {
-              "q": "Find the empirical formula of a compound with 40% C, 6.7% H and 53.3% O.",
-              "a": "Moles: C = 40/12 = 3.33, H = 6.7/1 = 6.7, O = 53.3/16 = 3.33. Ratio = 1:2:1, so CH2O."
+              "q": "Calculate the mass per cent of the different elements present in sodium sulphate (Na2SO4).",
+              "a": "Molar mass = 142.05 g/mol. Na: 45.98/142.05 = 32.4%, S: 32.07/142.05 = 22.6%, O: 64/142.05 = 45.1%.",
+              "src": "NCERT Exercise"
             },
             {
-              "q": "Define the limiting reagent with an example.",
-              "a": "The reactant used up first, which limits product formation. If 3 mol H2 and 1 mol O2 react (2H2 + O2 -> 2H2O), O2 is the limiting reagent and only 2 mol H2O forms."
+              "q": "Calculate the atomic mass (average) of chlorine using: 35Cl (75.77%, 34.9689 amu), 37Cl (24.23%, 36.9659 amu).",
+              "a": "0.7577 x 34.9689 + 0.2423 x 36.9659 = 26.50 + 8.96 = 35.45 amu.",
+              "src": "NCERT Exercise"
             },
             {
-              "q": "What is the molarity of a solution containing 8 g NaOH in 500 mL solution? (M = 40 g/mol)",
-              "a": "Moles = 8/40 = 0.2 mol; volume = 0.5 L; M = 0.2/0.5 = 0.4 mol/L."
+              "q": "Which of the following statements about a compound is INCORRECT: (i) A molecule of a compound has atoms of different elements. (ii) A compound retains the physical properties of its constituent elements. (iii) A compound cannot be separated into its constituent elements by physical methods. (iv) A compound is formed when atoms of different elements combine in a definite ratio.",
+              "a": "(ii) is incorrect - a compound's properties are entirely different from those of its constituent elements (e.g. NaCl vs Na and Cl).",
+              "src": "NCERT Exemplar"
             }
           ]
         },
@@ -472,20 +532,24 @@
           ],
           "questions": [
             {
-              "q": "What are the quantum numbers of the outermost electron of sodium (Z = 11)?",
-              "a": "Configuration: 1s^2 2s^2 2p^6 3s^1. The 3s electron has n = 3, l = 0, m = 0, s = +1/2."
+              "q": "Calculate the number of protons, neutrons and electrons in the bromine isotope 80Br35.",
+              "a": "Protons = 35, electrons = 35 (neutral atom), neutrons = 80 - 35 = 45.",
+              "src": "NCERT Exercise"
             },
             {
-              "q": "Calculate the energy of the electron in the second orbit of hydrogen.",
-              "a": "E_2 = -13.6 / 2^2 = -13.6/4 = -3.4 eV."
+              "q": "The longest wavelength doublet absorption transition is observed at 589 and 589.6 nm. Calculate the frequency of each transition and the energy difference between the two excited states.",
+              "a": "nu1 = c/lambda1 = 5.093 x 10^14 s^-1; nu2 = 5.088 x 10^14 s^-1. Energy difference = h(nu1 - nu2) = about 3.3 x 10^-22 J.",
+              "src": "NCERT Exercise"
             },
             {
-              "q": "Why is copper's configuration [Ar] 3d^10 4s^1 and not [Ar] 3d^9 4s^2?",
-              "a": "A completely filled d subshell (3d^10) is extra stable, so one 4s electron moves into 3d."
+              "q": "Electrons are emitted with zero velocity from a metal surface when it is exposed to radiation of wavelength 6800 Angstrom. Calculate the threshold frequency and the work function of the metal.",
+              "a": "Threshold frequency nu0 = c/lambda = 3 x 10^8/6800 x 10^-10 = 4.41 x 10^14 s^-1. Work function W0 = h nu0 = about 2.92 x 10^-19 J.",
+              "src": "NCERT Exercise"
             },
             {
-              "q": "How many orbitals and electrons can the M shell (n = 3) hold?",
-              "a": "Orbitals = n^2 = 9; maximum electrons = 2n^2 = 18."
+              "q": "Which of the following statements in relation to the hydrogen atom is correct: (i) 3s, 3p and 3d orbitals all have the same energy, (ii) 3s and 3p orbitals are of lower energy than 3d orbital, (iii) 3p orbital is lower in energy than 3d orbital, (iv) 3s orbital is lower in energy than 3p orbital.",
+              "a": "(i) In hydrogen, which has only one electron, the energy depends only on the principal quantum number n.",
+              "src": "NCERT Exemplar"
             }
           ]
         },
@@ -502,20 +566,24 @@
           ],
           "questions": [
             {
-              "q": "Arrange Na, Mg, Al in increasing order of ionisation enthalpy and explain.",
-              "a": "Na < Mg < Al in first ionisation enthalpy, because effective nuclear charge increases across the period, holding electrons more tightly."
+              "q": "What is the basic theme of organisation in the periodic table?",
+              "a": "To simplify and systematise the study of elements and their compounds: elements with similar properties recur at regular intervals, so the properties are periodic functions of atomic number.",
+              "src": "NCERT Exercise"
             },
             {
-              "q": "Which has a larger atomic radius: K or Br? Why?",
-              "a": "Potassium is much larger; radius increases down a group and decreases across a period, and K is both to the left and lower than Br."
+              "q": "Write the atomic number of the element present in the third period and seventeenth group of the periodic table.",
+              "a": "17 - it is chlorine.",
+              "src": "NCERT Exercise"
             },
             {
-              "q": "Why does chlorine have a higher electron gain enthalpy than fluorine?",
-              "a": "Fluorine is extremely small, so electron-electron repulsion in its compact 2p subshell offsets the attraction; Cl (3p) accepts the extra electron more easily."
+              "q": "Among the second period elements the actual ionisation enthalpies are in the order Li < B < Be < C < O < N < F < Ne. Explain why (i) Be has higher ionisation enthalpy than B, and (ii) O has lower ionisation enthalpy than N and F.",
+              "a": "(i) Be loses its 2s electron, which penetrates closer to the nucleus; B loses a 2p electron, which is higher in energy. (ii) N has a stable half-filled 2p^3 configuration, so removing an electron costs more; O loses one electron to reach that stable half-filled arrangement. F has the highest effective nuclear charge of the three.",
+              "src": "NCERT Exercise"
             },
             {
-              "q": "Name the most electronegative element and the element with the highest electron gain enthalpy.",
-              "a": "Most electronegative: fluorine (F). Highest electron gain enthalpy: chlorine (Cl)."
+              "q": "Consider the isoelectronic species Na+, Mg2+, F- and O2-. The correct order of increasing radii is: (i) F- < O2- < Mg2+ < Na+ (ii) Mg2+ < Na+ < F- < O2- (iii) O2- < F- < Na+ < Mg2+ (iv) O2- < F- < Mg2+ < Na+",
+              "a": "(ii) Mg2+ < Na+ < F- < O2-. All have 10 electrons; higher nuclear charge pulls the same electron cloud in more strongly.",
+              "src": "NCERT Exemplar"
             }
           ]
         },
@@ -532,20 +600,24 @@
           ],
           "questions": [
             {
-              "q": "Predict the shape of NH3 and explain using VSEPR.",
-              "a": "Nitrogen has 3 bond pairs and 1 lone pair (4 electron domains, tetrahedral arrangement), but the lone pair compresses the angles, giving a pyramidal shape with 107 degree bond angle."
+              "q": "Explain the formation of a chemical bond.",
+              "a": "A chemical bond is the attractive force that holds atoms together in a molecule. Atoms combine to form molecules because the energy of the system is lower (more stable) when they are bonded than when the atoms are far apart.",
+              "src": "NCERT Exercise"
             },
             {
-              "q": "What are the hybridisation and shape of BF3?",
-              "a": "Boron has 3 bond pairs and no lone pair: sp2 hybridisation, trigonal planar shape, 120 degree angles."
+              "q": "Explain why the BeH2 molecule has a zero dipole moment although the Be-H bonds are polar.",
+              "a": "BeH2 is linear: the two equal and opposite Be-H bond dipoles cancel each other exactly, giving zero net dipole moment.",
+              "src": "NCERT Exercise"
             },
             {
-              "q": "Find the bond order of O2 (16 electrons total).",
-              "a": "Configuration gives 10 bonding and 6 antibonding electrons: bond order = (10 - 6)/2 = 2, a double bond."
+              "q": "Although both CO2 and H2O are triatomic molecules, the shape of H2O is bent while that of CO2 is linear. Explain this on the basis of dipole moment.",
+              "a": "CO2 has zero dipole moment, so its two bond moments cancel - the molecule must be linear. H2O has a net dipole moment of 1.85 D, so its bond moments do not cancel - the molecule is bent.",
+              "src": "NCERT Exercise"
             },
             {
-              "q": "Why does H2O have a bent shape while CO2 is linear?",
-              "a": "H2O has 2 bond pairs plus 2 lone pairs, which repel and bend the molecule (104.5 deg); CO2 has only 2 bond pairs, which take the linear 180 deg arrangement."
+              "q": "Isostructural species are those which have the same shape and hybridisation. Among the given species, identify the isostructural pair: (a) NF3 and BF3 (b) BF4- and NH4+ (c) BCl3 and BrCl3 (d) NH3 and NO3-",
+              "a": "(b) BF4- and NH4+: both are tetrahedral.",
+              "src": "NCERT Exemplar"
             }
           ]
         },
@@ -562,20 +634,24 @@
           ],
           "questions": [
             {
-              "q": "For a reaction, delta H = -100 kJ/mol and delta S = -200 J/mol K. Is it spontaneous at 300 K?",
-              "a": "delta G = delta H - T delta S = -100,000 - 300(-200) = -100,000 + 60,000 = -40,000 J = -40 kJ < 0, so yes, spontaneous."
+              "q": "Choose the correct answer. A thermodynamic state function is a quantity: (i) used to determine heat changes (ii) whose value is independent of path (iii) used to determine pressure-volume work (iv) whose value depends on temperature only.",
+              "a": "(ii) A state function depends only on the initial and final states, not on the path taken.",
+              "src": "NCERT Exercise"
             },
             {
-              "q": "State Hess's law and give its use.",
-              "a": "The enthalpy change of a reaction is the same whether it occurs in one step or many steps. It lets us find delta H for reactions that cannot be measured directly, using known steps."
+              "q": "For a process to occur under adiabatic conditions, the correct condition is: (i) delta T = 0 (ii) delta p = 0 (iii) q = 0 (iv) w = 0",
+              "a": "(iii) q = 0 - no heat enters or leaves the system.",
+              "src": "NCERT Exercise"
             },
             {
-              "q": "Why does ice melt spontaneously above 0 deg C?",
-              "a": "Melting increases entropy (delta S > 0); above the melting point T delta S exceeds delta H of fusion, making delta G negative."
+              "q": "Enthalpies of formation of CO(g), CO2(g), N2O(g) and N2O4(g) are -110, -393, 81 and 9.7 kJ/mol respectively. Find the value of delta_rH for: N2O4(g) + 3CO(g) -> N2O(g) + 3CO2(g).",
+              "a": "delta_rH = [81 + 3(-393)] - [9.7 + 3(-110)] = -1098 + 320.3 = -777.7 kJ/mol.",
+              "src": "NCERT Exercise"
             },
             {
-              "q": "In which case does work by the system on surroundings have a negative sign in chemistry convention?",
-              "a": "Work done BY the system on the surroundings is taken as negative in the chemistry sign convention (delta U = q + w), because the system loses energy."
+              "q": "Thermodynamics is not concerned about: (i) energy changes involved in a chemical reaction, (ii) the extent to which a chemical reaction proceeds, (iii) the rate at which a reaction proceeds, (iv) the feasibility of a chemical reaction.",
+              "a": "(iii) Thermodynamics says nothing about how fast a reaction happens - that is the domain of chemical kinetics.",
+              "src": "NCERT Exemplar"
             }
           ]
         },
@@ -592,20 +668,24 @@
           ],
           "questions": [
             {
-              "q": "For N2 + 3H2 <=> 2NH3, how does increasing pressure affect the equilibrium?",
-              "a": "The product side has 2 gas moles vs 4 on the reactant side, so higher pressure shifts equilibrium towards NH3 (fewer gas molecules)."
+              "q": "A liquid is in equilibrium with its vapour in a sealed container at a fixed temperature. The volume of the container is suddenly increased. (a) What is the initial effect on vapour pressure? (b) How do the rates of evaporation and condensation change initially? (c) What happens when equilibrium is restored finally, and what will be the final vapour pressure?",
+              "a": "(a) Vapour pressure falls initially as the same vapour spreads over a larger volume. (b) Evaporation increases and condensation decreases. (c) More liquid evaporates until equilibrium is restored; the final vapour pressure equals the original value, since it depends only on temperature.",
+              "src": "NCERT Exercise"
             },
             {
-              "q": "The pH of a solution is 4. Find [H+].",
-              "a": "[H+] = 10^-pH = 10^-4 mol/L."
+              "q": "The pH of a sample of vinegar is 3.76. Calculate the concentration of hydrogen ions in it.",
+              "a": "[H+] = 10^-pH = 10^-3.76 = 1.74 x 10^-4 mol/L.",
+              "src": "NCERT Exercise"
             },
             {
-              "q": "A reaction has K_c = 10 and Q_c = 2 at some moment. Which direction will it proceed?",
-              "a": "Q < K, so the forward reaction proceeds until Q rises to K."
+              "q": "The ionisation constants of HF, HCOOH and HCN at 298 K are 6.8 x 10^-4, 1.8 x 10^-4 and 4.8 x 10^-9 respectively. Calculate the ionisation constants of their conjugate bases.",
+              "a": "Kb = Kw/Ka: for F- = 1.47 x 10^-11; for HCOO- = 5.56 x 10^-11; for CN- = 2.08 x 10^-6.",
+              "src": "NCERT Exercise"
             },
             {
-              "q": "What is the pH of 0.01 M NaOH solution?",
-              "a": "[OH-] = 0.01, so pOH = 2 and pH = 14 - 2 = 12."
+              "q": "For the reaction H2(g) + I2(g) <=> 2HI(g), the standard free energy change delta G0 is greater than zero. The equilibrium constant K would be: (i) K = 0 (ii) K > 1 (iii) K = 1 (iv) K < 1",
+              "a": "(iv) K < 1, since delta G0 = -RT ln K; a positive delta G0 means ln K is negative.",
+              "src": "NCERT Exemplar"
             }
           ]
         },
@@ -621,20 +701,24 @@
           ],
           "questions": [
             {
-              "q": "Find the oxidation number of Cr in K2Cr2O7.",
-              "a": "2(+1) + 2x + 7(-2) = 0 gives 2 + 2x - 14 = 0, so x = +6."
+              "q": "Assign the oxidation number to Mn in K2MnO4.",
+              "a": "Let it be x: 2(+1) + x + 4(-2) = 0 gives x = +6.",
+              "src": "NCERT Exercise"
             },
             {
-              "q": "Identify the oxidising and reducing agents in: Zn + CuSO4 -> ZnSO4 + Cu.",
-              "a": "Zn is oxidised (0 to +2), so Zn is the reducing agent; Cu2+ is reduced (+2 to 0), so CuSO4 is the oxidising agent."
+              "q": "Consider the elements Cs, Ne, I and F. (a) Identify the element that exhibits only negative oxidation state. (b) The element that exhibits only positive oxidation state. (c) The element that exhibits both positive and negative oxidation states. (d) The element which exhibits neither negative nor positive oxidation state.",
+              "a": "(a) F (b) Cs (c) I (d) Ne.",
+              "src": "NCERT Exercise"
             },
             {
-              "q": "Balance: Fe2+ + Cr2O7^2- -> Fe3+ + Cr3+ (acidic medium).",
-              "a": "Half reactions: Cr2O7^2- + 14H+ + 6e- -> 2Cr3+ + 7H2O; Fe2+ -> Fe3+ + e- (x6). Combined: Cr2O7^2- + 14H+ + 6Fe2+ -> 2Cr3+ + 7H2O + 6Fe3+."
+              "q": "The compound AgF2 is unstable. However, if formed, it acts as a very strong oxidising agent. Why?",
+              "a": "Ag(II) is unstable and readily gains one electron to become the stable Ag(I); the strong tendency to be reduced makes AgF2 a powerful oxidising agent.",
+              "src": "NCERT Exercise"
             },
             {
-              "q": "Is this disproportionation? 2H2O2 -> 2H2O + O2.",
-              "a": "Yes: oxygen goes from -1 in H2O2 to -2 in H2O (reduction) and to 0 in O2 (oxidation)."
+              "q": "Which of the following is NOT an example of a redox reaction: (i) CuO + H2 -> Cu + H2O (ii) Fe2O3 + 3CO -> 2Fe + 3CO2 (iii) 2K + F2 -> 2KF (iv) BaCl2 + H2SO4 -> BaSO4 + 2HCl",
+              "a": "(iv) - it is a double displacement (precipitation) reaction with no change in oxidation numbers.",
+              "src": "NCERT Exemplar"
             }
           ]
         },
@@ -652,20 +736,24 @@
           ],
           "questions": [
             {
-              "q": "Write the IUPAC name of CH3-CH(CH3)-CH2-CH3.",
-              "a": "The longest chain has 4 carbons with a methyl at position 2: 2-methylbutane."
+              "q": "What are the hybridisation states of each carbon atom in CH2=C=O?",
+              "a": "The CH2 carbon is sp2 hybridised (two sigma bonds + one pi); the central carbon joined to C and O is sp hybridised.",
+              "src": "NCERT Exercise"
             },
             {
-              "q": "Arrange in increasing carbocation stability: (CH3)3C+, (CH3)2CH+, CH3CH2+.",
-              "a": "CH3CH2+ < (CH3)2CH+ < (CH3)3C+, i., 1 deg < 2 deg < 3 deg, due to increasing hyperconjugation."
+              "q": "Indicate the sigma and pi bonds in CH2=C=CH2 (allene).",
+              "a": "4 C-H sigma + 2 C-C sigma = 6 sigma bonds; 2 pi bonds (one on each C=C).",
+              "src": "NCERT Exercise"
             },
             {
-              "q": "What is the difference between inductive and electromeric effects?",
-              "a": "Inductive effect is the permanent polarisation of sigma bonds by electronegative atoms; the electromeric effect is a temporary shift of pi electrons under the attack of a reagent."
+              "q": "Explain the terms inductive and electromeric effects. Which electron displacement effect explains the correct acidity order: Cl3CCOOH > Cl2CHCOOH > ClCH2COOH?",
+              "a": "The inductive effect is the permanent polarisation of sigma bonds by electronegative atoms; the electromeric effect is a temporary shift of pi electrons under attack by a reagent. The -I effect of the Cl atoms explains the acidity order - more Cl atoms pull electron density away and stabilise the carboxylate ion.",
+              "src": "NCERT Exercise"
             },
             {
-              "q": "How would you separate a mixture of camphor and common salt?",
-              "a": "By sublimation: camphor sublimes to vapour on gentle heating and condenses on a cool surface, leaving salt behind."
+              "q": "The principle involved in paper chromatography is: (i) adsorption (ii) partition (iii) solubility (iv) volatility",
+              "a": "(ii) Partition - the components distribute between the stationary (water held on paper) and mobile phases.",
+              "src": "NCERT Exemplar"
             }
           ]
         },
@@ -682,20 +770,24 @@
           ],
           "questions": [
             {
-              "q": "Convert ethyne to benzene.",
-              "a": "Pass ethyne through a red-hot iron tube at 873 K: 3 HC triple CH -> C6H6 (cyclic polymerisation)."
+              "q": "How will you convert ethyne into benzene?",
+              "a": "Pass ethyne (acetylene) through a red-hot iron tube at 873 K: 3 HC triple-bond CH -> C6H6 (cyclic polymerisation).",
+              "src": "NCERT Exercise"
             },
             {
-              "q": "Predict the major product of propene + HBr.",
-              "a": "Markovnikov addition: H adds to C1 (the carbon with more H), Br to C2, giving 2-bromopropane as the major product."
+              "q": "Write the IUPAC names of the products obtained by the ozonolysis of pent-2-ene.",
+              "a": "Ethanal (CH3CHO) and propanal (CH3CH2CHO) - the double bond breaks to give one aldehyde from each side.",
+              "src": "NCERT Exercise"
             },
             {
-              "q": "How do you distinguish 1-butyne from 2-butyne?",
-              "a": "1-butyne is a terminal alkyne with an acidic H: it gives a red precipitate with ammoniacal cuprous chloride; 2-butyne does not react."
+              "q": "Draw the cis and trans structures of hex-2-ene. Which isomer has the higher boiling point, and why?",
+              "a": "The cis isomer has the higher boiling point: its dipole moment is larger, giving stronger dipole-dipole attraction than in the nearly non-polar trans form.",
+              "src": "NCERT Exercise"
             },
             {
-              "q": "Why does benzene undergo substitution rather than addition?",
-              "a": "Addition would destroy the delocalised aromatic sextet (losing resonance stabilisation); substitution keeps the aromatic ring intact, so it is energetically preferred."
+              "q": "Arrange the following hydrogen halides in order of their decreasing reactivity with propene: (i) HCl > HBr > HI (ii) HBr > HI > HCl (iii) HI > HBr > HCl (iv) HCl > HI > HBr",
+              "a": "(iii) HI > HBr > HCl - as the halogen size increases, the H-X bond weakens, so the proton is donated more easily in electrophilic addition.",
+              "src": "NCERT Exemplar"
             }
           ]
         }
@@ -717,20 +809,24 @@
           ],
           "questions": [
             {
-              "q": "If A = {1, 2} and B = {2, 3, 4}, find A u B and A n B.",
-              "a": "A u B = {1, 2, 3, 4}; A n B = {2}."
+              "q": "Whether the following is a set or not: (i) The collection of all months of a year beginning with the letter J. (ii) The collection of the ten most talented writers of India.",
+              "a": "(i) It is a set: January, June, July are well defined. (ii) It is not a set: 'most talented' is not well defined.",
+              "src": "NCERT Exercise"
             },
             {
-              "q": "A set has 5 elements. How many subsets does it have?",
-              "a": "2^5 = 32 subsets (31 proper subsets)."
+              "q": "Let A = {1, 2, 3, 4} and B = {3, 4, 5, 6}. Find A union B.",
+              "a": "A union B = {1, 2, 3, 4, 5, 6}.",
+              "src": "NCERT Exercise"
             },
             {
-              "q": "In a class, 25 students like cricket, 20 like football, and 10 like both. How many like at least one?",
-              "a": "n(C u F) = 25 + 20 - 10 = 35 students."
+              "q": "Let X and Y be sets such that n(X) = 17, n(Y) = 23 and n(X union Y) = 38. Find n(X intersection Y).",
+              "a": "n(X intersection Y) = 17 + 23 - 38 = 2.",
+              "src": "NCERT Exercise"
             },
             {
-              "q": "State De Morgan's first law and verify with A = {1, 2}, B = {2, 3}, U = {1, 2, 3, 4}.",
-              "a": "(A u B)' = {4}; A' n B' = {3, 4} n {1, 4} = {4}. Both equal, so the law holds."
+              "q": "Let A and B be two sets. Then A intersection (A union B) is equal to: (A) A (B) B (C) null set (D) A intersection B",
+              "a": "(A) A. Absorption law: A is a subset of A union B, so the intersection with A is A itself.",
+              "src": "NCERT Exemplar"
             }
           ]
         },
@@ -746,20 +842,24 @@
           ],
           "questions": [
             {
-              "q": "Is the relation {(1, 2), (1, 3), (2, 4)} a function? Why?",
-              "a": "No, because the input 1 has two different outputs (2 and 3); a function needs exactly one output per input."
+              "q": "If (x + 1, y - 2) = (3, 1), find the values of x and y.",
+              "a": "x + 1 = 3 gives x = 2; y - 2 = 1 gives y = 3.",
+              "src": "NCERT Exercise"
             },
             {
-              "q": "Find the domain of f(x) = 1/(x - 2).",
-              "a": "The denominator cannot be zero, so x is not 2: domain = all real numbers except 2."
+              "q": "Let P = {a, b, c} and Q = {r}. Are P x Q and Q x P equal?",
+              "a": "No. P x Q = {(a,r), (b,r), (c,r)} while Q x P = {(r,a), (r,b), (r,c)}; the ordered pairs differ.",
+              "src": "NCERT Exercise"
             },
             {
-              "q": "Check whether f(x) = 2x + 1 from R to R is one-one and onto.",
-              "a": "If f(a) = f(b) then 2a + 1 = 2b + 1 gives a = b, so one-one. For any real y, x = (y-1)/2 maps to y, so onto. It is bijective."
+              "q": "Find the domain and range of the real function f(x) = sqrt(9 - x^2).",
+              "a": "Domain: -3 <= x <= 3, i.e. [-3, 3]. Range: [0, 3], since sqrt preserves non-negative values and 9 - x^2 is at most 9.",
+              "src": "NCERT Exercise"
             },
             {
-              "q": "Find the range of f(x) = x^2 + 1, x real.",
-              "a": "x^2 >= 0 for all real x, so f(x) >= 1: range = [1, infinity)."
+              "q": "The domain of R = {(x, y) : x, y in Z and x^2 + 3y^2 <= 8} is: (A) {0, 1, 2} (B) {-2, -1, 1, 2} (C) {0, 1} (D) {-2, -1, 0, 1, 2}",
+              "a": "(D) x can take -2, -1, 0, 1, 2 (x^2 must be at most 8); e.g. x = 2 works with y = +/-1.",
+              "src": "NCERT Exemplar"
             }
           ]
         },
@@ -777,19 +877,23 @@
           "questions": [
             {
               "q": "Find the exact value of sin 75 degrees.",
-              "a": "sin 75 = sin(45 + 30) = sin45 cos30 + cos45 sin30 = (sqrt6 + sqrt2)/4."
+              "a": "sin 75 = sin(45 + 30) = sin45 cos30 + cos45 sin30 = (sqrt6 + sqrt2)/4.",
+              "src": "NCERT Exercise"
             },
             {
-              "q": "If tan x = 3/4 and x is in the third quadrant, find sin x.",
-              "a": "In quadrant III sin is negative: sin x = -3/5 (from 3-4-5 triangle)."
+              "q": "Convert 240 degrees into radian measure.",
+              "a": "240 x pi/180 = 4pi/3 radians.",
+              "src": "NCERT Exercise"
             },
             {
-              "q": "Prove that cos 2A = 1 - 2 sin^2 A.",
-              "a": "cos 2A = cos^2 A - sin^2 A = (1 - sin^2 A) - sin^2 A = 1 - 2 sin^2 A."
+              "q": "Convert 7pi/6 into degree measure.",
+              "a": "7pi/6 x 180/pi = 210 degrees.",
+              "src": "NCERT Exercise"
             },
             {
-              "q": "Simplify: (sin 2x)/(1 + cos 2x).",
-              "a": "sin 2x = 2 sin x cos x and 1 + cos 2x = 2 cos^2 x, so the ratio = tan x."
+              "q": "A wheel makes 360 revolutions in one minute. Through how many radians does it turn in one second?",
+              "a": "360 revolutions/min = 6 revolutions/s, so it turns 6 x 2pi = 12pi radians per second.",
+              "src": "NCERT Exercise"
             }
           ]
         },
@@ -806,20 +910,24 @@
           ],
           "questions": [
             {
-              "q": "Simplify (2 + 3i) / (1 - i).",
-              "a": "Multiply by (1 + i): ((2+3i)(1+i))/2 = (2 + 5i + 3i^2)/2 = (-1 + 5i)/2 = -0.5 + 2.5i."
+              "q": "Express (5i)(-3i/5) in the form a + ib.",
+              "a": "(5i)(-3i/5) = -3i^2 = 3, i.e. 3 + i0.",
+              "src": "NCERT Exercise"
             },
             {
-              "q": "Find the modulus and argument of 1 + i sqrt3.",
-              "a": "|z| = sqrt(1 + 3) = 2. Argument = tan^-1(sqrt3) = 60 deg (pi/3), since both parts are positive."
+              "q": "Find the multiplicative inverse of 4 - 3i.",
+              "a": "(4 + 3i)/|4 - 3i|^2 = (4 + 3i)/25 = 4/25 + (3/25)i.",
+              "src": "NCERT Exercise"
             },
             {
-              "q": "Solve x^2 + 4x + 13 = 0.",
-              "a": "D = 16 - 52 = -36, so x = (-4 +- 6i)/2 = -2 +- 3i."
+              "q": "Find the modulus and argument of -1 - i sqrt(3).",
+              "a": "Modulus = 2. Argument = -2pi/3 (the point lies in the third quadrant, and the principal argument is taken between -pi and pi).",
+              "src": "NCERT Exercise"
             },
             {
-              "q": "Form a quadratic equation with roots 2 and -5.",
-              "a": "Sum = -3, product = -10, so x^2 + 3x - 10 = 0."
+              "q": "The value of i^-39 is: (A) 1 (B) -1 (C) i (D) -i",
+              "a": "(C) i. i^-39 = (i^-4)^9 x i^-3 = 1 x (-i^-1) = i... computed as: i^-39 = i^(41)/i^80 ... simpler: i^-3 = i, and -39 = -40 + 1, with i^-40 = 1, so i^-39 = i.",
+              "src": "NCERT Exemplar"
             }
           ]
         },
@@ -835,20 +943,24 @@
           ],
           "questions": [
             {
-              "q": "Solve: 3x + 5 < 2x + 11.",
-              "a": "Subtracting 2x and 5: x < 6."
+              "q": "Solve 24x < 100, when (i) x is a natural number, (ii) x is an integer.",
+              "a": "x < 100/24 = 25/6 = 4.17. (i) {1, 2, 3, 4}. (ii) {..., -3, -2, -1, 0, 1, 2, 3, 4}.",
+              "src": "NCERT Exercise"
             },
             {
-              "q": "Solve: x^2 - 9 <= 0.",
-              "a": "(x-3)(x+3) <= 0, which holds between the roots: -3 <= x <= 3."
+              "q": "Solve -12x > 30, when (i) x is a natural number, (ii) x is an integer.",
+              "a": "Dividing by -12 reverses the inequality: x < -30/12 = -2.5. (i) No natural number solution. (ii) Integers ..., -5, -4, -3, i.e. x <= -3.",
+              "src": "NCERT Exercise"
             },
             {
-              "q": "Solve: |2x - 1| < 5.",
-              "a": "-5 < 2x - 1 < 5 gives -4 < 2x < 6, so -2 < x < 3."
+              "q": "Solve 3(x - 1) <= 2(x - 3).",
+              "a": "3x - 3 <= 2x - 6 gives x <= -3.",
+              "src": "NCERT Exercise"
             },
             {
-              "q": "Solve: -4x + 8 >= 0.",
-              "a": "Dividing by -4 reverses the inequality: x <= 2."
+              "q": "|x| < 3 is equivalent to: (A) x >= 3 (B) -3 < x < 3 (C) x <= -3 (D) -3 <= x <= 3",
+              "a": "(B) -3 < x < 3.",
+              "src": "NCERT Exemplar"
             }
           ]
         },
@@ -864,20 +976,24 @@
           ],
           "questions": [
             {
-              "q": "How many 3-digit numbers can be formed from digits 1-6 without repetition?",
-              "a": "6P3 = 6 x 5 x 4 = 120."
+              "q": "Given 5 flags of different colours, how many different signals can be generated if each signal requires the use of 2 flags, one below the other?",
+              "a": "5 x 4 = 20 signals.",
+              "src": "NCERT Exercise"
             },
             {
-              "q": "In how many ways can a committee of 4 be chosen from 10 people?",
-              "a": "10C4 = 210."
+              "q": "From a committee of 8 persons, how many ways can a chairman and a vice-chairman be chosen, one person not holding more than one position?",
+              "a": "8 choices for chairman, then 7 for vice-chairman: 8 x 7 = 56 ways.",
+              "src": "NCERT Exercise"
             },
             {
-              "q": "How many arrangements of the letters of MISSISSIPPI are possible?",
-              "a": "11 letters with I x4, S x4, P x2: 11!/(4!4!2!) = 34,650."
+              "q": "If (n-1)P3 : nP4 = 1 : 9, find n.",
+              "a": "Solving (n-1)!/(n-4)! divided by n!/(n-4)! = 1/9 gives (n-1)/n(n-1)... leads to n = 9.",
+              "src": "NCERT Exercise"
             },
             {
-              "q": "How many ways can 5 people sit around a round table?",
-              "a": "(5-1)! = 4! = 24 ways."
+              "q": "If nC12 = nC8, then n is equal to: (A) 20 (B) 12 (C) 6 (D) 30",
+              "a": "(A) 20, since nCr = nCs implies r = s or r + s = n; here 12 + 8 = 20.",
+              "src": "NCERT Exemplar"
             }
           ]
         },
@@ -892,20 +1008,24 @@
           ],
           "questions": [
             {
-              "q": "Find the 4th term in the expansion of (x + 2)^6.",
-              "a": "T_4 = 6C3 x^3 x 2^3 = 20 x x^3 x 8 = 160 x^3."
+              "q": "Expand (1 - 2x)^5 using the binomial theorem.",
+              "a": "1 - 10x + 40x^2 - 80x^3 + 80x^4 - 32x^5.",
+              "src": "NCERT Exercise"
             },
             {
-              "q": "Find the coefficient of x^5 in (x + 1/x)^10.",
-              "a": "General term: 10Cr x^(10-r) (1/x)^r = 10Cr x^(10-2r). For x^5: 10 - 2r = 5 gives r = 2.5, not an integer - no such term, coefficient 0."
+              "q": "Expand (2/x - x/2)^5.",
+              "a": "32/x^5 - 40/x^3 + 20/x - (5/2)x + (5/16)x^3 - (1/32)x^5.",
+              "src": "NCERT Exercise"
             },
             {
-              "q": "Find the middle term of (2x - 1/x)^6.",
-              "a": "n = 6 is even, middle term is T_4 = 6C3 (2x)^3 (-1/x)^3 = 20 x 8x^3 x (-1/x^3) = -160."
+              "q": "Find the middle terms in the expansion of (3 - x^3/6)^7.",
+              "a": "There are 8 terms, so the middle terms are the 4th and 5th: -105x^9/8 and 35x^12/48.",
+              "src": "NCERT Exercise"
             },
             {
-              "q": "Evaluate (1.02)^5 approximately using binomial expansion (first three terms).",
-              "a": "(1 + 0.02)^5 approx = 1 + 5(0.02) + 10(0.02)^2 = 1 + 0.1 + 0.004 = 1.104."
+              "q": "The largest coefficient in the expansion of (1 + x)^30 is: (A) 30C15 (B) 30C10 (C) 30C20 (D) 30C30",
+              "a": "(A) 30C15 - the middle coefficient of a binomial row is the largest.",
+              "src": "NCERT Exemplar"
             }
           ]
         },
@@ -921,20 +1041,24 @@
           ],
           "questions": [
             {
-              "q": "Find the 20th term of the AP 5, 9, 13, ...",
-              "a": "a = 5, d = 4. a_20 = 5 + 19 x 4 = 81."
+              "q": "Find the first five terms of the sequence a_n = 3n + 2.",
+              "a": "5, 8, 11, 14, 17.",
+              "src": "NCERT Exercise"
             },
             {
-              "q": "Find the sum of the first 12 terms of the GP 3, 6, 12, ...",
-              "a": "a = 3, r = 2. S_12 = 3(2^12 - 1)/(2-1) = 3 x 4095 = 12,285."
+              "q": "Find the 20th term and the nth term of the GP 5/2, 5/4, 5/8, ...",
+              "a": "Common ratio r = 1/2. a_n = (5/2)(1/2)^(n-1) = 5/2^n; a_20 = 5/2^20.",
+              "src": "NCERT Exercise"
             },
             {
-              "q": "Find the sum to infinity of 1 + 1/2 + 1/4 + ...",
-              "a": "a = 1, r = 1/2. S_inf = 1/(1 - 1/2) = 2."
+              "q": "Which term of the sequence 2, 2sqrt2, 4, ... is 128?",
+              "a": "Common ratio sqrt2, and 128 = 2^7 = 2 x (sqrt2)^12: so 128 is the 13th term.",
+              "src": "NCERT Exercise"
             },
             {
-              "q": "The AM of two numbers is 10 and GM is 8. Find the numbers.",
-              "a": "Let the numbers be a, b: a+b = 20, ab = 64. Solving t^2 - 20t + 64 = 0 gives t = 4 or 16: the numbers are 4 and 16."
+              "q": "Find the sum to n terms of the series: 1 x 2 + 2 x 3 + 3 x 4 + ...",
+              "a": "Sum = n(n + 1)(n + 2)/3.",
+              "src": "NCERT Exercise"
             }
           ]
         },
@@ -950,20 +1074,24 @@
           ],
           "questions": [
             {
-              "q": "Find the slope of the line joining (2, 5) and (6, 13).",
-              "a": "m = (13 - 5)/(6 - 2) = 8/4 = 2."
+              "q": "Find the area of the quadrilateral whose vertices are (-4, 5), (0, 7), (5, -5) and (-4, -2), taken in order.",
+              "a": "Using the shoelace formula: (1/2)|-58 - 63| = 60.5 square units.",
+              "src": "NCERT Exercise"
             },
             {
-              "q": "Find the equation of the line through (3, -2) with slope 4.",
-              "a": "y + 2 = 4(x - 3), so 4x - y - 14 = 0."
+              "q": "An equilateral triangle has side length 2a. Its base lies on the y-axis with the midpoint at the origin. Find the vertices of the triangle.",
+              "a": "(0, a), (0, -a) and (sqrt3 a, 0); equivalently the third vertex may be (-sqrt3 a, 0).",
+              "src": "NCERT Exercise"
             },
             {
-              "q": "Find the distance of (4, 1) from the line 3x - 4y + 5 = 0.",
-              "a": "d = |12 - 4 + 5| / sqrt(9 + 16) = 13/5 = 2.6 units."
+              "q": "Find the distance between P(x1, y1) and Q(x2, y2) when (i) PQ is parallel to the y-axis, (ii) PQ is parallel to the x-axis.",
+              "a": "(i) |y2 - y1| (ii) |x2 - x1|.",
+              "src": "NCERT Exercise"
             },
             {
-              "q": "Find the angle between the lines y = 2x + 1 and y = -3x + 5.",
-              "a": "tan theta = |(2 - (-3))/(1 + (2)(-3))| = |5/(-5)| = 1, so theta = 45 deg."
+              "q": "The equation of the line through the point (1, 2) and perpendicular to the line x + y + 1 = 0 is: (A) y - x + 1 = 0 (B) y - x - 1 = 0 (C) y - x + 2 = 0 (D) y - x - 2 = 0",
+              "a": "(B) y - x - 1 = 0. Slope of the given line is -1, so the perpendicular has slope 1: y - 2 = 1(x - 1).",
+              "src": "NCERT Exemplar"
             }
           ]
         },
@@ -979,20 +1107,24 @@
           ],
           "questions": [
             {
-              "q": "Find the centre and radius of x^2 + y^2 - 4x + 6y - 3 = 0.",
-              "a": "Centre = (2, -3); radius = sqrt(4 + 9 + 3) = sqrt(16) = 4."
+              "q": "Find the equation of the circle with centre (0, 2) and radius 2.",
+              "a": "x^2 + (y - 2)^2 = 4, i.e. x^2 + y^2 - 4y = 0.",
+              "src": "NCERT Exercise"
             },
             {
-              "q": "Find the focus of the parabola y^2 = 12x.",
-              "a": "Compare with y^2 = 4ax: 4a = 12 gives a = 3, so focus = (3, 0)."
+              "q": "Find the coordinates of the focus, the axis, the equation of the directrix and the length of the latus rectum of the parabola y^2 = 12x.",
+              "a": "4a = 12, so a = 3. Focus = (3, 0); axis is the x-axis; directrix x = -3; length of latus rectum = 12.",
+              "src": "NCERT Exercise"
             },
             {
-              "q": "Find the eccentricity of the ellipse 9x^2 + 25y^2 = 225.",
-              "a": "Divide by 225: x^2/25 + y^2/9 = 1, so a^2 = 25, b^2 = 9. e = sqrt(1 - 9/25) = 4/5 = 0.8."
+              "q": "Find the coordinates of the foci, the vertices, the lengths of the major and minor axes, the eccentricity and the length of the latus rectum of the ellipse x^2/36 + y^2/16 = 1.",
+              "a": "a = 6, b = 4, c = 2 sqrt5. Foci (±2 sqrt5, 0); vertices (±6, 0); major axis 12; minor axis 8; e = sqrt5/3; latus rectum = 16/3.",
+              "src": "NCERT Exercise"
             },
             {
-              "q": "A conic has eccentricity 1.5. Which conic is it?",
-              "a": "e > 1 means a hyperbola."
+              "q": "The area of the triangle formed by the vertex and the ends of the latus rectum of the parabola x^2 = 12y is: (A) 16 (B) 18 (C) 24 (D) 36 square units",
+              "a": "(B) 18. a = 3; latus rectum = 12, focal distance = 3, so area = (1/2)(12)(3) = 18.",
+              "src": "NCERT Exemplar"
             }
           ]
         },
@@ -1007,20 +1139,24 @@
           ],
           "questions": [
             {
-              "q": "Find the distance between (1, 2, 3) and (4, 6, 8).",
-              "a": "d = sqrt(9 + 16 + 25) = sqrt(50) = 5 sqrt2 units."
+              "q": "A point is on the x-axis. What are its y-coordinate and z-coordinate?",
+              "a": "Both are 0: a point on the x-axis has the form (x, 0, 0).",
+              "src": "NCERT Exercise"
             },
             {
-              "q": "Find the midpoint of A(2, -1, 5) and B(6, 3, -1).",
-              "a": "Midpoint = ((2+6)/2, (-1+3)/2, (5-1)/2) = (4, 1, 2)."
+              "q": "Find the distance between the points (2, 3, 5) and (4, 3, 1).",
+              "a": "sqrt((4-2)^2 + 0 + (1-5)^2) = sqrt(4 + 16) = 2 sqrt5 units.",
+              "src": "NCERT Exercise"
             },
             {
-              "q": "In which octant does (-2, 3, -5) lie?",
-              "a": "x negative, y positive, z negative: the octant with signs (-, +, -)."
+              "q": "Find the distance between the points (-1, 3, -4) and (1, -3, 4).",
+              "a": "sqrt(2^2 + (-6)^2 + 8^2) = sqrt(104) = 2 sqrt26 units.",
+              "src": "NCERT Exercise"
             },
             {
-              "q": "Find the point dividing A(1, 2, 3) and B(7, 8, 9) in the ratio 2:1.",
-              "a": "x = (2x7 + 1x1)/3 = 5, y = (2x8+2)/3 = 6, z = (2x9+3)/3 = 7: the point is (5, 6, 7)."
+              "q": "The distance of the point P(3, 4, 5) from the y-axis is: (A) sqrt34 (B) sqrt41 (C) 4 (D) 5",
+              "a": "(A) sqrt34: drop the perpendicular to the y-axis; the distance is sqrt(3^2 + 5^2) = sqrt34.",
+              "src": "NCERT Exemplar"
             }
           ]
         },
@@ -1036,20 +1172,24 @@
           ],
           "questions": [
             {
-              "q": "Evaluate lim x->0 (sin 5x)/x.",
-              "a": "Write as 5 x (sin 5x)/(5x); the bracket tends to 1, so the limit = 5."
+              "q": "Evaluate lim as x -> 3 of (x + 3).",
+              "a": "Substituting x = 3 gives 6.",
+              "src": "NCERT Exercise"
             },
             {
-              "q": "Evaluate lim x->2 (x^2 - 4)/(x - 2).",
-              "a": "Factor: (x-2)(x+2)/(x-2) = x + 2 -> 4 as x -> 2."
+              "q": "Evaluate lim as x -> 0 of (cos 2x - 1)/(cos x - 1).",
+              "a": "Use cos 2x - 1 = -2 sin^2 x and cos x - 1 = -2 sin^2(x/2): the limit is 4.",
+              "src": "NCERT Exercise"
             },
             {
-              "q": "Find the derivative of f(x) = x^3 - 5x^2 + 7 from first principles or rules.",
-              "a": "f'(x) = 3x^2 - 10x."
+              "q": "Find the derivative of x^2 - 2 at x = 10 from first principles (or directly).",
+              "a": "d/dx(x^2 - 2) = 2x, so at x = 10 the derivative is 20.",
+              "src": "NCERT Exercise"
             },
             {
-              "q": "Find the derivative of (x^2 + 1)(x^3 - 2x).",
-              "a": "Product rule: 2x(x^3 - 2x) + (x^2 + 1)(3x^2 - 2) = 5x^4 - x^2 - 2."
+              "q": "lim as x -> pi of sin x/(x - pi) is equal to: (A) 1 (B) 2 (C) -1 (D) -2",
+              "a": "(C) -1. Put t = x - pi: sin x = -sin t, and sin t/t -> 1.",
+              "src": "NCERT Exemplar"
             }
           ]
         },
@@ -1065,20 +1205,24 @@
           ],
           "questions": [
             {
-              "q": "Find the mean deviation about the mean for 2, 4, 6, 8, 10.",
-              "a": "Mean = 6. Deviations: 4, 2, 0, 2, 4; sum = 12; MD = 12/5 = 2.4."
+              "q": "Find the mean deviation about the mean for the numbers 4, 7, 8, 9, 10, 12, 13, 17.",
+              "a": "Mean = 10. Sum of absolute deviations = 3 + 2 + 1 + 0 + 2 + 3 + 7 = 24; mean deviation = 24/8 = 3.",
+              "src": "NCERT Exercise"
             },
             {
-              "q": "Find the variance of 1, 2, 3, 4, 5.",
-              "a": "Mean = 3. Variance = ((1+4+9+16+25)/5) - 9 = 11 - 9 = 2."
+              "q": "Find the mean and the variance of the numbers 6, 7, 10, 12, 13, 4, 8, 12.",
+              "a": "Mean = 9. Sum of squared deviations = 74, so variance = 74/8 = 9.25.",
+              "src": "NCERT Exercise"
             },
             {
-              "q": "Two series have (mean 20, SD 2) and (mean 30, SD 3). Which is more consistent?",
-              "a": "CV1 = (2/20)x100 = 10%, CV2 = (3/30)x100 = 10%: equally consistent."
+              "q": "Calculate the mean and the variance for the frequency distribution: x: 6, 10, 14, 18, 24, 28, 30 and f: 2, 4, 7, 12, 8, 4, 3.",
+              "a": "Sum fx = 760 over N = 40, so mean = 19. Sum fx^2 = 16176, variance = 16176/40 - 19^2 = 43.4.",
+              "src": "NCERT Exercise"
             },
             {
-              "q": "If each observation is increased by 5, what happens to the standard deviation?",
-              "a": "No change: standard deviation is independent of a shift of origin."
+              "q": "Mean deviation from the mean for the values 3, 10, 10, 4, 7, 10, 5 is: (A) 2 (B) 2.57 (C) 3 (D) 3.75",
+              "a": "(B) 2.57. Mean = 7; absolute deviations 4, 3, 3, 3, 0, 3, 2 sum to 18, and 18/7 = 2.57.",
+              "src": "NCERT Exemplar"
             }
           ]
         },
@@ -1094,20 +1238,24 @@
           ],
           "questions": [
             {
-              "q": "A card is drawn from a 52-card deck. Find P(king).",
-              "a": "4 kings in 52 cards: P = 4/52 = 1/13."
+              "q": "A coin is tossed twice. What is the probability that at least one tail occurs?",
+              "a": "Sample space {HH, HT, TH, TT}; favourable outcomes = 3, so P = 3/4.",
+              "src": "NCERT Exercise"
             },
             {
-              "q": "Two dice are thrown. Find P(sum = 10).",
-              "a": "Favourable: (4,6), (5,5), (6,4) = 3 outcomes out of 36: P = 3/36 = 1/12."
+              "q": "A die is thrown. Find the probability of getting (i) a prime number, (ii) a number greater than 6.",
+              "a": "(i) Primes are 2, 3, 5, so P = 3/6 = 1/2. (ii) 0 - no face exceeds 6.",
+              "src": "NCERT Exercise"
             },
             {
-              "q": "P(A) = 0.4, P(B) = 0.5, P(A n B) = 0.2. Find P(A u B).",
-              "a": "P(A u B) = 0.4 + 0.5 - 0.2 = 0.7."
+              "q": "One card is drawn from a well-shuffled deck of 52 cards. Calculate the probability that the card will (i) be an ace of spades, (ii) be an ace, (iii) be a black card.",
+              "a": "(i) 1/52. (ii) 4/52 = 1/13. (iii) 26/52 = 1/2.",
+              "src": "NCERT Exercise"
             },
             {
-              "q": "A bag has 5 red and 3 black balls. One ball is drawn. Find P(not red).",
-              "a": "P(red) = 5/8, so P(not red) = 1 - 5/8 = 3/8."
+              "q": "If P(A union B) = P(A intersection B) then: (A) P(A) = P(B) (B) P(A) > P(B) (C) P(A) < P(B) (D) none of these",
+              "a": "(A) P(A) = P(B). Since P(A union B) = P(A) + P(B) - P(A intersection B), equality forces P(A) + P(B) = 2P(A intersection B), which (with P(A intersect B) <= each) gives P(A) = P(B).",
+              "src": "NCERT Exemplar"
             }
           ]
         }
@@ -1129,20 +1277,24 @@
           ],
           "questions": [
             {
-              "q": "Who proposed binomial nomenclature and what are its two components?",
-              "a": "Carolus Linnaeus. The two components are the generic name (genus) and the specific epithet, e. Homo sapiens."
+              "q": "Why are living organisms classified?",
+              "a": "Classification makes it convenient to study the enormous diversity of living beings: it groups organisms with common characteristics so their study becomes systematic.",
+              "src": "NCERT Exercise"
             },
             {
-              "q": "Arrange the hierarchy in ascending order: Family, Phylum, Species, Class.",
-              "a": "Species < Family < Class < Phylum (species is the smallest, most specific category)."
+              "q": "Why do classification systems continue to change over time?",
+              "a": "Because new organisms are discovered and new techniques (cytotaxonomy, chemotaxonomy, DNA studies) keep revealing new relationships, so the criteria and systems keep being refined.",
+              "src": "NCERT Exercise"
             },
             {
-              "q": "Why is reproduction alone not a defining property of life?",
-              "a": "Some organisms like mules, worker bees and infertile couples cannot reproduce, yet they are alive. Defining properties must hold for all living beings."
+              "q": "If you were to identify and classify the people you meet often, what criteria would you use (say, at least ten)?",
+              "a": "Age, sex, height, weight, skin colour, education, profession, income and marital status - any set of useful, observable characters serves for a workable classification.",
+              "src": "NCERT Exercise"
             },
             {
-              "q": "What is the scientific name of housefly and man?",
-              "a": "Housefly: Musca domestica. Man: Homo sapiens."
+              "q": "As we go from species to kingdom in a taxonomic hierarchy, the number of common characteristics: (a) will decrease (b) will increase (c) remain the same (d) may increase or decrease, depending on the number of taxa used.",
+              "a": "(a) Will decrease. Lower categories share more characters; higher taxa are united on fewer, broader characteristics.",
+              "src": "NCERT Exemplar"
             }
           ]
         },
@@ -1157,20 +1309,24 @@
           ],
           "questions": [
             {
-              "q": "Name the five kingdoms in Whittaker's classification.",
-              "a": "Monera, Protista, Fungi, Plantae and Animalia."
+              "q": "How have classification systems of organisms changed over time?",
+              "a": "They expanded from two kingdoms (Linnaeus) to three, four and finally Whittaker's five kingdoms, as study criteria broadened from morphology to cell structure, mode of nutrition and evolutionary relationships.",
+              "src": "NCERT Exercise"
             },
             {
-              "q": "Which organism is responsible for red tides and which group does it belong to?",
-              "a": "Gonyaulax, a dinoflagellate (Protista). Its rapid multiplication colours the sea red."
+              "q": "Give two economically important uses of (i) heterotrophic bacteria and (ii) archaebacteria.",
+              "a": "(i) Heterotrophic bacteria: making curd and antibiotics, and Rhizobium fixing nitrogen in legume fields. (ii) Archaebacteria: methanogens in gobar gas (biogas) plants and in the rumen of ruminants, helping cellulose digestion.",
+              "src": "NCERT Exercise"
             },
             {
-              "q": "How do lichens indicate air pollution?",
-              "a": "Lichens do not grow in polluted areas (high SO2), so their presence/absence signals pollution levels - they are pollution indicators."
+              "q": "State the structure and genetic material present in viruses. Name four viruses and the diseases they cause.",
+              "a": "A virus has a protein capsid surrounding nucleic acid (DNA or RNA), sometimes with a lipid envelope. Examples: TMV (tobacco mosaic), HIV (AIDS), Variola virus (smallpox), Influenza virus (flu).",
+              "src": "NCERT Exercise"
             },
             {
-              "q": "Give two differences between viruses and bacteria.",
-              "a": "Viruses are non-cellular, have only DNA or RNA (never both) and are inert outside hosts; bacteria are cellular prokaryotes that can live independently and have both DNA and RNA."
+              "q": "All eukaryotic unicellular organisms belong to: (a) Monera (b) Protista (c) Fungi (d) Bacteria",
+              "a": "(b) Protista.",
+              "src": "NCERT Exemplar"
             }
           ]
         },
@@ -1187,20 +1343,24 @@
           ],
           "questions": [
             {
-              "q": "Why are bryophytes called the amphibians of the plant kingdom?",
-              "a": "They live on land (soil) but depend on water for sexual reproduction, because their male gametes must swim to the egg, just like amphibians return to water to breed."
+              "q": "Why are bryophytes called amphibians of the plant kingdom?",
+              "a": "They can live on land, but depend on water for sexual reproduction, since their male gametes are flagellated and swim to the egg. They also need a thin film of water for growth. Like amphibians of the animal world, they need both land and water - hence the title.",
+              "src": "NCERT Exercise"
             },
             {
-              "q": "From which alga is agar obtained and what is it used for?",
-              "a": "Agar is obtained from Gelidium and Gracilaria (red algae). It is used to grow microbes and in ice creams and jellies."
+              "q": "On what basis are algae primarily classified?",
+              "a": "On the nature of their photosynthetic pigments, the type of stored food reserve and the flagellation pattern.",
+              "src": "NCERT Exercise"
             },
             {
-              "q": "Give two differences between gymnosperms and angiosperms.",
-              "a": "Gymnosperms have naked seeds not enclosed in a fruit and no flowers; angiosperms have ovules inside an ovary forming fruits, and bear flowers. Gymnosperms lack vessels in xylem (except few) and companion cells."
+              "q": "Mention the group names in which archegonia (the female sex organ) is present.",
+              "a": "Bryophyta, Pteridophyta and Gymnosperms.",
+              "src": "NCERT Exercise"
             },
             {
-              "q": "Name the dominant phase in the life cycle of a moss and a fern.",
-              "a": "Moss: the dominant free-living phase is the haploid gametophyte. Fern: the dominant phase is the diploid sporophyte."
+              "q": "Cyanobacteria are classified under: (a) Protista (b) Plantae (c) Monera (d) Algae",
+              "a": "(c) Monera, as they are prokaryotic.",
+              "src": "NCERT Exemplar"
             }
           ]
         },
@@ -1216,20 +1376,24 @@
           ],
           "questions": [
             {
-              "q": "What is metamerism? Give an example.",
-              "a": "True segmentation where the body is divided into repeating segments (metameres), internally and externally, as in the earthworm (Annelida)."
+              "q": "What difficulties would you have come across in classifying the animals, if common fundamental features are not taken into account?",
+              "a": "Without common fundamental features, every animal would have to be described and classified separately, making the study chaotic and nearly impossible.",
+              "src": "NCERT Exercise"
             },
             {
-              "q": "Name two parasitic adaptations in Platyhelminthes.",
-              "a": "They have hooks and suckers for attachment to hosts, and the body is covered by a tough tegument; digestive system is incomplete or absent since they absorb digested food from the host."
+              "q": "If you are given a specimen, what are the steps you would follow to classify it?",
+              "a": "Study its level of organisation, symmetry, germ layers, coelom, segmentation and notochord, then assign it to phylum, class, order, family, genus and species.",
+              "src": "NCERT Exercise"
             },
             {
-              "q": "How can you distinguish chordates from non-chordates?",
-              "a": "Chordates have a notochord (at some stage of life), a dorsal hollow single nerve cord, paired pharyngeal gill slits and a post-anal tail; non-chordates lack these and have a solid ventral nerve cord."
+              "q": "How is the body cavity (coelom) useful in classification?",
+              "a": "The presence/absence and nature of the coelom separates acoelomates, pseudocoelomates and eucoelomates - a fundamental step in animal classification.",
+              "src": "NCERT Exercise"
             },
             {
-              "q": "Water canal system is characteristic of which phylum? How does it help?",
-              "a": "Phylum Porifera (sponges). Water enters through ostia into the spongocoel and exits via osculum, helping in food gathering, respiration and waste removal."
+              "q": "Serial repetition of organs or segments in animals is known as: (a) segmentation (b) metamerism (c) metagenesis (d) metamorphosis",
+              "a": "(b) Metamerism.",
+              "src": "NCERT Exemplar"
             }
           ]
         },
@@ -1246,20 +1410,24 @@
           ],
           "questions": [
             {
-              "q": "How do roots of Rhizophora help the plant?",
-              "a": "Rhizophora grows in swampy mangrove areas; its pneumatophores (breathing roots) grow vertically upward out of the mud to get oxygen for respiration."
+              "q": "What modification of root is found in the (a) banyan tree, (b) turnip, (c) mangroves?",
+              "a": "(a) Prop roots for support. (b) The tap root is swollen for food storage. (c) Pneumatophores (breathing roots) that grow vertically upward out of the mud.",
+              "src": "NCERT Exercise"
             },
             {
-              "q": "Differentiate racemose and cymose inflorescence.",
-              "a": "In racemose, the main axis continues to grow and flowers open in acropetal order (younger at apex); in cymose, the main axis ends in a flower, limiting growth, and flowers open in basipetal order."
+              "q": "Differentiate between racemose and cymose inflorescence.",
+              "a": "In racemose inflorescence, the main axis continues to grow and flowers open in acropetal succession (oldest at the base). In cymose, the main axis ends in a flower, so growth is limited and flowers open in basipetal order (oldest at the top).",
+              "src": "NCERT Exercise"
             },
             {
-              "q": "Which family shows vexillary aestivation and marginal placentation?",
-              "a": "Family Fabaceae (pea family) - vexillary (papilionaceous) corolla and marginal placentation in the ovary."
+              "q": "What is a flower? Describe the parts of a typical angiosperm flower.",
+              "a": "A flower is a modified, condensed shoot specialised for sexual reproduction. Its parts are calyx (sepals), corolla (petals), androecium (stamens) and gynoecium (carpels).",
+              "src": "NCERT Exercise"
             },
             {
-              "q": "Is potato a root or a stem? How can you tell?",
-              "a": "It is a modified stem (tuber): it has nodes ('eyes') with buds and scale leaves, which roots never have."
+              "q": "Roots developed from parts of the plant other than the radicle are called: (a) tap roots (b) fibrous roots (c) adventitious roots (d) prop roots",
+              "a": "(c) Adventitious roots.",
+              "src": "NCERT Exemplar"
             }
           ]
         },
@@ -1276,20 +1444,24 @@
           ],
           "questions": [
             {
-              "q": "Why is secondary growth absent in monocot stems?",
-              "a": "Their vascular bundles are closed - there is no cambium between xylem and phloem, so no secondary xylem/phloem (wood) can be produced."
+              "q": "State the location and function of the different types of meristems in plant tissue.",
+              "a": "Apical meristems at root/shoot tips cause primary growth (length). Lateral meristems (vascular and cork cambium) cause secondary growth (girth). Intercalary meristems at nodes cause elongation of internodes.",
+              "src": "NCERT Exercise"
             },
             {
-              "q": "Distinguish xylem vessels from tracheids.",
-              "a": "Vessels are long tube-like structures made of many cells with open (perforated) end walls, giving continuous water columns; tracheids are single elongated cells with tapering ends and intact walls, water passes through pits."
+              "q": "'Cork cambium forms tissues that form the cork.' Do you agree with this statement? Explain.",
+              "a": "Yes. The cork cambium (phellogen) cuts off cells: those towards the outside become cork (phellem), and those towards the inside become secondary cortex (phelloderm).",
+              "src": "NCERT Exercise"
             },
             {
-              "q": "What are bulliform cells and where are they found?",
-              "a": "Large, empty, colourless motor cells in the upper epidermis of grass (monocot) leaves; they lose water and make leaves curl in dry weather, reducing water loss."
+              "q": "What is periderm? How does periderm develop in dicot stems?",
+              "a": "Periderm is the protective tissue that replaces the epidermis in older stems; it consists of phellem (cork), phellogen (cork cambium) and phelloderm, formed by the activity of the cork cambium.",
+              "src": "NCERT Exercise"
             },
             {
-              "q": "Compare dicot and monocot roots anatomically.",
-              "a": "Dicot root: 2-4 xylem bundles (diarch to tetrarch), small or absent pith, secondary growth occurs. Monocot root: more than 6 xylem bundles (polyarch), large well-developed pith, no secondary growth."
+              "q": "A transverse section of the stem is stained first with safranin and then fast green following the usual schedule of double staining. What would be the colour of the stained xylem and phloem? (a) Red and green (b) Green and red (c) Orange and yellow (d) Purple and orange",
+              "a": "(a) Red and green - lignified xylem takes safranin (red), non-lignified phloem takes fast green.",
+              "src": "NCERT Exemplar"
             }
           ]
         },
@@ -1305,20 +1477,24 @@
           ],
           "questions": [
             {
-              "q": "What is the function of intercalated discs in cardiac muscle?",
-              "a": "They are communication junctions that let adjacent cardiac muscle cells contract as one unit, so the heart beats in a coordinated wave without fatigue."
+              "q": "Answer in one word or one line: (i) Give the common name of Periplaneta americana. (ii) How many pairs of spermathecae are found in the earthworm? (iii) What is the number of segments in the abdomen of a cockroach?",
+              "a": "(i) American cockroach. (ii) Four pairs. (iii) 10 segments.",
+              "src": "NCERT Exercise"
             },
             {
-              "q": "How do tendons differ from ligaments?",
-              "a": "Tendons connect muscles to bones; ligaments connect bones to bones. Both are dense regular connective tissues rich in collagen."
+              "q": "Mention briefly the role of (a) ureters in a frog, (b) Malpighian tubules, (c) the body wall in an earthworm.",
+              "a": "(a) Transport urine from kidneys to the cloaca. (b) Excretion in insects - they remove nitrogenous wastes into the gut. (c) Protection, locomotion (with setae and muscles) and moist surface for cutaneous respiration.",
+              "src": "NCERT Exercise"
             },
             {
-              "q": "Why is blood called a fluid connective tissue?",
-              "a": "It has cells (RBC, WBC, platelets) suspended in a fluid matrix (plasma) and connects all body parts by transporting gases, nutrients, hormones and wastes."
+              "q": "Cells present in the inner lining of large blood vessels are: (a) cuboidal epithelium (b) columnar epithelium (c) squamous epithelium (d) stratified epithelium",
+              "a": "(c) Squamous epithelium (endothelium).",
+              "src": "NCERT Exemplar"
             },
             {
-              "q": "Mention two identifying features of male frogs.",
-              "a": "Male frogs have vocal sacs that amplify their croak, and a copulatory (nuptial) pad on the first digit of the forelimb to grip the female during mating."
+              "q": "Adipose tissue is a type of: (a) epithelial tissue (b) connective tissue (c) muscular tissue (d) neural tissue",
+              "a": "(b) Connective tissue - its cells store fat in large globules.",
+              "src": "NCERT Exemplar"
             }
           ]
         },
@@ -1334,20 +1510,24 @@
           ],
           "questions": [
             {
-              "q": "Why are lysosomes called 'suicidal bags' of the cell?",
-              "a": "They contain powerful hydrolytic enzymes; if the lysosomal membrane ruptures, these enzymes digest the cell itself, so they serve in destroying worn-out organelles and the cell in emergencies."
+              "q": "Which of the following is NOT correct? (a) Robert Brown discovered the cell. (b) Schleiden and Schwann formulated the cell theory. (c) Virchow explained that cells are formed from pre-existing cells. (d) A unicellular organism carries out its life activities within a single cell.",
+              "a": "(a) is not correct: Brown discovered the nucleus (1831); cells were first seen and named earlier (Hooke, Leeuwenhoek).",
+              "src": "NCERT Exercise"
             },
             {
-              "q": "Distinguish between rough and smooth endoplasmic reticulum.",
-              "a": "RER has ribosomes on its surface and synthesises/folds proteins (abundant in pancreatic cells); SER lacks ribosomes and synthesises lipids and detoxifies drugs (abundant in liver cells)."
+              "q": "New cells generate from: (a) bacterial fermentation (b) regeneration of old cells (c) pre-existing cells by division (d) abiotic materials",
+              "a": "(c) Pre-existing cells by division (Virchow: Omnis cellula-e cellula).",
+              "src": "NCERT Exercise"
             },
             {
-              "q": "What is the 9+2 arrangement in cilia and flagella?",
-              "a": "The axoneme of cilia/flagella has 9 pairs of peripheral microtubules surrounding 2 central microtubules, giving them their characteristic bending movement."
+              "q": "Both lysosomes and vacuoles are endomembrane structures, yet they differ in terms of their functions. Comment.",
+              "a": "Lysosomes contain hydrolytic enzymes and carry out intracellular digestion. Vacuoles mainly store substances (food, sap, waste) and maintain turgor in plant cells.",
+              "src": "NCERT Exercise"
             },
             {
-              "q": "Name the sites of (a) ATP synthesis and (b) rRNA synthesis in a eukaryotic cell.",
-              "a": "(a) Mitochondria (inner membrane/cristae). (b) Nucleolus inside the nucleus."
+              "q": "Which of the following is NOT a eukaryote: (a) Euglena (b) Anabaena (c) Spirogyra (d) Agaricus",
+              "a": "(b) Anabaena - a cyanobacterium, hence prokaryotic.",
+              "src": "NCERT Exemplar"
             }
           ]
         },
@@ -1363,20 +1543,24 @@
           ],
           "questions": [
             {
-              "q": "What type of bond links (a) amino acids in proteins and (b) nucleotides in nucleic acids?",
-              "a": "(a) Peptide bond (-CO-NH-) between the amino group of one amino acid and carboxyl group of another. (b) Phosphodiester bond between phosphate and sugars of successive nucleotides."
+              "q": "What are macromolecules? Give examples.",
+              "a": "Very large molecules formed by the polymerisation of many small units. Examples: proteins, nucleic acids and polysaccharides.",
+              "src": "NCERT Exercise"
             },
             {
-              "q": "Why does cellulose not give a blue colour with iodine while starch does?",
-              "a": "Iodine fits into the coiled helical structure of amylose in starch; cellulose has straight beta-linked chains with no helical coils to hold iodine, so no blue colour forms."
+              "q": "What is meant by the tertiary structure of proteins?",
+              "a": "The overall three-dimensional folding of a single polypeptide chain, stabilised by hydrogen bonds, ionic bonds, disulphide bonds and hydrophobic interactions.",
+              "src": "NCERT Exercise"
             },
             {
-              "q": "How does a competitive inhibitor work, with an example?",
-              "a": "It competes for the enzyme's active site because it resembles the substrate. Example: sulphanilamide competes with PABA in bacterial folate synthesis, and statins competitively inhibit HMG-CoA reductase in cholesterol synthesis."
+              "q": "What is the difference between a nucleotide and a nucleoside? Give two examples of each.",
+              "a": "A nucleoside = nitrogenous base + pentose sugar (e.g. adenosine, cytidine). A nucleotide = nucleoside + phosphate group (e.g. AMP, ATP).",
+              "src": "NCERT Exemplar"
             },
             {
-              "q": "What is the difference between a nucleotide and a nucleoside?",
-              "a": "A nucleoside = nitrogenous base + sugar. A nucleotide = nucleoside + phosphate group (attached to the 5' carbon of sugar)."
+              "q": "The chemical composition of living and inanimate matter differs mainly in that, per unit mass, living matter has more of: (a) gold (b) water (c) carbon, oxygen and hydrogen (d) calcium",
+              "a": "(c) Carbon, oxygen and hydrogen.",
+              "src": "NCERT Exemplar"
             }
           ]
         },
@@ -1392,20 +1576,24 @@
           ],
           "questions": [
             {
-              "q": "A cell with 2n = 16 undergoes meiosis. How many chromosomes will each daughter cell have?",
-              "a": "Meiosis halves the number: each of the 4 daughter cells will have n = 8 chromosomes."
+              "q": "What is the average cell cycle span for a mammalian cell?",
+              "a": "About 24 hours; the actual cell division (M phase) takes only about 1 hour of it.",
+              "src": "NCERT Exercise"
             },
             {
-              "q": "In which stage of prophase I does crossing over occur, and what is exchanged?",
-              "a": "Crossing over occurs in the pachytene stage; non-sister chromatids of homologous chromosomes exchange corresponding segments at chiasmata, producing recombinant chromatids."
+              "q": "Distinguish anaphase of mitosis from anaphase I of meiosis. Also state: (i) at what stage do chromosomes move to spindle equator, (ii) during what stage does centromere split, (iii) during what stage does pairing of homologous chromosomes occur, (iv) during what stage does crossing over occur?",
+              "a": "In mitotic anaphase sister chromatids separate; in anaphase I homologous chromosomes (not chromatids) separate. (i) Metaphase. (ii) Anaphase. (iii) Zygotene. (iv) Pachytene.",
+              "src": "NCERT Exercise"
             },
             {
-              "q": "Why is meiosis I called the reduction division?",
-              "a": "Because homologous chromosomes separate and move to opposite poles, reducing the chromosome number from diploid (2n) to haploid (n) in the daughter cells."
+              "q": "Describe the events taking place during interphase.",
+              "a": "G1: cell grows and prepares for DNA synthesis. S: DNA replicates, chromosome number of DNA doubles. G2: proteins are synthesised in preparation for mitosis, and cell growth continues.",
+              "src": "NCERT Exercise"
             },
             {
-              "q": "If the DNA content of a cell in G1 is 2C, what is it at the end of the S phase and after mitosis?",
-              "a": "After the S phase it becomes 4C; after mitosis each daughter cell returns to 2C."
+              "q": "The process of meiosis results in: (a) production of gametes (b) reduction in chromosome number (c) introducing variation (d) all of the above",
+              "a": "(d) All of the above.",
+              "src": "NCERT Exemplar"
             }
           ]
         },
@@ -1422,20 +1610,24 @@
           ],
           "questions": [
             {
-              "q": "Why is the Calvin cycle called the C3 pathway and the Hatch-Slack pathway the C4 pathway?",
-              "a": "In the Calvin cycle the first stable product of CO2 fixation is a 3-carbon compound (3-PGA). In Hatch-Slack (C4) it is a 4-carbon compound, oxaloacetic acid."
+              "q": "By looking at a plant externally can you tell whether a plant is C3 or C4? Why or why not?",
+              "a": "No - C3 and C4 plants do not differ in any external feature; the difference is internal and physiological.",
+              "src": "NCERT Exercise"
             },
             {
-              "q": "What is photorespiration and why does it reduce yield in C3 plants?",
-              "a": "In photorespiration RuBisCO binds O2 instead of CO2 (oxygenase activity), producing a 2C compound and releasing fixed CO2 without making sugar or ATP, wasting energy and reducing productivity."
+              "q": "Which organelle/structure inside the leaf tells you whether a plant is C3 or C4? Explain.",
+              "a": "The bundle sheath cells: C4 leaves show Kranz anatomy - large bundle sheath cells packed with chloroplasts, where the Calvin cycle runs, while the mesophyll only fixes CO2 into a 4-carbon acid.",
+              "src": "NCERT Exercise"
             },
             {
-              "q": "Differentiate between PS I and PS II reaction centres.",
-              "a": "PS I has reaction centre P700 (absorbs at 700 nm) and works in both cyclic and non-cyclic flow; PS II has P680, is involved only in non-cyclic flow and is linked with photolysis of water."
+              "q": "Compare C3 and C4 pathways of photosynthesis.",
+              "a": "C3: CO2 acceptor is RuBP, first stable product is 3-PGA, photosynthesis occurs in mesophyll cells. C4: CO2 acceptor is PEP, first product is oxaloacetic acid (4C), Calvin cycle occurs in the bundle sheath, and photorespiration is suppressed.",
+              "src": "NCERT Exercise"
             },
             {
-              "q": "How does Kranz anatomy help C4 plants avoid photorespiration?",
-              "a": "The large bundle sheath cells surrounding the vascular bundles keep RuBisCO away from atmospheric O2: CO2 is released there from C4 acids at high local concentration, so RuBisCO works as a carboxylase, not oxygenase."
+              "q": "Chlorophyll contains which metal ion at its centre: (a) Fe (b) Cu (c) Mg (d) Zn",
+              "a": "(c) Mg.",
+              "src": "NCERT Exemplar"
             }
           ]
         },
@@ -1447,24 +1639,28 @@
             "Fermentation (anaerobic, cytoplasm): pyruvate -> ethanol + CO2 (yeast) or lactic acid (muscles/bacteria); net gain only 2 ATP; dangerous in large amounts due to acid/alcohol accumulation.",
             "Aerobic respiration: pyruvate enters mitochondria; oxidative decarboxylation gives acetyl CoA (2C) + NADH + CO2. Krebs cycle (in mitochondrial matrix): per acetyl CoA - 3 NADH, 1 FADH2, 1 GTP(ATP), 2 CO2 released.",
             "Electron transport system (inner mitochondrial membrane): NADH and FADH2 pass electrons to O2 (final acceptor); proton gradient drives ATP synthesis (oxidative phosphorylation).",
-            "ATP tally per glucose (NCERT): theoretical maximum 38 ATP (some books count 36 via shuttle); net gain from glycolysis 8 ATP when NADH enters mitochondria (or 6 via glycerol phosphate shuttle). Amphibolic pathway: respiratory intermediates link carbohydrate, fat and protein metabolism."
+            "ATP tally per glucose (NCERT): glycolysis gives a net gain of 8 ATP when its cytoplasmic NADH is oxidised inside the mitochondria (only 6 ATP if the glycerol phosphate shuttle is used); the overall net gain in aerobic respiration is about 36 ATP (38 by the other shuttle count) - NCERT notes these figures rest on idealised assumptions about transport into mitochondria. Respiration is an amphibolic pathway: its intermediates link carbohydrate, fat and protein metabolism."
           ],
           "questions": [
             {
-              "q": "What is RQ for glucose and for fats? Why do fats have a lower RQ?",
-              "a": "RQ for glucose = 1 (equal CO2 released and O2 used). Fats give RQ about 0.7 because they are poorer in oxygen, so more O2 must be taken up to oxidise them fully, releasing relatively less CO2."
+              "q": "Explain the term RQ. What is its value for fats?",
+              "a": "RQ = volume of CO2 evolved / volume of O2 consumed. For glucose RQ = 1; for fats RQ is about 0.7, because fats are poorer in oxygen, so relatively more O2 is consumed than CO2 released.",
+              "src": "NCERT Exercise"
             },
             {
-              "q": "Why is the Krebs cycle called the citric acid cycle and where does it run?",
-              "a": "Its first stable product after acetyl CoA joins oxaloacetate is citric acid (citrate, 6C). It runs in the matrix of the mitochondria."
+              "q": "What are respiratory substrates? Name the most common one.",
+              "a": "Compounds oxidised during respiration to release energy. The most common is glucose (carbohydrates).",
+              "src": "NCERT Exercise"
             },
             {
-              "q": "What is the net gain of ATP in fermentation from one glucose?",
-              "a": "Only 2 ATP (net) - substrate-level phosphorylation in glycolysis; most of the energy remains locked in ethanol/lactic acid, which are toxic in high amounts."
+              "q": "What is the significance of step-wise release of energy in respiration?",
+              "a": "Energy released in small steps can be captured efficiently as ATP and does not damage the cell or escape as sudden heat; intermediates can also be drawn off for other pathways.",
+              "src": "NCERT Exercise"
             },
             {
-              "q": "What is meant by 'respiration is an amphibolic pathway'?",
-              "a": "The same intermediates serve both breakdown (catabolism) and synthesis (anabolism) - e. acetyl CoA is used to make fatty acids, and respiratory intermediates are withdrawn to build amino acids and proteins."
+              "q": "The ultimate electron acceptor in aerobic respiration is: (a) the final cytochrome oxidase (b) oxygen (c) hydrogen (d) glucose",
+              "a": "(b) Oxygen - it accepts electrons and protons to form water.",
+              "src": "NCERT Exemplar"
             }
           ]
         },
@@ -1480,20 +1676,24 @@
           ],
           "questions": [
             {
-              "q": "Why is ABA called the 'stress hormone'?",
-              "a": "Abscisic acid increases when the plant faces water stress: it closes stomata to reduce transpiration and induces protective proteins and seed dormancy - helping the plant survive adverse conditions."
+              "q": "Why is abscisic acid (ABA) also known as the stress hormone?",
+              "a": "ABA production shoots up under water stress and other harsh conditions. It closes the stomata (cutting water loss), promotes seed and bud dormancy, and helps the plant tolerate stress - hence, stress hormone.",
+              "src": "NCERT Exercise"
             },
             {
-              "q": "A farmer wants to delay ripening of bananas for transport. Which hormone should be avoided, and which is used to ripen them later?",
-              "a": "Ethylene triggers ripening, so exposure to it must be avoided during transport (they use ethylene absorbents/cold storage). Ethylene-releasing Ethephon is applied to ripen fruits uniformly when needed."
+              "q": "Define growth in plants.",
+              "a": "Growth is an irreversible, permanent increase in size (length, area, volume, mass or cell number) of an organ or its parts, accompanied by an increase in dry weight.",
+              "src": "NCERT Exercise"
             },
             {
-              "q": "What is bolting and which hormone induces it?",
-              "a": "Bolting is the sudden elongation of the internodes just before flowering in rosette plants like cabbage. Gibberellins induce bolting artificially in such plants."
+              "q": "Why is not any one parameter good enough to demonstrate growth throughout the life of a flowering plant?",
+              "a": "Different stages and organs grow differently: true growth at different times is better shown by pollen tube length, leaf area, root length, number of lateral roots or cell number - no single parameter works throughout life.",
+              "src": "NCERT Exercise"
             },
             {
-              "q": "Differentiate photoperiodism from vernalisation.",
-              "a": "Photoperiodism is the response of flowering to the length of light/dark periods (sensed by phytochrome in leaves); vernalisation is the promotion of flowering by a preceding period of low temperature."
+              "q": "The term 'auxin bioassay' refers to: (a) measurement using a potometer (b) lettuce hypocotyl elongation test (c) Avena coleoptile curvature test (d) hydroponics",
+              "a": "(c) Avena (oat) coleoptile curvature test.",
+              "src": "NCERT Exemplar"
             }
           ]
         },
@@ -1509,20 +1709,24 @@
           ],
           "questions": [
             {
-              "q": "Why can't inspiration occur if the chest wall is punctured?",
-              "a": "The pleural cavity pressure balance is lost; air enters the pleural space (pneumothorax), the lung collapses and can no longer expand with the chest, so air cannot be drawn into the alveoli."
+              "q": "Define vital capacity. What is its significance?",
+              "a": "Vital capacity is the maximum volume of air a person can breathe out after a forced inspiration (VC = ERV + TV + IRV, about 4600 mL). It indicates the strength of the respiratory muscles and the efficiency of the lungs.",
+              "src": "NCERT Exercise"
             },
             {
-              "q": "Explain the Bohr effect with its significance.",
-              "a": "Rising CO2 and H+ (falling pH) reduce haemoglobin's affinity for O2, shifting the dissociation curve right. In active tissues (high CO2), more O2 is released exactly where it is needed most."
+              "q": "What is the effect of pCO2 on oxygen transport?",
+              "a": "High pCO2 (and low pH) reduces haemoglobin's affinity for O2 (Bohr effect), shifting the dissociation curve right, so tissues receive more oxygen where they need it most.",
+              "src": "NCERT Exercise"
             },
             {
-              "q": "How is most CO2 transported in blood, and which enzyme makes it possible?",
-              "a": "About 70% travels as bicarbonate (HCO3-) in plasma. Carbonic anhydrase inside RBCs rapidly converts CO2 + H2O to carbonic acid, which dissociates into H+ and HCO3-."
+              "q": "What happens to the respiratory process in a man going up a hill?",
+              "a": "As altitude rises, pO2 falls; breathing rate and depth increase, and over days the RBC count rises to compensate for lower oxygen availability.",
+              "src": "NCERT Exercise"
             },
             {
-              "q": "What is vital capacity and how is it calculated?",
-              "a": "The maximum volume of air a person can breathe out after a forced inspiration: VC = TV + IRV + ERV, roughly 4600 mL in a healthy adult."
+              "q": "Respiration in insects is called direct because: (a) the tissues exchange O2/CO2 directly with the air in the tubes (b) the tissues exchange O2/CO2 directly with the coelomic fluid (c) the tissues exchange O2/CO2 directly with the air outside through the body surface (d) the tissues exchange O2/CO2 directly with the air through internal tubes",
+              "a": "(a) Insects deliver air directly to tissues through tracheae, without blood as intermediary.",
+              "src": "NCERT Exemplar"
             }
           ]
         },
@@ -1538,20 +1742,24 @@
           ],
           "questions": [
             {
-              "q": "Why is the AB blood group called the universal recipient and O the universal donor?",
-              "a": "AB plasma has neither anti-A nor anti-B antibodies, so it can receive A, B, AB or O blood. O RBCs have no A/B antigens, so they do not trigger agglutination in any recipient."
+              "q": "Name the formed elements of the blood and mention one function of each.",
+              "a": "RBCs (erythrocytes): transport O2 and CO2. WBCs (leucocytes): defence against infection. Platelets (thrombocytes): blood clotting.",
+              "src": "NCERT Exercise"
             },
             {
-              "q": "Calculate cardiac output if heart rate is 72 beats/min and stroke volume is 70 mL.",
-              "a": "Cardiac output = 72 x 70 = 5040 mL/min, about 5 litres per minute."
+              "q": "What is the importance of plasma proteins?",
+              "a": "Fibrinogen is needed for clotting, globulins are involved in defence, and albumins help maintain the osmotic balance of blood.",
+              "src": "NCERT Exercise"
             },
             {
-              "q": "What do the P wave and T wave of an ECG represent?",
-              "a": "P wave: electrical excitation (depolarisation) of the atria, leading to atrial contraction. T wave: repolarisation of the ventricles, marking the end of ventricular systole."
+              "q": "Match column I with column II: (a) Eosinophils, (b) RBC, (c) AB group, (d) Platelets, (e) Systole - with (i) Coagulation, (ii) Universal recipient, (iii) Resist infections, (iv) Contraction of heart, (v) Gas transport.",
+              "a": "a - iii, b - v, c - ii, d - i, e - iv.",
+              "src": "NCERT Exercise"
             },
             {
-              "q": "Why does the left ventricle have a thicker wall than the right?",
-              "a": "The left ventricle pumps blood to the entire body through the aorta against high resistance, while the right ventricle pumps only to the nearby lungs, so the left wall is about three times thicker."
+              "q": "Which of the following statements is correct: (a) Serum = blood + fibrinogen (b) Lymph = plasma + RBC + WBC (c) Blood = plasma + RBC + WBC (d) Plasma = blood - lymphocytes",
+              "a": "(c) Blood = plasma + RBC + WBC (and platelets are also formed elements).",
+              "src": "NCERT Exemplar"
             }
           ]
         },
@@ -1567,20 +1775,24 @@
           ],
           "questions": [
             {
-              "q": "Why do desert animals and birds excrete uric acid?",
-              "a": "Uric acid needs almost no water for its removal and is nearly non-toxic as a solid paste/pellet, conserving precious water in arid habitats; it is energetically costly but vital for survival."
+              "q": "Define GFR (glomerular filtration rate).",
+              "a": "The amount of filtrate formed by both kidneys per minute - about 125 mL/min (180 litres per day).",
+              "src": "NCERT Exercise"
             },
             {
-              "q": "A person produces only 1 L of urine though 180 L is filtered daily. How?",
-              "a": "About 99% of the filtrate is reabsorbed: glucose and amino acids fully in the PCT, most salts and water along the tubule, and ADH-regulated water uptake in the collecting duct leaves only ~1-1.5 L as urine."
+              "q": "Explain the autoregulatory mechanism by which the kidney controls GFR.",
+              "a": "The juxtaglomerular (JG) apparatus senses falling GFR and releases renin, which activates the renin-angiotensin mechanism to constrict vessels and raise glomerular pressure and GFR back to normal.",
+              "src": "NCERT Exercise"
             },
             {
-              "q": "What is the role of ADH in urine formation?",
-              "a": "ADH (vasopressin) from the posterior pituitary makes the DCT and collecting duct permeable to water, so more water is reabsorbed and urine becomes concentrated when the body is dehydrated."
+              "q": "Explain the counter-current mechanism in the kidney.",
+              "a": "The flow of filtrate in the two limbs of Henle's loop (and blood in vasa recta) in opposite directions creates and maintains a salt gradient in the medulla, allowing water reabsorption and concentrated urine.",
+              "src": "NCERT Exercise"
             },
             {
-              "q": "Name the steps of urine formation in order.",
-              "a": "Glomerular filtration (ultrafiltration), selective reabsorption, and tubular secretion."
+              "q": "Which one of the following is the least toxic excretory product: (a) urea (b) uric acid (c) ammonia (d) CO2",
+              "a": "(b) Uric acid - it can be excreted almost dry, conserving water.",
+              "src": "NCERT Exemplar"
             }
           ]
         },
@@ -1596,20 +1808,24 @@
           ],
           "questions": [
             {
-              "q": "During muscle contraction, which bands/structures change length and which do not?",
-              "a": "The I band and H zone shorten and Z lines draw closer (the sarcomere shortens), but the A band (length of myosin filaments) remains constant - this supports the sliding filament theory."
+              "q": "Define sliding filament theory of muscle contraction.",
+              "a": "During contraction, the thin actin filaments slide over the thick myosin filaments towards the centre of the sarcomere: the H-zone and I-bands shorten while the A-band length stays constant; the process is driven by ATP and regulated by Ca2+.",
+              "src": "NCERT Exercise"
             },
             {
-              "q": "Why is Ca2+ essential for muscle contraction?",
-              "a": "Ca2+ ions released from the sarcoplasmic reticulum bind to troponin on actin filaments, shifting tropomyosin and exposing the myosin-binding sites, allowing cross-bridge formation."
+              "q": "Describe the important steps in muscle contraction.",
+              "a": "Neural signal reaches the neuromuscular junction -> acetylcholine triggers an action potential -> Ca2+ released from sarcoplasmic reticulum binds troponin -> myosin heads form cross-bridges with actin -> power stroke pulls actin filaments -> ATP breaks the bridges and the cycle repeats; on relaxation Ca2+ is pumped back.",
+              "src": "NCERT Exercise"
             },
             {
-              "q": "Distinguish red and white muscle fibres.",
-              "a": "Red fibres: rich in myoglobin and mitochondria, contract slowly, work aerobically, resist fatigue (e. back/postural muscles). White fibres: little myoglobin, fewer mitochondria, contract fast, tire quickly (e. eye muscles)."
+              "q": "What are the different types of movements exhibited by the cells of the human body?",
+              "a": "Amoeboid movement (e.g. macrophages and WBCs), ciliary movement (e.g. in the trachea and oviducts) and muscular movement (by muscle cells).",
+              "src": "NCERT Exercise"
             },
             {
-              "q": "What kind of joint is present between (a) humerus and pectoral girdle, (b) atlas and axis?",
-              "a": "(a) Ball and socket joint - allows movement in all planes. (b) Pivot joint - allows rotation of the head."
+              "q": "Match: (a) Fast muscles, (b) Slow muscles, (c) Actin filament, (d) Sarcomere - with (i) Myoglobin, (ii) Lactic acid accumulation, (iii) Contractile unit, (iv) I-band.",
+              "a": "a - ii, b - i, c - iv, d - iii.",
+              "src": "NCERT Exemplar"
             }
           ]
         },
@@ -1625,20 +1841,24 @@
           ],
           "questions": [
             {
-              "q": "Why do nerve impulses travel faster in myelinated fibres?",
-              "a": "The myelin sheath insulates the axon, so the action potential jumps from one node of Ranvier to the next (saltatory conduction), which is much faster than continuous conduction along the whole membrane."
+              "q": "Briefly describe the structure of the brain.",
+              "a": "The brain has three parts: forebrain (cerebrum, thalamus, hypothalamus), midbrain, and hindbrain (cerebellum, pons and medulla oblongata). The cerebrum is the largest part, divided into two hemispheres.",
+              "src": "NCERT Exercise"
             },
             {
-              "q": "Trace the reflex arc when you touch a hot object.",
-              "a": "Heat receptors in skin -> sensory neuron -> spinal cord interneuron -> motor neuron -> arm muscles contract and withdraw the hand. The brain is informed afterwards; the spinal reflex gives speed."
+              "q": "Compare resting potential and action potential.",
+              "a": "Resting potential: the axonal membrane is polarised at about -70 mV (outside positive). Action potential: on stimulation, Na+ rushes in, the inside becomes positive (depolarisation), followed by K+ outflow restoring the resting state (repolarisation).",
+              "src": "NCERT Exercise"
             },
             {
-              "q": "What maintains the resting membrane potential of a neuron?",
-              "a": "The sodium-potassium pump actively moves 3 Na+ out for every 2 K+ in (using ATP), and the membrane is more permeable to K+ leaking out, keeping the inside about -70 mV relative to outside."
+              "q": "Explain the following processes: (a) polarisation of the membrane of a nerve fibre, (b) depolarisation of the membrane, (c) conduction of a nerve impulse along an axon, (d) transmission of a nerve impulse across a chemical synapse.",
+              "a": "(a) Resting state with Na+/K+ pump maintaining -70 mV. (b) Stimulus opens Na+ channels; inside becomes positive. (c) The local current ahead of the impulse depolarises the next segment, so the impulse self-propagates. (d) The impulse releases neurotransmitter into the synaptic cleft, which binds receptors on the post-synaptic membrane and starts a new impulse.",
+              "src": "NCERT Exercise"
             },
             {
-              "q": "Why is there no vision at the blind spot?",
-              "a": "The blind spot is where the optic nerve exits the eyeball; there are no rods or cones there, so light falling on it forms no image - the other eye compensates."
+              "q": "The chemicals involved in the transmission of impulses at the chemical synapse are called: (a) hormones (b) neurotransmitters (c) cerebrospinal fluid (d) lymph",
+              "a": "(b) Neurotransmitters (e.g. acetylcholine).",
+              "src": "NCERT Exemplar"
             }
           ]
         },
@@ -1654,20 +1874,24 @@
           ],
           "questions": [
             {
-              "q": "A patient has high blood glucose and is given insulin. Which cells produce insulin and what is its action?",
-              "a": "Insulin is secreted by the beta cells of the Islets of Langerhans in the pancreas. It lowers blood glucose by promoting glucose uptake by cells and glycogen synthesis in liver and muscles."
+              "q": "Define the following terms: (a) exocrine gland, (b) endocrine gland, (c) hormone.",
+              "a": "(a) A gland with ducts that releases its secretion onto a surface or into a cavity. (b) A ductless gland releasing hormones directly into the blood. (c) A chemical messenger secreted by endocrine glands, carried by blood to target organs.",
+              "src": "NCERT Exercise"
             },
             {
-              "q": "Why is adrenaline called the emergency hormone?",
-              "a": "Adrenaline (epinephrine) from the adrenal medulla is released in stress, fear, anger or danger: it raises heart rate, blood pressure, breathing rate, dilates pupils and diverts blood to muscles - preparing the body for fight, flight or fright."
+              "q": "Name the hormones secreted by the following and specify the source in each case: hypothalamus, pituitary, thyroid, parathyroid, adrenal, pancreas, testis, ovary, thymus, atrium, kidney and gastro-intestinal tract.",
+              "a": "Hypothalamus: releasing and inhibiting hormones. Pituitary: GH, PRL, TSH, ACTH, LH, FSH, MSH, oxytocin, vasopressin. Thyroid: T3, T4, calcitonin. Parathyroid: parathyroid hormone. Adrenal: cortisol, aldosterone, adrenaline, noradrenaline. Pancreas: insulin, glucagon. Testis: androgens (testosterone). Ovary: estrogen, progesterone. Thymus: thymosins. Atrium: atrial natriuretic factor. Kidney: erythropoietin. GI tract: gastrin, secretin, CCK, GIP.",
+              "src": "NCERT Exercise"
             },
             {
-              "q": "Name the gland and hormone responsible for (a) goitre on iodine deficiency and (b) tetany on low calcium.",
-              "a": "(a) Thyroid gland - deficiency of thyroxine due to lack of iodine causes simple goitre (enlarged thyroid). (b) Parathyroid glands - deficiency of parathormone (PTH) lowers blood Ca2+, causing tetany (muscle spasms)."
+              "q": "Fill in the blanks: (a) Hypothalamic hormones are transported to the _____ gland. (b) TSH acts on the _____. (c) ACTH acts on the _____. (d) Gonadotrophins act on the _____. (e) MSH acts on the _____.",
+              "a": "(a) Pituitary (b) Thyroid (c) Adrenal cortex (d) Gonads (testis/ovary) (e) Melanocytes.",
+              "src": "NCERT Exercise"
             },
             {
-              "q": "How do steroid hormones act differently from peptide hormones?",
-              "a": "Steroid hormones are lipid-soluble, pass through the cell membrane and bind intracellular receptors to switch genes on/off (slow, long-lasting). Peptide hormones cannot cross the membrane, so they bind surface receptors and work through second messengers like cAMP (fast, short-lived)."
+              "q": "Which of the following pairs is correctly matched: (a) Pineal - melatonin, (b) Thyroid - tetraiodothyronine, (c) Ovary - estrogen, (d) Adrenal medulla - epinephrine, (e) all of the above?",
+              "a": "(e) All of the above are correct pairings.",
+              "src": "NCERT Exemplar"
             }
           ]
         }
@@ -1677,363 +1901,393 @@
   "dailyQuestions": [
     {
       "subject": "Physics",
-      "q": "The dimensional formula of force is:",
+      "q": "Which of the following pairs of physical quantities have the same dimensional formula?",
       "options": [
-        "[M L T^-2]",
-        "[M L^2 T^-2]",
-        "[M L T^-1]",
-        "[M L^-1 T^-2]"
+        "Work and torque",
+        "Tension and surface tension",
+        "Force and power",
+        "Speed and acceleration"
       ],
       "correct": 0,
-      "why": "Force = mass x acceleration, so F = [M][L T^-2] = [M L T^-2]."
+      "why": "Both work and torque have the dimensional formula M L^2 T^-2; in each other pair the dimensions differ.",
+      "src": "NCERT Exemplar"
     },
     {
       "subject": "Physics",
-      "q": "A projectile has maximum range when the angle of projection is:",
+      "q": "A vehicle covers half the distance with speed V1 and the remaining half with speed V2. Its average speed is:",
       "options": [
-        "30 degrees",
-        "45 degrees",
-        "60 degrees",
-        "90 degrees"
+        "(V1 + V2)/2",
+        "2V1V2/(V1 + V2)",
+        "V1V2/(V1 + V2)",
+        "2(V1 + V2)/(V1V2)"
       ],
       "correct": 1,
-      "why": "Range R = u^2 sin 2(theta)/g is maximum when sin 2(theta) = 1, i., theta = 45 degrees."
+      "why": "For equal distances, average speed is the harmonic mean: 2V1V2/(V1 + V2).",
+      "src": "NCERT Exemplar"
     },
     {
       "subject": "Physics",
-      "q": "Work done by a centripetal force is always:",
+      "q": "The value of the scalar product (B x A) dot A is:",
       "options": [
-        "Positive",
-        "Negative",
+        "BA",
         "Zero",
-        "Maximum"
-      ],
-      "correct": 2,
-      "why": "The force is perpendicular to displacement at every point, so W = Fs cos 90 = 0."
-    },
-    {
-      "subject": "Physics",
-      "q": "Escape velocity from Earth is approximately:",
-      "options": [
-        "7.9 km/s",
-        "11.2 km/s",
-        "9.8 km/s",
-        "12.6 km/s"
+        "-BA",
+        "A^2 B"
       ],
       "correct": 1,
-      "why": "v_e = sqrt(2) x orbital velocity = 1.414 x 7.9 = about 11.2 km/s."
+      "why": "B x A is perpendicular to both A and B, so its dot product with A is zero.",
+      "src": "NCERT Exemplar"
     },
     {
       "subject": "Physics",
-      "q": "The SI unit of Young modulus is:",
+      "q": "A body of mass 2 kg moves such that its position is x(t) = pt + qt^2 + rt^3, where p = 3 m/s, q = 4 m/s^2 and r = 5 m/s^3. The force acting on the body at t = 2 s is:",
       "options": [
-        "Newton",
-        "Joule",
-        "Pascal",
-        "Watt"
+        "136 N",
+        "134 N",
+        "158 N",
+        "68 N"
+      ],
+      "correct": 0,
+      "why": "Acceleration a = d^2x/dt^2 = 2q + 6rt = 8 + 60 = 68 m/s^2 at t = 2 s; F = ma = 2 x 68 = 136 N.",
+      "src": "NCERT Exercise"
+    },
+    {
+      "subject": "Physics",
+      "q": "A body is falling freely in a vacuum. Which of the following remains constant?",
+      "options": [
+        "Kinetic energy",
+        "Potential energy",
+        "Total mechanical energy",
+        "Momentum"
       ],
       "correct": 2,
-      "why": "Young modulus = stress/strain; strain is dimensionless, so its unit is that of stress: pascal (N/m^2)."
+      "why": "With only gravity acting and no air resistance, mechanical energy is conserved.",
+      "src": "NCERT Exemplar"
     },
     {
       "subject": "Physics",
-      "q": "For a monoatomic ideal gas, gamma (C_p/C_v) equals:",
+      "q": "Both the Earth and the Moon are subject to the gravitational force of the Sun. As observed from the Sun, the orbit of the Moon:",
       "options": [
-        "1.33",
-        "1.40",
-        "1.67",
-        "1.20"
-      ],
-      "correct": 2,
-      "why": "Monoatomic gas: C_v = (3/2)R, C_p = (5/2)R, so gamma = 5/3 = 1.67."
-    },
-    {
-      "subject": "Physics",
-      "q": "In SHM, acceleration is maximum at:",
-      "options": [
-        "Mean position",
-        "Extreme position",
-        "One-fourth amplitude",
-        "Half amplitude"
+        "will be elliptical",
+        "will not be strictly elliptical because the total gravitational force on it is not central",
+        "will be parabolic",
+        "will be a straight line"
       ],
       "correct": 1,
-      "why": "a = -omega^2 x is largest in magnitude where |x| = A, i., at the extreme positions."
+      "why": "The Moon experiences two centres of attraction (Sun and Earth), so the net force is not central and the orbit is not strictly an ellipse.",
+      "src": "NCERT Exemplar"
     },
     {
       "subject": "Physics",
-      "q": "Sound waves in air are:",
+      "q": "Streamline flow is more likely for liquids with:",
       "options": [
-        "Transverse",
-        "Longitudinal",
-        "Electromagnetic",
-        "Stationary only"
+        "high density and low viscosity",
+        "low density and high viscosity",
+        "high density and high viscosity",
+        "low density and low viscosity"
       ],
       "correct": 1,
-      "why": "Air particles vibrate parallel to the direction of propagation, forming compressions and rarefactions."
+      "why": "Both low density and high viscosity keep the Reynolds number (rvd/eta) low, which favours streamline flow.",
+      "src": "NCERT Exemplar"
     },
     {
-      "subject": "Chemistry",
-      "q": "One mole of any substance contains:",
+      "subject": "Physics",
+      "q": "A cubic vessel containing an ideal gas at NTP is carried by a rocket moving vertically at 500 m/s. The pressure of the gas inside, as observed from the ground:",
       "options": [
-        "6.022 x 10^22 particles",
-        "6.022 x 10^23 particles",
-        "3.011 x 10^23 particles",
-        "1.6 x 10^19 particles"
+        "remains the same",
+        "doubles",
+        "halves",
+        "increases due to the rocket's speed"
       ],
-      "correct": 1,
-      "why": "By definition, 1 mole = Avogadro number = 6.022 x 10^23 entities."
+      "correct": 0,
+      "why": "Pressure depends on molecular motion relative to the walls, which uniform motion of the vessel does not change.",
+      "src": "NCERT Exemplar"
     },
     {
       "subject": "Chemistry",
-      "q": "The maximum number of electrons in the N shell (n = 4) is:",
+      "q": "The law of multiple proportions is illustrated by the pair:",
       "options": [
-        "8",
-        "18",
-        "32",
-        "50"
-      ],
-      "correct": 2,
-      "why": "Maximum electrons = 2n^2 = 2 x 16 = 32."
-    },
-    {
-      "subject": "Chemistry",
-      "q": "The shape of the CH4 molecule is:",
-      "options": [
-        "Square planar",
-        "Trigonal planar",
-        "Tetrahedral",
-        "Linear"
+        "N2O and NO",
+        "MgO and Mg(OH)2",
+        "CO and CO2",
+        "NaCl and NaBr"
       ],
       "correct": 2,
-      "why": "Carbon is sp3 hybridised with 4 bond pairs, giving a tetrahedral shape with 109.5 degree angles."
+      "why": "CO and CO2: the same elements combine in different fixed ratios; the oxygen masses combining with a fixed mass of carbon are in the simple ratio 1:2.",
+      "src": "NCERT Exemplar"
     },
     {
       "subject": "Chemistry",
-      "q": "The oxidation number of sulphur in H2SO4 is:",
+      "q": "The number of radial nodes for the 3p orbital is:",
       "options": [
-        "+2",
-        "+4",
-        "+6",
-        "-2"
-      ],
-      "correct": 2,
-      "why": "2(+1) + x + 4(-2) = 0 gives x = +6."
-    },
-    {
-      "subject": "Chemistry",
-      "q": "The pH of a neutral solution at 25 deg C is:",
-      "options": [
-        "0",
+        "3",
+        "2",
         "1",
-        "7",
-        "14"
+        "0"
       ],
       "correct": 2,
-      "why": "At 25 deg C, [H+] = [OH-] = 10^-7 in a neutral solution, so pH = 7."
+      "why": "Radial nodes = n - l - 1 = 3 - 1 - 1 = 1.",
+      "src": "NCERT Exemplar"
     },
     {
       "subject": "Chemistry",
-      "q": "According to Markovnikov's rule, HBr adds to propene to give mainly:",
+      "q": "Covalency of nitrogen is restricted to 4 but phosphorus and sulphur can expand it to 5 or 6 because of:",
       "options": [
-        "1-bromopropane",
-        "2-bromopropane",
-        "1,2-dibromopropane",
-        "Cyclopropane"
+        "larger size of P and S",
+        "the presence of vacant d orbitals in P and S",
+        "lower electronegativity of P and S",
+        "higher ionisation enthalpy of N"
       ],
       "correct": 1,
-      "why": "H+ adds to the carbon with more hydrogens, forming the more stable 2 degree carbocation, so Br ends up on C-2."
+      "why": "Vacant d orbitals in the third period allow P and S to expand their octet.",
+      "src": "NCERT Exemplar"
     },
     {
       "subject": "Chemistry",
-      "q": "For a spontaneous process at constant T and P:",
+      "q": "The molecule with the highest dipole moment is:",
       "options": [
-        "delta G > 0",
-        "delta G < 0",
-        "delta G = 0",
-        "delta H must be negative"
+        "CO2",
+        "H2O",
+        "NH3",
+        "NF3"
       ],
       "correct": 1,
-      "why": "delta G = delta H - T delta S is negative for spontaneous processes; zero means equilibrium."
+      "why": "H2O has the largest net dipole (1.85 D) because of its bent geometry and the two O-H dipoles.",
+      "src": "NCERT Exemplar"
     },
     {
       "subject": "Chemistry",
-      "q": "The hybridisation of carbon in ethyne (C2H2) is:",
+      "q": "The enthalpy of formation of a compound is:",
       "options": [
-        "sp3",
-        "sp2",
-        "sp",
-        "sp3d"
+        "always positive",
+        "always negative",
+        "may be positive or negative",
+        "always zero"
       ],
       "correct": 2,
-      "why": "Each carbon in ethyne has 2 sigma domains (one C-H, one C-C), so it is sp hybridised and the molecule is linear."
+      "why": "Formation can be exothermic or endothermic; e.g. NH3 is negative but HI is positive.",
+      "src": "NCERT Exemplar"
     },
     {
-      "subject": "Mathematics",
-      "q": "If A = {1, 2, 3} and B = {3, 4}, then A n B equals:",
+      "subject": "Chemistry",
+      "q": "Arrange the hydrogen halides in order of decreasing reactivity with propene: (i) HCl > HBr > HI (ii) HBr > HI > HCl (iii) HI > HBr > HCl (iv) HCl > HI > HBr",
       "options": [
-        "{1, 2}",
-        "{3}",
-        "{1, 2, 3, 4}",
-        "Empty set"
-      ],
-      "correct": 1,
-      "why": "Intersection contains only common elements: {3}."
-    },
-    {
-      "subject": "Mathematics",
-      "q": "The value of 8C3 is:",
-      "options": [
-        "24",
-        "56",
-        "120",
-        "336"
-      ],
-      "correct": 1,
-      "why": "8C3 = 8!/(3! 5!) = (8 x 7 x 6)/(3 x 2 x 1) = 56."
-    },
-    {
-      "subject": "Mathematics",
-      "q": "The derivative of sin x with respect to x is:",
-      "options": [
-        "-cos x",
-        "-sin x",
-        "cos x",
-        "tan x"
+        "i",
+        "ii",
+        "iii",
+        "iv"
       ],
       "correct": 2,
-      "why": "From first principles, d/dx (sin x) = cos x."
+      "why": "Reactivity follows HI > HBr > HCl because the H-X bond weakens down the group, easing electrophilic addition.",
+      "src": "NCERT Exemplar"
     },
     {
       "subject": "Mathematics",
-      "q": "In an AP with first term 7 and common difference 3, the 15th term is:",
+      "q": "The complement of the union of two sets, (A union B)' is:",
       "options": [
-        "46",
-        "49",
-        "52",
-        "45"
+        "A' union B'",
+        "A' intersection B'",
+        "A intersection B",
+        "A union B"
       ],
       "correct": 1,
-      "why": "a_15 = 7 + 14 x 3 = 49."
+      "why": "De Morgan's law: (A union B)' = A' intersection B'.",
+      "src": "NCERT Exemplar"
     },
     {
       "subject": "Mathematics",
-      "q": "The sum of the GP 2 + 6 + 18 + ... to 5 terms is:",
+      "q": "The number of non-empty relations that can be defined from a set A of p elements to a set B of q elements is:",
       "options": [
-        "242",
-        "200",
-        "162",
-        "486"
-      ],
-      "correct": 0,
-      "why": "S_5 = 2(3^5 - 1)/(3 - 1) = 243 - 1 = 242."
-    },
-    {
-      "subject": "Mathematics",
-      "q": "The eccentricity of a parabola is:",
-      "options": [
-        "0",
-        "Less than 1",
-        "Exactly 1",
-        "Greater than 1"
+        "p^q",
+        "2^(pq)",
+        "2^(pq) - 1",
+        "pq"
       ],
       "correct": 2,
-      "why": "A parabola is defined by e = 1 (distance to focus equals distance to directrix)."
+      "why": "There are 2^(pq) relations in all; excluding the empty relation gives 2^(pq) - 1.",
+      "src": "NCERT Exemplar"
     },
     {
       "subject": "Mathematics",
-      "q": "Two dice are thrown. The probability of getting a sum of 8 is:",
-      "options": [
-        "5/36",
-        "7/36",
-        "1/6",
-        "1/9"
-      ],
-      "correct": 0,
-      "why": "Favourable outcomes: (2,6), (3,5), (4,4), (5,3), (6,2) = 5 out of 36."
-    },
-    {
-      "subject": "Mathematics",
-      "q": "If sin^2 x + cos^2 x = 1, then sec^2 x - tan^2 x equals:",
+      "q": "If sin theta + cosec theta = 2, then sin^2 theta + cosec^2 theta equals:",
       "options": [
         "0",
         "1",
         "2",
-        "-1"
+        "4"
+      ],
+      "correct": 2,
+      "why": "Squaring gives sin^2 + cosec^2 + 2 = 4, so the sum is 2.",
+      "src": "NCERT Exemplar"
+    },
+    {
+      "subject": "Mathematics",
+      "q": "If nPr = 840 and nCr = 35, then r equals:",
+      "options": [
+        "3",
+        "4",
+        "5",
+        "6"
       ],
       "correct": 1,
-      "why": "Dividing the identity by cos^2 x gives 1 + tan^2 x = sec^2 x, so sec^2 x - tan^2 x = 1."
+      "why": "nPr/nCr = r! = 840/35 = 24, so r = 4.",
+      "src": "NCERT Exemplar"
+    },
+    {
+      "subject": "Mathematics",
+      "q": "The number of terms in the expansion of (x + a)^51 - (x - a)^51 after simplification is:",
+      "options": [
+        "102",
+        "26",
+        "25",
+        "51"
+      ],
+      "correct": 1,
+      "why": "Only odd powers of a survive: the terms with a^1, a^3, ..., a^51 give 26 terms.",
+      "src": "NCERT Exemplar"
+    },
+    {
+      "subject": "Mathematics",
+      "q": "If the sum of n terms of an AP is Sn = 3n + 2n^2, then the common difference of the AP is:",
+      "options": [
+        "3",
+        "4",
+        "2",
+        "6"
+      ],
+      "correct": 1,
+      "why": "a1 = S1 = 5; a2 = S2 - S1 = 14 - 5 = 9, so d = a2 - a1 = 4.",
+      "src": "NCERT Exemplar"
+    },
+    {
+      "subject": "Mathematics",
+      "q": "lim as x -> 0 of (sin^2 x - x^2)/x^2 is:",
+      "options": [
+        "1",
+        "0",
+        "infinity",
+        "does not exist"
+      ],
+      "correct": 1,
+      "why": "Since sin x ~ x, sin^2 x - x^2 tends to 0 faster than x^2; the limit is 0.",
+      "src": "NCERT Exemplar"
+    },
+    {
+      "subject": "Mathematics",
+      "q": "The probability that at least one of the events A and B occurs is 0.6. If A and B occur simultaneously with probability 0.2, then P(A') + P(B') is:",
+      "options": [
+        "0.4",
+        "0.8",
+        "1.2",
+        "1.6"
+      ],
+      "correct": 2,
+      "why": "P(A) + P(B) = 0.6 + 0.2 = 0.8, so P(A') + P(B') = 2 - 0.8 = 1.2.",
+      "src": "NCERT Exemplar"
     },
     {
       "subject": "Biology",
-      "q": "The scientific name of mango is:",
+      "q": "Family names in plants end with the suffix:",
       "options": [
-        "Mangifera indica",
-        "Homo sapiens",
-        "Musca domestica",
-        "Solanum tuberosum"
+        "-aceae",
+        "-idae",
+        "-ales",
+        "-ae"
       ],
       "correct": 0,
-      "why": "Mango = genus Mangifera, species indica, as per binomial nomenclature."
+      "why": "ICBN rule: plant family names end in -aceae (e.g. Rosaceae).",
+      "src": "NCERT Exemplar"
     },
     {
       "subject": "Biology",
-      "q": "Which organelle is known as the powerhouse of the cell?",
+      "q": "Which of the following statements is WRONG for viroids?",
       "options": [
-        "Ribosome",
-        "Golgi body",
-        "Mitochondria",
-        "Lysosome"
+        "They lack a protein coat",
+        "They are smaller than viruses",
+        "Their RNA is of high molecular weight",
+        "They cause potato spindle tuber disease"
       ],
       "correct": 2,
-      "why": "Mitochondria produce most of the cell's ATP through aerobic respiration."
+      "why": "Viroids have RNA of low molecular weight (not high).",
+      "src": "NCERT Exemplar"
     },
     {
       "subject": "Biology",
-      "q": "Crossing over takes place during which stage of meiosis?",
+      "q": "Which of the following is a WRONG statement?",
       "options": [
-        "Leptotene",
-        "Zygotene",
-        "Pachytene",
-        "Diakinesis"
+        "Mucor has biflagellate zoospores",
+        "Haploid endosperm is typical of gymnosperms",
+        "Sexual reproduction in fungi may occur by conjugation",
+        "Mushrooms belong to basidiomycetes"
       ],
-      "correct": 2,
-      "why": "In pachytene, non-sister chromatids exchange segments at chiasmata."
+      "correct": 0,
+      "why": "Mucor (zygomycete) reproduces asexually by non-motile sporangiospores - it does not produce biflagellate zoospores.",
+      "src": "NCERT Exemplar"
     },
     {
       "subject": "Biology",
-      "q": "The first stable product of the Calvin cycle is:",
+      "q": "The 'eyes' of the potato tuber are:",
       "options": [
-        "RuBP",
-        "3-PGA",
-        "Oxaloacetic acid",
-        "Glucose"
+        "root buds",
+        "flower buds",
+        "shoot buds",
+        "axillary buds"
+      ],
+      "correct": 3,
+      "why": "Each eye is a node bearing an axillary bud.",
+      "src": "NCERT Exemplar"
+    },
+    {
+      "subject": "Biology",
+      "q": "A basic dye used for staining mitochondria is:",
+      "options": [
+        "safranin",
+        "Janus green",
+        "fast green",
+        "orcein"
       ],
       "correct": 1,
-      "why": "CO2 joins RuBP and the 6C intermediate splits into two molecules of 3-phosphoglyceric acid (3C)."
+      "why": "Janus green B specifically stains mitochondria.",
+      "src": "NCERT Exemplar"
     },
     {
       "subject": "Biology",
-      "q": "Which hormone lowers blood glucose level?",
+      "q": "C4 plants are less limited by CO2 than C3 plants because:",
       "options": [
-        "Glucagon",
-        "Insulin",
-        "Adrenaline",
-        "Thyroxine"
+        "their stomata remain open longer",
+        "the primary CO2 fixation is via PEP carboxylase, which has high affinity for CO2",
+        "their RuBisCO has higher affinity",
+        "they need less water"
       ],
       "correct": 1,
-      "why": "Insulin from the beta cells of the pancreas promotes glucose uptake and glycogen formation."
+      "why": "PEP carboxylase has a very high affinity for CO2, so C4 plants can concentrate CO2 at RuBisCO and suppress photorespiration.",
+      "src": "NCERT Exemplar"
     },
     {
       "subject": "Biology",
-      "q": "The universal blood donor group is:",
+      "q": "The muscles involved in normal (quiet) breathing in humans are:",
       "options": [
-        "AB positive",
-        "A positive",
-        "O negative",
-        "B negative"
+        "diaphragm and external intercostals",
+        "internal intercostals and diaphragm",
+        "abdominal muscles only",
+        "phrenic muscles only"
+      ],
+      "correct": 0,
+      "why": "Quiet breathing is driven by the diaphragm and the external intercostal muscles.",
+      "src": "NCERT Exemplar"
+    },
+    {
+      "subject": "Biology",
+      "q": "Which of the following statements is correct?",
+      "options": [
+        "Serum = blood + fibrinogen",
+        "Lymph = plasma + RBC + WBC",
+        "Blood = plasma + RBC + WBC",
+        "Plasma = blood - lymphocytes"
       ],
       "correct": 2,
-      "why": "O negative RBCs carry no A, B or Rh antigens, so they can be given to any patient in an emergency."
+      "why": "Blood consists of plasma plus the formed elements (RBCs, WBCs, platelets).",
+      "src": "NCERT Exemplar"
     }
   ],
   "revisionCards": [
