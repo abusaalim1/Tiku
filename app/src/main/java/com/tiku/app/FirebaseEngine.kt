@@ -793,7 +793,8 @@ object FirebaseEngine : ChatRepo {
             photo, replyQuote, reactions, starredBy.contains(my), deletedFor.contains(my), tsMs, localPath,
             seenByPeer = seenBy.contains(peerUid),
             callCallerUid = callCallerUid, callOutcome = callOutcome,
-            callDurationSec = callDurSec, callVideo = callVideo)
+            callDurationSec = callDurSec, callVideo = callVideo,
+            callMine = callCallerUid.isNotEmpty() && callCallerUid == my)
     }
 
     // ================= SEND PATH (round 3: optimistic + NO silent failures) ====

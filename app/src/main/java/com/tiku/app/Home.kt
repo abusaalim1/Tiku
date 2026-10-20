@@ -226,7 +226,7 @@ fun ChatRow(th: ChatThread) {
         last.kind == MsgKind.VOICE -> "Voice message"
         last.kind == MsgKind.IMAGE -> "Photo"
         // round 4: call events preview as their pill label, never raw text
-        last.kind == MsgKind.CALL -> callEventLabel(last, last.callCallerUid == myUidForUi())
+        last.kind == MsgKind.CALL -> callEventLabel(last, last.callMine)
         else -> last.text
     }
     Row(

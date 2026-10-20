@@ -44,7 +44,7 @@ object PreviewStore {
             // …a call event pill (centred, not a bubble)…
             msg("", time = "9:39", kind = MsgKind.CALL)
                 .copy(callCallerUid = "me", callOutcome = "ended",
-                    callDurationSec = 754, callVideo = false),
+                    callDurationSec = 754, callVideo = false, callMine = true),
             msg("Aaj shaam milte hain? ✨", time = "9:41"),
             // …and an own message NOT yet seen (single ✓)
             msg("On my way!", me = true, time = "9:41"))
@@ -64,7 +64,7 @@ object PreviewStore {
         val body = when (m.kind) {
             MsgKind.VOICE -> "🎙 Voice message"
             MsgKind.IMAGE -> "📷 Photo"
-            MsgKind.CALL -> callEventLabel(m, m.callCallerUid == "me")
+            MsgKind.CALL -> callEventLabel(m, m.callMine)
             else -> m.text
         }
         val tick = if (m.me && m.kind != MsgKind.CALL) (if (m.seenByPeer) "✓✓ " else "✓ ") else ""
@@ -190,6 +190,7 @@ object PreviewRepo : ChatRepo {
             time = "now", me = false, tsMs = System.currentTimeMillis(),
             callCallerUid = callerUid, callOutcome = outcome,
             callDurationSec = durSec, callVideo = video,
+            callMine = callerUid == "me",
         ))
     }
 }

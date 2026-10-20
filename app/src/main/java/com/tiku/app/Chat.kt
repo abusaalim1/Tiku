@@ -462,11 +462,6 @@ fun TypingBubble() {
 }
 
 // ================= call events (round 4) =================
-/** My uid for UI-side perspective decisions (real: the engine's established
- *  uid incl. the restored-identity fallback; preview: the "me" sentinel the
- *  preview store stamps on its own call events). */
-fun myUidForUi(): String = if (Config.PREVIEW_UI_ONLY) "me" else FirebaseEngine.myUid()
-
 /** Perspective-correct label for a call event. [iAmCaller] = the viewer is
  *  the one who placed the call. Owner's copy rules: no answer → caller sees
  *  "No answer", callee sees "Missed call"; declined → both see it; ended →
@@ -488,7 +483,7 @@ fun callEventLabel(m: TikuMessage, iAmCaller: Boolean): String {
  *  banner above the messages. Never a bubble, never side-aligned. */
 @Composable
 fun CallEventPill(m: TikuMessage) {
-    val iAmCaller = m.callCallerUid == myUidForUi()
+    val iAmCaller = m.callMine
     val icon = when {
         m.callOutcome == "noanswer" && !iAmCaller -> Icons.Filled.CallMissed
         m.callOutcome == "declined" -> Icons.Filled.CallEnd

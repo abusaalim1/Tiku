@@ -461,7 +461,9 @@ object CallController {
         if (!realMode) { startFakeCall(threadId, video, person); return }
         val settings = SettingsStore.state.value
         val callId = UUID.randomUUID().toString()
-        curCallerUid = FirebaseEngine.uid
+        // guarded: in the Robolectric screenshot process FirebaseApp is not
+        // initialized and a bare FirebaseEngine.uid would throw synchronously
+        curCallerUid = runCatching { FirebaseEngine.uid }.getOrDefault("")
         eventRecordedCallId = null
         state.value = CallUiState.Outgoing(threadId, callId, video, person, System.currentTimeMillis())
         armRingTimeout(threadId, callId)

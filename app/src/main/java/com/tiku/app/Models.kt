@@ -44,6 +44,10 @@ data class TikuMessage(
     val callOutcome: String = "",
     val callDurationSec: Int = 0,
     val callVideo: Boolean = false,
+    /** True when the VIEWER placed this call — computed where the message is
+     *  built (engine decrypt / preview seed), never in composition, so the
+     *  pill renders perspective copy without touching Firebase at draw time. */
+    val callMine: Boolean = false,
 )
 
 /** One 1:1 conversation. */
