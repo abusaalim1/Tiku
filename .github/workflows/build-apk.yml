@@ -1,0 +1,218 @@
+name: Build and Publish Release APK
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build & Release Release APK
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Temurin Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Verify Java environment
+        run: |
+          java -version
+          JAVA_MAJOR_VERSION=$(java -version 2>&1 | awk -F '"' '/version/ {print $2}' | cut -d'.' -f1)
+          if [ "$JAVA_MAJOR_VERSION" -lt 17 ]; then
+            echo "Error: Java 17+ required."
+            exit 1
+          fi
+
+      - name: Set up Android SDK licenses
+        run: |
+          mkdir -p "$ANDROID_HOME/licenses"
+          printf "24333f8a63b6825ea9c5514f83c2829b004d1fee\nd56f5187479edd01e217609cb32e753ac077a977\n" > "$ANDROID_HOME/licenses/android-sdk-license"
+          printf "84831b9409646a918e30573bab4c9c91346d8abd\n" > "$ANDROID_HOME/licenses/android-sdk-preview-license"
+          echo "sdk.dir=$ANDROID_HOME" > local.properties
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-35" "build-tools;35.0.0" "platform-tools" || true
+
+      - name: Set up Gradle 8.10.2
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.10.2'
+
+      - name: Verify stable keystore present
+        run: |
+          if [ ! -f ./tiku.keystore ]; then
+            echo "Error: ./tiku.keystore missing from repo root. The stable release keystore must be committed."
+            exit 1
+          fi
+          echo "Stable keystore present at repo root."
+
+      - name: Print signing SHA-1 fingerprint
+        env:
+          TIKU_KEYSTORE_PASSWORD: ${{ secrets.TIKU_KEYSTORE_PASSWORD }}
+        run: |
+          if [ -z "$TIKU_KEYSTORE_PASSWORD" ]; then echo "Error: TIKU_KEYSTORE_PASSWORD secret missing."; exit 1; fi
+          SHA1=$("$JAVA_HOME/bin/keytool" -list -v -keystore ./tiku.keystore -storepass "$TIKU_KEYSTORE_PASSWORD" -alias tiku | grep "SHA1:" | awk '{print $2}')
+          echo "SHA-1: $SHA1"
+          {
+            echo "## :key: Release signing key SHA-1"
+            echo ""
+            echo "\`$SHA1\`"
+            echo ""
+            echo "This fingerprint is registered in the Firebase Console (tiku-chat project) for Google sign-in."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Build release APK
+        env:
+          GRADLE_OPTS: "-Dorg.gradle.jvmargs=-Xmx3584m -Dorg.gradle.workers.max=2 -Dorg.gradle.parallel=false"
+          TIKU_KEYSTORE_PASSWORD: ${{ secrets.TIKU_KEYSTORE_PASSWORD }}
+        run: |
+          set -o pipefail
+          gradle :app:assembleRelease --stacktrace --no-configuration-cache 2>&1 | tee gradle-build.log
+
+      - name: Capture build failure details
+        if: failure()
+        run: |
+          if [ -f gradle-build.log ]; then
+            echo "## :x: Gradle Build Error Details" >> "$GITHUB_STEP_SUMMARY"
+            echo '```text' >> "$GITHUB_STEP_SUMMARY"
+            tail -n 150 gradle-build.log >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload build log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gradle-build-log
+          path: gradle-build.log
+          if-no-files-found: ignore
+
+      - name: Verify release APK
+        run: |
+          EXPECTED_APK="app/build/outputs/apk/release/app-release.apk"
+          if [ ! -f "$EXPECTED_APK" ] || [ ! -s "$EXPECTED_APK" ]; then
+            echo "Error: Expected APK missing or empty at $EXPECTED_APK"
+            find app/build/outputs/apk -maxdepth 3 -type f -name "*.apk" || true
+            exit 1
+          fi
+          echo "APK verified: $EXPECTED_APK"
+
+      - name: Verify debuggable=false and release signature
+        run: |
+          {
+            echo "## :shield: Release APK verification"
+            echo ""
+          } >> "$GITHUB_STEP_SUMMARY"
+          BT="$ANDROID_HOME/build-tools/35.0.0"
+          AAPT="$BT/aapt2"
+          APK="app/build/outputs/apk/release/app-release.apk"
+          if [ -x "$AAPT" ]; then
+            if "$AAPT" dump xmltree "$APK" AndroidManifest.xml 2>/dev/null | grep -qi "debuggable"; then
+              echo ":x: debuggable flag found in manifest!" | tee -a "$GITHUB_STEP_SUMMARY"
+              exit 1
+            else
+              echo ":white_check_mark: debuggable flag ABSENT from manifest (non-debuggable release build)." | tee -a "$GITHUB_STEP_SUMMARY"
+            fi
+          else
+            echo ":warning: aapt2 not available - debuggable check skipped." | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+          APK_CERTS=$("$BT/apksigner" verify --print-certs --min-sdk-version 26 "$APK" 2>&1)
+          echo "$APK_CERTS" | head -6
+          RAW=$(echo "$APK_CERTS" | grep "Signer #1 certificate SHA-1 digest" | awk '{print $6}')
+          CERT_SHA1=$(echo "$RAW" | sed 's/../&:/g;s/:$//' | tr 'a-f' 'A-F')
+          EXPECTED_SHA1="27:31:80:75:8E:7F:6F:9E:D6:D5:06:A3:B7:0C:B4:35:84:14:55:95"
+          echo "APK signer SHA-1: '$CERT_SHA1'" | tee -a "$GITHUB_STEP_SUMMARY"
+          if [ "$CERT_SHA1" = "$EXPECTED_SHA1" ]; then
+            echo ":white_check_mark: APK signed with the Tiku stable release cert." | tee -a "$GITHUB_STEP_SUMMARY"
+          else
+            echo ":x: WRONG SIGNING CERT (expected $EXPECTED_SHA1)" | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload release APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-release-apk
+          path: app/build/outputs/apk/release/app-release.apk
+          if-no-files-found: error
+
+      - name: Prepare APK release asset
+        id: prepare_asset
+        run: |
+          TEMP_ASSET_DIR="${{ runner.temp }}/release-asset"
+          mkdir -p "$TEMP_ASSET_DIR"
+          RUN_NUM="${{ github.run_number }}"
+          RELEASE_ASSET_NAME="tiku-release-build-${RUN_NUM}.apk"
+          TARGET_ASSET_PATH="${TEMP_ASSET_DIR}/${RELEASE_ASSET_NAME}"
+          cp app/build/outputs/apk/release/app-release.apk "$TARGET_ASSET_PATH"
+          if [ ! -s "$TARGET_ASSET_PATH" ]; then echo "Error: Release asset missing."; exit 1; fi
+          echo "asset_path=${TARGET_ASSET_PATH}" >> "$GITHUB_OUTPUT"
+          echo "asset_name=${RELEASE_ASSET_NAME}" >> "$GITHUB_OUTPUT"
+
+      - name: Publish APK to GitHub Releases
+        id: publish_release
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ASSET_PATH="${{ steps.prepare_asset.outputs.asset_path }}"
+          ASSET_NAME="${{ steps.prepare_asset.outputs.asset_name }}"
+          if [ ! -f "$ASSET_PATH" ] || [ ! -s "$ASSET_PATH" ]; then
+            echo "Error: Prepared release asset $ASSET_PATH is missing or empty."
+            exit 1
+          fi
+          RELEASE_TAG="release-apk-build-${{ github.run_number }}-${{ github.run_attempt }}"
+          RELEASE_TITLE="Release APK Build #${{ github.run_number }}"
+          NOTES=$(cat << 'EOF'
+          ### Tiku Release APK Automated Build
+
+          - **Build Type**: Non-debuggable release APK, signed with the Tiku stable release certificate
+          - **Signing SHA-1**: `27:31:80:75:8E:7F:6F:9E:D6:D5:06:A3:B7:0C:B4:35:84:14:55:95` (registered in Firebase for Google sign-in)
+          - **Build**: GitHub Actions
+          - **Firebase project**: tiku-chat (Auth + Firestore; free Spark plan — no Storage)
+          - **Mode**: Real app — Google sign-in works, chats are end-to-end encrypted (ECDH P-256 + AES-256-GCM)
+          - **Calls**: engine comes in the next round; the call screen ships as UI in this build
+
+          > **Note**: This is the real-mode build. Sign in with Google, create your password (it also backs up your private key), pick a username, and start chatting.
+          EOF
+          )
+          echo "Publishing release: tag=$RELEASE_TAG"
+          gh release create "$RELEASE_TAG" "$ASSET_PATH" \
+            --title "$RELEASE_TITLE" \
+            --notes "$NOTES" \
+            --target "${{ github.sha }}" \
+            --latest
+
+      - name: Report APK download result
+        if: always()
+        run: |
+          RELEASE_OUTCOME="${{ steps.publish_release.outcome }}"
+          if [ "$RELEASE_OUTCOME" = "success" ]; then
+            RELEASE_TAG="release-apk-build-${{ github.run_number }}-${{ github.run_attempt }}"
+            RELEASE_URL="https://github.com/${{ github.repository }}/releases/tag/$RELEASE_TAG"
+            {
+              echo "## :rocket: Release APK Build and Release Succeeded"
+              echo ""
+              echo "- **Release Tag**: \`$RELEASE_TAG\`"
+              echo "- **Release URL**: [View Release]($RELEASE_URL)"
+              echo ""
+              echo ":arrow_down: **Download**: The APK is in the **Assets** section of the [GitHub Release page]($RELEASE_URL)."
+            } >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "::warning ::Release publishing failed or was skipped, but the APK build succeeded."
+            {
+              echo "## :warning: Release APK Build Succeeded (Release Publishing Failed)"
+              echo ""
+              echo ":package: **Download Backup**: artifact \`app-release-apk\` in the workflow run."
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi

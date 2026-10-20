@@ -1,0 +1,47 @@
+{
+  "project_info": {
+    "project_number": "258621285053",
+    "project_id": "tiku-chat",
+    "storage_bucket": "tiku-chat.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:258621285053:android:1cab17f5051a409886cdd4",
+        "android_client_info": {
+          "package_name": "tiku.app"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "258621285053-rmvhp8pldn1ko9e0v03nhso66594nu60.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "tiku.app",
+            "certificate_hash": "273180758e7f6f9ed6d506a3b70cb43584145595"
+          }
+        },
+        {
+          "client_id": "258621285053-dm6i7dck4iosn7mhh0hk0frfjn6tmdgj.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBjg1QJLcBl4vmDBj5d6PNAhd9iWKCY-O4"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "258621285053-dm6i7dck4iosn7mhh0hk0frfjn6tmdgj.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

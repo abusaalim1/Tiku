@@ -1,18 +1,73 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    // Only authenticated users can access their own private data
-    match /users/{userId} {
-      allow read, write: if request.auth != null && request.auth.uid == userId;
 
-      match /{allSubcollections=**} {
-        allow read, write: if request.auth != null && request.auth.uid == userId;
+    function signedIn() {
+      return request.auth != null;
+    }
+    function isUser(uid) {
+      return signedIn() && request.auth.uid == uid;
+    }
+    // Chat membership gates everything inside a chat.
+    function isMember(chatId) {
+      return signedIn() && request.auth.uid in
+        get(/databases/$(database)/documents/chats/$(chatId)).data.members;
+    }
+
+    // ---- Users: profile/publicKey/keyBackup/presence. Readable by any
+    // signed-in user; writable ONLY by the doc's owner. ----
+    match /users/{uid} {
+      allow read: if signedIn();
+      allow write: if isUser(uid);
+    }
+
+    // ---- Username claims: create-only, exactly once per name. ----
+    match /usernames/{username} {
+      allow get: if signedIn();
+      allow list: if false;
+      allow create: if signedIn();
+      allow update, delete: if false;
+    }
+
+    // ---- Chats: gated on members membership (both uids, exactly 2).
+    // The chat doc carries members, typing map and clearedBefore per-user map. ----
+    match /chats/{chatId} {
+      allow get: if isMember(chatId);
+      allow list: if signedIn();
+      allow create: if signedIn()
+        && request.auth.uid in request.resource.data.members
+        && request.resource.data.members.size() == 2;
+      allow update: if isMember(chatId);
+      allow delete: if false;
+
+      // ---- messages + their media chunks + per-chat call logs:
+      // members only. ----
+      match /messages/{msgId} {
+        allow read, write: if isMember(chatId);
+
+        match /chunks/{index} {
+          allow read, write: if isMember(chatId);
+        }
+      }
+      match /calls/{callId} {
+        allow read, write: if isMember(chatId);
       }
     }
 
-    // Fallback/Legacy test collection if needed
-    match /test/{docId} {
-      allow read, write: if request.auth != null;
+    // ---- Moments: owner writes, signed-in users read. ----
+    match /moments/{uid} {
+      allow read: if signedIn();
+      allow write: if isUser(uid);
+
+      match /items/{itemId} {
+        allow read: if signedIn();
+        allow write: if isUser(uid);
+      }
+    }
+
+    // ---- Default deny: nothing outside this contract. ----
+    match /{document=**} {
+      allow read, write: if false;
     }
   }
 }

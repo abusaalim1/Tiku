@@ -1,8 +1,14 @@
-node_modules/
+*.iml
+.gradle/
 build/
-dist/
-coverage/
+app/build/
+local.properties
+.idea/
+*.orig
+*.rej
 .DS_Store
-*.log
-.env*
-!.env.example
+# Signing keystores: only tiku.keystore (the stable release cert) is committed,
+# exactly as briefed; every other keystore stays local.
+*.keystore
+!tiku.keystore
+gradle-build.log
