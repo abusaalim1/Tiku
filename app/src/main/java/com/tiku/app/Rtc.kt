@@ -24,7 +24,6 @@ import org.webrtc.DefaultVideoDecoderFactory
 import org.webrtc.DefaultVideoEncoderFactory
 import org.webrtc.EglBase
 import org.webrtc.IceCandidate
-import org.webrtc.JavaAudioDeviceModule
 import org.webrtc.MediaConstraints
 import org.webrtc.MediaStream
 import org.webrtc.PeerConnection
@@ -143,14 +142,9 @@ object RtcFactory {
                 .createInitializationOptions(),
         )
         egl = EglBase.create()
-        val adm = runCatching {
-            JavaAudioDeviceModule.builder(ctx.applicationContext)
-                .setUseHardwareAcousticEchoCanceler(true)
-                .setUseHardwareNoiseSuppressor(true)
-                .createAudioDeviceModule()
-        }.getOrElse { JavaAudioDeviceModule.builder(ctx.applicationContext).createAudioDeviceModule() }
+        // No custom audio device module: the factory's default IS JavaAudioDeviceModule
+        // (with the platform's echo cancellation / noise suppression).
         factory = PeerConnectionFactory.builder()
-            .setAudioDeviceModule(adm)
             .setVideoEncoderFactory(DefaultVideoEncoderFactory(egl.eglBaseContext, true, true))
             .setVideoDecoderFactory(DefaultVideoDecoderFactory(egl.eglBaseContext))
             .createPeerConnectionFactory()
@@ -211,6 +205,7 @@ class RtcSession(
                 }
             }
             override fun onIceGatheringChange(s: PeerConnection.IceGatheringState) {}
+            override fun onIceConnectionReceivingChange(receiving: Boolean) {}
             override fun onAddStream(stream: MediaStream) {
                 stream.videoTracks.firstOrNull()?.let { vt ->
                     if (remoteVideoTrack !== vt) { remoteVideoTrack = vt; events?.onRemoteVideo() }
