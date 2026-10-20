@@ -9,15 +9,14 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.test.hasScrollAction
 import androidx.compose.ui.test.junit4.createComposeRule
-import androidx.compose.ui.test.onAllNodes
-import androidx.compose.ui.test.onFirst
+import androidx.compose.ui.test.onNode
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.swipeUp
 import androidx.test.core.app.ApplicationProvider
-import io.github.takahirom.roborazzi.captureRoboImage
+import com.github.takahirom.roborazzi.captureRoboImage
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
@@ -172,7 +171,7 @@ class ScreenshotsTest {
     @Test fun shot18_meSettingsScrolled() {
         AppState.homeTab = HomeTab.ME
         frame { HomeScreen() }
-        composeRule.onAllNodes(hasScrollAction()).onFirst()
+        composeRule.onNode(hasScrollAction())
             .performTouchInput { swipeUp(); swipeUp() }
         composeRule.waitForIdle()
         shot("18-me-settings-scrolled.png")
