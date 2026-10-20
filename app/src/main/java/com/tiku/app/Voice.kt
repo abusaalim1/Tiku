@@ -14,7 +14,8 @@ class VoiceRecorder(private val ctx: Context) {
     private var recorder: MediaRecorder? = null
     private var outFile: File? = null
     val amps = mutableListOf<Int>()
-    var startedAt = 0L; private set
+    var startedAt = 0L
+    private set
 
     fun start(): File {
         stopQuietly()
@@ -61,7 +62,8 @@ class VoiceRecorder(private val ctx: Context) {
 /** Plays a local decrypted voice file; reports completion. */
 class VoicePlayer {
     private var mp: MediaPlayer? = null
-    var playingKey: String? = null; private set
+    var playingKey: String? = null
+    private set
 
     fun toggle(key: String, file: File, onDone: () -> Unit) {
         if (playingKey == key) { stop(); onDone(); return }
