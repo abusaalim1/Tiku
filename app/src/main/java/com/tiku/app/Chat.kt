@@ -89,6 +89,7 @@ fun ChatWallpaperBrush(settings: TikuUiSettings) = when (settings.wallpaper) {
 
 @Composable
 fun ChatScreen(threadId: String) {
+    androidx.activity.compose.BackHandler { AppState.go(Screen.Home) }
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
     val settings by SettingsStore.state.collectAsState()
@@ -185,7 +186,7 @@ fun ChatScreen(threadId: String) {
                 .padding(horizontal = 14.dp, vertical = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            GlassIconButton(Icons.Filled.ChevronLeft, { AppState.go(Screen.Home) }, 38.dp, 20.dp)
+            GlassIconButton(Icons.Filled.ChevronLeft, size = 38.dp, iconSize = 20.dp, onClick = { AppState.go(Screen.Home) })
             Spacer(Modifier.width(10.dp))
             AvatarBox(person, 42.dp, 15.dp, 18f)
             Spacer(Modifier.width(10.dp))
@@ -193,11 +194,11 @@ fun ChatScreen(threadId: String) {
                 Text(person.name, fontFamily = Bricolage, fontWeight = FontWeight.Bold, fontSize = 17.sp, color = TikuTokens.Ink)
                 Text(statusText, fontSize = 12.sp, color = settings.accent, fontFamily = Manrope)
             }
-            GlassIconButton(Icons.Filled.Call, { AppState.go(Screen.Call(threadId, false)) }, 38.dp, 18.dp)
+            GlassIconButton(Icons.Filled.Call, size = 38.dp, iconSize = 18.dp, onClick = { AppState.go(Screen.Call(threadId, false)) })
             Spacer(Modifier.width(8.dp))
-            GlassIconButton(Icons.Filled.Videocam, { AppState.go(Screen.Call(threadId, true)) }, 38.dp, 18.dp)
+            GlassIconButton(Icons.Filled.Videocam, size = 38.dp, iconSize = 18.dp, onClick = { AppState.go(Screen.Call(threadId, true)) })
             Spacer(Modifier.width(8.dp))
-            GlassIconButton(Icons.Filled.MoreHoriz, { ChatSheets.more(thread, person) }, 38.dp, 18.dp)
+            GlassIconButton(Icons.Filled.MoreHoriz, size = 38.dp, iconSize = 18.dp, onClick = { ChatSheets.more(thread, person) })
         }
         // messages
         val listState = rememberLazyListState()
@@ -298,9 +299,9 @@ fun ChatScreen(threadId: String) {
                 Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                GlassIconButton(Icons.Filled.Close, {
+                GlassIconButton(Icons.Filled.Close, onClick = {
                     recorder.stop(false); recording = false
-                }, 42.dp, 18.dp)
+                })
                 Spacer(Modifier.width(8.dp))
                 RecordingTimer(recSecs)
                 Spacer(Modifier.weight(1f))
@@ -315,7 +316,7 @@ fun ChatScreen(threadId: String) {
                 Modifier.fillMaxWidth().padding(horizontal = 12.dp).padding(bottom = 14.dp, top = 10.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                GlassIconButton(Icons.Filled.Image, { pickImage.launch("image/*") }, 42.dp, 20.dp)
+                GlassIconButton(Icons.Filled.Image, onClick = { ChatSession.expectExternalActivity = true; pickImage.launch("image/*") })
                 Spacer(Modifier.width(8.dp))
                 Row(
                     Modifier.weight(1f).height(46.dp)

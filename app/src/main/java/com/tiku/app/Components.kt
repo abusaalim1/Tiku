@@ -1,7 +1,8 @@
 package com.tiku.app
 
 import android.graphics.Bitmap
-import androidx.compose.animation.AnimatedVisibilityimport androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -74,7 +75,7 @@ fun AvatarBox(
 
 /** .ib icon button: 42dp circle, card bg, hairline border. */
 @Composable
-fun GlassIconButton(icon: ImageVector, onClick: () -> Unit, size: Dp = 42.dp, iconSize: Dp = 20.dp, label: String? = null) {
+fun GlassIconButton(icon: ImageVector, size: Dp = 42.dp, iconSize: Dp = 20.dp, label: String? = null, onClick: () -> Unit) {
     val interaction = remember { MutableInteractionSource() }
     Box(
         modifier = Modifier.size(size)
@@ -90,7 +91,7 @@ fun GlassIconButton(icon: ImageVector, onClick: () -> Unit, size: Dp = 42.dp, ic
 
 /** .pri primary button: 54dp tall, radius 18, ink bg, 600 weight. */
 @Composable
-fun PrimaryButton(text: String, onClick: () -> Unit, enabled: Boolean = true, modifier: Modifier = Modifier) {
+fun PrimaryButton(text: String, enabled: Boolean = true, modifier: Modifier = Modifier, onClick: () -> Unit) {
     val scale by animateFloatAsState(if (enabled) 1f else 1f, tween(300, easing = TikuEase), label = "pri")
     Box(
         modifier = modifier

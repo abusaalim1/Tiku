@@ -30,7 +30,7 @@ object MediaStore {
     suspend fun upload(db: FirebaseFirestore, chatId: String, msgId: String, ciphertext: ByteArray): Int {
         val chunksRef = db.collection(Schema.Chats.COLL).document(chatId)
             .collection(Schema.Chats.MESSAGES).document(msgId)
-            .collection(Schema.Messages.CHUNKS)
+            .collection("chunks")
         val count = (ciphertext.size + CHUNK_BYTES - 1) / CHUNK_BYTES
         var batch = db.batch()
         var inBatch = 0
@@ -48,7 +48,7 @@ object MediaStore {
     suspend fun download(db: FirebaseFirestore, chatId: String, msgId: String, chunkCount: Int): ByteArray {
         val snap = db.collection(Schema.Chats.COLL).document(chatId)
             .collection(Schema.Chats.MESSAGES).document(msgId)
-            .collection(Schema.Messages.CHUNKS)
+            .collection("chunks")
             .orderBy(com.google.firebase.firestore.FieldPath.documentId(), Query.Direction.ASCENDING)
             .get().await()
         val out = ByteArrayOutputStream()

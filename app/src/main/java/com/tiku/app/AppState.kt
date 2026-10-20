@@ -16,12 +16,22 @@ import kotlinx.coroutines.launch
 
 /** Screens, mirroring the prototype's sections. Chat/Call/Story overlay Home. */
 sealed interface Screen {
+    // ---- study facade (default surface — what the APK opens to) ----
+    data object Facade : Screen
+    data class StudySubject(val name: String) : Screen
+    data class StudyChapter(val subject: String, val index: Int) : Screen
+    data object StudyNotes : Screen
+    data object StudyTimer : Screen
+    data object StudyRevision : Screen
+    data object StudyFormulas : Screen
+    /** Password gate behind the facade's "Tik" study-tool. */
+    data object TikGate : Screen
+    // ---- ChatRoot (hidden behind the gate) ----
     data object Welcome : Screen
     data object Password : Screen
     /** Returning user on a new device: enter the backup password to restore the key. */
     data object Restore : Screen
     data object ProfileSetup : Screen
-    data object Locked : Screen
     data object Home : Screen
     data class Chat(val threadId: String) : Screen
     data class Call(val threadId: String, val video: Boolean) : Screen
@@ -80,6 +90,24 @@ object AppState {
     var story by mutableStateOf<StoryContent?>(null)
 
     fun go(s: Screen) { screen = s }
+
+    /** True while the next navigation must snap with no transition (quick exit / re-lock). */
+    var instantNav by mutableStateOf(false)
+    fun instantGo(s: Screen) { instantNav = true; screen = s }
+
+    fun isChatRoot(dest: Screen): Boolean = when (dest) {
+        is Screen.Welcome, is Screen.Password, is Screen.Restore, is Screen.ProfileSetup,
+        is Screen.TikGate, is Screen.Home, is Screen.Chat, is Screen.Call, is Screen.Story -> true
+        else -> false
+    }
+
+    /** True for any study-facade destination (the study surface; never gated). */
+    fun isFacade(dest: Screen): Boolean = when (dest) {
+        is Screen.Facade, is Screen.StudySubject, is Screen.StudyChapter,
+        is Screen.StudyNotes, is Screen.StudyTimer, is Screen.StudyRevision,
+        is Screen.StudyFormulas -> true
+        else -> false
+    }
 
     /** Simulated <-> real repository facade (see Repository.kt). */
     lateinit var repo: ChatRepo

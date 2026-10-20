@@ -9,6 +9,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -44,7 +45,7 @@ import kotlinx.coroutines.launch
 
 /** .form scaffold: 56dp top padding, 24dp sides, h2 serif title + muted sub. */
 @Composable
-fun FormScaffold(title: String, sub: String, content: @Composable Column.() -> Unit) {
+fun FormScaffold(title: String, sub: String, content: @Composable ColumnScope.() -> Unit) {
     Column(Modifier.fillMaxSize().padding(start = 24.dp, end = 24.dp, top = 56.dp, bottom = 24.dp)) {
         SerifTitle(title, 42.sp)
         Spacer(Modifier.height(8.dp))
@@ -93,13 +94,14 @@ fun strengthOf(p: String): Int =
 
 @Composable
 fun CreatePasswordScreen() {
+    androidx.activity.compose.BackHandler { AppState.go(Screen.Facade) }
     val settings = tikuSettings().value
     var p1 by remember { mutableStateOf("") }
     var p2 by remember { mutableStateOf("") }
     val n = strengthOf(p1)
     val match = p2.isNotEmpty() && p1 == p2
     val ctx = LocalContext.current
-    FormScaffold("Create a password", "You’ll use it to unlock Tikuu on this phone.") {
+    FormScaffold("Lock your study journal", "Set a password only you know — your journal, notes and progress stay yours.") {
         PasswordField(p1, { p1 = it }, "Password")
         Spacer(Modifier.height(14.dp))
         Row(Modifier.fillMaxWidth()) {
@@ -129,20 +131,21 @@ fun CreatePasswordScreen() {
 
 @Composable
 fun RestorePasswordScreen() {
+    androidx.activity.compose.BackHandler { AppState.go(Screen.Facade) }
     var pw by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf("") }
     val scope = rememberCoroutineScope()
     val ctx = LocalContext.current
-    FormScaffold("Welcome back", "Enter the backup password you set on your other phone to restore your encrypted chats.") {
+    FormScaffold("Welcome back", "Enter your study-journal password to restore your journal on this phone.") {
         PasswordField(pw, { pw = it; error = "" }, "Backup password")
         Spacer(Modifier.height(6.dp))
         Text(
-            if (error.isNotEmpty()) error else "Without this password your backup can’t be recovered — not even by Tikuu.",
+            if (error.isNotEmpty()) error else "Without this password your journal can’t be restored here — nobody can, not even Tikuu.",
             fontSize = 13.sp, color = if (error.isNotEmpty()) TikuTokens.Red else TikuTokens.Muted, fontFamily = Manrope,
         )
         Spacer(Modifier.weight(1f))
-        PrimaryButton(if (busy) "Restoring…" else "Restore my chats", enabled = pw.isNotEmpty() && !busy, modifier = Modifier.fillMaxWidth()) {
+        PrimaryButton(if (busy) "Restoring…" else "Restore my journal", enabled = pw.isNotEmpty() && !busy, modifier = Modifier.fillMaxWidth()) {
             busy = true
             scope.launch {
                 val ok = FirebaseEngine.restoreFromBackup(ctx, pw)
@@ -155,7 +158,7 @@ fun RestorePasswordScreen() {
                     AppState.go(Screen.Home)
                 } else {
                     busy = false
-                    error = "Couldn’t unlock the backup. Wrong password — recovery is impossible without it."
+                    error = "Couldn’t open the journal. Wrong password — recovery is impossible without it."
                 }
             }
         }
@@ -163,26 +166,8 @@ fun RestorePasswordScreen() {
 }
 
 @Composable
-fun LockedScreen() {
-    var pw by remember { mutableStateOf("") }
-    var error by remember { mutableStateOf("") }
-    val ctx = LocalContext.current
-    FormScaffold("Locked", "Enter your password to open Tikuu.") {
-        PasswordField(pw, { pw = it; error = "" }, "Password")
-        Spacer(Modifier.height(6.dp))
-        Text(error, fontSize = 13.sp, color = TikuTokens.Red, fontFamily = Manrope)
-        Spacer(Modifier.weight(1f))
-        PrimaryButton("Unlock", enabled = pw.isNotEmpty(), modifier = Modifier.fillMaxWidth()) {
-            val hash = SettingsStore.passwordHash(ctx)
-            if (hash != null && Crypto.passwordVerify(pw, hash)) {
-                AppState.go(Screen.Home)
-            } else error = "Wrong password"
-        }
-    }
-}
-
-@Composable
 fun ProfileSetupScreen() {
+    androidx.activity.compose.BackHandler { AppState.go(Screen.Facade) }
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
     val settings = tikuSettings().value
@@ -214,7 +199,7 @@ fun ProfileSetupScreen() {
         }
     }
 
-    FormScaffold("Set up your profile", "Add a photo and pick a username.") {
+    FormScaffold("Set up your student profile", "Add a photo and pick your Study ID.") {
         // avatar picker: mint tile, + badge
         Box(Modifier.align(Alignment.CenterHorizontally)) {
             Box(
@@ -271,11 +256,15 @@ fun ProfileSetupScreen() {
         }
         Spacer(Modifier.height(6.dp))
         Text(hint, fontSize = 13.sp, color = if (available) settings.accent else TikuTokens.Muted, fontFamily = Manrope)
+        Spacer(Modifier.height(4.dp))
+        Text("Friends use your Study ID to share notes with you.", fontSize = 13.sp, color = TikuTokens.Muted, fontFamily = Manrope)
         Spacer(Modifier.weight(1f))
         PrimaryButton(if (busy) "Setting up…" else "Continue",
             enabled = available && !busy, modifier = Modifier.fillMaxWidth()) {
             AppState.myUsername = username
             if (Config.PREVIEW_UI_ONLY) {
+                ctx.getSharedPreferences("tiku_prefs", android.content.Context.MODE_PRIVATE)
+                    .edit().putBoolean("onboarded", true).apply()
                 AppState.go(Screen.Home)
                 AppState.toast("Welcome to Tikuu 🌿")
             } else {

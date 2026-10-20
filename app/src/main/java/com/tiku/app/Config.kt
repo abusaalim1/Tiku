@@ -2,8 +2,9 @@ package com.tiku.app
 
 object Config {
     /**
-     * false = REAL mode (this shipped build): Firebase Auth + Firestore + Storage
-     * with the E2EE engine live. Real mode starts EMPTY — new users see the
+     * false = REAL mode (this shipped build): Firebase Auth + Firestore
+     * with the E2EE engine live (Firebase Storage is NOT used — media lives as
+     * Firestore chunks). Real mode starts EMPTY — new users see the
      * design's "Search a username to start a chat" empty state.
      * true = preview/demo mode: every screen runs against an in-memory store
      * seeded with the prototype's sample data (UI testing only). Demo data is

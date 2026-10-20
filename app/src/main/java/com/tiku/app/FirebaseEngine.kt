@@ -1,15 +1,9 @@
 package com.tiku.app
 
 import android.app.Activity
-import android.app.NotificationChannel
-import android.app.NotificationManager
-import android.app.PendingIntent
 import android.content.Context
-import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
-import androidx.core.app.NotificationCompat
-import androidx.core.app.NotificationManagerCompat
 import androidx.credentials.CredentialManager
 import androidx.credentials.CustomCredential
 import androidx.credentials.GetCredentialRequest
@@ -48,7 +42,6 @@ import javax.crypto.SecretKey
  *   moments/{uid}/items/{itemId} {quote, ts}
  */
 object FirebaseEngine : ChatRepo {
-    const val NOTIF_CHANNEL = "tiku_msg"
     lateinit var appCtx: Context
 
     private val auth get() = FirebaseAuth.getInstance()
@@ -71,7 +64,8 @@ object FirebaseEngine : ChatRepo {
     fun chatIdFor(a: String, b: String) = listOf(a, b).sorted().joinToString("_")
 
     // ================= AUTH =================
-    suspend fun googleSignIn(activity: Activity): Result<Unit> = try {
+    suspend fun googleSignIn(activity: Activity): Result<Unit> {
+        return try {
         val nonce = UUID.randomUUID().toString()
         val option = GetSignInWithGoogleOption.Builder(Config.WEB_CLIENT_ID).setNonce(nonce).build()
         val request = GetCredentialRequest.Builder().addCredentialOption(option).build()
@@ -83,8 +77,9 @@ object FirebaseEngine : ChatRepo {
         val idToken = GoogleIdTokenCredential.createFrom(cred.data).idToken
         auth.signInWithCredential(GoogleAuthProvider.getCredential(idToken, null)).await()
         Result.success(Unit)
-    } catch (e: Exception) {
-        Result.failure(e)
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
     }
 
     suspend fun isReturningUser(): Boolean {
@@ -221,8 +216,6 @@ object FirebaseEngine : ChatRepo {
     // ================= LISTENERS =================
     private var threadsReg: ListenerRegistration? = null
     private var msgsReg: ListenerRegistration? = null
-    private val notifRegs = mutableListOf<ListenerRegistration>()
-    private val notifWatermark = mutableMapOf<String, Long>()
     private var readPrefs: android.content.SharedPreferences? = null
     private val openChatIds = mutableSetOf<String>()
 
@@ -255,74 +248,23 @@ object FirebaseEngine : ChatRepo {
                             pinned = existing?.pinned ?: false)
                     } ?: emptyList()
                     AppState.threads.value = list
-                    attachNotifListeners()
                 }
             }
-    }
-
-    private fun attachNotifListeners() {
-        notifRegs.forEach { it.remove() }; notifRegs.clear()
-        for (th in AppState.threads.value) {
-            val chatId = th.id
-            val reg = db.collection(Schema.Chats.COLL).document(chatId)
-                .collection(Schema.Chats.MESSAGES)
-                .orderBy("ts", Query.Direction.DESCENDING).limit(1)
-                .addSnapshotListener { snap, _ ->
-                    val doc = snap?.documents?.firstOrNull() ?: return@addSnapshotListener
-                    val sender = doc.getString("senderId") ?: return@addSnapshotListener
-                    if (sender == uid) return@addSnapshotListener
-                    val ts = doc.getTimestamp("ts")?.toDate()?.time ?: return@addSnapshotListener
-                    if (ts <= (notifWatermark[chatId] ?: lastRead(chatId))) return@addSnapshotListener
-                    notifWatermark[chatId] = ts
-                    if (AppState.screen is Screen.Chat && (AppState.screen as Screen.Chat).threadId == chatId) return@addSnapshotListener
-                    scope.launch { postIncoming(th, doc.id, sender) }
-                }
-            notifRegs.add(reg)
-        }
-    }
-
-    private suspend fun postIncoming(th: ChatThread, msgId: String, senderUid: String) {
-        val s = SettingsStore.state.value
-        val hour = Calendar.getInstance().get(Calendar.HOUR_OF_DAY)
-        if (s.toggles["qh"] == true && (hour >= 23 || hour < 7)) return // quiet hours
-        var body = "New message"
-        if (s.messagePreview) {
-            runCatching {
-                val doc = db.collection(Schema.Chats.COLL).document(th.id)
-                    .collection(Schema.Chats.MESSAGES).document(msgId).get().await()
-                val key = convKey(th.id, senderUid)
-                body = when (doc.getString("kind") ?: "text") {
-                    "image" -> "📷 Photo"
-                    "voice" -> "🎙 Voice message"
-                    else -> Crypto.decryptText(key, doc.getString("iv") ?: "", doc.getString("ct") ?: "")
-                }
-            }
-        }
-        val intent = Intent(appCtx, MainActivity::class.java)
-        val pi = PendingIntent.getActivity(appCtx, th.id.hashCode(), intent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
-        val builder = NotificationCompat.Builder(appCtx, NOTIF_CHANNEL)
-            .setSmallIcon(android.R.drawable.sym_action_chat)
-            .setContentTitle(th.person.name)
-            .setContentText(body)
-            .setContentIntent(pi)
-            .setAutoCancel(true)
-        if (s.sounds) builder.setDefaults(NotificationCompat.DEFAULT_SOUND)
-        if (s.vibration) builder.setDefaults(NotificationCompat.DEFAULT_VIBRATE)
-        @Suppress("MissingPermission")
-        NotificationManagerCompat.from(appCtx).notify(th.id.hashCode(), builder.build())
-    }
-
-    fun ensureChannel(ctx: Context) {
-        val nm = ctx.getSystemService(NotificationManager::class.java)
-        if (nm.getNotificationChannel(NOTIF_CHANNEL) == null) {
-            nm.createNotificationChannel(NotificationChannel(NOTIF_CHANNEL, "Messages",
-                NotificationManager.IMPORTANCE_HIGH).apply { description = "New Tikuu messages" })
-        }
     }
 
     fun stop() {
-        threadsReg?.remove(); msgsReg?.remove(); notifRegs.forEach { it.remove() }; notifRegs.clear()
+        threadsReg?.remove(); msgsReg?.remove()
+    }
+
+    /** INSTANT RE-LOCK: stop listeners, zeroize the private key + conversation keys in RAM,
+     *  drop all caches. After this the session is cryptographically dead. */
+    fun lock() {
+        stop()
+        threadsReg = null; msgsReg = null
+        runCatching { myPrivBytes?.fill(0) }
+        myPrivBytes = null
+        convKeyCache.clear(); profileCache.clear(); publicKeyCache.clear()
+        openChatIds.clear()
     }
 
     fun setPresence(online: Boolean) {

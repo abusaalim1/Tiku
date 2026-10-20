@@ -6,6 +6,8 @@ import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.ExitTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -17,11 +19,9 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -30,74 +30,50 @@ class TikuApp : Application() {
     override fun onCreate() {
         super.onCreate()
         SettingsStore.init(this)
-        FirebaseEngine.ensureChannel(this)
+        // NOTE: zero chat notifications by design — no channel is ever created for chat.
     }
 }
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        bootstrap()
+        // The APK always opens to the study facade; ChatRoot is reachable only via the gate.
+        AppState.repo = if (Config.PREVIEW_UI_ONLY) PreviewRepo else FirebaseEngine
+        StudyContent.load(this)
+        AppState.instantGo(Screen.Facade)
         setContent { TikuRoot(onGoogleClick = ::onGoogleClick) }
     }
 
     override fun onResume() {
         super.onResume()
-        if (!Config.PREVIEW_UI_ONLY && FirebaseEngine.signedIn && isOnboarded()) FirebaseEngine.setPresence(true)
-        applySecureFlag()
+        // presence reflects being INSIDE ChatRoot only — never the facade
+        if (!Config.PREVIEW_UI_ONLY && ChatSession.unlocked && FirebaseEngine.signedIn && isOnboarded()) {
+            FirebaseEngine.setPresence(true)
+        }
     }
 
     override fun onPause() {
         super.onPause()
-        if (!Config.PREVIEW_UI_ONLY && FirebaseEngine.signedIn) {
+        if (!Config.PREVIEW_UI_ONLY && ChatSession.unlocked && FirebaseEngine.signedIn) {
             FirebaseEngine.setPresence(false)
         }
     }
 
+    override fun onStop() {
+        super.onStop()
+        // INSTANT RE-LOCK ON EXIT: backgrounding drops the unlocked session entirely —
+        // keys zeroed, decrypted state dropped, facade restored, password required again.
+        if (isChangingConfigurations) return
+        if (ChatSession.expectExternalActivity) {
+            // photo pickers etc. launched from inside ChatRoot don't count as "exit"
+            ChatSession.expectExternalActivity = false
+            return
+        }
+        if (ChatSession.unlocked) ChatSession.lock(this)
+    }
+
     private fun isOnboarded(): Boolean =
         getSharedPreferences("tiku_prefs", MODE_PRIVATE).getBoolean("onboarded", false)
-
-    private fun applySecureFlag() {
-        val block = SettingsStore.state.value.toggles["bs"] == true
-        if (block) window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
-        else window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
-    }
-
-    /** Repo + data bootstrap, cold-start route. */
-    private fun bootstrap() {
-        if (Config.PREVIEW_UI_ONLY) {
-            AppState.repo = PreviewRepo
-            if (AppState.threads.value.isEmpty()) {
-                val seeded = PreviewStore.seedThreads()
-                AppState.threads.value = seeded
-                AppState.callLogs.value = PreviewStore.seedCallLogsFor(seeded)
-            }
-            AppState.go(Screen.Welcome)
-            return
-        }
-        AppState.repo = FirebaseEngine
-        FirebaseEngine.appCtx = applicationContext
-        if (!FirebaseEngine.signedIn) {
-            AppState.go(Screen.Welcome)
-            return
-        }
-        lifecycleScope.launch {
-            val onboarded = isOnboarded()
-            when {
-                onboarded && FirebaseEngine.loadLocalIdentity(this@MainActivity) -> {
-                    FirebaseEngine.start(this@MainActivity)
-                    FirebaseEngine.loadMyProfile()
-                    FirebaseEngine.refreshCallLogs()
-                    FirebaseEngine.setPresence(true)
-                    if (SettingsStore.state.value.appLock && SettingsStore.passwordHash(this@MainActivity) != null) {
-                        AppState.go(Screen.Locked)
-                    } else AppState.go(Screen.Home)
-                }
-                FirebaseEngine.isReturningUser() -> AppState.go(Screen.Restore)
-                else -> AppState.go(Screen.Password)
-            }
-        }
-    }
 
     /** Welcome Google button: 1.1s spinner in preview; real Credential Manager + Firebase otherwise. */
     private fun onGoogleClick() {
@@ -134,39 +110,42 @@ fun TikuRoot(onGoogleClick: () -> Unit) {
     val bgBrush = Brush.verticalGradient(listOf(TikuTokens.BgTop, TikuTokens.BgBottom))
     val screen = AppState.screen
     Box(Modifier.fillMaxSize().background(bgBrush)) {
-        val target = when (screen) {
-            is Screen.Welcome, is Screen.Password, is Screen.Restore,
-            is Screen.ProfileSetup, is Screen.Locked -> "gate"
-            else -> "main"
+        val kind = when (screen) {
+            is Screen.Welcome, is Screen.Password, is Screen.Restore, is Screen.ProfileSetup -> "gate"
+            is Screen.Facade, is Screen.StudySubject, is Screen.StudyChapter, is Screen.StudyNotes,
+            is Screen.StudyTimer, is Screen.StudyRevision, is Screen.StudyFormulas, is Screen.TikGate -> "facade"
+            else -> "home"
         }
         AnimatedContent(
-            targetState = target,
+            targetState = kind,
             transitionSpec = {
-                (slideInHorizontally(tween(550, easing = TikuEase)) { it / 3 } + fadeIn(tween(450, easing = TikuEase)))
+                if (AppState.instantNav) EnterTransition.None togetherWith ExitTransition.None
+                else (slideInHorizontally(tween(550, easing = TikuEase)) { it / 3 } + fadeIn(tween(450, easing = TikuEase)))
                     .togetherWith(slideOutHorizontally(tween(550, easing = TikuEase)) { -it / 4 } + fadeOut(tween(300, easing = TikuEase)))
             },
             label = "root",
-        ) { kind ->
-            if (kind == "gate") {
-                when (screen) {
+        ) { k ->
+            when (k) {
+                "gate" -> when (screen) {
                     is Screen.Welcome -> WelcomeScreen(onGoogleClick)
                     is Screen.Password -> CreatePasswordScreen()
                     is Screen.Restore -> RestorePasswordScreen()
                     is Screen.ProfileSetup -> ProfileSetupScreen()
-                    is Screen.Locked -> LockedScreen()
                     else -> WelcomeScreen(onGoogleClick)
                 }
-            } else {
-                Box(Modifier.fillMaxSize()) {
-                    HomeScreen()
-                    when (screen) {
-                        is Screen.Chat -> ChatScreen(screen.threadId)
-                        is Screen.Call -> {
-                            val s = screen as? Screen.Call ?: return@Box
-                            CallScreen(s.threadId, s.video)
+                "facade" -> FacadeRouter()
+                else -> {
+                    Box(Modifier.fillMaxSize()) {
+                        HomeScreen()
+                        when (screen) {
+                            is Screen.Chat -> ChatScreen(screen.threadId)
+                            is Screen.Call -> {
+                                val s = screen as? Screen.Call ?: return@Box
+                                CallScreen(s.threadId, s.video)
+                            }
+                            is Screen.Story -> StoryScreen()
+                            else -> {}
                         }
-                        is Screen.Story -> StoryScreen()
-                        else -> {}
                     }
                 }
             }
@@ -174,7 +153,43 @@ fun TikuRoot(onGoogleClick: () -> Unit) {
         DesignToast()
         BottomSheetHost()
     }
-    // block-screenshots toggle applies FLAG_SECURE live
-    val settings by SettingsStore.state.collectAsState()
-    LaunchedEffect(settings.toggles["bs"]) { /* handled in MainActivity.onResume / below hook */ }
+
+    // FLAG_SECURE hook: set while ANY ChatRoot destination is visible (blocks screenshots +
+    // the Android recents preview of gated content); cleared on the study facade.
+    val activity = LocalContext.current as? ComponentActivity
+    LaunchedEffect(screen) {
+        AppState.instantNav = false
+        val w = activity?.window
+        if (AppState.isChatRoot(screen)) {
+            w?.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
+        } else {
+            w?.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
+        }
+    }
+}
+
+/** Facade sub-navigation: fade transitions; instant snaps when re-locking. */
+@Composable
+fun FacadeRouter() {
+    val screen = AppState.screen
+    AnimatedContent(
+        targetState = screen,
+        transitionSpec = {
+            if (AppState.instantNav) EnterTransition.None togetherWith ExitTransition.None
+            else fadeIn(tween(280, easing = TikuEase)).togetherWith(fadeOut(tween(180, easing = TikuEase)))
+        },
+        label = "facade",
+    ) { s ->
+        when (s) {
+            is Screen.Facade -> FacadeHome()
+            is Screen.StudySubject -> SubjectScreen(s.name)
+            is Screen.StudyChapter -> ChapterScreen(s.subject, s.index)
+            is Screen.StudyNotes -> NotesScreen()
+            is Screen.StudyTimer -> TimerScreen()
+            is Screen.StudyRevision -> RevisionScreen()
+            is Screen.StudyFormulas -> FormulasScreen()
+            is Screen.TikGate -> TikGateScreen()
+            else -> FacadeHome()
+        }
+    }
 }

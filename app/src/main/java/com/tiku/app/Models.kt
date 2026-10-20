@@ -53,7 +53,7 @@ data class CallLog(
     val person: Person,
     val kind: String,      // "voice" | "video"
     val direction: String, // "outgoing" | "missed"
-    val when: String,
+    val dateLabel: String,
     val tsMs: Long = 0L,   // for sorting (real mode)
     val threadId: String = "",
 )
@@ -93,7 +93,7 @@ object Schema {
             /** Media kinds (image/voice): ciphertext lives in the chunks subcollection;
               * iv on the doc describes the whole-blob AES-GCM encryption. */
             val mediaChunks: Int = 0,
-        ) { const val CHUNKS = "chunks" }
+        )
     }
     object Moments {
         const val COLL = "moments"

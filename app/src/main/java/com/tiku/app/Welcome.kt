@@ -52,15 +52,16 @@ import kotlinx.coroutines.delay
 import kotlin.random.Random
 
 private val Scenes = listOf(
-    Triple("Private by design", "Messages lock on your phone before they leave.", 0),
-    Triple("End-to-end encrypted", "Not even Tikuu can read your chats.", 1),
-    Triple("Calls, photos, voice", "Everything you send stays between you and them.", 2),
+    Triple("Physics MCQs, fresh every day", "Class 11 • NCERT — daily practice, notes and formulas in one quiet place.", 0),
+    Triple("Chemistry important questions", "Chapter-wise key points, written for quick revision.", 1),
+    Triple("Notes • Formulas • Diagrams", "Physics • Chemistry • Biology • Maths — your Class 11 companion.", 2),
 )
-private const val PLAIN_LINE = "Aaj shaam milte hain? ✨"
+private const val PLAIN_LINE = "Physics • Chapter 4 — key points 📘"
 private const val RND_CHARS = "▓▒░#@%&*ø§¤"
 
 @Composable
 fun WelcomeScreen(onGoogleClick: () -> Unit) {
+    androidx.activity.compose.BackHandler { AppState.go(Screen.Facade) }
     val settings = tikuSettings().value
     var sceneIdx by remember { mutableStateOf(0) }
     var visible by remember { mutableStateOf(true) }
@@ -142,7 +143,7 @@ fun WelcomeScreen(onGoogleClick: () -> Unit) {
                             .background(settings.gradBrush),
                         contentAlignment = Alignment.Center,
                     ) {
-                        TikuLockIcon(Modifier.size(38.dp), tint = Color.White)
+                        TikuBookIcon(Modifier.size(38.dp), tint = Color.White)
                     }
                 }
                 Spacer(Modifier.height(26.dp))
@@ -158,7 +159,7 @@ fun WelcomeScreen(onGoogleClick: () -> Unit) {
                         when (Scenes[sceneIdx].third) {
                             0 -> PLAIN_LINE
                             1 -> cipherText
-                            else -> "🔒 photo · 🎙 voice · 📞 call"
+                            else -> "📘 notes · ∫ formulas · △ diagrams"
                         },
                         fontFamily = SerifItalic, fontSize = 20.sp, color = TikuTokens.Ink,
                     )
@@ -212,7 +213,7 @@ fun WelcomeScreen(onGoogleClick: () -> Unit) {
                     }
                 }
                 Spacer(Modifier.height(12.dp))
-                Text("Your chats are end-to-end encrypted.", fontSize = 12.sp, color = TikuTokens.Muted, fontFamily = Manrope)
+                Text("Continue with Google to sync your notes & progress on every device.", fontSize = 12.sp, color = TikuTokens.Muted, fontFamily = Manrope)
             }
         }
     }

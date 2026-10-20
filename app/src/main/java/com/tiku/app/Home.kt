@@ -5,6 +5,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -42,6 +43,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalContext
@@ -53,13 +55,16 @@ import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.launch
 
 private val TabsIcons = listOf(
-    androidx.compose.material.icons.filled.ChatBubbleOutline,
+    androidx.compose.material.icons.outlined.ChatBubbleOutline,
     Icons.Filled.Call,
-    androidx.compose.material.icons.filled.PersonOutline,
+    androidx.compose.material.icons.outlined.PersonOutline,
 )
 
 @Composable
 fun HomeScreen() {
+    val ctx = LocalContext.current
+    // QUICK EXIT (lock rule): Back at ChatRoot home re-locks instantly to the facade.
+    androidx.activity.compose.BackHandler { ChatSession.quickExit(ctx) }
     val settings = tikuSettings().value
     val tab = AppState.homeTab
     val title = when (tab) { HomeTab.CHATS -> "Chats"; HomeTab.CALLS -> "Calls"; HomeTab.ME -> "Me" }
@@ -71,7 +76,13 @@ fun HomeScreen() {
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween,
             ) {
-                SerifTitle(title, 30.sp)
+                Box(
+                    Modifier.combinedClickable(
+                        interactionSource = remember { MutableInteractionSource() }, indication = null,
+                        onClick = {},
+                        onLongClick = { ChatSession.quickExit(ctx) },
+                    ),
+                ) { SerifTitle(title, 30.sp) }
                 Row {
                     GlassIconButton(Icons.Filled.DarkMode, label = "Theme") {
                         AppState.toast("Light mode is Tikuu’s home 🌿")
@@ -257,12 +268,12 @@ fun CallsPane() {
                         log.kind.replaceFirstChar { it.uppercase() },
                         fontSize = 14.sp, color = TikuTokens.Muted, fontFamily = Manrope)
                 }
-                GlassIconButton(Icons.Filled.Call, label = "Call") {
+                GlassIconButton(Icons.Filled.Call, label = "Call", onClick = {
                     val tid = log.threadId.ifEmpty {
                         AppState.threads.value.firstOrNull { it.person.uid == log.person.uid }?.id ?: ""
                     }
                     if (tid.isNotEmpty()) AppState.go(Screen.Call(tid, log.kind == "video"))
-                }
+                })
             }
         }
     }

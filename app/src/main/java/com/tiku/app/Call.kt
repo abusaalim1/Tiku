@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
@@ -50,6 +51,7 @@ import kotlinx.coroutines.delay
  */
 @Composable
 fun CallScreen(threadId: String, video: Boolean) {
+    androidx.activity.compose.BackHandler { AppState.go(Screen.Home) }
     val thread = AppState.threads.value.firstOrNull { it.id == threadId }
     val person = thread?.person ?: Person(name = "Unknown")
     var secs by remember { mutableIntStateOf(-3) }
@@ -57,8 +59,9 @@ fun CallScreen(threadId: String, video: Boolean) {
 
     LaunchedEffect(threadId) {
         AppState.repo.logCall(threadId, video)
-        launch { delay(1200); AppState.toast("Calls are coming in the next round 📞") }
-        delay(2800)
+        delay(1200)
+        AppState.toast("Calls are coming in the next round 📞")
+        delay(1600)
         AppState.go(Screen.Chat(threadId))
     }
     LaunchedEffect(Unit) {
@@ -139,6 +142,7 @@ fun CallScreen(threadId: String, video: Boolean) {
  */
 @Composable
 fun StoryScreen() {
+    androidx.activity.compose.BackHandler { AppState.go(Screen.Home) }
     val content = AppState.story
     if (content == null) { LaunchedEffect(Unit) { AppState.go(Screen.Home) }; return }
 
