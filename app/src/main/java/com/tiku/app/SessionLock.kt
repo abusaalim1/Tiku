@@ -98,9 +98,17 @@ object OwnerPrefs {
         prefs?.edit()?.putBoolean("app_lock", on)?.apply()
     }
 
-    fun setGateOnce(on: Boolean) {
-        gateOnce = on
-        prefs?.edit()?.putBoolean("gate_once", on)?.apply()
+    // NOTE: no setGateOnce(Boolean) here — the delegated property's own JVM
+    // setter already owns that name (platform declaration clash); the
+    // one-shot is armed/consumed through this pair instead.
+    fun requestGateOnce() {
+        gateOnce = true
+        prefs?.edit()?.putBoolean("gate_once", true)?.apply()
+    }
+
+    fun consumeGateOnce() {
+        gateOnce = false
+        prefs?.edit()?.putBoolean("gate_once", false)?.apply()
     }
 }
 
@@ -240,7 +248,7 @@ object ChatSession {
         // ROUND 9: reaching here means an unlock succeeded (gate password,
         // restore password, or the owner's gate-skip) — consume any pending
         // one-shot gate left by an explicit "Lock now".
-        OwnerPrefs.setGateOnce(false)
+        OwnerPrefs.consumeGateOnce()
         val onboarded = c.getSharedPreferences("tiku_prefs", Context.MODE_PRIVATE)
             .getBoolean("onboarded", false)
         // from here on the user is inside the gated flow — any exit must re-lock

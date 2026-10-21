@@ -61,7 +61,7 @@ class ScreenshotsTest {
         OwnerState.previewOverride = null
         OwnerPrefs.setNotify(false)
         OwnerPrefs.setAppLock(true)
-        OwnerPrefs.setGateOnce(false)
+        OwnerPrefs.consumeGateOnce()
         StudyContent.load(ctx)
         AppState.repo = PreviewRepo
         val seeded = PreviewStore.seedThreads()

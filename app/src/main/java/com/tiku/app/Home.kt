@@ -526,7 +526,7 @@ fun OwnerSection() {
                 .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {
                     // One-shot: even with App lock OFF, the NEXT entry must
                     // pass the password gate (unlockFlow consumes the flag).
-                    OwnerPrefs.setGateOnce(true)
+                    OwnerPrefs.requestGateOnce()
                     ChatSession.lock(ctx)
                 },
             verticalAlignment = Alignment.CenterVertically,
