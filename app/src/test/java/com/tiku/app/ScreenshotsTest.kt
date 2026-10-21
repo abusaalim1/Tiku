@@ -635,7 +635,10 @@ class ScreenshotsTest {
         OwnerPrefs.setNotify(true)
         AppState.homeTab = HomeTab.ME
         frame { HomeScreen() }
-        composeRule.onRoot().performTouchInput { swipeUp() }
+        // NO scroll: the Owner group sits directly under the profile card and
+        // fits in the first viewport — a root swipeUp flings the list to the
+        // settings groups and DISPOSES this item (the round-7 lesson, learned
+        // again: shot37 v1 swiped and the title left the semantics tree).
         composeRule.waitForIdle()
         org.junit.Assert.assertTrue(
             "owner Me pane must carry the Owner section",
@@ -659,7 +662,7 @@ class ScreenshotsTest {
         OwnerState.previewOverride = false
         AppState.homeTab = HomeTab.ME
         frame { HomeScreen() }
-        composeRule.onRoot().performTouchInput { swipeUp() }
+        // Same unswiped first viewport as shot37 — the honest pair.
         composeRule.waitForIdle()
         org.junit.Assert.assertTrue(
             "non-owner Me pane must not contain an Owner section",
