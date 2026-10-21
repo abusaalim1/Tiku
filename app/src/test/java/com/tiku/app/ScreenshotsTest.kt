@@ -18,6 +18,7 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.longClick
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollToIndex
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.swipeDown
@@ -606,21 +607,14 @@ class ScreenshotsTest {
         }
         frame { ChatScreen(id) }
         composeRule.waitForIdle()
-        // the message list is REVERSED (round 8): older messages live toward
-        // higher item indices, reached by dragging DOWN — the inverse of a
-        // normal list. Drive it until the pill actually shows.
-        var pillShown = false
-        repeat(8) {
-            if (!pillShown) {
-                composeRule.onRoot().performTouchInput { swipeDown() }
-                composeRule.waitForIdle()
-                pillShown = composeRule.onAllNodesWithTag("jump_to_latest")
-                    .fetchSemanticsNodes().isNotEmpty()
-            }
-        }
+        // Drive the scroll through the list's own semantics action (gestures
+        // against the reversed list proved unreliable in this harness): jump
+        // deep into history — the pill must appear once we're off the bottom.
+        composeRule.onNodeWithTag("message_list").performScrollToIndex(24)
+        composeRule.waitForIdle()
         org.junit.Assert.assertTrue(
             "jump-to-latest pill must appear when scrolled up",
-            pillShown,
+            composeRule.onAllNodesWithTag("jump_to_latest").fetchSemanticsNodes().isNotEmpty(),
         )
         shot("36-jump-to-bottom.png")
     }

@@ -198,10 +198,21 @@ private fun ChatContent(thread: ChatThread) {
 
     val person = thread.person
 
+    // ROUND 8 (item A): presence is freshness-aware (see
+    // FirebaseEngine.presenceText). The profile listener pushes updates
+    // live; this 30s tick additionally re-evaluates the freshness window so
+    // a peer whose app died (no more writes, ever) flips from "online" to
+    // their exact last seen without waiting for the next snapshot.
+    var presenceTick by remember { mutableIntStateOf(0) }
+    LaunchedEffect(threadId) {
+        while (true) { delay(30_000); presenceTick++ }
+    }
     val statusText = when {
         peerTyping -> "typing…"
-        person.online -> "online"
-        !Config.PREVIEW_UI_ONLY -> FirebaseEngine.fmtLastSeen(person.lastSeenMs).ifEmpty { "offline" }
+        !Config.PREVIEW_UI_ONLY -> {
+            @Suppress("UNUSED_EXPRESSION") presenceTick // read: re-evaluate per tick
+            FirebaseEngine.presenceText(person)
+        }
         else -> "online"
     }
 
@@ -329,7 +340,7 @@ private fun ChatContent(thread: ChatThread) {
             lastVisible.seenByPeer
         Box(Modifier.weight(1f).fillMaxWidth()) {
         LazyColumn(
-            Modifier.fillMaxSize().padding(horizontal = 14.dp),
+            Modifier.fillMaxSize().padding(horizontal = 14.dp).testTag("message_list"),
             state = listState,
             reverseLayout = true,
             contentPadding = androidx.compose.foundation.layout.PaddingValues(vertical = 16.dp),
@@ -800,6 +811,11 @@ fun MessageBubble(
     var swipeArmed by remember { mutableStateOf(false) }
     val swipeProgress = (abs(dragX) / thresholdPx).coerceIn(0f, 1f)
 
+    // The bubble's pieces are wrapped in ONE Column: inside a reverseLayout
+    // LazyColumn item, multiple top-level children stack from the item's
+    // bottom edge (they rendered flipped — caption under the bubble). A
+    // Column always stacks in emission order, top-down.
+    Column {
     // IG quote caption (item 2): sits just above a reply bubble.
     if (m.replyQuote != null) {
         Row(
@@ -977,6 +993,7 @@ fun MessageBubble(
         }
     }
     Spacer(Modifier.height(2.dp))
+    } // close bubble Column
 }
 
 @Composable

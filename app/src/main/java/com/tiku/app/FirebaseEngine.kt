@@ -562,8 +562,30 @@ object FirebaseEngine : ChatRepo {
     private var pinPrefs: android.content.SharedPreferences? = null
 
     fun lastRead(threadId: String): Long = readPrefs?.getLong("read_$threadId", 0L) ?: 0L
+
+    /**
+     * ROUND 8 (item B1) — the read anchor is the NEWEST SERVER TIMESTAMP
+     * actually rendered, never the device wall clock. Message `ts` is a
+     * Firestore serverTimestamp, so comparing it against
+     * System.currentTimeMillis() mixed two clocks: a phone running behind
+     * the server left already-read messages "unread" forever (badge never
+     * cleared); a phone running ahead swallowed brand-new messages (badge
+     * never counted). Anchoring to the newest server-ts message seen makes
+     * `tsMs > lastRead` an exact same-clock comparison. Optimistic locals
+     * are excluded (their tsMs IS device time) — only SENT (server-backed)
+     * messages qualify. Monotonic: never decreases; written with commit()
+     * only when it advances, so a kill right after reading can't resurrect
+     * the badge on the next launch.
+     */
     fun markRead(threadId: String) {
-        readPrefs?.edit()?.putLong("read_$threadId", System.currentTimeMillis())?.apply()
+        val newest = AppState.thread(threadId)?.messages
+            ?.filter { it.status == SendStatus.SENT }
+            ?.maxOfOrNull { it.tsMs } ?: 0L
+        val prev = lastRead(threadId)
+        val anchor = maxOf(prev, newest)
+        if (anchor > prev) {
+            readPrefs?.edit()?.putLong("read_$threadId", anchor)?.commit()
+        }
     }
 
     fun start(ctx: Context) {
@@ -923,11 +945,42 @@ object FirebaseEngine : ChatRepo {
         }
     }
 
+    // ROUND 8 (item A): presence heartbeat — while I'm online, my lastSeen
+    // stamp is refreshed every 60s so a crash/kill (which never gets to
+    // write online=false) SELF-EXPIRES on the peer's screen within ~3
+    // minutes (see presenceText) instead of showing "online" forever with a
+    // days-old last seen next to it.
+    @Volatile private var presenceOnline = false
+    private var presenceJob: kotlinx.coroutines.Job? = null
+
     fun setPresence(online: Boolean) {
         if (uid.isEmpty()) return
-        val updates = mutableMapOf<String, Any>("online" to online)
-        if (!online && SettingsStore.state.value.lastSeen) updates["lastSeen"] = FieldValue.serverTimestamp()
-        runCatching { db.collection(Schema.Users.COLL).document(uid).update(updates) }
+        presenceOnline = online
+        presenceJob?.cancel(); presenceJob = null
+        val lsOn = SettingsStore.state.value.lastSeen
+        val ref = db.collection(Schema.Users.COLL).document(uid)
+        if (online) {
+            val updates = mutableMapOf<String, Any>("online" to true)
+            // stamp immediately too — "last active" starts moving from the
+            // first second, not the first heartbeat.
+            if (lsOn) updates["lastSeen"] = FieldValue.serverTimestamp()
+            runCatching { ref.update(updates) }
+            if (lsOn) {
+                presenceJob = scope.launch {
+                    while (presenceOnline) {
+                        delay(60_000)
+                        if (presenceOnline) runCatching {
+                            ref.update("lastSeen", FieldValue.serverTimestamp())
+                        }
+                    }
+                }
+            }
+        } else {
+            val updates = mutableMapOf<String, Any>("online" to false)
+            if (lsOn) updates["lastSeen"] = FieldValue.serverTimestamp()
+            else updates["lastSeen"] = FieldValue.delete() // sharing off: keep no stamp at all
+            runCatching { ref.update(updates) }
+        }
     }
 
     // ================= CHATREPO =================
@@ -1056,7 +1109,9 @@ object FirebaseEngine : ChatRepo {
         val older = hasOlderCache[id] ?: false
         AppState.threads.value = AppState.threads.value.map { t ->
             if (t.id == id) t.copy(messages = msgs.toMutableList(), hasOlder = older,
-                unread = if (openChatIds.contains(id)) 0 else msgs.count { !it.me && it.tsMs > lr })
+                // ROUND 8 (item B1): call events never count as unread —
+                // matches the preview-path calc exactly.
+                unread = if (openChatIds.contains(id)) 0 else msgs.count { !it.me && it.kind != MsgKind.CALL && it.tsMs > lr })
             else t
         }
         if (openChatIds.contains(id)) markRead(id)
@@ -1503,7 +1558,48 @@ object FirebaseEngine : ChatRepo {
         }
     }
 
-    fun fmtLastSeen(tsMs: Long): String = if (tsMs <= 0) "" else "last seen ${fmtTime(tsMs)}"
+    /**
+     * ROUND 8 (item A) — IG-form last seen: "last seen today at 7:41 PM" /
+     * "yesterday at …" / "Oct 12 at …" (+"yyyy" across years). Buckets are
+     * computed on DEVICE-LOCAL epoch days (the stored value is an absolute
+     * epoch from the server timestamp; Calendar/SimpleDateFormat render it
+     * in the device's own timezone). The old one-liner reused fmtTime, which
+     * printed a bare "h:mm" (no AM/PM) for today and a bare date with NO
+     * time for anything older — the "count sahi nhi hota" the owner meant.
+     */
+    fun fmtLastSeen(tsMs: Long): String {
+        if (tsMs <= 0) return ""
+        fun epochDay(ms: Long): Long {
+            val c = Calendar.getInstance().apply { timeInMillis = ms }
+            val local = ms + c.get(Calendar.ZONE_OFFSET) + c.get(Calendar.DST_OFFSET)
+            return Math.floorDiv(local, 86_400_000L)
+        }
+        val time = SimpleDateFormat("h:mm a", Locale.getDefault()).format(Date(tsMs))
+        val dayDiff = epochDay(System.currentTimeMillis()) - epochDay(tsMs)
+        val sameYear = Calendar.getInstance().apply { timeInMillis = tsMs }.get(Calendar.YEAR) ==
+            Calendar.getInstance().get(Calendar.YEAR)
+        return when {
+            dayDiff == 0L -> "last seen today at $time"
+            dayDiff == 1L -> "last seen yesterday at $time"
+            sameYear -> "last seen ${SimpleDateFormat("MMM d", Locale.getDefault()).format(Date(tsMs))} at $time"
+            else -> "last seen ${SimpleDateFormat("MMM d, yyyy", Locale.getDefault()).format(Date(tsMs))} at $time"
+        }
+    }
+
+    /**
+     * ROUND 8 (item A) — the peer's presence line, freshness-aware: "online"
+     * is honoured only while the peer's heartbeat stamp is fresh (≤3 min) or
+     * unmeasurable (they share no lastSeen — privacy toggle off; then the
+     * online flag is taken at face value). A STALE online flag (app crashed
+     * / killed before it could write offline) falls through to the exact
+     * last-seen instead of showing "online" forever.
+     */
+    fun presenceText(p: Person): String = when {
+        p.online && (p.lastSeenMs == 0L ||
+            System.currentTimeMillis() - p.lastSeenMs <= 180_000L) -> "online"
+        p.lastSeenMs > 0L -> fmtLastSeen(p.lastSeenMs)
+        else -> "offline"
+    }
 
     /** Re-wrap target for password change (Change password row in Settings). */
     suspend fun updateBackupBlob(blob: Map<String, String>) {
