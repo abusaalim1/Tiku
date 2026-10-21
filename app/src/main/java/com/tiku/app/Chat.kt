@@ -410,8 +410,10 @@ private fun ChatContent(thread: ChatThread) {
             }
         }
         // ROUND 8: IG-style jump-to-latest pill — appears when scrolled up;
-        // counts messages that arrived while reading history.
-        AnimatedVisibility(
+        // counts messages that arrived while reading history. (Fully
+        // qualified: the bare name resolves to ColumnScope.AnimatedVisibility
+        // from the enclosing Column and cannot be called inside this Box.)
+        androidx.compose.animation.AnimatedVisibility(
             visible = !nearBottom,
             enter = fadeIn(tween(200, easing = TikuEase)) + scaleIn(initialScale = 0.85f, animationSpec = tween(200, easing = TikuEase)),
             exit = fadeOut(tween(150)) + scaleOut(targetScale = 0.85f, animationSpec = tween(150)),
