@@ -20,6 +20,7 @@ import androidx.compose.ui.test.longClick
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.test.swipeDown
 import androidx.compose.ui.test.swipeLeft
 import androidx.compose.ui.test.swipeUp
 import androidx.compose.ui.unit.dp
@@ -605,11 +606,21 @@ class ScreenshotsTest {
         }
         frame { ChatScreen(id) }
         composeRule.waitForIdle()
-        repeat(4) { composeRule.onRoot().performTouchInput { swipeUp() } }
-        composeRule.waitForIdle()
+        // the message list is REVERSED (round 8): older messages live toward
+        // higher item indices, reached by dragging DOWN — the inverse of a
+        // normal list. Drive it until the pill actually shows.
+        var pillShown = false
+        repeat(8) {
+            if (!pillShown) {
+                composeRule.onRoot().performTouchInput { swipeDown() }
+                composeRule.waitForIdle()
+                pillShown = composeRule.onAllNodesWithTag("jump_to_latest")
+                    .fetchSemanticsNodes().isNotEmpty()
+            }
+        }
         org.junit.Assert.assertTrue(
             "jump-to-latest pill must appear when scrolled up",
-            composeRule.onAllNodesWithTag("jump_to_latest").fetchSemanticsNodes().isNotEmpty(),
+            pillShown,
         )
         shot("36-jump-to-bottom.png")
     }
