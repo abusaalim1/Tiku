@@ -42,7 +42,12 @@ class TikuApp : Application() {
     override fun onCreate() {
         super.onCreate()
         SettingsStore.init(this)
-        // NOTE: zero chat notifications by design — no channel is ever created for chat.
+        OwnerPrefs.init(this)
+        // NOTE: zero chat notifications by design — no notification channel is
+        // created at startup, ever. ROUND 9 exception (owner account only, his
+        // own phone, opt-in): OwnerNotify creates ONE channel lazily at the
+        // first actual alert when — and only when — the owner enabled it.
+        // For every other account that code path never runs.
     }
 }
 
@@ -89,7 +94,11 @@ class MainActivity : ComponentActivity() {
         // desynced password creation (owner Bug 0). There is no unlocked
         // ChatRoot session to protect yet.
         if (AppState.isSetupFlow(AppState.screen)) return
-        if (ChatSession.unlocked) ChatSession.lock(this)
+        // ROUND 9: the owner with App lock OFF keeps his session across
+        // backgrounding (his phone, his choice — the relaxed mode exists only
+        // for his account; OwnerGate is the single check). Everyone else,
+        // and the owner with the toggle ON: instant re-lock, as always.
+        if (ChatSession.unlocked && !OwnerGate.lockOffActive()) ChatSession.lock(this)
     }
 
     private fun isOnboarded(): Boolean =

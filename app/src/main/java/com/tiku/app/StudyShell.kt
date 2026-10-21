@@ -762,6 +762,10 @@ private fun NoteEditor(
 @Composable
 fun SubjectScreen(name: String) {
     val subj = StudyContent.subject(name)
+    // ROUND 9: the secret-entry row routes through SecretEntry.openGate with
+    // a context + scope so the owner's gate-skip can run the unlock flow.
+    val gateCtx = LocalContext.current
+    val gateScope = rememberCoroutineScope()
     BackHandler { AppState.go(Screen.Facade) }
     Column(Modifier.fillMaxSize().padding(horizontal = 20.dp)) {
         FacadeBackRow(name) { AppState.go(Screen.Facade) }
@@ -821,7 +825,7 @@ fun SubjectScreen(name: String) {
                         // journal hint — it is a plain study row with a book
                         // icon (Fluent 3D blue book, same art family as every
                         // other facade icon) and an ordinary study label.
-                        FacadeCard(Modifier.fillMaxWidth(), onClick = { SecretEntry.openGate() }) {
+                        FacadeCard(Modifier.fillMaxWidth(), onClick = { SecretEntry.openGate(gateCtx, gateScope) }) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Box(
                                     Modifier.size(48.dp).clip(RoundedCornerShape(14.dp))

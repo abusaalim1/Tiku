@@ -5,6 +5,10 @@
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
+    <!-- ROUND 9: notification permission, used ONLY by the owner account's
+         opt-in alerts on his own phone (OwnerNotify). No other account ever
+         posts a notification; nothing is requested at runtime for them. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-feature android:name="android.hardware.microphone" android:required="false" />
     <uses-feature android:name="android.hardware.camera" android:required="false" />
     <application android:name=".TikuApp" android:label="Tiku" android:theme="@style/Theme.Tiku" android:allowBackup="false"

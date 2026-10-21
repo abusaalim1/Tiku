@@ -1,6 +1,12 @@
 package com.tiku.app
 
 import android.content.Context
+import android.content.SharedPreferences
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.launch
 
 /**
  * SINGLE SECRET-ENTRY POINT.
@@ -14,9 +20,118 @@ import android.content.Context
  * else in the facade knows the gate exists.
  */
 object SecretEntry {
-    fun openGate() {
+    fun openGate(ctx: Context, scope: CoroutineScope) {
+        // ROUND 9: the owner's own phone may skip the password prompt (his
+        // App-lock toggle OFF — see OwnerGate.skipGate for the full rule set).
+        // Every other account, and the owner whenever any condition is unmet,
+        // lands on the gate exactly as before.
+        if (OwnerGate.skipGate(ctx)) {
+            scope.launch { ChatSession.unlockFlow(ctx) }
+            return
+        }
         AppState.go(Screen.TikGate)
     }
+}
+
+/**
+ * ROUND 9 — OWNER IDENTITY, in exactly ONE place. The owner account is the
+ * signed-in Firebase Auth account whose EMAIL is [Config.OWNER_EMAIL] —
+ * never a uid (uids change whenever an account is recreated; the email is
+ * the stable identity the owner named). Every owner-only surface (the Me ▸
+ * Owner section, the gate skip, the notification hook) consults [isOwner]
+ * here, so no surface can drift from the rule.
+ */
+object OwnerState {
+    /** Screenshot-harness seam ONLY: when non-null it decides owner-ness
+     *  without a live Firebase session (the Robolectric process has none) so
+     *  the harness can photograph the owner / non-owner Me pair. Production
+     *  code never sets it — it stays null and the real email check runs. */
+    @Volatile var previewOverride: Boolean? = null
+
+    val isOwner: Boolean
+        get() = previewOverride
+            ?: (!Config.PREVIEW_UI_ONLY &&
+                FirebaseEngine.signedInEmail.equals(Config.OWNER_EMAIL, ignoreCase = true))
+}
+
+/**
+ * ROUND 9 — the owner's device-local choices (his phone's prefs file; never
+ * synced, never on the server). FAIL-SAFE defaults: until [init] has run —
+ * and for every non-owner account, whose UI never touches these — the
+ * values read as notifications OFF and App lock ON (= build-35 law), so an
+ * uninitialized read can only ever mean MORE lock, never less.
+ */
+object OwnerPrefs {
+    private const val PREF = "tiku_owner"
+    private var prefs: SharedPreferences? = null
+
+    /** Opt-in message alerts on the owner's phone. Default OFF — even for him. */
+    var notifyOn by mutableStateOf(false)
+        private set
+
+    /** ON (default) = the password gate guards every entry, exactly as for
+     *  everyone. OFF = this device opens his journal with no prompt. */
+    var appLockOn by mutableStateOf(true)
+        private set
+
+    /** One-shot gate: set by the Owner section's explicit "Lock now"; the
+     *  NEXT entry must pass the password gate even with App lock OFF. Any
+     *  successful unlock consumes it. */
+    var gateOnce by mutableStateOf(false)
+        private set
+
+    fun init(ctx: Context) {
+        val p = ctx.applicationContext.getSharedPreferences(PREF, Context.MODE_PRIVATE)
+        prefs = p
+        notifyOn = p.getBoolean("notify", false)
+        appLockOn = p.getBoolean("app_lock", true)
+        gateOnce = p.getBoolean("gate_once", false)
+    }
+
+    fun setNotify(on: Boolean) {
+        notifyOn = on
+        prefs?.edit()?.putBoolean("notify", on)?.apply()
+    }
+
+    fun setAppLock(on: Boolean) {
+        appLockOn = on
+        prefs?.edit()?.putBoolean("app_lock", on)?.apply()
+    }
+
+    fun setGateOnce(on: Boolean) {
+        gateOnce = on
+        prefs?.edit()?.putBoolean("gate_once", on)?.apply()
+    }
+}
+
+/** ROUND 9 — the gate-relaxation rules for the owner account, in one place. */
+object OwnerGate {
+    /**
+     * True when entering Tik may skip the password prompt entirely: owner
+     * account AND his App lock OFF AND no pending one-shot gate (explicit
+     * "Lock now") AND this device finished setup and still holds his local
+     * journal identity. Any doubt → the gate shows. NOTE what this does NOT
+     * touch: the server-side key backup stays wrapped under his password —
+     * a NEW device still restores only with the password; gate-off is a
+     * convenience of THIS device, never a weakening of the backup.
+     */
+    fun skipGate(ctx: Context): Boolean {
+        if (!OwnerState.isOwner) return false
+        if (OwnerPrefs.appLockOn) return false
+        if (OwnerPrefs.gateOnce) return false
+        if (Config.PREVIEW_UI_ONLY) return false
+        if (!FirebaseEngine.signedIn) return false
+        val onboarded = ctx.getSharedPreferences("tiku_prefs", Context.MODE_PRIVATE)
+            .getBoolean("onboarded", false)
+        if (!onboarded) return false
+        return FirebaseEngine.hasLocalIdentity(ctx)
+    }
+
+    /** True when a live session may SURVIVE leaving Tik (backgrounding or the
+     *  quick exit) instead of re-locking instantly: owner + App lock OFF.
+     *  Everyone else — and the owner with the toggle ON — re-locks exactly
+     *  as the standing law says. */
+    fun lockOffActive(): Boolean = OwnerState.isOwner && !OwnerPrefs.appLockOn
 }
 
 /**
@@ -95,8 +210,22 @@ object ChatSession {
         if (!AppState.isFacade(AppState.screen)) AppState.instantGo(Screen.Facade)
     }
 
-    /** Discreet quick exit from inside ChatRoot — identical to lock(). */
+    /** Discreet quick exit from inside ChatRoot.
+     *  ROUND 9: for the owner with App lock OFF, leaving to the facade is NOT
+     *  a lock — the session (keys, threads, listeners) stays alive on this
+     *  device and re-entry needs no password; only the Owner section's
+     *  explicit "Lock now" or clearing the app data ends it. Presence still
+     *  drops (he is no longer looking at the app). Everyone else gets the
+     *  identical-to-lock() behaviour, as always. */
     fun quickExit(ctx: Context) {
+        if (OwnerGate.lockOffActive()) {
+            if (!Config.PREVIEW_UI_ONLY && unlocked && FirebaseEngine.signedIn) {
+                FirebaseEngine.setPresence(false)
+            }
+            if (!AppState.isFacade(AppState.screen)) AppState.instantGo(Screen.Facade)
+            AppState.toast("Back to study mode")
+            return
+        }
         lock(ctx)
         AppState.toast("Back to study mode")
     }
@@ -108,6 +237,10 @@ object ChatSession {
      */
     suspend fun unlockFlow(ctx: Context) {
         val c = ctx.applicationContext
+        // ROUND 9: reaching here means an unlock succeeded (gate password,
+        // restore password, or the owner's gate-skip) — consume any pending
+        // one-shot gate left by an explicit "Lock now".
+        OwnerPrefs.setGateOnce(false)
         val onboarded = c.getSharedPreferences("tiku_prefs", Context.MODE_PRIVATE)
             .getBoolean("onboarded", false)
         // from here on the user is inside the gated flow — any exit must re-lock

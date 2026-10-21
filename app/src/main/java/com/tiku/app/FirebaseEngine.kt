@@ -57,6 +57,13 @@ object FirebaseEngine : ChatRepo {
     val uid: String get() = auth.currentUser?.uid ?: ""
     val signedIn: Boolean get() = auth.currentUser != null
 
+    /** The signed-in account's email ("" when signed out). ROUND 9: owner
+     *  identity keys off THIS — never the uid. runCatching because the
+     *  screenshot harness composes owner-gated UI in a process where no
+     *  FirebaseApp is initialized. */
+    val signedInEmail: String
+        get() = runCatching { auth.currentUser?.email ?: "" }.getOrDefault("")
+
     /**
      * The session's established my-uid (round 4, item 2): the live Auth uid,
      * falling back to the uid the on-device identity was created for
@@ -761,6 +768,12 @@ object FirebaseEngine : ChatRepo {
                 t.copy(messages = msgs.toMutableList(), unread = unread)
             else t
         }
+        // ROUND 9: the owner's opt-in alert hook sees this same freshly
+        // decrypted preview window (regular messages AND call events).
+        // OwnerNotify itself checks owner + toggle + foreground and
+        // baselines history before ever posting, so for every other
+        // account — and for the owner with the toggle off — this is a no-op.
+        OwnerNotify.onPreviewMessages(appCtx, id, msgs)
     }
 
     // ================= CALL SIGNALING WATCHERS =================
@@ -938,6 +951,9 @@ object FirebaseEngine : ChatRepo {
         // the app cache (dl_*.m4a) — a chat trace that used to outlive the
         // lock. They simply re-download on the next unlock.
         msgCache.clear(); hasOlderCache.clear(); clearedBeforeCache.clear(); loadingOlder.clear()
+        // ROUND 9: the owner's alert bookkeeping baselines die with the
+        // session too — after a re-lock, history can never re-alert.
+        OwnerNotify.reset()
         runCatching {
             appCtx.cacheDir.listFiles()?.forEach { f ->
                 if (f.name.startsWith("dl_") && f.name.endsWith(".m4a")) f.delete()

@@ -1,6 +1,10 @@
 package com.tiku.app
 
+import android.Manifest
+import android.content.pm.PackageManager
 import android.graphics.BitmapFactory
+import android.os.Build
+import androidx.core.content.ContextCompat
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedContent
@@ -441,7 +445,100 @@ fun MePane() {
                 }
             }
         }
+        // ROUND 9: the Owner section exists ONLY for the owner account —
+        // for every other account this item is never composed at all.
+        if (OwnerState.isOwner) {
+            item { OwnerSection() }
+        }
         item { SettingsGroups() }
+    }
+}
+
+/**
+ * ROUND 9 — Me ▸ Owner (owner account only; [OwnerState] is the single
+ * check, and MePane composes this only when it passes). Two device-local
+ * privileges for the owner's own phone, both stored in [OwnerPrefs]:
+ * opt-in notifications and an optional app lock — plus "Lock now", the
+ * explicit full lock that overrides the relaxed mode once. Nothing here
+ * exists, renders, or can be reached for any other account.
+ */
+@Composable
+fun OwnerSection() {
+    val ctx = LocalContext.current
+    val permLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { }
+    SerifTitle("Owner", 22.sp, TikuTokens.Muted, Modifier.padding(start = 24.dp, end = 24.dp, top = 16.dp))
+    Column(
+        Modifier.fillMaxWidth().padding(start = 20.dp, end = 20.dp)
+            .clip(RoundedCornerShape(24.dp)).background(TikuTokens.Card)
+            .border(1.dp, TikuTokens.Line, RoundedCornerShape(24.dp)),
+    ) {
+        // --- Notifications (opt-in; default OFF even for the owner) ---
+        Row(
+            Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 14.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text("Notifications", fontWeight = FontWeight.Medium, fontSize = 15.sp, fontFamily = Manrope, color = TikuTokens.Ink)
+                Text("A quiet “New message” alert on this phone when something arrives — only for your account, and only while the app is running",
+                    fontSize = 12.sp, color = TikuTokens.Muted, fontFamily = Manrope)
+            }
+            ToggleSwitch(OwnerPrefs.notifyOn) { on ->
+                OwnerPrefs.setNotify(on)
+                if (on) {
+                    if (Build.VERSION.SDK_INT >= 33 &&
+                        ContextCompat.checkSelfPermission(ctx, Manifest.permission.POST_NOTIFICATIONS)
+                            != PackageManager.PERMISSION_GRANTED
+                    ) {
+                        permLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                    }
+                    AppState.toast("Notifications on — this phone only")
+                } else {
+                    OwnerNotify.cancelAll(ctx)
+                    AppState.toast("Notifications off")
+                }
+            }
+        }
+        Box(Modifier.fillMaxWidth().height(1.dp).padding(horizontal = 18.dp).background(TikuTokens.Line))
+        // --- App lock (ON = the standing law; OFF = his phone skips the gate) ---
+        Row(
+            Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 14.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text("App lock", fontWeight = FontWeight.Medium, fontSize = 15.sp, fontFamily = Manrope, color = TikuTokens.Ink)
+                Text("Ask for your password every time you open your journal on this phone",
+                    fontSize = 12.sp, color = TikuTokens.Muted, fontFamily = Manrope)
+            }
+            ToggleSwitch(OwnerPrefs.appLockOn) { on ->
+                OwnerPrefs.setAppLock(on)
+                AppState.toast(
+                    if (on) "App lock on — password on every open"
+                    else "App lock off — this phone opens without the password",
+                )
+            }
+        }
+        Box(Modifier.fillMaxWidth().height(1.dp).padding(horizontal = 18.dp).background(TikuTokens.Line))
+        // --- Lock now (explicit one-shot full lock) ---
+        Row(
+            Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 14.dp)
+                .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {
+                    // One-shot: even with App lock OFF, the NEXT entry must
+                    // pass the password gate (unlockFlow consumes the flag).
+                    OwnerPrefs.setGateOnce(true)
+                    ChatSession.lock(ctx)
+                },
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text("Lock now", fontWeight = FontWeight.Medium, fontSize = 15.sp, fontFamily = Manrope, color = TikuTokens.Ink)
+                Text("Lock right away — the password will be asked on the next open, even while App lock is off",
+                    fontSize = 12.sp, color = TikuTokens.Muted, fontFamily = Manrope)
+            }
+            Text("›", fontSize = 20.sp, color = TikuTokens.Muted)
+        }
     }
 }
 

@@ -55,6 +55,13 @@ class ScreenshotsTest {
     fun setup() {
         ctx = ApplicationProvider.getApplicationContext()
         SettingsStore.init(ctx)
+        OwnerPrefs.init(ctx)
+        // ROUND 9: clean owner slate for every shot — non-owner by default;
+        // the owner pair (shots 37/38) flips the seam inside its own test.
+        OwnerState.previewOverride = null
+        OwnerPrefs.setNotify(false)
+        OwnerPrefs.setAppLock(true)
+        OwnerPrefs.setGateOnce(false)
         StudyContent.load(ctx)
         AppState.repo = PreviewRepo
         val seeded = PreviewStore.seedThreads()
@@ -617,5 +624,52 @@ class ScreenshotsTest {
             composeRule.onAllNodesWithTag("jump_to_latest").fetchSemanticsNodes().isNotEmpty(),
         )
         shot("36-jump-to-bottom.png")
+    }
+
+    // ---------- round 9 additions ----------
+    @Test fun shot37_ownerSection() {
+        // OWNER PAIR (1 of 2): harness owner seam ON — Me gains the Owner
+        // section: Notifications toggle (shown ON, as he would opt in), App
+        // lock toggle, and the explicit Lock now row.
+        OwnerState.previewOverride = true
+        OwnerPrefs.setNotify(true)
+        AppState.homeTab = HomeTab.ME
+        frame { HomeScreen() }
+        composeRule.onRoot().performTouchInput { swipeUp() }
+        composeRule.waitForIdle()
+        org.junit.Assert.assertTrue(
+            "owner Me pane must carry the Owner section",
+            composeRule.onAllNodesWithText("Owner").fetchSemanticsNodes().isNotEmpty(),
+        )
+        org.junit.Assert.assertTrue(
+            "owner section must offer the Notifications toggle",
+            composeRule.onAllNodesWithText("Notifications").fetchSemanticsNodes().isNotEmpty(),
+        )
+        org.junit.Assert.assertTrue(
+            "owner section must offer Lock now",
+            composeRule.onAllNodesWithText("Lock now").fetchSemanticsNodes().isNotEmpty(),
+        )
+        shot("37-owner-section.png")
+        OwnerState.previewOverride = null
+    }
+
+    @Test fun shot38_mePaneNoOwner() {
+        // OWNER PAIR (2 of 2): seam OFF — the Owner section must not exist
+        // AT ALL (this is every non-owner account's Me pane, unchanged).
+        OwnerState.previewOverride = false
+        AppState.homeTab = HomeTab.ME
+        frame { HomeScreen() }
+        composeRule.onRoot().performTouchInput { swipeUp() }
+        composeRule.waitForIdle()
+        org.junit.Assert.assertTrue(
+            "non-owner Me pane must not contain an Owner section",
+            composeRule.onAllNodesWithText("Owner").fetchSemanticsNodes().isEmpty(),
+        )
+        org.junit.Assert.assertTrue(
+            "non-owner Me pane must not contain Lock now",
+            composeRule.onAllNodesWithText("Lock now").fetchSemanticsNodes().isEmpty(),
+        )
+        shot("38-me-pane-no-owner.png")
+        OwnerState.previewOverride = null
     }
 }

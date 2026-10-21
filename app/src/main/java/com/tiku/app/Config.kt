@@ -20,6 +20,18 @@ object Config {
     const val WEB_CLIENT_ID = "258621285053-dm6i7dck4iosn7mhh0hk0frfjn6tmdgj.apps.googleusercontent.com"
 
     /**
+     * ROUND 9 — THE OWNER ACCOUNT. The signed-in Firebase Auth account whose
+     * email equals this constant is the app's owner: only for that account do
+     * the Owner-section extras exist (opt-in notifications on his phone, an
+     * optional Tik password lock). Identity is the EMAIL — never a uid (uids
+     * change whenever an account is recreated; the email is stable). Every
+     * other account gets build-35 behaviour exactly: mandatory gate, zero
+     * notifications, all zero-trace laws. The single check lives in
+     * [OwnerState]; nothing else may compare against this constant.
+     */
+    const val OWNER_EMAIL = "taiwanserverforff123@gmail.com"
+
+    /**
      * WebRTC ICE servers (real P2P calls). STUN for NAT discovery; Open Relay
      * Project free TURN as fallback. Swappable without code changes elsewhere.
      */
