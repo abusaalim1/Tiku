@@ -27,6 +27,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -422,7 +423,7 @@ private fun defaultSubjects(): List<StudyContent.Subject> = listOf(
     StudyContent.Subject("Biology", "🧬", emptyList()),
 )
 
-// ---------- PASSWORD GATE (reached ONLY via SecretEntry / the "Tik" row
+// ---------- PASSWORD GATE (reached ONLY via SecretEntry / the book row
 // on the Chemistry subject page) ----------
 
 @Composable
@@ -433,6 +434,13 @@ fun TikGateScreen() {
     var pw by remember { mutableStateOf("") }
     var error by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
+    // ROUND 8 (item 9b): escalating wrong-attempt backoff (GateGuard) — the
+    // counters persist in prefs, so leaving and reopening the gate resets
+    // nothing; the countdown ticks while a lockout is running.
+    var lockRemainingMs by remember { mutableLongStateOf(GateGuard.lockedRemainingMs(ctx)) }
+    LaunchedEffect(lockRemainingMs) {
+        while (lockRemainingMs > 0) { delay(500); lockRemainingMs = GateGuard.lockedRemainingMs(ctx) }
+    }
     // BUG-0: the gate distinguishes THREE states — a verifiable password, a
     // missing verifier, and a DAMAGED verifier. Only the first may ever produce
     // the words "Wrong password"; missing/damaged data routes to the Google-
@@ -450,7 +458,12 @@ fun TikGateScreen() {
             hasHash && !hashDamaged -> {
                 PasswordField(pw, { pw = it; error = "" }, "Password")
                 Spacer(Modifier.height(6.dp))
-                Text(error, fontSize = 13.sp, color = TikuTokens.Red, fontFamily = Manrope)
+                if (lockRemainingMs > 0) {
+                    Text("Too many tries in a row — take a short break and try again in ${(lockRemainingMs + 999) / 1000}s.",
+                        fontSize = 13.sp, color = TikuTokens.Red, fontFamily = Manrope)
+                } else {
+                    Text(error, fontSize = 13.sp, color = TikuTokens.Red, fontFamily = Manrope)
+                }
                 if (rescuable) {
                     // ROUND 3.1: the rescue is offered whenever this phone holds
                     // the journal key — NOT only when the verifier is missing or
@@ -468,13 +481,14 @@ fun TikGateScreen() {
                         ) { AppState.go(Screen.PasswordReset) })
                 }
                 Spacer(Modifier.weight(1f))
-                PrimaryButton(if (busy) "Opening…" else "Open journal", enabled = pw.isNotEmpty() && !busy, modifier = Modifier.fillMaxWidth()) {
+                PrimaryButton(if (busy) "Opening…" else "Open journal", enabled = pw.isNotEmpty() && !busy && lockRemainingMs <= 0, modifier = Modifier.fillMaxWidth()) {
                     busy = true
                     scope.launch {
                         val hash = SettingsStore.passwordHash(ctx)
                         val ok = hash != null && Crypto.hashWellFormed(hash) &&
                             withContext(Dispatchers.Default) { Crypto.passwordVerify(pw, hash) }
                         if (ok) {
+                            GateGuard.reset(ctx)
                             // first unlock in preview = run onboarding before the home
                             val onboarded = ctx.getSharedPreferences("tiku_prefs", android.content.Context.MODE_PRIVATE)
                                 .getBoolean("onboarded", false)
@@ -485,7 +499,15 @@ fun TikGateScreen() {
                                 ChatSession.unlockFlow(ctx)
                             }
                         } else {
-                            error = "Wrong password — try again."
+                            // ROUND 8: feed the backoff and wipe the typed
+                            // guess from the field — a wrong password should
+                            // never linger on screen.
+                            val delayMs = GateGuard.recordFailure(ctx)
+                            lockRemainingMs = GateGuard.lockedRemainingMs(ctx)
+                            pw = ""
+                            error = if (delayMs > 0) {
+                                "Too many tries in a row — take a short break and try again in ${delayMs / 1000}s."
+                            } else "Wrong password — try again."
                         }
                         busy = false
                     }
@@ -791,23 +813,26 @@ fun SubjectScreen(name: String) {
                 }
                 if (name == "Chemistry") {
                     item {
-                        // SECRET ENTRY (round 3.2) — one discreet row among the
-                        // Chemistry chapter rows, same visual language as its
-                        // neighbours. This is the ONLY door to the password
-                        // gate anywhere on the facade (see SecretEntry); the
-                        // standalone tools-grid tile was removed.
+                        // SECRET ENTRY — one discreet row among the Chemistry
+                        // chapter rows, same visual language as its neighbours.
+                        // This is the ONLY door to the password gate anywhere
+                        // on the facade (see SecretEntry). ROUND 8 (owner):
+                        // the row no longer carries the "Tik" word or any
+                        // journal hint — it is a plain study row with a book
+                        // icon (Fluent 3D blue book, same art family as every
+                        // other facade icon) and an ordinary study label.
                         FacadeCard(Modifier.fillMaxWidth(), onClick = { SecretEntry.openGate() }) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Box(
                                     Modifier.size(48.dp).clip(RoundedCornerShape(14.dp))
                                         .background(TikuTokens.Mint),
                                     contentAlignment = Alignment.Center,
-                                ) { EmojiArt("📓", 26.dp) }
+                                ) { EmojiArt("📘", 26.dp) }
                                 Spacer(Modifier.width(14.dp))
                                 Column {
-                                    Text("Tik", fontSize = 16.sp, fontFamily = Bricolage, fontWeight = FontWeight.Bold, color = TikuTokens.Ink)
+                                    Text("Reference books", fontSize = 16.sp, fontFamily = Bricolage, fontWeight = FontWeight.Bold, color = TikuTokens.Ink)
                                     Spacer(Modifier.height(2.dp))
-                                    Text("Study journal", fontSize = 12.sp, fontFamily = Manrope, color = TikuTokens.Muted)
+                                    Text("Extra reading & reference material", fontSize = 12.sp, fontFamily = Manrope, color = TikuTokens.Muted)
                                 }
                             }
                         }

@@ -11,7 +11,11 @@ service cloud.firestore {
     match /usernames/{name} {
       allow read: if signedIn();
       allow create: if signedIn() && request.resource.data.uid == request.auth.uid;
-      allow update, delete: if false;
+      allow update: if false;
+      // ROUND 8: a user may release ONLY their own claim (username change —
+      // the rename transaction frees the old name while claiming the new
+      // one). Nobody can ever delete another user's claim.
+      allow delete: if signedIn() && resource.data.uid == request.auth.uid;
     }
 
     match /chats/{chatId} {

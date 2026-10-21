@@ -181,21 +181,32 @@ fun RestorePasswordScreen() {
     var error by remember { mutableStateOf("") }
     val scope = rememberCoroutineScope()
     val ctx = LocalContext.current
+    // ROUND 8: the restore field is the same offline guessing surface as the
+    // journal gate — it shares the GateGuard escalating backoff.
+    var lockRemainingMs by remember { mutableStateOf(GateGuard.lockedRemainingMs(ctx)) }
+    LaunchedEffect(lockRemainingMs) {
+        while (lockRemainingMs > 0) { delay(500); lockRemainingMs = GateGuard.lockedRemainingMs(ctx) }
+    }
     FormScaffold("Welcome back", "Your journal was found on this account. Enter the password you set when you created it — and everything comes back on this phone: every note and every conversation, exactly as you left it.") {
         PasswordField(pw, { pw = it; error = "" }, "Backup password")
         Spacer(Modifier.height(6.dp))
         Text(
-            if (error.isNotEmpty()) error else "Only this password opens this journal — there is no starting over with a new one. A wrong try changes nothing and deletes nothing.",
-            fontSize = 13.sp, color = if (error.isNotEmpty()) TikuTokens.Red else TikuTokens.Muted, fontFamily = Manrope,
+            when {
+                lockRemainingMs > 0 -> "Too many tries in a row — take a short break and try again in ${(lockRemainingMs + 999) / 1000}s."
+                error.isNotEmpty() -> error
+                else -> "Only this password opens this journal — there is no starting over with a new one. A wrong try changes nothing and deletes nothing."
+            },
+            fontSize = 13.sp, color = if (error.isNotEmpty() || lockRemainingMs > 0) TikuTokens.Red else TikuTokens.Muted, fontFamily = Manrope,
         )
         Spacer(Modifier.weight(1f))
-        PrimaryButton(if (busy) "Restoring…" else "Restore my journal", enabled = pw.isNotEmpty() && !busy, modifier = Modifier.fillMaxWidth()) {
+        PrimaryButton(if (busy) "Restoring…" else "Restore my journal", enabled = pw.isNotEmpty() && !busy && lockRemainingMs <= 0, modifier = Modifier.fillMaxWidth()) {
             busy = true
             scope.launch {
                 // outcomes are DISTINCT (owner Bug 0): a genuinely wrong password
                 // is never confused with a missing backup / server refusal.
                 when (val r = FirebaseEngine.restoreFromBackup(ctx, pw)) {
                     is FirebaseEngine.RestoreResult.Ok -> {
+                        GateGuard.reset(ctx)
                         ctx.getSharedPreferences("tiku_prefs", android.content.Context.MODE_PRIVATE)
                             .edit().putBoolean("onboarded", true).apply()
                         FirebaseEngine.start(ctx)
@@ -205,7 +216,13 @@ fun RestorePasswordScreen() {
                     }
                     is FirebaseEngine.RestoreResult.WrongPassword -> {
                         busy = false
-                        error = "Wrong password — nothing was changed or deleted, and your journal is still saved. Try again with the password you set when you created it."
+                        // ROUND 8: wrong restore attempts feed the shared backoff too.
+                        val delayMs = GateGuard.recordFailure(ctx)
+                        lockRemainingMs = GateGuard.lockedRemainingMs(ctx)
+                        pw = ""
+                        error = if (delayMs > 0) {
+                            "Too many tries in a row — take a short break and try again in ${delayMs / 1000}s."
+                        } else "Wrong password — nothing was changed or deleted, and your journal is still saved. Try again with the password you set when you created it."
                     }
                     is FirebaseEngine.RestoreResult.Unavailable -> {
                         busy = false

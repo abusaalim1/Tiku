@@ -164,6 +164,11 @@ val SerifItalic = FontFamily(Font(R.font.instrument_serif_italic))
 
 val TikuEase = androidx.compose.animation.core.CubicBezierEasing(0.32f, 0.72f, 0f, 1f)
 
+/** ROUND 8: the gentle spring ease of the owner's reference chat UI
+ *  (cubic-bezier(.34, 1.56, .64, 1) in the HTML, toned down a touch) — used
+ *  for bubble entrances and other small settle motions. Calm, not bouncy. */
+val TikuSpringEase = androidx.compose.animation.core.CubicBezierEasing(0.34f, 1.30f, 0.64f, 1f)
+
 @Composable
 fun tikuSettings(): State<TikuUiSettings> = SettingsStore.state.collectAsState()
 

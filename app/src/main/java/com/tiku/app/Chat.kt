@@ -5,26 +5,34 @@ import android.content.pm.PackageManager
 import android.graphics.BitmapFactory
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.rememberTransformableState
+import androidx.compose.foundation.gestures.transformable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.WindowInsets
-import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -46,8 +54,11 @@ import androidx.compose.material.icons.filled.CallMissed
 import androidx.compose.material.icons.filled.ChevronLeft
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Image
+import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.MoreHoriz
+import androidx.compose.material.icons.filled.Reply
+import androidx.compose.material.icons.filled.SaveAlt
 import androidx.compose.material.icons.filled.Send
 import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material3.Icon
@@ -56,25 +67,34 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -82,6 +102,8 @@ import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.io.File
+import kotlin.math.abs
+import kotlin.math.roundToInt
 
 @Composable
 fun ChatWallpaperBrush(settings: TikuUiSettings) = when (settings.wallpaper) {
@@ -130,12 +152,17 @@ private fun ChatContent(thread: ChatThread) {
     val peerTyping = typingMap[threadId] == true
 
     var input by remember { mutableStateOf("") }
-    var replyTo by remember { mutableStateOf<String?>(null) }
+    // ROUND 8: reply state carries the quote AND whose it was, so the
+    // composer bar can render the IG-form header ("Replying to …").
+    var replyTarget by remember { mutableStateOf<ReplyTarget?>(null) }
+    // ROUND 8: the message currently open in the full-screen image viewer.
+    var viewerMsg by remember { mutableStateOf<TikuMessage?>(null) }
     var recording by remember { mutableStateOf(false) }
     var recSecs by remember { mutableIntStateOf(0) }
     val recorder = remember { VoiceRecorder(ctx) }
     val player = remember { VoicePlayer() }
     var playingId by remember { mutableStateOf<String?>(null) }
+    val listState = rememberLazyListState()
 
     DisposableEffect(threadId) { onDispose { player.stop(); AppState.repo.closeThread(threadId) } }
 
@@ -181,9 +208,11 @@ private fun ChatContent(thread: ChatThread) {
     fun sendCurrent() {
         val v = input.trim()
         if (v.isEmpty()) return
-        AppState.repo.sendText(threadId, v, replyTo)
-        input = ""; replyTo = null
+        AppState.repo.sendText(threadId, v, replyTarget?.quote)
+        input = ""; replyTarget = null
         scope.launch { AppState.repo.setTyping(threadId, false) }
+        // ROUND 8: my own send always lands me at the latest message (IG)
+        scope.launch { runCatching { listState.animateScrollToItem(0) } }
     }
 
     Box(Modifier.fillMaxSize().background(ChatWallpaperBrush(settings))) {
@@ -250,46 +279,76 @@ private fun ChatContent(thread: ChatThread) {
             Spacer(Modifier.width(8.dp))
             GlassIconButton(Icons.Filled.MoreHoriz, size = 38.dp, iconSize = 18.dp, onClick = { ChatSheets.more(thread, person) })
         }
-        // messages
-        val listState = rememberLazyListState()
+        // messages — ROUND 8 REWORK (items 4 + 7b):
+        // The list is REVERSED: index 0 IS the latest message, glued to the
+        // bottom edge by the layout itself. Opening a chat, the keyboard
+        // opening/closing, and older pages prepending all need NO scroll
+        // calls at all — which removes the old "animateScrollToItem on every
+        // size change" effect, the direct cause of the owner's scroll
+        // up/down jitter (it fired on every snapshot rebuild). Position now
+        // only ever moves when the USER scrolls, when their own send lands,
+        // or when they tap the jump-to-latest pill.
         val visibleMessages = thread.messages.filter { !it.deletedForMe }
-        LaunchedEffect(visibleMessages.size, peerTyping) {
-            if (visibleMessages.isNotEmpty()) listState.animateScrollToItem(visibleMessages.size - 1 + if (peerTyping) 1 else 0)
+        val nearBottom by remember { derivedStateOf { listState.firstVisibleItemIndex <= 1 } }
+        var unseenNew by remember { mutableIntStateOf(0) }
+        // arrivals are measured against the NEWEST timestamp known so far —
+        // older pages loading in (pagination) must never count as "new".
+        var prevNewestTs by remember {
+            mutableStateOf(visibleMessages.maxOfOrNull { it.tsMs } ?: 0L)
         }
-        // keyboard open/close: the root's imePadding shrinks this column, and the
-        // last message must stay visible above the keyboard (owner bug 2).
-        val imeBottomPx = WindowInsets.ime.getBottom(androidx.compose.ui.platform.LocalDensity.current)
-        LaunchedEffect(imeBottomPx) {
-            if (imeBottomPx > 0 && visibleMessages.isNotEmpty()) {
-                listState.scrollToItem(visibleMessages.size - 1 + if (peerTyping) 1 else 0)
+        LaunchedEffect(visibleMessages.size) {
+            val newest = visibleMessages.maxOfOrNull { it.tsMs } ?: 0L
+            if (newest > prevNewestTs) {
+                val fresh = visibleMessages.count { it.tsMs > prevNewestTs }
+                // follow the conversation only if I'm already at the bottom;
+                // if I'm reading history, count the arrivals on the pill
+                if (nearBottom) runCatching { listState.animateScrollToItem(0) }
+                else unseenNew += fresh
+            }
+            if (newest > prevNewestTs) prevNewestTs = newest
+        }
+        LaunchedEffect(nearBottom) { if (nearBottom) unseenNew = 0 }
+        // pagination: approaching the oldest loaded message fetches the
+        // next older page (the engine no-ops when there is none / one is
+        // already in flight)
+        LaunchedEffect(threadId, thread.hasOlder) {
+            snapshotFlow {
+                listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index to
+                    listState.layoutInfo.totalItemsCount
+            }.collect { (lastIdx, total) ->
+                if (thread.hasOlder && lastIdx != null && total > 0 && lastIdx >= total - 3) {
+                    AppState.repo.loadOlder(threadId)
+                }
             }
         }
+        // IG "Seen": under my latest message, only when it is also the
+        // latest message overall and the peer's uid is in its seenBy.
+        val lastVisible = visibleMessages.lastOrNull()
+        val showSeen = lastVisible != null && lastVisible.me &&
+            lastVisible.kind != MsgKind.CALL && lastVisible.status == SendStatus.SENT &&
+            lastVisible.seenByPeer
+        Box(Modifier.weight(1f).fillMaxWidth()) {
         LazyColumn(
-            Modifier.weight(1f).fillMaxWidth().padding(horizontal = 14.dp),
+            Modifier.fillMaxSize().padding(horizontal = 14.dp),
             state = listState,
+            reverseLayout = true,
             contentPadding = androidx.compose.foundation.layout.PaddingValues(vertical = 16.dp),
             verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {
-            item {
-                Box(
-                    Modifier.fillMaxWidth().padding(bottom = 8.dp),
-                    contentAlignment = Alignment.Center,
-                ) {
+            if (peerTyping) {
+                item(key = "typing") { TypingBubble() }
+            }
+            if (showSeen) {
+                item(key = "seen-caption") {
                     Row(
-                        Modifier.clip(RoundedCornerShape(12.dp)).background(TikuTokens.Mint)
-                            .padding(horizontal = 12.dp, vertical = 6.dp),
-                        verticalAlignment = Alignment.CenterVertically,
+                        Modifier.fillMaxWidth().padding(end = 4.dp, top = 2.dp),
+                        horizontalArrangement = Arrangement.End,
                     ) {
-                        TikuLockIcon(Modifier.size(12.dp), tint = TikuTokens.Muted)
-                        Spacer(Modifier.width(6.dp))
-                        Text(
-                            "Messages are end-to-end encrypted. Only you and ${thread.displayName} can read them.",
-                            fontSize = 12.sp, color = TikuTokens.Muted, fontFamily = Manrope,
-                        )
+                        Text("Seen", fontSize = 11.5.sp, color = TikuTokens.Muted, fontFamily = Manrope)
                     }
                 }
             }
-            items(visibleMessages, key = { it.id }) { m ->
+            items(visibleMessages.asReversed(), key = { it.id }) { m ->
                 if (m.kind == MsgKind.CALL) {
                     // round 4: call events are centred system pills, never bubbles
                     CallEventPill(m)
@@ -317,26 +376,100 @@ private fun ChatContent(thread: ChatThread) {
                     },
                     onRetry = { AppState.repo.retrySend(threadId, m.id) },
                     onLongPress = {
-                        ChatSheets.context(threadId, m) { q -> replyTo = q }
+                        ChatSheets.context(threadId, m) { msg ->
+                            replyTarget = ReplyTarget(replyQuoteLabel(msg), msg.me)
+                        }
                     },
+                    onSwipeReply = {
+                        replyTarget = ReplyTarget(replyQuoteLabel(m), m.me)
+                    },
+                    onImageClick = { viewerMsg = m },
                 )
                 }
             }
-            if (peerTyping) {
-                item { TypingBubble() }
+            // the E2EE banner is declared LAST — in the reversed layout it
+            // renders at the very TOP of the history, as designed.
+            item(key = "e2ee-banner") {
+                Box(
+                    Modifier.fillMaxWidth().padding(bottom = 8.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Row(
+                        Modifier.clip(RoundedCornerShape(12.dp)).background(TikuTokens.Mint)
+                            .padding(horizontal = 12.dp, vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        TikuLockIcon(Modifier.size(12.dp), tint = TikuTokens.Muted)
+                        Spacer(Modifier.width(6.dp))
+                        Text(
+                            "Messages are end-to-end encrypted. Only you and ${thread.displayName} can read them.",
+                            fontSize = 12.sp, color = TikuTokens.Muted, fontFamily = Manrope,
+                        )
+                    }
+                }
             }
         }
-        // reply quote bar
-        if (replyTo != null) {
+        // ROUND 8: IG-style jump-to-latest pill — appears when scrolled up;
+        // counts messages that arrived while reading history.
+        AnimatedVisibility(
+            visible = !nearBottom,
+            enter = fadeIn(tween(200, easing = TikuEase)) + scaleIn(initialScale = 0.85f, animationSpec = tween(200, easing = TikuEase)),
+            exit = fadeOut(tween(150)) + scaleOut(targetScale = 0.85f, animationSpec = tween(150)),
+            modifier = Modifier.align(Alignment.BottomEnd).padding(end = 16.dp, bottom = 14.dp),
+        ) {
+            Row(
+                Modifier.testTag("jump_to_latest")
+                    .shadow(10.dp, RoundedCornerShape(20.dp))
+                    .clip(RoundedCornerShape(20.dp)).background(TikuTokens.Card)
+                    .border(1.dp, TikuTokens.Line, RoundedCornerShape(20.dp))
+                    .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {
+                        scope.launch { runCatching { listState.animateScrollToItem(0) } }
+                        unseenNew = 0
+                    }
+                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(Icons.Filled.KeyboardArrowDown, null, Modifier.size(16.dp), tint = settings.accent)
+                Spacer(Modifier.width(4.dp))
+                Text(
+                    if (unseenNew > 0) "$unseenNew new" else "Latest",
+                    fontSize = 12.5.sp, fontWeight = FontWeight.SemiBold,
+                    color = TikuTokens.Ink, fontFamily = Manrope,
+                )
+            }
+        }
+        // ROUND 8: full-screen image viewer (same window — FLAG_SECURE and
+        // zero-trace behaviour are inherited, never a separate dialog window)
+        viewerMsg?.let { vm ->
+            ImageViewerOverlay(vm) { viewerMsg = null }
+        }
+        } // close messages Box
+        // reply quote bar — ROUND 8 restyle: IG form. A small accent header
+        // ("Replying to …") over the quote itself at ~70% opacity, with a
+        // left accent bar; closing returns the composer to plain mode.
+        if (replyTarget != null) {
+            val rt = replyTarget!!
             Row(
                 Modifier.fillMaxWidth().padding(start = 14.dp, end = 14.dp, top = 8.dp)
                     .clip(RoundedCornerShape(14.dp)).background(TikuTokens.Mint)
                     .padding(horizontal = 12.dp, vertical = 8.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text("Replying to: ${replyTo!!.take(60)}", fontSize = 13.sp, fontFamily = Manrope, color = TikuTokens.Ink)
-                Box(Modifier.clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) { replyTo = null }) {
+                Box(Modifier.width(3.dp).height(32.dp).clip(RoundedCornerShape(2.dp)).background(settings.accent))
+                Spacer(Modifier.width(10.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        if (rt.mine) "Replying to yourself" else "Replying to ${thread.displayName}",
+                        fontSize = 12.sp, fontWeight = FontWeight.SemiBold,
+                        fontFamily = Manrope, color = settings.accent,
+                    )
+                    Text(
+                        rt.quote, fontSize = 13.sp, fontFamily = Manrope,
+                        color = TikuTokens.Ink.copy(alpha = 0.7f),
+                        maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                    )
+                }
+                Box(Modifier.clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) { replyTarget = null }) {
                     Text("✕", fontSize = 13.sp, color = TikuTokens.Ink)
                 }
             }
@@ -353,8 +486,8 @@ private fun ChatContent(thread: ChatThread) {
                     Modifier.clip(RoundedCornerShape(16.dp)).background(TikuTokens.Card)
                         .border(1.dp, TikuTokens.Line, RoundedCornerShape(16.dp))
                         .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {
-                            AppState.repo.sendText(threadId, label, replyTo)
-                            replyTo = null
+                            AppState.repo.sendText(threadId, label, replyTarget?.quote)
+                            replyTarget = null
                         }
                         .padding(horizontal = 13.dp, vertical = 7.dp),
                 ) {
@@ -543,6 +676,91 @@ fun CallEventPill(m: TikuMessage) {
     }
 }
 
+// ================= replies (round 8) =================
+/** An armed reply: the quote text that will ride the next send, plus whose
+ *  message it was (drives the composer bar's "Replying to …" header). */
+data class ReplyTarget(val quote: String, val mine: Boolean)
+
+/** The quote label a reply attaches — the message text, or a kind label for
+ *  media. Shared by swipe-to-reply and the long-press sheet so both paths
+ *  attach exactly the same quote. */
+fun replyQuoteLabel(m: TikuMessage): String = when (m.kind) {
+    MsgKind.IMAGE -> "Photo"
+    MsgKind.VOICE -> "Voice message"
+    else -> m.text
+}.take(60)
+
+// ================= image viewer (round 8) =================
+/**
+ * Full-screen image viewer (item 5): tap an image message → the photo fills
+ * the screen (fit), pinch to zoom (1–4×, transformable — transform-only, no
+ * layout work), ✕ or Back closes. Saving is the EXPLICIT "Save to device"
+ * button (the same MediaSaver pipeline as the message sheet) — opening the
+ * viewer never writes anything anywhere. Rendered as an overlay INSIDE the
+ * chat (same activity window), so FLAG_SECURE + zero-trace behaviour are
+ * inherited rather than re-implemented on a dialog window.
+ */
+@Composable
+fun ImageViewerOverlay(m: TikuMessage, onClose: () -> Unit) {
+    val bmp = m.photo
+    if (bmp == null) {
+        LaunchedEffect(Unit) { onClose() }
+        return
+    }
+    androidx.activity.compose.BackHandler { onClose() }
+    var zoom by remember { mutableFloatStateOf(1f) }
+    var panX by remember { mutableFloatStateOf(0f) }
+    var panY by remember { mutableFloatStateOf(0f) }
+    val transformState = rememberTransformableState { zoomChange, panChange, _ ->
+        zoom = (zoom * zoomChange).coerceIn(1f, 4f)
+        if (zoom > 1f) { panX += panChange.x; panY += panChange.y } else { panX = 0f; panY = 0f }
+    }
+    Box(
+        Modifier.fillMaxSize().background(Color(0xF21F0E0D)).testTag("image_viewer"),
+    ) {
+        androidx.compose.foundation.Image(
+            bmp.asBmp(), null,
+            Modifier.fillMaxSize().padding(12.dp)
+                .graphicsLayer {
+                    scaleX = zoom; scaleY = zoom
+                    translationX = panX; translationY = panY
+                }
+                .transformable(transformState),
+            contentScale = ContentScale.Fit,
+        )
+        Row(
+            Modifier.fillMaxWidth().padding(14.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Box(
+                Modifier.size(40.dp).clip(CircleShape).background(Color(0x33FFFFFF))
+                    .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) { onClose() },
+                contentAlignment = Alignment.Center,
+            ) { Icon(Icons.Filled.Close, null, Modifier.size(20.dp), tint = Color.White) }
+            Row(
+                Modifier.clip(RoundedCornerShape(18.dp)).background(Color(0x33FFFFFF))
+                    .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {
+                        if (Config.PREVIEW_UI_ONLY) {
+                            AppState.toast("Saved to device")
+                        } else {
+                            val ok = MediaSaver.saveToDevice(AppState.appCtx, m)
+                            AppState.toast(if (ok) "Saved to device" else "Couldn't save")
+                        }
+                        onClose()
+                    }
+                    .padding(horizontal = 14.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(Icons.Filled.SaveAlt, null, Modifier.size(17.dp), tint = Color.White)
+                Spacer(Modifier.width(7.dp))
+                Text("Save to device", fontSize = 13.5.sp, fontWeight = FontWeight.SemiBold,
+                    color = Color.White, fontFamily = Manrope)
+            }
+        }
+    }
+}
+
 // ================= message bubble =================
 @Composable
 fun MessageBubble(
@@ -554,22 +772,97 @@ fun MessageBubble(
     onReact: (String) -> Unit,
     onLongPress: () -> Unit,
     onRetry: () -> Unit = {},
+    onSwipeReply: () -> Unit = {},
+    onImageClick: () -> Unit = {},
 ) {
-    var appeared by remember { mutableStateOf(false) }
-    LaunchedEffect(Unit) { appeared = true }
-    val scale by androidx.compose.animation.core.animateFloatAsState(
-        if (appeared) 1f else 0.7f, tween(450, easing = TikuEase), label = "pop")
+    // ROUND 8 entrance (item 8): subtle rise + fade + settle, transform/alpha
+    // only (graphicsLayer — no layout work), matching the reference UI's
+    // keyframes (translateY + scale → 1) with the spring ease.
+    val enter = remember { Animatable(0f) }
+    LaunchedEffect(Unit) { enter.animateTo(1f, tween(380, easing = TikuSpringEase)) }
     val shape = if (m.me) RoundedCornerShape(20.dp, 20.dp, 6.dp, 20.dp)
         else RoundedCornerShape(20.dp, 20.dp, 20.dp, 6.dp)
     val textColor = if (m.me) Color.White else TikuTokens.Ink
 
+    // ROUND 8 swipe-to-reply (item 1): drag state lives in plain snapshot
+    // state (synchronous, tracks the finger exactly); an Animatable runs
+    // ONLY the release spring-back. Own messages swipe LEFT, peer messages
+    // swipe RIGHT (IG directions), clamped to 84dp; 56dp arms the reply.
+    val density = LocalDensity.current
+    val maxSwipePx = with(density) { 84.dp.toPx() }
+    val thresholdPx = with(density) { 56.dp.toPx() }
+    var dragX by remember { mutableFloatStateOf(0f) }
+    val springBack = remember { Animatable(0f) }
+    val bubbleScope = rememberCoroutineScope()
+    val haptics = LocalHapticFeedback.current
+    var swipeArmed by remember { mutableStateOf(false) }
+    val swipeProgress = (abs(dragX) / thresholdPx).coerceIn(0f, 1f)
+
+    // IG quote caption (item 2): sits just above a reply bubble.
+    if (m.replyQuote != null) {
+        Row(
+            Modifier.fillMaxWidth().padding(bottom = 3.dp, start = 2.dp, end = 2.dp),
+            horizontalArrangement = if (m.me) Arrangement.End else Arrangement.Start,
+        ) {
+            Text(
+                if (m.me) "You replied" else "Replied to you",
+                fontSize = 11.sp, color = TikuTokens.Muted, fontFamily = Manrope,
+            )
+        }
+    }
+    Box(Modifier.fillMaxWidth()) {
+        // the reply arrow the swipe reveals, on the edge the bubble vacates
+        Box(
+            Modifier.align(if (m.me) Alignment.CenterEnd else Alignment.CenterStart)
+                .padding(horizontal = 8.dp).size(30.dp)
+                .graphicsLayer {
+                    alpha = swipeProgress
+                    val s = 0.6f + 0.4f * swipeProgress
+                    scaleX = s; scaleY = s
+                }
+                .clip(CircleShape).background(settings.accent),
+            contentAlignment = Alignment.Center,
+        ) { Icon(Icons.Filled.Reply, null, Modifier.size(16.dp), tint = Color.White) }
     Row(
         Modifier.fillMaxWidth()
+            .offset { androidx.compose.ui.unit.IntOffset(dragX.roundToInt(), 0) }
             .pointerInput(m.id) {
                 detectTapGestures(
                     onDoubleTap = { onReact("❤️") },
                     onLongPress = { onLongPress() },
+                    onTap = { if (m.kind == MsgKind.IMAGE && m.photo != null) onImageClick() },
                 )
+            }
+            .pointerInput(m.id + "_swipe") {
+                detectHorizontalDragGestures(
+                    onDragEnd = {
+                        val hit = abs(dragX) >= thresholdPx
+                        val from = dragX
+                        bubbleScope.launch {
+                            springBack.snapTo(from)
+                            springBack.animateTo(0f, spring(dampingRatio = 0.72f, stiffness = Spring.StiffnessMediumLow)) { dragX = value }
+                        }
+                        if (hit) onSwipeReply()
+                        swipeArmed = false
+                    },
+                    onDragCancel = {
+                        val from = dragX
+                        bubbleScope.launch {
+                            springBack.snapTo(from)
+                            springBack.animateTo(0f, spring(dampingRatio = 0.72f, stiffness = Spring.StiffnessMediumLow)) { dragX = value }
+                        }
+                        swipeArmed = false
+                    },
+                ) { change, dragAmount ->
+                    change.consume()
+                    dragX = if (m.me) (dragX + dragAmount).coerceIn(-maxSwipePx, 0f)
+                        else (dragX + dragAmount).coerceIn(0f, maxSwipePx)
+                    val nowArmed = abs(dragX) >= thresholdPx
+                    if (nowArmed && !swipeArmed) {
+                        haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                    }
+                    swipeArmed = nowArmed
+                }
             },
         horizontalArrangement = if (m.me) Arrangement.End else Arrangement.Start,
     ) {
@@ -587,20 +880,33 @@ fun MessageBubble(
             Modifier.fillMaxWidth(0.78f),
             contentAlignment = if (m.me) Alignment.TopEnd else Alignment.TopStart,
         ) {
-            Box {
+            Box(
+                Modifier.graphicsLayer {
+                    val v = enter.value
+                    alpha = v
+                    val s = 0.86f + 0.14f * v
+                    scaleX = s; scaleY = s
+                    translationY = (1f - v) * 22f
+                },
+            ) {
             Column(
-                Modifier.scale(scale)
-                    .clip(shape)
+                Modifier.clip(shape)
                     .then(if (m.me) Modifier.background(settings.gradBrush)
                           else Modifier.background(TikuTokens.Bubble).border(1.dp, TikuTokens.Line, shape))
                     .padding(horizontal = 13.dp, vertical = 9.dp),
             ) {
                 if (m.replyQuote != null) {
-                    Row {
-                        Box(Modifier.width(3.dp).fillMaxHeight()
-                            .background(if (m.me) Color.White.copy(alpha = 0.8f) else settings.accent))
-                        Spacer(Modifier.width(8.dp))
-                        Text(m.replyQuote, fontSize = 12.sp, color = textColor.copy(alpha = 0.75f),
+                    // ROUND 8 (item 2): the quote is its own soft block inside
+                    // the bubble — a translucent fill, rounded, and the quoted
+                    // text at ~70% opacity so it reads as a step quieter
+                    // than the message body (the owner's IG reference).
+                    Column(
+                        Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp))
+                            .background(if (m.me) Color.White.copy(alpha = 0.20f)
+                                else TikuTokens.Ink.copy(alpha = 0.06f))
+                            .padding(horizontal = 9.dp, vertical = 6.dp),
+                    ) {
+                        Text(m.replyQuote, fontSize = 12.sp, color = textColor.copy(alpha = 0.7f),
                             fontFamily = Manrope, maxLines = 2,
                             overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
                     }
@@ -624,13 +930,11 @@ fun MessageBubble(
                         when {
                             m.me && m.status == SendStatus.SENDING -> "Sending…"
                             m.me && m.status == SendStatus.FAILED -> "Not sent"
-                            // ROUND 4 (item 1): single ✓ until the peer has
-                            // actually SEEN the message (their uid in the
-                            // doc's seenBy); ✓✓ only after. seenByPeer is
-                            // re-derived from Firestore on every snapshot, so
-                            // this survives re-entry / restore / 2nd device.
-                            else -> (if (m.starredByMe) "★ " else "") + m.time +
-                                if (m.me) (if (m.seenByPeer) " ✓✓" else " ✓") else ""
+                            // ROUND 8 (item 7b): ticks are GONE. Read state
+                            // renders IG-style as the small "Seen" caption
+                            // under the latest own message (in ChatContent),
+                            // driven by the same seenByPeer derivation.
+                            else -> (if (m.starredByMe) "★ " else "") + m.time
                         },
                         fontSize = 11.sp, color = textColor.copy(alpha = 0.7f), fontFamily = Manrope,
                     )
@@ -652,6 +956,7 @@ fun MessageBubble(
             }
         }
     }
+    } // close swipe-reveal Box
     // FAILED outgoing bubble: plain reason + tap-to-retry (round 3 — a failed
     // send must never be invisible again).
     if (m.me && m.status == SendStatus.FAILED) {
@@ -729,8 +1034,7 @@ object ChatSheets {
         }
     }
 
-    fun context(threadId: String, m: TikuMessage, onReply: (String) -> Unit) {
-        val label = when (m.kind) { MsgKind.IMAGE -> "Photo"; MsgKind.VOICE -> "Voice message"; else -> m.text }
+    fun context(threadId: String, m: TikuMessage, onReply: (TikuMessage) -> Unit) {
         AppState.sheet {
             // reaction row
             Row(
@@ -752,10 +1056,17 @@ object ChatSheets {
             }
             Spacer(Modifier.height(10.dp))
             SheetAction("Reply") {
-                onReply(label.take(60)); AppState.closeSheet()
+                onReply(m); AppState.closeSheet()
             }
             SheetAction("Copy") {
-                // clipboard handled by the caller platform-side; toast to match the prototype
+                // ROUND 8: Copy actually copies now (it used to only toast).
+                // The text is already decrypted on this device; the user
+                // explicitly chose to put it on their own clipboard.
+                if (m.kind == MsgKind.TEXT) {
+                    val cm = AppState.appCtx.getSystemService(android.content.Context.CLIPBOARD_SERVICE)
+                        as? android.content.ClipboardManager
+                    cm?.setPrimaryClip(android.content.ClipData.newPlainText("message", m.text))
+                }
                 AppState.toast("Copied"); AppState.closeSheet()
             }
             SheetAction(if (m.starredByMe) "Unstar" else "Star") {
@@ -799,7 +1110,13 @@ object ChatSheets {
                 nickname(thread)
             }
             SheetAction("Mute notifications") { AppState.toast("Muted for 8 hours"); AppState.closeSheet() }
-            SheetAction("Pin chat") { AppState.toast("Chat pinned"); AppState.closeSheet() }
+            // ROUND 8: pinning is REAL now (IG-style) — a per-user local
+            // preference; pinned chats sort to the top of the list.
+            SheetAction(if (thread.pinned) "Unpin chat" else "Pin chat") {
+                AppState.repo.setPinned(thread.id, !thread.pinned)
+                AppState.toast(if (thread.pinned) "Chat unpinned" else "Chat pinned")
+                AppState.closeSheet()
+            }
             SheetAction("Export chat") { AppState.toast("Chat exported (encrypted)"); AppState.closeSheet() }
             SheetAction("Clear chat") {
                 AppState.repo.clearChat(thread.id); AppState.closeSheet()

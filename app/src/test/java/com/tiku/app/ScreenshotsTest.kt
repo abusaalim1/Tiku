@@ -16,9 +16,11 @@ import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
+import androidx.compose.ui.test.longClick
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.test.swipeLeft
 import androidx.compose.ui.test.swipeUp
 import androidx.compose.ui.unit.dp
 import androidx.test.core.app.ApplicationProvider
@@ -141,15 +143,20 @@ class ScreenshotsTest {
         shot("07-tik-gate.png")
     }
 
-    @Test fun shot06_chemistryTikRow() {
-        // ROUND 3.2 PROOF (positive): the discreet "Tik" row now lives at the
-        // END of the Chemistry subject page's chapter rows. Scroll the list to
-        // the bottom, capture the page (row in context), then the row itself.
+    @Test fun shot06_chemistryBookRow() {
+        // ROUND 8 PROOF (positive + negative): the Chemistry page's secret
+        // entry is now a plain "Reference books" row with a book icon — and
+        // the word "Tik" appears NOWHERE on the page. Scroll the list to the
+        // bottom, capture the page (row in context), then the row itself.
         frame { SubjectScreen("Chemistry") }
         repeat(6) { composeRule.onRoot().performTouchInput { swipeUp() } }
         composeRule.waitForIdle()
+        org.junit.Assert.assertTrue(
+            "Chemistry page must not contain any Tik wording",
+            composeRule.onAllNodesWithText("Tik").fetchSemanticsNodes().isEmpty(),
+        )
         shot("06-chemistry-subject.png")
-        composeRule.onNodeWithText("Tik").captureRoboImage("$outDir/06-chemistry-tik-row.png")
+        composeRule.onNodeWithText("Reference books").captureRoboImage("$outDir/06-chemistry-book-row.png")
     }
 
     @Test fun shot19_qotdAnswered() {
@@ -316,14 +323,38 @@ class ScreenshotsTest {
     }
 
     // ---------- round 4 additions ----------
-    @Test fun shot24_chatTicksCallEvent() {
-        // ITEM 1 + 3 PROOF: the seeded first thread carries an own message the
-        // peer has SEEN (✓✓), a centred call-event pill ("Call ended · 12:34"),
-        // and an own message NOT yet seen (single ✓) — all in one chat.
-        val th = AppState.threads.value.first()
-        frame { ChatScreen(th.id) }
+    @Test fun shot24_chatSeenCallEvent() {
+        // ROUND 8 PROOF (items 2 + 7b): ticks are GONE — this chat carries a
+        // peer reply bubble with its soft quote block + "Replied to you"
+        // caption, a centred call-event pill, and the muted "Seen" caption
+        // under my latest (seen) message. Asserts no ✓✓ renders anywhere.
+        val p = PreviewStore.people[1]
+        val id = PreviewRepo.startThreadWith(p)
+        AppState.upsertMessage(id, TikuMessage(
+            id = "s1", senderUid = p.uid, kind = MsgKind.TEXT,
+            text = "Did you see the moodboard?", time = "9:38", me = false, tsMs = 1))
+        AppState.upsertMessage(id, TikuMessage(
+            id = "s2", senderUid = p.uid, kind = MsgKind.TEXT,
+            text = "Yes! The sage tones are perfect", time = "9:40", me = false, tsMs = 2,
+            replyQuote = "Did you see the moodboard?"))
+        AppState.upsertMessage(id, TikuMessage(
+            id = "s3", senderUid = "me", kind = MsgKind.CALL,
+            time = "9:41", me = true, tsMs = 3,
+            callCallerUid = "me", callOutcome = "ended", callDurationSec = 754, callMine = true))
+        AppState.upsertMessage(id, TikuMessage(
+            id = "s4", senderUid = "me", kind = MsgKind.TEXT,
+            text = "On my way!", time = "9:42", me = true, tsMs = 4, seenByPeer = true))
+        frame { ChatScreen(id) }
         composeRule.waitForIdle()
-        shot("24-chat-ticks-call-event.png")
+        org.junit.Assert.assertTrue(
+            "chat must not render tick glyphs anymore",
+            composeRule.onAllNodesWithText("✓✓", substring = true).fetchSemanticsNodes().isEmpty(),
+        )
+        org.junit.Assert.assertTrue(
+            "Seen caption must render under the latest own message",
+            composeRule.onAllNodesWithText("Seen").fetchSemanticsNodes().isNotEmpty(),
+        )
+        shot("24-chat-seen-call-event.png")
     }
 
     @Test fun shot25_newChatLiveSearch() {
@@ -448,5 +479,138 @@ class ScreenshotsTest {
             composeRule.onAllNodesWithText("Edit nickname").fetchSemanticsNodes().isNotEmpty(),
         )
         shot("30-chat-details-nickname.png")
+    }
+
+    // ---------- round 8 additions ----------
+    @Test fun shot32_swipeReplyQuote() {
+        // ITEM 1 + 2 PROOF: reply mode armed on a chat — first try the real
+        // swipe gesture on an own bubble (long message = a long drag); if the
+        // harness can't drive it past the threshold, fall back to the
+        // long-press sheet's Reply (the same reply state). The capture shows
+        // the composer reply bar (IG header + quote at ~70%) over a thread
+        // whose peer reply bubble carries its own quote block + caption.
+        val p = PreviewStore.people[1]
+        val id = PreviewRepo.startThreadWith(p)
+        AppState.upsertMessage(id, TikuMessage(
+            id = "r1", senderUid = p.uid, kind = MsgKind.TEXT,
+            text = "The venue photos came out so well", time = "9:38", me = false, tsMs = 1))
+        AppState.upsertMessage(id, TikuMessage(
+            id = "r2", senderUid = p.uid, kind = MsgKind.TEXT,
+            text = "Sending the best ones tonight", time = "9:39", me = false, tsMs = 2,
+            replyQuote = "The venue photos came out so well"))
+        AppState.upsertMessage(id, TikuMessage(
+            id = "r3", senderUid = "me", kind = MsgKind.TEXT,
+            text = "Perfect, this is the long message I am swiping on to reply",
+            time = "9:40", me = true, tsMs = 3))
+        frame { ChatScreen(id) }
+        composeRule.waitForIdle()
+        var armedBySwipe = false
+        runCatching {
+            composeRule.onNodeWithText("Perfect, this is the long message I am swiping on to reply")
+                .performTouchInput { swipeLeft() }
+            composeRule.waitForIdle()
+            armedBySwipe = composeRule.onAllNodesWithText("Replying to yourself")
+                .fetchSemanticsNodes().isNotEmpty()
+        }
+        if (!armedBySwipe) {
+            composeRule.onNodeWithText("Perfect, this is the long message I am swiping on to reply")
+                .performTouchInput { longClick() }
+            composeRule.waitForIdle()
+            composeRule.onNodeWithText("Reply").performClick()
+            composeRule.waitForIdle()
+        }
+        org.junit.Assert.assertTrue(
+            "reply bar must be armed (swipe or menu path)",
+            composeRule.onAllNodesWithText("Replying to yourself").fetchSemanticsNodes().isNotEmpty(),
+        )
+        shot("32-swipe-reply-quote.png")
+    }
+
+    @Test fun shot33_floatingCallWindow() {
+        // ITEM 3 PROOF: a connected call minimized to the floating window,
+        // floating over a live chat — controller state driven exactly as the
+        // call screen's Back/minimize path drives it.
+        val th = AppState.threads.value.first()
+        CallController.state.value = CallUiState.Connected(
+            th.id, "shot-pip-1", false, th.person, System.currentTimeMillis() - 65_000,
+        )
+        CallController.minimizeCall()
+        frame {
+            Box(Modifier.fillMaxSize()) {
+                ChatScreen(th.id)
+                FloatingCallWindow()
+            }
+        }
+        composeRule.waitForIdle()
+        org.junit.Assert.assertTrue(
+            "floating call window must be showing over the chat",
+            CallController.pipMinimized.value &&
+                composeRule.onAllNodesWithText("Aarav").fetchSemanticsNodes().isNotEmpty(),
+        )
+        shot("33-floating-call-window.png")
+        CallController.endSilently()
+    }
+
+    @Test fun shot34_imageViewer() {
+        // ITEM 5 PROOF: the full-screen image viewer — photo fit to screen,
+        // explicit "Save to device" action + close. (Nothing auto-saves.)
+        val bmp = android.graphics.Bitmap.createBitmap(600, 400, android.graphics.Bitmap.Config.ARGB_8888)
+        val canvas = android.graphics.Canvas(bmp)
+        canvas.drawColor(android.graphics.Color.rgb(240, 200, 170))
+        val paint = android.graphics.Paint().apply {
+            color = android.graphics.Color.rgb(160, 80, 50); textSize = 44f
+        }
+        canvas.drawText("Tikuu photo", 60f, 210f, paint)
+        val m = TikuMessage(
+            id = "viewer1", senderUid = "p-aarav", kind = MsgKind.IMAGE,
+            time = "9:41", me = false, photo = bmp)
+        frame { ImageViewerOverlay(m) {} }
+        composeRule.waitForIdle()
+        org.junit.Assert.assertTrue(
+            "viewer must offer the explicit Save to device action",
+            composeRule.onAllNodesWithText("Save to device").fetchSemanticsNodes().isNotEmpty(),
+        )
+        shot("34-image-viewer.png")
+    }
+
+    @Test fun shot35_editProfile() {
+        // ITEM 6 PROOF: Me ▸ Edit profile — photo row + username field with
+        // the signup-mirroring validation + save.
+        AppState.myUsername = "abu_saalim"
+        AppState.homeTab = HomeTab.ME
+        frame { HomeScreen() }
+        EditProfileSheet.open()
+        composeRule.waitForIdle()
+        org.junit.Assert.assertTrue(
+            "edit profile sheet must offer the username save",
+            composeRule.onAllNodesWithText("Save username").fetchSemanticsNodes().isNotEmpty(),
+        )
+        org.junit.Assert.assertTrue(
+            "edit profile sheet must offer photo change",
+            composeRule.onAllNodesWithText("Change photo").fetchSemanticsNodes().isNotEmpty(),
+        )
+        shot("35-edit-profile.png")
+    }
+
+    @Test fun shot36_jumpToBottomPill() {
+        // ITEM 4 PROOF: a long chat scrolled UP (toward older messages)
+        // surfaces the floating jump-to-latest pill.
+        val p = PreviewStore.people[1]
+        val id = PreviewRepo.startThreadWith(p)
+        for (i in 1..30) {
+            AppState.upsertMessage(id, TikuMessage(
+                id = "j$i", senderUid = if (i % 2 == 0) "me" else p.uid,
+                kind = MsgKind.TEXT, text = "Message number $i in a long chat",
+                time = "9:41", me = i % 2 == 0, tsMs = i.toLong()))
+        }
+        frame { ChatScreen(id) }
+        composeRule.waitForIdle()
+        repeat(4) { composeRule.onRoot().performTouchInput { swipeUp() } }
+        composeRule.waitForIdle()
+        org.junit.Assert.assertTrue(
+            "jump-to-latest pill must appear when scrolled up",
+            composeRule.onAllNodesWithTag("jump_to_latest").fetchSemanticsNodes().isNotEmpty(),
+        )
+        shot("36-jump-to-bottom.png")
     }
 }

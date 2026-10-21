@@ -1,5 +1,14 @@
 package com.tiku.app
 
+import android.graphics.BitmapFactory
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.horizontalScroll
@@ -33,6 +42,7 @@ import androidx.compose.material.icons.filled.CallMissed
 import androidx.compose.material.icons.filled.CallReceived
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.PhotoCamera
+import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material.icons.filled.DarkMode
 import androidx.compose.material.icons.filled.Search
@@ -101,10 +111,23 @@ fun HomeScreen() {
                 }
             }
             Box(Modifier.weight(1f)) {
-                when (tab) {
-                    HomeTab.CHATS -> ChatsPane()
-                    HomeTab.CALLS -> CallsPane()
-                    HomeTab.ME -> MePane()
+                // ROUND 8 (animations pass): panes cross-fade with a whisper
+                // of horizontal drift instead of snapping (transform/alpha
+                // only, 240ms — calm).
+                AnimatedContent(
+                    targetState = tab,
+                    transitionSpec = {
+                        (fadeIn(tween(240, easing = TikuEase)) +
+                            slideInHorizontally(tween(240, easing = TikuEase)) { it / 24 })
+                            .togetherWith(fadeOut(tween(160, easing = TikuEase)))
+                    },
+                    label = "home-tabs",
+                ) { t ->
+                    when (t) {
+                        HomeTab.CHATS -> ChatsPane()
+                        HomeTab.CALLS -> CallsPane()
+                        HomeTab.ME -> MePane()
+                    }
                 }
             }
         }
@@ -176,10 +199,12 @@ fun ChatsPane() {
         }
         // round 6: the list filter matches the DISPLAY name (nickname when
         // set) and the @username, not just the profile name.
+        // round 8: pinned chats float to the top (stable sort — recency
+        // order is otherwise untouched).
         val filtered = threads.filter {
             it.displayName.contains(query, ignoreCase = true) ||
                 it.person.username.contains(query, ignoreCase = true)
-        }
+        }.sortedByDescending { it.pinned }
         if (filtered.isEmpty() && !Config.PREVIEW_UI_ONLY) {
             item {
                 Column(Modifier.fillMaxWidth().padding(top = 60.dp), horizontalAlignment = Alignment.CenterHorizontally) {
@@ -249,12 +274,20 @@ fun ChatRow(th: ChatThread) {
         AvatarBox(th.person, 52.dp, 19.dp, 22f)
         Spacer(Modifier.width(13.dp))
         Column(Modifier.weight(1f)) {
-            // round 6: nickname replaces the profile name in the list too
-            Text(th.displayName, fontWeight = FontWeight.SemiBold, fontSize = 16.sp, fontFamily = Manrope, color = TikuTokens.Ink)
             Row(verticalAlignment = Alignment.CenterVertically) {
-                // round 4: the row tick follows the real seen state too
-                if (last?.me == true && last.kind != MsgKind.CALL) {
-                    Text(if (last.seenByPeer) "✓✓ " else "✓ ", fontSize = 14.sp, color = TikuTokens.Muted, fontFamily = Manrope)
+                // round 6: nickname replaces the profile name in the list too
+                Text(th.displayName, fontWeight = FontWeight.SemiBold, fontSize = 16.sp, fontFamily = Manrope, color = TikuTokens.Ink)
+                if (th.pinned) {
+                    Spacer(Modifier.width(6.dp))
+                    Icon(Icons.Filled.PushPin, null, Modifier.size(13.dp), tint = TikuTokens.Muted)
+                }
+            }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                // ROUND 8 (item 7b): the row tick is gone — a subtle "Seen"
+                // stands in its place when my latest message was seen.
+                if (last?.me == true && last.kind != MsgKind.CALL && last.seenByPeer) {
+                    Text("Seen", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = TikuTokens.Muted, fontFamily = Manrope)
+                    Spacer(Modifier.width(5.dp))
                 }
                 val pvIcon = when {
                     last == null -> null
@@ -394,6 +427,18 @@ fun MePane() {
                 Text("@" + AppState.myUsername.ifEmpty { "you" }, fontFamily = Bricolage, fontWeight = FontWeight.Bold,
                     fontSize = 22.sp, color = TikuTokens.Ink)
                 Text("Encrypted · Verified", fontSize = 13.sp, color = TikuTokens.Muted, fontFamily = Manrope)
+                // ROUND 8 (item 6): Edit profile — photo + username.
+                Spacer(Modifier.height(14.dp))
+                Box(
+                    Modifier.clip(RoundedCornerShape(14.dp)).background(TikuTokens.Mint)
+                        .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {
+                            EditProfileSheet.open()
+                        }
+                        .padding(horizontal = 18.dp, vertical = 9.dp),
+                ) {
+                    Text("Edit profile", fontSize = 13.5.sp, fontWeight = FontWeight.SemiBold,
+                        fontFamily = Manrope, color = TikuTokens.Ink)
+                }
             }
         }
         item { SettingsGroups() }
@@ -423,7 +468,7 @@ fun SettingsGroups() {
         "Privacy" to listOf(
             RowDef("tg", "App lock", "Ask for password on open", "al"),
             RowDef("tg", "Disappearing messages", "Vanish after 24 hours", "dm"),
-            RowDef("tg", "Read receipts", "Show ✓✓ when seen", "rr", true),
+            RowDef("tg", "Read receipts", "Show “Seen” when read", "rr", true),
             RowDef("tg", "Last seen", "Let contacts see when you were online", "ls", true),
             RowDef("tg", "Block screenshots", "Block screenshots & app-switcher previews of chats", "bs", true),
             RowDef("tg", "Hide typing status", "Don’t show “typing…”", "ht"),
@@ -636,6 +681,153 @@ object NewChatSheet {
                     }
                 }
             }
+        }
+    }
+}
+
+/**
+ * ROUND 8 — EDIT PROFILE (item 6): change the profile photo (the photoData
+ * pipeline) and change the username. Username validation mirrors the signup
+ * screen exactly (same input filter, same 3-char minimum, same debounced
+ * availability check); the rename itself is ONE transaction in the engine
+ * (claim new + free old + rewrite user doc/search fields), so a taken name
+ * fails cleanly and changes nothing. Chats key on uid — a rename touches
+ * no conversation.
+ */
+object EditProfileSheet {
+    fun open() {
+        AppState.sheet {
+            val ctx = LocalContext.current
+            val scope = rememberCoroutineScope()
+            var username by remember { mutableStateOf(AppState.myUsername) }
+            var hint by remember { mutableStateOf("Letters, numbers, dots and underscores.") }
+            var available by remember { mutableStateOf(false) }
+            var busy by remember { mutableStateOf(false) }
+            var err by remember { mutableStateOf("") }
+            val changed = username != AppState.myUsername
+
+            val pick = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+                if (uri != null) {
+                    ctx.contentResolver.openInputStream(uri)?.use { stream ->
+                        BitmapFactory.decodeStream(stream)?.let { bmp ->
+                            if (Config.PREVIEW_UI_ONLY) {
+                                AppState.myAvatar = bmp
+                                AppState.toast("Profile photo updated")
+                            } else {
+                                scope.launch {
+                                    val r = FirebaseEngine.updateProfilePhoto(bmp)
+                                    AppState.toast(if (r.isSuccess) "Profile photo updated" else "Couldn't update the photo")
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // debounced availability — the signup screen's exact behaviour
+            LaunchedEffect(username) {
+                available = false
+                if (!changed) { hint = "This is your current username."; return@LaunchedEffect }
+                if (username.isEmpty()) { hint = "Letters, numbers, dots and underscores."; return@LaunchedEffect }
+                delay(450)
+                when {
+                    username.length < 3 -> hint = "At least 3 characters."
+                    else -> {
+                        val taken = if (Config.PREVIEW_UI_ONLY) username in listOf("admin", "tikuu")
+                            else runCatching { FirebaseEngine.usernameTaken(username) }.getOrDefault(false)
+                        if (taken) hint = "@$username is taken. Try another."
+                        else { hint = "✓ @$username is available"; available = true }
+                    }
+                }
+            }
+
+            SerifTitle("Edit profile", 28.sp, modifier = Modifier.padding(top = 2.dp, bottom = 12.dp))
+            // photo row
+            Row(
+                Modifier.fillMaxWidth()
+                    .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {
+                        // picker backgrounds the app — flag it so the instant
+                        // re-lock doesn't fire mid-pick (same rule as chat)
+                        ChatSession.expectExternalActivity = true
+                        pick.launch("image/*")
+                    }
+                    .padding(vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Box(
+                    Modifier.size(54.dp).clip(RoundedCornerShape(18.dp)).background(TikuTokens.Mint),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    val bmp = AppState.myAvatar
+                    if (bmp != null) {
+                        androidx.compose.foundation.Image(bmp.asBmp(), null, Modifier.fillMaxSize(),
+                            contentScale = androidx.compose.ui.layout.ContentScale.Crop)
+                    } else {
+                        EmojiArt("🙂", 24.dp)
+                    }
+                }
+                Spacer(Modifier.width(13.dp))
+                Column {
+                    Text("Change photo", fontWeight = FontWeight.SemiBold, fontSize = 16.sp, fontFamily = Manrope, color = TikuTokens.Ink)
+                    Text("Shown on your profile", fontSize = 13.sp, color = TikuTokens.Muted, fontFamily = Manrope)
+                }
+            }
+            Spacer(Modifier.height(16.dp))
+            // username field — same shape + input filter as signup
+            Box(
+                Modifier.fillMaxWidth().height(56.dp)
+                    .clip(RoundedCornerShape(18.dp)).background(TikuTokens.Card)
+                    .border(1.dp, TikuTokens.Line, RoundedCornerShape(18.dp)),
+                contentAlignment = Alignment.CenterStart,
+            ) {
+                Text("@", color = TikuTokens.Muted, fontSize = 16.sp, fontFamily = Manrope,
+                    modifier = Modifier.padding(start = 18.dp))
+                BasicTextField(
+                    value = username,
+                    onValueChange = { raw ->
+                        username = raw.lowercase().filter { it.isLetterOrDigit() || it == '.' || it == '_' }.take(20)
+                    },
+                    textStyle = TextStyle(fontSize = 16.sp, fontFamily = Manrope, color = TikuTokens.Ink),
+                    cursorBrush = SolidColor(TikuTokens.Ink),
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth().padding(start = 36.dp, end = 18.dp),
+                    decorationBox = { inner ->
+                        if (username.isEmpty()) Text("username", fontSize = 16.sp, fontFamily = Manrope, color = TikuTokens.Muted)
+                        inner()
+                    },
+                )
+            }
+            Spacer(Modifier.height(6.dp))
+            Text(hint, fontSize = 13.sp, color = if (available) tikuSettings().value.accent else TikuTokens.Muted, fontFamily = Manrope)
+            Text("Friends find you by your username — chats and history are not affected.",
+                fontSize = 13.sp, color = TikuTokens.Muted, fontFamily = Manrope)
+            if (err.isNotEmpty()) {
+                Spacer(Modifier.height(6.dp))
+                Text(err, fontSize = 13.sp, color = TikuTokens.Red, fontFamily = Manrope)
+            }
+            Spacer(Modifier.height(14.dp))
+            PrimaryButton(if (busy) "Saving…" else "Save username",
+                enabled = changed && available && !busy, modifier = Modifier.fillMaxWidth()) {
+                if (Config.PREVIEW_UI_ONLY) {
+                    AppState.myUsername = username
+                    AppState.closeSheet()
+                    AppState.toast("Username updated")
+                } else {
+                    busy = true
+                    err = ""
+                    scope.launch {
+                        val r = FirebaseEngine.changeUsername(username)
+                        busy = false
+                        if (r.isSuccess) {
+                            AppState.closeSheet()
+                            AppState.toast("Username updated")
+                        } else {
+                            err = r.exceptionOrNull()?.message ?: "Couldn't change username. Try again."
+                        }
+                    }
+                }
+            }
+            Spacer(Modifier.height(6.dp))
         }
     }
 }

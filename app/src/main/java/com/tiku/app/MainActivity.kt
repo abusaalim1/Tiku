@@ -6,11 +6,14 @@ import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.EnterTransition
 import androidx.compose.animation.ExitTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
@@ -25,6 +28,9 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.platform.LocalContext
@@ -162,15 +168,40 @@ fun TikuRoot(onGoogleClick: () -> Unit) {
                 else -> {
                     Box(Modifier.fillMaxSize()) {
                         HomeScreen()
-                        when (screen) {
-                            is Screen.Chat -> ChatScreen(screen.threadId)
-                            is Screen.Call -> {
-                                val s = screen as? Screen.Call ?: return@Box
-                                CallScreen(s.threadId, s.video)
-                            }
-                            is Screen.Story -> StoryScreen()
-                            else -> {}
+                        // ROUND 8 (animations pass): the chat overlay slides
+                        // in from the right and the call overlay fades/scales
+                        // in — previously both snapped in instantly. The last
+                        // non-null target is remembered so the EXIT animation
+                        // still has content to animate after navigation flips.
+                        var lastChat by remember { mutableStateOf<Screen.Chat?>(null) }
+                        var lastCall by remember { mutableStateOf<Screen.Call?>(null) }
+                        LaunchedEffect(screen) {
+                            (screen as? Screen.Chat)?.let { lastChat = it }
+                            (screen as? Screen.Call)?.let { lastCall = it }
                         }
+                        AnimatedVisibility(
+                            visible = screen is Screen.Chat,
+                            enter = slideInHorizontally(tween(420, easing = TikuEase)) { it } +
+                                fadeIn(tween(300, easing = TikuEase)),
+                            exit = slideOutHorizontally(tween(320, easing = TikuEase)) { it } +
+                                fadeOut(tween(220, easing = TikuEase)),
+                        ) {
+                            (screen as? Screen.Chat ?: lastChat)?.let { ChatScreen(it.threadId) }
+                        }
+                        AnimatedVisibility(
+                            visible = screen is Screen.Call,
+                            enter = fadeIn(tween(300, easing = TikuEase)) +
+                                scaleIn(initialScale = 0.97f, animationSpec = tween(300, easing = TikuEase)),
+                            exit = fadeOut(tween(220, easing = TikuEase)) +
+                                scaleOut(targetScale = 0.98f, animationSpec = tween(220, easing = TikuEase)),
+                        ) {
+                            (screen as? Screen.Call ?: lastCall)?.let { CallScreen(it.threadId, it.video) }
+                        }
+                        if (screen is Screen.Story) StoryScreen()
+                        // ROUND 8: the floating call window lives above the
+                        // chat surfaces (below sheets + toast, which render
+                        // after this Box).
+                        FloatingCallWindow()
                     }
                 }
             }

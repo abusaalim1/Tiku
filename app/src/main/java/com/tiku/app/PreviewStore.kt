@@ -38,7 +38,7 @@ object PreviewStore {
         }
         add(0, 2, "9:41",
             msg("Sent you the new moodboard", time = "9:30"),
-            // round 4 proof seed: an own message the peer HAS seen (✓✓)…
+            // proof seed: an own message the peer HAS seen ("Seen")…
             msg("Ooh, the sage tones are perfect 😍", me = true, time = "9:38")
                 .copy(seenByPeer = true),
             // …a call event pill (centred, not a bubble)…
@@ -46,7 +46,7 @@ object PreviewStore {
                 .copy(callCallerUid = "me", callOutcome = "ended",
                     callDurationSec = 754, callVideo = false, callMine = true, tsMs = 6000),
             msg("Aaj shaam milte hain? ✨", time = "9:41"),
-            // …and an own message NOT yet seen (single ✓)
+            // …and an own message NOT yet seen (no caption)
             msg("On my way!", me = true, time = "9:41"))
         // ROUND 6 seeds: more call events (Calls tab history proof) — a missed
         // incoming call, a declined outgoing call, an ended incoming video call.
@@ -73,9 +73,9 @@ object PreviewStore {
         return t
     }
 
-    /** Last-message preview exactly like the prototype: ✓✓ / 🎙 / 📷.
-     *  Round 4: the tick prefix follows the real seen state (single ✓ until
-     *  the peer has seen it); call events preview as their pill label. */
+    /** Last-message preview. Round 8: ticks are gone everywhere — a seen own
+     *  message prefixes a subtle "Seen · "; call events preview as their
+     *  pill label. */
     fun previewLine(th: ChatThread): String {
         val m = th.messages.lastOrNull { !it.deletedForMe } ?: return ""
         val body = when (m.kind) {
@@ -84,8 +84,8 @@ object PreviewStore {
             MsgKind.CALL -> callEventLabel(m, m.callMine)
             else -> m.text
         }
-        val tick = if (m.me && m.kind != MsgKind.CALL) (if (m.seenByPeer) "✓✓ " else "✓ ") else ""
-        return tick + body
+        val seen = if (m.me && m.kind != MsgKind.CALL && m.seenByPeer) "Seen · " else ""
+        return seen + body
     }
 
     val storyQuotes = listOf(
@@ -161,6 +161,13 @@ object PreviewRepo : ChatRepo {
             voiceDurSec = durSec, amps = amps.ifEmpty { List(22) { 8 } },
             localPath = audioFile?.absolutePath))
         simulateReply(id)
+    }
+
+    /** Preview pin: local-only (the real engine persists it in prefs). */
+    override fun setPinned(id: String, on: Boolean) {
+        AppState.threads.value = AppState.threads.value.map {
+            if (it.id == id) it.copy(pinned = on) else it
+        }
     }
 
     /** Preview nickname: local-only (the real engine writes nicknames.<peerUid>

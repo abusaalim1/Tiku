@@ -35,9 +35,10 @@ data class TikuMessage(
     val localPath: String? = null,      // decrypted voice file in app-private cache
     val status: SendStatus = SendStatus.SENT, // outgoing delivery state (mine only)
     // ---- round 4 ----
-    /** True only when the PEER's uid is in the doc's seenBy — drives ✓ vs ✓✓.
-     *  Derived from the Firestore field on every snapshot, never local state,
-     *  so it survives re-entry / restore / a second device. */
+    /** True only when the PEER's uid is in the doc's seenBy — drives the
+     *  IG-style "Seen" caption (round 8; ticks were removed). Derived from
+     *  the Firestore field on every snapshot, never local state, so it
+     *  survives re-entry / restore / a second device. */
     val seenByPeer: Boolean = false,
     /** CALL events: who placed the call, how it resolved, how long it lasted.
      *  outcome ∈ "ended" | "declined" | "noanswer". The pill renders
@@ -50,6 +51,11 @@ data class TikuMessage(
      *  built (engine decrypt / preview seed), never in composition, so the
      *  pill renders perspective copy without touching Firebase at draw time. */
     val callMine: Boolean = false,
+    /** ROUND 8: chunk count of the media payload on the server doc. Lets the
+     *  incremental snapshot path tell "metadata-only change" (seen/reaction —
+     *  reuse the in-memory payload, skip the chunk re-download) from "payload
+     *  actually changed" (upload finished — download it). */
+    val mediaChunks: Int = 0,
 )
 
 /** One 1:1 conversation. */
@@ -67,6 +73,10 @@ data class ChatThread(
      *  `nicknames[peerUid]`, so it shows for BOTH members). Null = no nickname;
      *  [displayName] then falls back to the profile name. */
     val nickname: String? = null,
+    /** ROUND 8: the engine has older history beyond the currently loaded
+     *  window (pagination — the chat opens at the newest ~60 messages and
+     *  pages older ones in on scroll-up). UI-only bookkeeping. */
+    val hasOlder: Boolean = false,
 ) {
     /** What every surface renders as this chat's title: nickname first,
      *  profile name otherwise. Real name + @username stay visible in the

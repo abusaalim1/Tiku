@@ -5,16 +5,59 @@ import android.content.Context
 /**
  * SINGLE SECRET-ENTRY POINT.
  *
- * The discreet "Tik" row on the Chemistry subject page calls [openGate] — and
+ * The discreet book row on the Chemistry subject page calls [openGate] — and
  * only this function may route into the password gate. (Round 3.2: the entry
- * moved off the facade home tools grid into the Chemistry page; there is no
- * "Tik" affordance anywhere else on the facade.) If the owner ever swaps the
- * trigger, change this one call site; nothing else in the facade knows the
- * gate exists.
+ * moved off the facade home tools grid into the Chemistry page. Round 8: the
+ * row itself no longer says "Tik" at all — it is a plain study "Reference
+ * books" row with a book icon, indistinguishable from its neighbours.)
+ * If the owner ever swaps the trigger, change this one call site; nothing
+ * else in the facade knows the gate exists.
  */
 object SecretEntry {
     fun openGate() {
         AppState.go(Screen.TikGate)
+    }
+}
+
+/**
+ * ROUND 8 — GATE GUESSING BACKOFF (item 9b). Consecutive failed password
+ * attempts (journal gate AND backup restore — both are offline guessing
+ * surfaces over the same secret) accumulate in plain prefs (counters only,
+ * never password material). After the 2nd failure an escalating lockout
+ * applies: 10s, 20s, 40s, 80s, 160s, then 5 min. The counters SURVIVE the
+ * screen being closed/reopened (they live in prefs, not composition state),
+ * and a successful open resets them. UX copy stays study-framed.
+ */
+object GateGuard {
+    private fun prefs(ctx: Context) =
+        ctx.getSharedPreferences("tiku_gate", Context.MODE_PRIVATE)
+
+    fun lockedRemainingMs(ctx: Context): Long {
+        val until = prefs(ctx).getLong("locked_until", 0L)
+        return (until - System.currentTimeMillis()).coerceAtLeast(0L)
+    }
+
+    /** Records one failed attempt; returns the lockout (ms) now in force (0 = none yet). */
+    fun recordFailure(ctx: Context): Long {
+        val p = prefs(ctx)
+        val fails = p.getInt("fails", 0) + 1
+        val delay = when {
+            fails <= 2 -> 0L
+            fails == 3 -> 10_000L
+            fails == 4 -> 20_000L
+            fails == 5 -> 40_000L
+            fails == 6 -> 80_000L
+            fails == 7 -> 160_000L
+            else -> 300_000L
+        }
+        p.edit().putInt("fails", fails)
+            .putLong("locked_until", if (delay > 0) System.currentTimeMillis() + delay else 0L)
+            .apply()
+        return delay
+    }
+
+    fun reset(ctx: Context) {
+        prefs(ctx).edit().putInt("fails", 0).putLong("locked_until", 0L).apply()
     }
 }
 

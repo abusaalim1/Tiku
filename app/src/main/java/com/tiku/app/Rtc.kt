@@ -408,6 +408,32 @@ object CallController {
     /** Observable session handle so the call screen rebinds its renderers when
      *  the (async-created) WebRTC session lands. */
     val sessionState = MutableStateFlow<RtcSession?>(null)
+
+    /** ROUND 8 — IG-style floating call window (PiP). True while a live call
+     *  (Outgoing/Connected) is shrunk to the draggable mini window over the
+     *  chat UI. Purely a UI state: the call itself keeps running untouched.
+     *  Minimizing NEVER ends the call, records nothing and deletes nothing;
+     *  hanging up from the mini window goes through the same hangup() path
+     *  (event recorded, signaling deleted). Session lock still ends the call
+     *  (endSilently), exactly as before. */
+    val pipMinimized = MutableStateFlow(false)
+
+    fun minimizeCall() {
+        val st = state.value
+        if (st is CallUiState.Connected || st is CallUiState.Outgoing) pipMinimized.value = true
+    }
+
+    /** Tap on the floating window: back to the full call screen. */
+    fun restoreCall() {
+        val st = state.value
+        val (tid, video) = when (st) {
+            is CallUiState.Connected -> st.threadId to st.video
+            is CallUiState.Outgoing -> st.threadId to st.video
+            else -> return
+        }
+        pipMinimized.value = false
+        AppState.go(Screen.Call(tid, video))
+    }
     private var callDocReg: ListenerRegistration? = null
     private var ringJob: Job? = null
     private var answerApplied = false
@@ -502,6 +528,7 @@ object CallController {
         callDocReg?.remove(); callDocReg = null
         session?.dispose(); session = null
         state.value = CallUiState.Idle
+        pipMinimized.value = false
         answerApplied = false; processedCallerCands = 0; processedCalleeCands = 0
         curCallerUid = ""; eventRecordedCallId = null
         pendingOffer = null; pendingOfferCallId = null
@@ -525,6 +552,7 @@ object CallController {
         curCallerUid = runCatching { FirebaseEngine.uid }.getOrDefault("")
         eventRecordedCallId = null
         iceGateOpen = false; iceBuffer.clear()
+        pipMinimized.value = false
         state.value = CallUiState.Outgoing(threadId, callId, video, person, System.currentTimeMillis())
         armRingTimeout(threadId, callId)
         scope.launch {
@@ -557,6 +585,7 @@ object CallController {
         val callId = "preview-call"
         curCallerUid = "me"
         eventRecordedCallId = null
+        pipMinimized.value = false
         state.value = CallUiState.Outgoing(threadId, callId, video, person, System.currentTimeMillis())
         scope.launch {
             delay(1400)
@@ -580,6 +609,7 @@ object CallController {
         // single most reliable copy (server-confirmed, already in hand).
         pendingOffer = offerEnc?.let { runCatching { decodeSdp(it) }.getOrNull() }
         pendingOfferCallId = if (pendingOffer != null) callId else null
+        pipMinimized.value = false
         state.value = CallUiState.Incoming(chatId, callId, video, person, System.currentTimeMillis())
         armRingTimeout(chatId, callId)
         AppState.go(Screen.Call(chatId, video))
@@ -820,6 +850,7 @@ object CallController {
         callDocReg?.remove(); callDocReg = null
         session?.dispose(); session = null
         state.value = CallUiState.Idle
+        pipMinimized.value = false
         answerApplied = false; processedCallerCands = 0; processedCalleeCands = 0
         curCallerUid = ""; eventRecordedCallId = null
         pendingOffer = null; pendingOfferCallId = null

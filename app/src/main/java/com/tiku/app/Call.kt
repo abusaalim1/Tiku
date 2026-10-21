@@ -10,10 +10,13 @@ import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -32,6 +35,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.CallEnd
 import androidx.compose.material.icons.filled.Cameraswitch
+import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.MicOff
 import androidx.compose.material.icons.filled.Videocam
@@ -51,11 +55,13 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
@@ -187,8 +193,22 @@ fun CallScreen(threadId: String, video: Boolean) {
         else { pendingAccept = inc; acceptLauncher.launch(needed.toTypedArray()) }
     }
 
+    // ROUND 8: Back during a live call MINIMIZES to the floating window
+    // (IG behaviour) — it must never hang up by accident. Only the explicit
+    // end button ends a call. Incoming-call Back still rejects; the session
+    // lock / quick exit still ends everything (ChatSession → endSilently).
     androidx.activity.compose.BackHandler {
-        if (callState is CallUiState.Incoming) CallController.reject() else CallController.hangup()
+        when (callState) {
+            is CallUiState.Incoming -> CallController.reject()
+            is CallUiState.Connected, is CallUiState.Outgoing -> CallController.minimizeCall()
+            else -> CallController.hangup()
+        }
+    }
+    val pipMinimized by CallController.pipMinimized.collectAsState()
+    LaunchedEffect(pipMinimized) {
+        if (pipMinimized) {
+            if (AppState.thread(threadId) != null) AppState.go(Screen.Chat(threadId)) else AppState.go(Screen.Home)
+        }
     }
 
     // no active call for this screen -> back to the chat / home
@@ -255,6 +275,18 @@ fun CallScreen(threadId: String, video: Boolean) {
                 }
             }
         }
+        // ROUND 8: explicit minimize control (same action as Back) — shrinks
+        // the call to the floating window so messaging can continue.
+        if (connected != null || callState is CallUiState.Outgoing) {
+            Box(
+                Modifier.align(Alignment.TopStart).padding(16.dp).size(40.dp)
+                    .clip(CircleShape).background(Color(0x22FFFFFF))
+                    .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {
+                        CallController.minimizeCall()
+                    },
+                contentAlignment = Alignment.Center,
+            ) { Icon(Icons.Filled.KeyboardArrowDown, null, Modifier.size(22.dp), tint = Color.White) }
+        }
         Column(
             Modifier.fillMaxSize().padding(top = 70.dp, bottom = 50.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
@@ -303,6 +335,115 @@ fun CallScreen(threadId: String, video: Boolean) {
                         CallEndButton { CallController.hangup() }
                     }
                 }
+            }
+        }
+    }
+}
+
+/**
+ * ROUND 8 — FLOATING CALL WINDOW (IG-style PiP). Rendered by TikuRoot over
+ * the ChatRoot surfaces whenever a live call is minimized. Video calls show
+ * the live REMOTE tile (the same renderer binding the full screen uses);
+ * audio calls (and outgoing calls) show an avatar tile with the call clock.
+ * Draggable anywhere over the chat UI; tap restores the full call screen;
+ * the red button ends the call through CallController.hangup() — the call
+ * event is recorded and the signaling doc deleted, exactly as when ending
+ * from the full screen. If the peer ends, or the session locks, the
+ * controller leaves Connected/Outgoing (or pipMinimized clears) and the
+ * window disappears on its own.
+ */
+@Composable
+fun FloatingCallWindow() {
+    val callState by CallController.state.collectAsState()
+    val pip by CallController.pipMinimized.collectAsState()
+    val rtcSession by CallController.sessionState.collectAsState()
+    val connected = callState as? CallUiState.Connected
+    // connected-call clock (same cadence as the full call screen)
+    var nowMs by remember { mutableLongStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(connected?.callId) {
+        if (connected == null) return@LaunchedEffect
+        while (true) { delay(500); nowMs = System.currentTimeMillis() }
+    }
+    val active = callState is CallUiState.Connected || callState is CallUiState.Outgoing
+    if (!pip || !active) return
+    val (person, video) = when (val s = callState) {
+        is CallUiState.Connected -> s.person to s.video
+        is CallUiState.Outgoing -> s.person to s.video
+        else -> return
+    }
+    val statusText = if (connected != null) {
+        val secs = ((nowMs - connected.atMs) / 1000).coerceAtLeast(0).toInt()
+        "%d:%02d".format(secs / 60, secs % 60)
+    } else "Calling…"
+    val showVideo = video && connected != null && !Config.PREVIEW_UI_ONLY && rtcSession != null
+    val winW = if (showVideo) 108.dp else 184.dp
+    val winH = if (showVideo) 156.dp else 64.dp
+    BoxWithConstraints(Modifier.fillMaxSize()) {
+        val density = LocalDensity.current
+        var offX by remember { mutableStateOf(maxWidth - winW - 14.dp) }
+        var offY by remember { mutableStateOf(96.dp) }
+        LaunchedEffect(maxWidth, maxHeight, winW, winH) {
+            offX = offX.coerceIn(8.dp, (maxWidth - winW - 8.dp).coerceAtLeast(8.dp))
+            offY = offY.coerceIn(8.dp, (maxHeight - winH - 8.dp).coerceAtLeast(8.dp))
+        }
+        Box(
+            Modifier.offset(x = offX, y = offY).size(winW, winH)
+                .shadow(16.dp, RoundedCornerShape(20.dp))
+                .clip(RoundedCornerShape(20.dp))
+                .background(Brush.linearGradient(listOf(Color(0xFF5A1F1A), Color(0xFF1F0E0D))))
+                .border(1.dp, Color(0x33FFFFFF), RoundedCornerShape(20.dp))
+                .pointerInput(Unit) {
+                    detectDragGestures { change, drag ->
+                        change.consume()
+                        offX = (offX + with(density) { drag.x.toDp() })
+                            .coerceIn(8.dp, (maxWidth - winW - 8.dp).coerceAtLeast(8.dp))
+                        offY = (offY + with(density) { drag.y.toDp() })
+                            .coerceIn(8.dp, (maxHeight - winH - 8.dp).coerceAtLeast(8.dp))
+                    }
+                }
+                .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {
+                    CallController.restoreCall()
+                },
+        ) {
+            if (showVideo) {
+                key(connected?.tick) {
+                    RtcVideoView(local = false, modifier = Modifier.fillMaxSize())
+                }
+                Row(
+                    Modifier.align(Alignment.BottomStart).padding(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(person.name, fontSize = 11.sp, color = Color.White, fontFamily = Manrope,
+                        fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold)
+                    Spacer(Modifier.width(6.dp))
+                    Text(statusText, fontSize = 11.sp, color = Color.White.copy(alpha = 0.75f), fontFamily = Manrope)
+                }
+            } else {
+                Row(
+                    Modifier.fillMaxSize().padding(start = 10.dp, end = 44.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    AvatarBox(person, 40.dp, 14.dp, 16f)
+                    Spacer(Modifier.width(9.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text(person.name, fontSize = 13.sp, color = Color.White, fontFamily = Manrope,
+                            fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
+                            maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
+                        Text(statusText, fontSize = 11.5.sp, color = Color.White.copy(alpha = 0.75f), fontFamily = Manrope)
+                    }
+                }
+            }
+            // end call — a real hangup (event recorded + signaling deleted),
+            // never a mere dismiss of the window.
+            Box(
+                Modifier.align(Alignment.BottomEnd).padding(8.dp).size(30.dp)
+                    .clip(CircleShape).background(TikuTokens.Red)
+                    .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {
+                        CallController.hangup()
+                    },
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(Icons.Filled.CallEnd, null, Modifier.size(15.dp), tint = Color.White)
             }
         }
     }

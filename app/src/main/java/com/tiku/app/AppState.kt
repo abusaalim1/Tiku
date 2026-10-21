@@ -24,7 +24,7 @@ sealed interface Screen {
     data object StudyTimer : Screen
     data object StudyRevision : Screen
     data object StudyFormulas : Screen
-    /** Password gate behind the discreet "Tik" row on the Chemistry page. */
+    /** Password gate behind the discreet book row on the Chemistry page. */
     data object TikGate : Screen
     // ---- ChatRoot (hidden behind the gate) ----
     data object Welcome : Screen
@@ -174,4 +174,10 @@ interface ChatRepo {
      *  chat — stored on the chat doc (nicknames map), applies for both
      *  members. Default no-op keeps test doubles compiling. */
     fun setNickname(id: String, nickname: String?) {}
+    /** ROUND 8: fetch the next page of OLDER messages for an open chat
+     *  (pagination — a chat opens at its newest ~60). Default no-op. */
+    fun loadOlder(id: String) {}
+    /** ROUND 8: pin/unpin a chat in the list (IG-style). A per-user, local
+     *  view preference — never written to the chat doc. Default no-op. */
+    fun setPinned(id: String, on: Boolean) {}
 }

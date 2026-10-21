@@ -312,6 +312,75 @@ object FirebaseEngine : ChatRepo {
         return claim.exists() && claim.getString("uid") != uid
     }
 
+    /**
+     * ROUND 8 — CHANGE USERNAME (Me ▸ Edit profile). One transaction:
+     * claim `usernames/{new}`, update the user doc (username + displayName,
+     * which doubles as the profile name exactly like signup, plus the live
+     * search fields), and free `usernames/{old}` — the rules allow deleting
+     * ONLY your own claim, so a name held by anyone else fails the whole
+     * transaction cleanly with "@x is taken" and nothing changes. Chats key
+     * on uid everywhere (chat ids, members, message senders), so a rename
+     * cannot break a single conversation.
+     */
+    suspend fun changeUsername(newRaw: String): Result<Unit> {
+        val new = newRaw.lowercase().trim()
+        if (new.length < 3) return Result.failure(IllegalStateException("At least 3 characters."))
+        if (!new.all { it.isLetterOrDigit() || it == '.' || it == '_' })
+            return Result.failure(IllegalStateException("Letters, numbers, dots and underscores only."))
+        val me = uid
+        if (me.isEmpty()) return Result.failure(IllegalStateException("Not signed in."))
+        return try {
+            db.runTransaction { tx ->
+                val newClaimRef = db.collection(Schema.Users.USERNAME_CLAIM).document(new)
+                val claim = tx.get(newClaimRef)
+                if (claim.exists() && claim.getString("uid") != me)
+                    throw IllegalStateException("@$new is taken")
+                val userRef = db.collection(Schema.Users.COLL).document(me)
+                val current = tx.get(userRef).getString("username").orEmpty()
+                if (current == new) return@runTransaction Unit
+                if (!claim.exists()) {
+                    tx.set(newClaimRef, mapOf("uid" to me, "at" to FieldValue.serverTimestamp()))
+                }
+                tx.update(userRef, mapOf(
+                    "username" to new,
+                    "displayName" to new,
+                    "usernameNorm" to SearchNorm.norm(new),
+                    "nameTokens" to SearchNorm.tokens(new, new),
+                ))
+                if (current.isNotEmpty()) {
+                    tx.delete(db.collection(Schema.Users.USERNAME_CLAIM).document(current))
+                }
+                Unit
+            }.await()
+            myPerson = myPerson.copy(username = new, name = new)
+            AppState.myUsername = new
+            Log.d("TikuProfile", "username changed to @$new")
+            Result.success(Unit)
+        } catch (e: Exception) {
+            Log.e("TikuProfile", "changeUsername to @$new failed", e)
+            Result.failure(e)
+        }
+    }
+
+    /** ROUND 8 — CHANGE PROFILE PHOTO (Me ▸ Edit profile): the same
+     *  photoData pipeline as signup (compressAvatar → base64 on the user
+     *  doc), so every peer surface picks it up through the normal profile
+     *  fetch. */
+    suspend fun updateProfilePhoto(bmp: Bitmap): Result<Unit> {
+        return try {
+            if (uid.isEmpty()) throw IllegalStateException("Not signed in.")
+            val data = MediaStore.compressAvatar(bmp)
+            db.collection(Schema.Users.COLL).document(uid).update("photoData", data).await()
+            val decoded = MediaStore.decodeBitmap(data)
+            myPerson = myPerson.copy(photoBitmap = decoded)
+            AppState.myAvatar = decoded
+            Result.success(Unit)
+        } catch (e: Exception) {
+            Log.e("TikuProfile", "updateProfilePhoto failed", e)
+            Result.failure(e)
+        }
+    }
+
     suspend fun loadMyProfile() {
         if (uid.isEmpty()) return
         runCatching {
@@ -471,6 +540,27 @@ object FirebaseEngine : ChatRepo {
     private var readPrefs: android.content.SharedPreferences? = null
     private val openChatIds = mutableSetOf<String>()
 
+    // ================= ROUND 8 — INCREMENTAL MESSAGES + PAGINATION =========
+    // The old attachMessages loaded the chat's ENTIRE history (no limit) and
+    // re-decrypted EVERY doc on EVERY snapshot — including re-downloading
+    // every image's chunks and every voice file, plus extra chat-doc reads
+    // for typing/clear watermarks. On a long chat that is the crash + jank
+    // the owner reported, and the receive-path latency of item 7a.
+    // Now: the live listener covers only the newest [PAGE_SIZE] messages and
+    // applies DocumentChanges INCREMENTALLY into [msgCache] (decrypting only
+    // what actually changed; a metadata-only change to a media message reuses
+    // its in-memory payload). Older pages load on demand (loadOlder).
+    private val PAGE_SIZE = 60L
+    /** chatId -> (docId -> decrypted server message), insertion-ordered. */
+    private val msgCache = mutableMapOf<String, LinkedHashMap<String, TikuMessage>>()
+    private val hasOlderCache = mutableMapOf<String, Boolean>()
+    private val loadingOlder = mutableSetOf<String>()
+    /** chatId -> my clearedBefore watermark, fed by the threads listener
+     *  (the chat doc rides that snapshot — no per-snapshot get() anymore). */
+    private val clearedBeforeCache = mutableMapOf<String, Long>()
+    /** Pinned chats (round 8): a per-user LOCAL view preference. */
+    private var pinPrefs: android.content.SharedPreferences? = null
+
     fun lastRead(threadId: String): Long = readPrefs?.getLong("read_$threadId", 0L) ?: 0L
     fun markRead(threadId: String) {
         readPrefs?.edit()?.putLong("read_$threadId", System.currentTimeMillis())?.apply()
@@ -479,6 +569,7 @@ object FirebaseEngine : ChatRepo {
     fun start(ctx: Context) {
         appCtx = ctx.applicationContext
         readPrefs = ctx.getSharedPreferences("tiku_read", Context.MODE_PRIVATE)
+        pinPrefs = ctx.getSharedPreferences("tiku_pins", Context.MODE_PRIVATE)
         if (uid.isEmpty()) return
         threadsReg?.remove()
         // ROUND 6 — BUGS 2+3 SHARED ROOT CAUSE (proven server-side before this
@@ -531,12 +622,24 @@ object FirebaseEngine : ChatRepo {
                             @Suppress("UNCHECKED_CAST")
                             val nickMap = doc.get("nicknames") as? Map<String, Any?>
                             val nickname = (nickMap?.get(peerUid) as? String)?.takeIf { it.isNotBlank() }
+                            // ROUND 8: the chat doc rides THIS snapshot — harvest
+                            // the fields attachMessages used to re-fetch with a
+                            // get() on every messages snapshot (peer typing state
+                            // + my clearedBefore watermark) at zero extra reads.
+                            @Suppress("UNCHECKED_CAST")
+                            val typingMap = doc.get("typing") as? Map<String, Any?>
+                            AppState.setTyping(doc.id, typingMap?.get(peerUid) as? Boolean ?: false)
+                            @Suppress("UNCHECKED_CAST")
+                            val cbMap = doc.get("clearedBefore") as? Map<String, Any?>
+                            clearedBeforeCache[doc.id] = (cbMap?.get(uid) as? Number)?.toLong() ?: 0L
+                            val pinnedIds = pinPrefs?.getStringSet("ids", emptySet()) ?: emptySet()
                             ts to ChatThread(id = doc.id, person = peer,
                                 messages = existing?.messages ?: mutableListOf(),
                                 unread = existing?.unread ?: 0,
                                 time = fmtTime(ts),
-                                pinned = existing?.pinned ?: false,
-                                nickname = nickname)
+                                pinned = doc.id in pinnedIds,
+                                nickname = nickname,
+                                hasOlder = existing?.hasOlder ?: (hasOlderCache[doc.id] ?: false))
                         } ?: emptyList()
                         // client-side updatedAt DESC (the query no longer orders)
                         val list = built.sortedByDescending { it.first }.map { it.second }
@@ -594,6 +697,19 @@ object FirebaseEngine : ChatRepo {
         }
     }
 
+    /** My clearedBefore watermark for a chat: served from the threads-
+     *  listener-fed cache; a one-time get() only on a cold cache. */
+    private suspend fun clearedBeforeFor(id: String): Long {
+        clearedBeforeCache[id]?.let { return it }
+        val v = runCatching {
+            val cd = db.collection(Schema.Chats.COLL).document(id).get().await()
+                .get("clearedBefore") as? Map<*, *>
+            (cd?.get(uid) as? Number)?.toLong() ?: 0L
+        }.getOrDefault(0L)
+        clearedBeforeCache[id] = v
+        return v
+    }
+
     private suspend fun applyPreviewSnapshot(
         id: String,
         docs: List<com.google.firebase.firestore.DocumentSnapshot>,
@@ -608,11 +724,7 @@ object FirebaseEngine : ChatRepo {
             if (retry) { delay(1500); applyPreviewSnapshot(id, docs, retry = false) }
             return
         }
-        val clearedBefore = runCatching {
-            val cd = db.collection(Schema.Chats.COLL).document(id).get().await()
-                .get("clearedBefore") as? Map<*, *>
-            (cd?.get(uid) as? Number)?.toLong() ?: 0L
-        }.getOrDefault(0L)
+        val clearedBefore = clearedBeforeFor(id)
         val dmCutoff = if (SettingsStore.state.value.toggles["dm"] == true)
             System.currentTimeMillis() - 24L * 3600 * 1000 else 0L
         val msgs = docs.mapNotNull { d ->
@@ -799,6 +911,16 @@ object FirebaseEngine : ChatRepo {
         myPrivBytes = null
         convKeyCache.clear(); profileCache.clear(); publicKeyCache.clear()
         openChatIds.clear()
+        // ROUND 8: the decrypted message cache + pagination bookkeeping die
+        // with the session too, and so do the decrypted voice-note FILES in
+        // the app cache (dl_*.m4a) — a chat trace that used to outlive the
+        // lock. They simply re-download on the next unlock.
+        msgCache.clear(); hasOlderCache.clear(); clearedBeforeCache.clear(); loadingOlder.clear()
+        runCatching {
+            appCtx.cacheDir.listFiles()?.forEach { f ->
+                if (f.name.startsWith("dl_") && f.name.endsWith(".m4a")) f.delete()
+            }
+        }
     }
 
     fun setPresence(online: Boolean) {
@@ -813,14 +935,16 @@ object FirebaseEngine : ChatRepo {
 
     /**
      * SEEN MARKING (round 4, item 1): the recipient adds their uid to a
-     * message doc's seenBy. Called with the docs of the open chat — once at
-     * open (openThread) and again on EVERY messages snapshot while the chat
-     * is open (attachMessages), so a message that arrives while I'm looking
-     * at the chat is marked seen immediately, not on the next entry. The
-     * sender's client derives ✓✓ purely from this field (decryptDoc →
-     * seenByPeer), so ticks survive re-entry/restore. Call events are
-     * excluded — seen doesn't apply to them. Batched; a snapshot that finds
-     * nothing unseen writes nothing (no listener write-loop).
+     * message doc's seenBy. Called with the docs of the open chat — on EVERY
+     * messages snapshot while the chat is open (attachMessages) and on each
+     * pagination page (loadOlder), so a message that arrives while I'm
+     * looking at the chat is marked seen immediately, not on the next entry.
+     * (Round 8 removed the old extra full-collection get() at open — the
+     * listener's own snapshot covers the newest page.) The sender's client
+     * derives "Seen" purely from this field (decryptDoc → seenByPeer), so
+     * it survives re-entry/restore. Call events are excluded — seen doesn't
+     * apply to them. Batched; a snapshot that finds nothing unseen writes
+     * nothing (no listener write-loop).
      */
     private fun markIncomingSeen(id: String, docs: List<com.google.firebase.firestore.DocumentSnapshot>) {
         if (!SettingsStore.state.value.readReceipts) return
@@ -850,15 +974,11 @@ object FirebaseEngine : ChatRepo {
         }
         openChatIds += id
         attachMessages(id)
-        // seen-marking for everything already in the chat (the listener keeps
-        // it current from here on — see markIncomingSeen)
-        scope.launch {
-            runCatching {
-                val docs = db.collection(Schema.Chats.COLL).document(id)
-                    .collection(Schema.Chats.MESSAGES).get().await().documents
-                markIncomingSeen(id, docs)
-            }
-        }
+        // ROUND 8: no more full-collection get() here — the old code read
+        // EVERY message doc of the chat on EVERY open just to seen-mark them
+        // (thousands of reads on a long chat). Seen-marking now runs off the
+        // listener's own snapshot (newest page) and off each loadOlder page
+        // as it is fetched — the same coverage, zero extra reads.
     }
 
     private fun attachMessages(id: String) {
@@ -866,67 +986,141 @@ object FirebaseEngine : ChatRepo {
         val peerUid = AppState.thread(id)?.person?.uid ?: return
         msgsReg = db.collection(Schema.Chats.COLL).document(id)
             .collection(Schema.Chats.MESSAGES)
-            .orderBy("ts", Query.Direction.ASCENDING)
+            .orderBy("ts", Query.Direction.DESCENDING).limit(PAGE_SIZE)
             .addSnapshotListener { snap, _ ->
-                val chatDocId = id
+                if (snap == null) return@addSnapshotListener
                 // round 4: while this chat is OPEN on screen, incoming messages
-                // are marked seen as they land (drives the sender's ✓✓ live).
-                if (openChatIds.contains(id)) snap?.documents?.let { markIncomingSeen(id, it) }
+                // are marked seen as they land (drives the sender's "Seen").
+                if (openChatIds.contains(id)) markIncomingSeen(id, snap.documents)
                 scope.launch {
                     // EVERYTHING in this listener is failure-tolerant: a key that is not
                     // ready (fresh searched chat), a transient fetch error, or a broken
                     // doc must degrade to "no messages yet", never crash the process.
                     runCatching {
-                    val peer = fetchPerson(peerUid)
-                    val key = convKeyOrNull(id, peerUid) ?: run {
-                        // one delayed retry — the profile/key often lands a beat later
-                        delay(1500)
-                        convKeyOrNull(id, peerUid)
-                    } ?: return@runCatching
-                    val clearedBefore = runCatching {
-                        val cd = db.collection(Schema.Chats.COLL).document(id).get().await()
-                            .get("clearedBefore") as? Map<*, *>
-                        (cd?.get(uid) as? Number)?.toLong() ?: 0L
-                    }.getOrDefault(0L)
-                    val dmCutoff = if (SettingsStore.state.value.toggles["dm"] == true)
-                        System.currentTimeMillis() - 24L * 3600 * 1000 else 0L
-                    val serverMsgs = snap?.documents?.mapNotNull { doc ->
-                        runCatching { decryptDoc(id, doc, key, peerUid) }.getOrNull()
-                    }?.filter { m ->
-                        !m.deletedForMe && m.tsMs >= clearedBefore && (dmCutoff == 0L || m.tsMs >= dmCutoff)
-                    } ?: emptyList()
-                    // round 3: keep my local optimistic copies the server hasn't
-                    // confirmed yet (SENDING) and the ones it refused (FAILED —
-                    // tap-to-retry). Server copies win by id once they land.
-                    val serverIds = serverMsgs.map { it.id }.toHashSet()
-                    val localOnly = (AppState.thread(id)?.messages ?: emptyList())
-                        .filter { it.id !in serverIds && it.status != SendStatus.SENT }
-                    val msgs = (serverMsgs + localOnly).sortedBy { it.tsMs }
-                    // peer typing indicator -> chat header status
-                    runCatching {
-                        val chatDoc = db.collection(Schema.Chats.COLL).document(chatDocId).get().await()
-                        val typing = (chatDoc.get("typing") as? Map<*, *>)?.get(peerUid) as? Boolean ?: false
-                        AppState.setTyping(chatDocId, typing)
-                        // seen-by for my messages (✓✓ state rides on TikuMessage via seenBy of last mine message)
-                    }
-                    val lr = lastRead(id)
-                    AppState.threads.value = AppState.threads.value.map { t ->
-                        if (t.id == id) t.copy(messages = msgs.toMutableList(),
-                            unread = if (openChatIds.contains(id)) 0 else msgs.count { !it.me && it.tsMs > lr })
-                        else t
-                    }
-                    if (openChatIds.contains(id)) markRead(id)
-                    @Suppress("UNUSED_VARIABLE") val unused = peer
+                        val key = convKeyOrNull(id, peerUid) ?: run {
+                            // one delayed retry — the profile/key often lands a beat later
+                            delay(1500)
+                            convKeyOrNull(id, peerUid)
+                        } ?: return@runCatching
+                        val cache = msgCache.getOrPut(id) { LinkedHashMap() }
+                        val initialFill = cache.isEmpty()
+                        // ROUND 8 — INCREMENTAL: decrypt/apply ONLY the docs
+                        // this snapshot actually changed. A peer's seen-mark
+                        // or reaction used to re-decrypt (and re-download) the
+                        // WHOLE chat; now it touches exactly one doc.
+                        for (change in snap.documentChanges) {
+                            when (change.type) {
+                                com.google.firebase.firestore.DocumentChange.Type.ADDED,
+                                com.google.firebase.firestore.DocumentChange.Type.MODIFIED -> {
+                                    val doc = change.document
+                                    runCatching {
+                                        decryptDoc(id, doc, key, peerUid, cached = cache[doc.id])
+                                    }.getOrNull()?.let { cache[doc.id] = it }
+                                }
+                                com.google.firebase.firestore.DocumentChange.Type.REMOVED -> {
+                                    // Messages are NEVER hard-deleted in this
+                                    // schema (delete-for-me is a flag → MODIFIED).
+                                    // A REMOVED change means the doc slid out
+                                    // of the newest-page live window — it stays
+                                    // in the cache and in the visible history.
+                                }
+                            }
+                        }
+                        if (initialFill) {
+                            hasOlderCache[id] = snap.size() >= PAGE_SIZE.toInt()
+                        }
+                        applyCacheToThread(id)
                     } // end runCatching guard — failure = "no messages yet", never a crash
                 }
             }
     }
 
+    /** Rebuild one thread's visible message list from the incremental cache:
+     *  watermark filters (clearedBefore / disappearing-messages) + the round-3
+     *  optimistic merge (SENDING/FAILED locals survive until the server copy
+     *  lands). Runs on every cache change; the work is a sort of already-
+     *  decrypted messages — no I/O, no decryption. */
+    private suspend fun applyCacheToThread(id: String) {
+        val cache = msgCache[id] ?: return
+        val clearedBefore = clearedBeforeFor(id)
+        val dmCutoff = if (SettingsStore.state.value.toggles["dm"] == true)
+            System.currentTimeMillis() - 24L * 3600 * 1000 else 0L
+        val serverMsgs = cache.values.filter { m ->
+            !m.deletedForMe && m.tsMs >= clearedBefore && (dmCutoff == 0L || m.tsMs >= dmCutoff)
+        }
+        val serverIds = serverMsgs.map { it.id }.toHashSet()
+        val localOnly = (AppState.thread(id)?.messages ?: emptyList())
+            .filter { it.id !in serverIds && it.status != SendStatus.SENT }
+        val msgs = (serverMsgs + localOnly).sortedBy { it.tsMs }
+        val lr = lastRead(id)
+        val older = hasOlderCache[id] ?: false
+        AppState.threads.value = AppState.threads.value.map { t ->
+            if (t.id == id) t.copy(messages = msgs.toMutableList(), hasOlder = older,
+                unread = if (openChatIds.contains(id)) 0 else msgs.count { !it.me && it.tsMs > lr })
+            else t
+        }
+        if (openChatIds.contains(id)) markRead(id)
+    }
+
+    /** ROUND 8 — PAGINATION: fetch the next page of messages OLDER than the
+     *  oldest cached one (inclusive startAt + id-dedupe, so same-millisecond
+     *  neighbours can never fall through a gap). Fetched incoming messages
+     *  are seen-marked too (the chat is open while paging). */
+    override fun loadOlder(id: String) {
+        if (hasOlderCache[id] != true) return
+        if (!loadingOlder.add(id)) return
+        scope.launch {
+            try {
+                runCatching {
+                    val peerUid = AppState.thread(id)?.person?.uid ?: return@runCatching
+                    val key = convKeyOrNull(id, peerUid) ?: return@runCatching
+                    val cache = msgCache[id] ?: return@runCatching
+                    val oldest = cache.values.minByOrNull { it.tsMs } ?: return@runCatching
+                    val snap = db.collection(Schema.Chats.COLL).document(id)
+                        .collection(Schema.Chats.MESSAGES)
+                        .orderBy("ts", Query.Direction.DESCENDING)
+                        .startAt(com.google.firebase.Timestamp(java.util.Date(oldest.tsMs)))
+                        .limit(PAGE_SIZE).get().await()
+                    if (openChatIds.contains(id)) markIncomingSeen(id, snap.documents)
+                    var added = 0
+                    for (doc in snap.documents) {
+                        if (cache.containsKey(doc.id)) continue
+                        runCatching { decryptDoc(id, doc, key, peerUid) }.getOrNull()
+                            ?.let { cache[doc.id] = it; added++ }
+                    }
+                    // a short page — or one that added nothing new — is the top
+                    hasOlderCache[id] = snap.size() >= PAGE_SIZE.toInt() && added > 0
+                    applyCacheToThread(id)
+                }.onFailure { Log.e("TikuChat", "loadOlder failed for chat $id", it) }
+            } finally {
+                loadingOlder.remove(id)
+            }
+        }
+    }
+
+    /** ROUND 8: pin/unpin — persisted locally (a personal view preference),
+     *  reflected onto the thread immediately; the threads listener re-derives
+     *  it from the same prefs on every snapshot. */
+    override fun setPinned(id: String, on: Boolean) {
+        AppState.threads.value = AppState.threads.value.map {
+            if (it.id == id) it.copy(pinned = on) else it
+        }
+        val prefs = pinPrefs ?: return
+        val cur = (prefs.getStringSet("ids", emptySet()) ?: emptySet()).toMutableSet()
+        if (on) cur += id else cur -= id
+        prefs.edit().putStringSet("ids", cur).apply()
+    }
+
     /** [light] (round 6 preview path): text + call payloads decrypt fully,
      *  but image/voice payloads are NOT downloaded — the message is built as a
      *  stub (photo/localPath null, duration + waveform from the doc fields).
-     *  A chat-list preview and the Calls tab only need kind/metadata. */
-    private suspend fun decryptDoc(chatId: String, doc: com.google.firebase.firestore.DocumentSnapshot, key: SecretKey, peerUid: String, light: Boolean = false): TikuMessage {
+     *  A chat-list preview and the Calls tab only need kind/metadata.
+     *  [cached] (round 8, incremental path): the previously decrypted copy of
+     *  THIS doc. For media messages, when the chunk count is unchanged and
+     *  the payload is already in memory, a metadata-only change (seen-by,
+     *  reaction, star, delete flag) reuses the payload instead of
+     *  re-downloading every chunk — the hot-path fix for items 4 + 7a. */
+    private suspend fun decryptDoc(chatId: String, doc: com.google.firebase.firestore.DocumentSnapshot, key: SecretKey, peerUid: String, light: Boolean = false, cached: TikuMessage? = null): TikuMessage {
         val sender = doc.getString("senderId") ?: ""
         val kindRaw = doc.getString("kind") ?: "text"
         // ITEM 2: bubble side derives ONLY from the doc's senderId vs the
@@ -951,6 +1145,7 @@ object FirebaseEngine : ChatRepo {
         var durSec = 0
         var amps: List<Int> = emptyList()
         var localPath: String? = null
+        var mediaChunks = 0
         // round 4 call-event payload (decrypted JSON from the ct field)
         var callCallerUid = ""; var callOutcome = ""; var callDurSec = 0; var callVideo = false
         when (kindRaw) {
@@ -966,6 +1161,7 @@ object FirebaseEngine : ChatRepo {
                 }
             }
             "image", "voice" -> {
+                mediaChunks = (doc.getLong("mediaChunks") ?: 0L).toInt()
                 if (light) {
                     // preview stub — no chunk download (see decryptDoc doc)
                     if (kindRaw == "voice") {
@@ -973,8 +1169,17 @@ object FirebaseEngine : ChatRepo {
                         @Suppress("UNCHECKED_CAST")
                         amps = (doc.get("amps") as? List<Long>)?.map { it.toInt() } ?: emptyList()
                     }
+                } else if (cached != null && mediaChunks > 0 && mediaChunks == cached.mediaChunks &&
+                    ((kindRaw == "image" && cached.photo != null) || (kindRaw == "voice" && cached.localPath != null))) {
+                    // ROUND 8 — INCREMENTAL: only metadata changed on a media
+                    // message whose payload this device already holds. Reuse
+                    // the payload; download NOTHING.
+                    photo = cached.photo
+                    localPath = cached.localPath
+                    durSec = cached.voiceDurSec
+                    amps = cached.amps
                 } else {
-                    val chunkCount = (doc.getLong("mediaChunks") ?: 0L).toInt()
+                    val chunkCount = mediaChunks
                     val ctBytes = MediaStore.download(db, chatId, doc.id, chunkCount)
                     val plain = Crypto.decrypt(key, doc.getString("iv") ?: "", Crypto.b64(ctBytes))
                     if (kindRaw == "image") {
@@ -999,7 +1204,8 @@ object FirebaseEngine : ChatRepo {
             seenByPeer = seenBy.contains(peerUid),
             callCallerUid = callCallerUid, callOutcome = callOutcome,
             callDurationSec = callDurSec, callVideo = callVideo,
-            callMine = callCallerUid.isNotEmpty() && callCallerUid == my)
+            callMine = callCallerUid.isNotEmpty() && callCallerUid == my,
+            mediaChunks = mediaChunks)
     }
 
     // ================= SEND PATH (round 3: optimistic + NO silent failures) ====
