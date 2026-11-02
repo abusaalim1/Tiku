@@ -18,12 +18,12 @@ object PreviewStore {
     }
 
     val people = listOf(
-        Person("p-aarav", "Aarav", "aarav", "🌿", argb(0xFFE4714C)),
-        Person("p-meera", "Meera", "meera", "🌸", argb(0xFFD98FA0)),
-        Person("p-crew", "Design Crew", "designcrew", "🎨", argb(0xFFE0A04A)),
-        Person("p-zoya", "Zoya", "zoya", "☁️", argb(0xFFB9876F)),
-        Person("p-kabir", "Kabir", "kabir", "🎧", argb(0xFFC45A5A)),
-        Person("p-riya", "Riya", "riya", "🍋", argb(0xFFC9B13A)),
+        Person("p-aarav", "Aarav", "aarav", "🌿", argb(0xFFB95B72)),
+        Person("p-meera", "Meera", "meera", "🌸", argb(0xFFB07A5C)),
+        Person("p-crew", "Design Crew", "designcrew", "🎨", argb(0xFF7D6FA8)),
+        Person("p-zoya", "Zoya", "zoya", "☁️", argb(0xFF4F8F7E)),
+        Person("p-kabir", "Kabir", "kabir", "🎧", argb(0xFF5B86B8)),
+        Person("p-riya", "Riya", "riya", "🍋", argb(0xFF9A6B8A)),
     )
 
     private fun msg(text: String = "", me: Boolean = false, time: String = "now", kind: MsgKind = MsgKind.TEXT,
@@ -77,7 +77,7 @@ object PreviewStore {
             t[0] = t[0].copy(
                 nickname = "Aaru",
                 pinnedMsgIds = listOfNotNull(firstText?.id),
-                themeAccent = 4,
+                themeAccent = 5,
                 themeWallpaper = WallpaperMode.COUPLE.ordinal,
             )
         }
@@ -107,10 +107,12 @@ object PreviewStore {
         "Playlist on repeat 🎧",
         "Sunday reset ✨",
     )
+    // ROUND 12: story gradients are the design's dark card gradients
+    // (its Watch mock cards) — white quote text stays legible on them.
     val storyGrads = listOf(
-        Pair(Color(0xFFF7B58F), Color(0xFFC9552F)),
-        Pair(Color(0xFFFBD3C0), Color(0xFFB8607A)),
-        Pair(Color(0xFFEBC38F), Color(0xFF9A5A3B)),
+        Pair(Color(0xFF3A1F2B), Color(0xFF150D12)),
+        Pair(Color(0xFF2A2540), Color(0xFF100E18)),
+        Pair(Color(0xFF1A1214), Color(0xFF000000)),
     )
 
     private val replies = listOf(

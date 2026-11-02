@@ -544,7 +544,7 @@ object FirebaseEngine : ChatRepo {
     }
 
     private fun avatarColorFor(peerUid: String): Int {
-        val palette = listOf(0xFFE4714C, 0xFFD98FA0, 0xFFE0A04A, 0xFFB9876F, 0xFFC45A5A, 0xFFC9B13A)
+        val palette = listOf(0xFFB95B72, 0xFFB07A5C, 0xFF7D6FA8, 0xFF4F8F7E, 0xFF5B86B8, 0xFF9A6B8A)
         return palette[(peerUid.hashCode() and Int.MAX_VALUE) % palette.size].toInt()
     }
 

@@ -115,24 +115,13 @@ fun PrimaryButton(text: String, enabled: Boolean = true, modifier: Modifier = Mo
     }
 }
 
-/** .tg toggle: 50x30dp pill. */
+/** .tg toggle (Tik design): 44x26dp, knob 22, on = accent, off = #34343A.
+ *  Only Tik surfaces call this (Chat Details + Me settings) — the facade
+ *  has no toggles — so it carries the design metrics directly. */
 @Composable
 fun ToggleSwitch(on: Boolean, onChange: (Boolean) -> Unit) {
-    val interaction = remember { MutableInteractionSource() }
-    Box(
-        modifier = Modifier.width(50.dp).height(30.dp)
-            .clip(CircleShape)
-            .background(if (on) SettingsStore.state.collectAsState().value.accent else TikuTokens.Line)
-            .clickable(interactionSource = interaction, indication = null) { onChange(!on) },
-        contentAlignment = if (on) Alignment.CenterEnd else Alignment.CenterStart,
-    ) {
-        Box(
-            modifier = Modifier.size(24.dp)
-                .clip(CircleShape)
-                .background(Color.White)
-                .border(0.dp, Color.Transparent),
-        )
-    }
+    val settings = SettingsStore.state.collectAsState().value
+    TikToggle(checked = on, accent = settings.accent, onCheckedChange = onChange)
 }
 
 /** Serif italic display title (covers .top h2, .form h2, .hero h1, .logo, .sht, .gh, .sq, .cph, #kn). */
@@ -143,10 +132,33 @@ fun SerifTitle(text: String, fontSize: androidx.compose.ui.unit.TextUnit, color:
         letterSpacing = (-0.5).sp, modifier = modifier, textAlign = textAlign)
 }
 
-/** Design toast: dark pill sliding down from top. */
+/** Design toast. ROUND 12: inside the Tik section the toast is the design's
+ *  (.toast — bottom, 92dp up, s2 pill r14 with ln border, rises 12px in
+ *  .28s); everywhere else (facade / gate) the original top pill stays. */
 @Composable
 fun BoxScope.DesignToast() {
     val text = AppState.toastText
+    if (AppState.isChatRoot(AppState.screen)) {
+        AnimatedVisibility(
+            visible = text != null,
+            enter = slideInVertically(tween(280, easing = TikEase)) { 48 } + fadeIn(tween(280, easing = TikEase)),
+            exit = slideOutVertically(tween(280, easing = TikEase)) { 48 } + fadeOut(tween(280, easing = TikEase)),
+            modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 92.dp),
+        ) {
+            Box(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(Tik.S2)
+                    .border(1.dp, Tik.Ln, RoundedCornerShape(14.dp)),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(text ?: "", color = Tik.Tx, fontSize = 13.5.sp, fontWeight = FontWeight.Medium,
+                    fontFamily = Manrope,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp))
+            }
+        }
+        return
+    }
     AnimatedVisibility(
         visible = text != null,
         enter = slideInVertically(tween(600, easing = TikuEase)) { -80 } + fadeIn(),
@@ -165,10 +177,59 @@ fun BoxScope.DesignToast() {
     }
 }
 
-/** #sh bottom sheet: dim + blur scrim, sheet slides up with grabber. */
+/** Bottom sheet host. ROUND 12: sheets only ever open inside the Tik
+ *  section, where the host takes the design's .shw/.sheet skin — scrim
+ *  #000a fading .28s, sheet s2 with 20dp top radii sliding up .38s on the
+ *  design easing, grabber 36x4 #48484E; sheet contents carry their own
+ *  design margins (host horizontal padding is 0). The peach host below is
+ *  kept verbatim for any non-Tik surface. */
 @Composable
 fun BoxScope.BottomSheetHost() {
     val content = AppState.sheetContent
+    if (AppState.isChatRoot(AppState.screen)) {
+        AnimatedVisibility(
+            visible = content != null,
+            enter = fadeIn(tween(280, easing = TikEase)),
+            exit = fadeOut(tween(280, easing = TikEase)),
+            modifier = Modifier.fillMaxSize(),
+        ) {
+            Box(
+                modifier = Modifier.fillMaxSize()
+                    .background(Tik.Scrim)
+                    .clickable(interactionSource = remember { MutableInteractionSource() },
+                        indication = null) { AppState.closeSheet() },
+                contentAlignment = Alignment.BottomCenter,
+            ) {
+                AnimatedVisibility(
+                    visible = content != null,
+                    enter = slideInVertically(tween(380, easing = TikEase)) { it },
+                    exit = slideOutVertically(tween(300, easing = TikEase)) { it },
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp))
+                            .background(Tik.S2)
+                            .clickable(interactionSource = remember { MutableInteractionSource() },
+                                indication = null) { },
+                    ) {
+                        androidx.compose.foundation.layout.Column(
+                            modifier = Modifier.padding(top = 8.dp, bottom = 14.dp)
+                        ) {
+                            Box(
+                                modifier = Modifier.width(36.dp).height(4.dp)
+                                    .clip(RoundedCornerShape(2.dp))
+                                    .background(Tik.Grabber)
+                                    .align(Alignment.CenterHorizontally)
+                            )
+                            Spacer(Modifier.height(4.dp))
+                            content?.invoke()
+                        }
+                    }
+                }
+            }
+        }
+        return
+    }
     AnimatedVisibility(
         visible = content != null,
         enter = fadeIn(tween(400, easing = TikuEase)),
@@ -232,21 +293,24 @@ object PresetAvatars {
     }.getOrNull()
 }
 
-/** "Pick a picture" — the bundled presets as a row of circular crops. */
+/** "Pick a picture" — the bundled presets as a row of circular crops.
+ *  [dark] = the Tik-section skin (Edit profile sheet); the signup surface
+ *  keeps the peach skin. */
 @Composable
-fun PresetAvatarPicker(onPick: (Bitmap) -> Unit) {
+fun PresetAvatarPicker(onPick: (Bitmap) -> Unit, dark: Boolean = false) {
     val ctx = androidx.compose.ui.platform.LocalContext.current
     Column(Modifier.fillMaxWidth()) {
         Text(
             "Pick a picture", fontSize = 13.sp, fontWeight = FontWeight.SemiBold,
-            fontFamily = Manrope, color = TikuTokens.Muted,
+            fontFamily = Manrope, color = if (dark) Tik.Sub else TikuTokens.Muted,
         )
         Spacer(Modifier.height(10.dp))
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
             PresetAvatars.files.indices.forEach { i ->
                 val bmp = remember(ctx, i) { PresetAvatars.load(ctx, i) }
                 Box(
-                    Modifier.size(42.dp).clip(CircleShape).background(TikuTokens.Mint)
+                    Modifier.size(42.dp).clip(CircleShape)
+                        .background(if (dark) Tik.S1 else TikuTokens.Mint)
                         .clickable(
                             interactionSource = remember { MutableInteractionSource() },
                             indication = null,

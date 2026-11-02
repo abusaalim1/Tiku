@@ -93,12 +93,12 @@ import kotlinx.coroutines.launch
  * MainActivity.onPause merely pauses playback.
  */
 
-/** Bottom clearance for Watch content: the floating tab bar is 64dp tall
- *  with a 16dp bottom margin; every Home pane (Chats/Calls/Me lists) keeps
- *  its content clear of it with 110dp of bottom padding — Watch reuses the
- *  same measure so YouTube's own bottom navigation stays fully visible
- *  and tappable above Tikuu's bar. */
-private val WatchBottomInset = 110.dp
+/** Bottom clearance for Watch content. ROUND 12: the floating glass bar
+ *  is gone — the design's flat .nav is ~57dp — and Watch now reuses the
+ *  design .body bottom padding (84) that every Home pane uses, so
+ *  YouTube's own bottom navigation stays fully visible and tappable
+ *  above Tik's bar (the Round-11 fix, re-measured for the new nav). */
+private val WatchBottomInset = 84.dp
 
 /** The drawn Watch glyph: a rounded rectangle with a play triangle — the
  *  app's own mark in its own style. Deliberately NOT the official YouTube
@@ -152,12 +152,12 @@ fun DesignPlusButton(onClick: () -> Unit) {
             val u = size.width / 24f
             val sw = 1.6f * u
             drawLine(
-                TikuTokens.Ink,
+                Tik.Tx,
                 Offset(12 * u, 5 * u), Offset(12 * u, 19 * u),
                 strokeWidth = sw, cap = StrokeCap.Round,
             )
             drawLine(
-                TikuTokens.Ink,
+                Tik.Tx,
                 Offset(5 * u, 12 * u), Offset(19 * u, 12 * u),
                 strokeWidth = sw, cap = StrokeCap.Round,
             )
@@ -407,12 +407,12 @@ fun WatchPane() {
         // PREVIEW (Roborazzi) only: no WebView, no network, no fake feed —
         // just the pane's honest placeholder line. Never in the real app.
         Box(
-            Modifier.fillMaxSize().padding(bottom = WatchBottomInset),
+            Modifier.fillMaxSize().background(Tik.Bg).padding(bottom = WatchBottomInset),
             contentAlignment = Alignment.Center,
         ) {
             Text(
                 "YouTube opens here on your phone",
-                fontSize = 14.sp, color = TikuTokens.Muted, fontFamily = Manrope,
+                fontSize = 14.sp, color = Tik.Sub, fontFamily = Manrope,
             )
         }
         return
@@ -429,7 +429,7 @@ fun WatchPane() {
     DisposableEffect(Unit) {
         onDispose { WatchHolder.onPaneLeft(scope) }
     }
-    Box(Modifier.fillMaxSize()) {
+    Box(Modifier.fillMaxSize().background(Tik.Bg)) {
         // Keyed on the instance: a renderer-gone swap rebuilds this host
         // around the fresh WebView instead of leaving the dead one on screen.
         key(wv) {
@@ -486,7 +486,7 @@ fun WatchMiniOverlay() {
                 .shadow(16.dp, RoundedCornerShape(16.dp))
                 .clip(RoundedCornerShape(16.dp))
                 .background(Color.Black)
-                .border(1.dp, TikuTokens.Line, RoundedCornerShape(16.dp))
+                .border(1.dp, Tik.Ln, RoundedCornerShape(16.dp))
                 .pointerInput(Unit) {
                     detectDragGestures { change, drag ->
                         change.consume()

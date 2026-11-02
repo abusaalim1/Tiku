@@ -27,14 +27,18 @@ object TikuTokens {
     val PlainPlain = Color(0xFFFFF4EE)     // wallpaper "plain" = var(--bg)
     val PeachTop = Color(0xFFF6D2C4); val PeachBottom = Color(0xFFD9A5A0)
 
-    /** Accent swatch pairs (s1, s2) — the 4 from the prototype, plus ROUND 6:
-     *  the "Couple" rose pair (soft rose → deep rose) for the couple preset. */
+    /** Accent pairs — ROUND 12: the Tik design's flat ACC swatches
+     *  (#E5677F #EF8062 #D6A653 #A587E0 #5B9CF5), flat pairs so [accent]
+     *  and [gradBrush] resolve to the design colour itself, plus the
+     *  couple pair kept LAST (setCoupleTheme targets lastIndex). The
+     *  facade never reads Accents — it keeps the peach tokens above. */
     val Accents = listOf(
-        Color(0xFFEC8159) to Color(0xFFCC5832),
-        Color(0xFFE27A93) to Color(0xFFB53F5C),
-        Color(0xFFDDA866) to Color(0xFFA8742F),
-        Color(0xFFB0708A) to Color(0xFF7A3A52),
-        Color(0xFFF2A0B5) to Color(0xFFCE4E79), // couple rose
+        Color(0xFFE5677F) to Color(0xFFE5677F),
+        Color(0xFFEF8062) to Color(0xFFEF8062),
+        Color(0xFFD6A653) to Color(0xFFD6A653),
+        Color(0xFFA587E0) to Color(0xFFA587E0),
+        Color(0xFF5B9CF5) to Color(0xFF5B9CF5),
+        Color(0xFFF2A0B5) to Color(0xFFE5677F), // couple rose
     )
 
     val ToastBg = Color(0xFF3B1519); val ToastText = Color(0xFFFFF4EE)

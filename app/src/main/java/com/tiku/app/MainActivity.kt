@@ -15,6 +15,8 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
 import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
@@ -195,24 +197,28 @@ fun TikuRoot(onGoogleClick: () -> Unit) {
                             (screen as? Screen.Call)?.let { lastCall = it }
                             (screen as? Screen.ChatDetails)?.let { lastDetails = it }
                         }
+                        // ROUND 12: Tik overlays enter with the design's
+                        // screen motion (`in` keyframes: fade + 8px rise,
+                        // .26s, cubic-bezier(.22,.8,.22,1)) instead of the
+                        // old horizontal slide.
                         AnimatedVisibility(
                             visible = screen is Screen.Chat,
-                            enter = slideInHorizontally(tween(420, easing = TikuEase)) { it } +
-                                fadeIn(tween(300, easing = TikuEase)),
-                            exit = slideOutHorizontally(tween(320, easing = TikuEase)) { it } +
-                                fadeOut(tween(220, easing = TikuEase)),
+                            enter = slideInVertically(tween(260, easing = TikEase)) { 24 } +
+                                fadeIn(tween(260, easing = TikEase)),
+                            exit = slideOutVertically(tween(200, easing = TikEase)) { 24 } +
+                                fadeOut(tween(200, easing = TikEase)),
                         ) {
                             (screen as? Screen.Chat ?: lastChat)?.let { ChatScreen(it.threadId) }
                         }
-                        // ROUND 10: chat details rides the same overlay
-                        // pattern (header tap in the chat opens it; Back
-                        // returns to the chat).
+                        // Chat details rides the same overlay pattern
+                        // (header tap in the chat opens it; Back returns
+                        // to the chat).
                         AnimatedVisibility(
                             visible = screen is Screen.ChatDetails,
-                            enter = slideInHorizontally(tween(420, easing = TikuEase)) { it } +
-                                fadeIn(tween(300, easing = TikuEase)),
-                            exit = slideOutHorizontally(tween(320, easing = TikuEase)) { it } +
-                                fadeOut(tween(220, easing = TikuEase)),
+                            enter = slideInVertically(tween(260, easing = TikEase)) { 24 } +
+                                fadeIn(tween(260, easing = TikEase)),
+                            exit = slideOutVertically(tween(200, easing = TikEase)) { 24 } +
+                                fadeOut(tween(200, easing = TikEase)),
                         ) {
                             (screen as? Screen.ChatDetails ?: lastDetails)?.let { ChatDetailsScreen(it.threadId) }
                         }

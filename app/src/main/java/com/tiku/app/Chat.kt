@@ -14,10 +14,12 @@ import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -28,6 +30,7 @@ import androidx.compose.foundation.gestures.rememberTransformableState
 import androidx.compose.foundation.gestures.transformable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -41,6 +44,7 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -107,16 +111,17 @@ import java.io.File
 import kotlin.math.abs
 import kotlin.math.roundToInt
 
+/** ROUND 12: chat wallpapers are the design's WALL set — near-black tints
+ *  (DEFAULT #000000, PLAIN #0F0E18, PEACH #120C0F, DOTS #0B1311,
+ *  COUPLE #1A1214). The per-chat wallpaper choice itself is unchanged. */
 @Composable
-fun ChatWallpaperBrush(settings: TikuUiSettings) = when (settings.wallpaper) {
-    WallpaperMode.DEFAULT -> Brush.verticalGradient(listOf(TikuTokens.BgTop, TikuTokens.BgBottom))
-    WallpaperMode.PLAIN -> Brush.verticalGradient(listOf(TikuTokens.PlainPlain, TikuTokens.PlainPlain))
-    WallpaperMode.PEACH -> Brush.verticalGradient(listOf(TikuTokens.PeachTop, TikuTokens.PeachBottom))
-    WallpaperMode.DOTS -> Brush.verticalGradient(listOf(TikuTokens.BgTop, TikuTokens.BgBottom))
-    // ROUND 6 couple preset: a slightly pinker blush than the default peach;
-    // the sparse heart motif is drawn over it in ChatContent.
-    WallpaperMode.COUPLE -> Brush.verticalGradient(listOf(Color(0xFFFFF1EA), Color(0xFFF9DAD0)))
-}
+fun ChatWallpaperBrush(settings: TikuUiSettings) =
+    Brush.verticalGradient(
+        listOf(
+            Tik.WallColors[settings.wallpaper.ordinal],
+            Tik.WallColors[settings.wallpaper.ordinal],
+        ),
+    )
 
 /** Tiny heart path centred at (cx, cy), [s] ≈ half-width in px. */
 private fun heartPath(cx: Float, cy: Float, s: Float): Path = Path().apply {
@@ -285,7 +290,7 @@ private fun ChatContent(thread: ChatThread) {
                 while (y < size.height) {
                     x = 0f
                     while (x < size.width) {
-                        drawCircle(Color(0x55E9B9A4), r, Offset(x, y))
+                        drawCircle(Color(0x0FFFFFFF), r, Offset(x, y))
                         x += spacing
                     }
                     y += spacing
@@ -293,62 +298,52 @@ private fun ChatContent(thread: ChatThread) {
             }
         }
         if (settings.wallpaper == WallpaperMode.COUPLE) {
-            // ROUND 6 couple preset: sparse, very soft hearts over the blush
-            // gradient — same low-key technique as the dots, kept tasteful
-            // and inside the same peach family (light theme only, as locked).
+            // Design .couple.msgs: a soft rose glow pooled at the top —
+            // radial-gradient(120% 50% at 50% 0, #E5677F1C, transparent).
+            val glow = settings.accent
             Canvas(Modifier.fillMaxSize()) {
-                val spacing = 64.dp.toPx()
-                val s = 6.5.dp.toPx()
-                val rose = Color(0x26CE4E79)
-                var row = 0
-                var y = spacing * 0.5f
-                while (y < size.height + spacing) {
-                    var x = if (row % 2 == 0) spacing * 0.5f else spacing
-                    while (x < size.width + spacing) {
-                        drawPath(heartPath(x, y, s), rose)
-                        x += spacing
-                    }
-                    y += spacing
-                    row++
-                }
+                drawRect(
+                    brush = Brush.radialGradient(
+                        listOf(glow.copy(alpha = 0.11f), Color.Transparent),
+                        center = Offset(size.width / 2f, 0f),
+                        radius = size.width * 1.2f,
+                    ),
+                )
             }
         }
         Column(Modifier.fillMaxSize()) {
-        // glass header (translucent color only — .blur() on this box blurred the
-        // header's own content; that was the "bottom stays blurred" class of bug)
+        // .chead — padding 8, bottom hairline ln, avatar 34 round, name
+        // 15.5 w600, status 12 sub; bare .btn call / video buttons.
+        // Tapping the identity still opens Chat Details (Round 10).
         val startCall = rememberCallStarter()
-        Row(
-            Modifier.fillMaxWidth()
-                .background(TikuTokens.Glass)
-                .border(0.5.dp, TikuTokens.Line)
-                .padding(horizontal = 14.dp, vertical = 12.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            GlassIconButton(Icons.Filled.ChevronLeft, size = 38.dp, iconSize = 20.dp, onClick = { AppState.go(Screen.Home) })
-            Spacer(Modifier.width(10.dp))
-            // ROUND 10: tapping the header (avatar or name) opens Chat
-            // Details — theme, nicknames, read receipts. The old ⋯ details
-            // sheet's entry point is gone; this screen is the single home
-            // for all of it (its composables are reused there).
+        Column(Modifier.fillMaxWidth().background(Tik.Bg)) {
             Row(
-                Modifier.weight(1f)
-                    .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {
-                        AppState.go(Screen.ChatDetails(threadId))
-                    },
+                Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                AvatarBox(person, 42.dp, 15.dp, 18f)
-                Spacer(Modifier.width(10.dp))
-                Column {
-                    // ROUND 6: the header title is the chat's display name — the
-                    // peer's nickname when one is set, else their profile name.
-                    Text(thread.displayName, fontFamily = Bricolage, fontWeight = FontWeight.Bold, fontSize = 17.sp, color = TikuTokens.Ink)
-                    Text(statusText, fontSize = 12.sp, color = settings.accent, fontFamily = Manrope)
+                TikBtn("back") { AppState.go(Screen.Home) }
+                Spacer(Modifier.width(2.dp))
+                Row(
+                    Modifier.weight(1f)
+                        .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {
+                            AppState.go(Screen.ChatDetails(threadId))
+                        },
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    AvatarBox(person, 34.dp, 17.dp, 14f)
+                    Spacer(Modifier.width(10.dp))
+                    Column {
+                        // the header title is the chat's display name — the
+                        // peer's nickname when one is set, else their name.
+                        Text(thread.displayName, fontFamily = Manrope, fontWeight = FontWeight.SemiBold, fontSize = 15.5.sp, color = Tik.Tx,
+                            maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
+                        Text(statusText, fontSize = 12.sp, color = if (peerTyping) settings.accent else Tik.Sub, fontFamily = Manrope)
+                    }
                 }
+                TikBtn("call", iconSize = 23.dp) { startCall(threadId, false) }
+                TikBtn("vid", iconSize = 23.dp) { startCall(threadId, true) }
             }
-            GlassIconButton(Icons.Filled.Call, size = 38.dp, iconSize = 18.dp, onClick = { startCall(threadId, false) })
-            Spacer(Modifier.width(8.dp))
-            GlassIconButton(Icons.Filled.Videocam, size = 38.dp, iconSize = 18.dp, onClick = { startCall(threadId, true) })
+            Box(Modifier.fillMaxWidth().height(1.dp).background(Tik.Ln))
         }
         // ROUND 10 (C6): pinned strip — a slim bar under the header showing
         // the most recent pin; tap jumps to the message, long-press unpins.
@@ -362,7 +357,7 @@ private fun ChatContent(thread: ChatThread) {
                 else -> pinnedMsg?.text?.take(60) ?: "Pinned message"
             }
             Row(
-                Modifier.fillMaxWidth().background(TikuTokens.Mint)
+                Modifier.fillMaxWidth().background(Tik.S1)
                     .pointerInput(pinId) {
                         detectTapGestures(
                             onTap = { jumpToMessage(pinId) },
@@ -375,17 +370,17 @@ private fun ChatContent(thread: ChatThread) {
                     .padding(horizontal = 14.dp, vertical = 7.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Icon(Icons.Filled.PushPin, null, Modifier.size(13.dp), tint = settings.accent)
+                TikIcon("pin", Modifier.size(13.dp), tint = settings.accent)
                 Spacer(Modifier.width(6.dp))
                 Text(
                     "Pinned · $pinPreview",
-                    fontSize = 12.5.sp, fontFamily = Manrope, color = TikuTokens.Ink,
+                    fontSize = 12.5.sp, fontFamily = Manrope, color = Tik.Tx,
                     maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f),
                 )
                 if (thread.pinnedMsgIds.size > 1) {
                     Text("${thread.pinnedMsgIds.size} pinned", fontSize = 11.5.sp,
-                        color = TikuTokens.Muted, fontFamily = Manrope)
+                        color = Tik.Sub, fontFamily = Manrope)
                 }
             }
         }
@@ -454,7 +449,9 @@ private fun ChatContent(thread: ChatThread) {
             Modifier.fillMaxSize().padding(horizontal = 14.dp).testTag("message_list"),
             state = listState,
             reverseLayout = true,
-            contentPadding = androidx.compose.foundation.layout.PaddingValues(vertical = 16.dp),
+            // .msgs padding 12/14/8 (top = the history end in this
+            // reversed layout, bottom = the composer side)
+            contentPadding = androidx.compose.foundation.layout.PaddingValues(top = 12.dp, bottom = 8.dp),
             // ROUND 10 (C3): no fixed arrangement spacing — each bubble item
             // carries its own top gap (2dp inside a same-sender group, 10dp
             // between groups), which a uniform spacedBy could never express.
@@ -465,11 +462,15 @@ private fun ChatContent(thread: ChatThread) {
             }
             if (showSeen) {
                 item(key = "seen-caption") {
+                    // .seen — right aligned, 11.5 sub, margin 4/6/0, fi .3s fade
+                    val seenAlpha = remember { Animatable(0f) }
+                    LaunchedEffect(Unit) { seenAlpha.animateTo(1f, tween(300, easing = TikEase)) }
                     Row(
-                        Modifier.fillMaxWidth().padding(end = 4.dp, top = 2.dp),
+                        Modifier.fillMaxWidth().padding(end = 6.dp, top = 4.dp)
+                            .graphicsLayer { alpha = seenAlpha.value },
                         horizontalArrangement = Arrangement.End,
                     ) {
-                        Text("Seen", fontSize = 11.5.sp, color = TikuTokens.Muted, fontFamily = Manrope)
+                        Text("Seen", fontSize = 11.5.sp, color = Tik.Sub, fontFamily = Manrope)
                     }
                 }
             }
@@ -494,7 +495,14 @@ private fun ChatContent(thread: ChatThread) {
                     // round 4: call events are centred system pills, never bubbles
                     CallEventPill(m)
                 } else {
-                Box(Modifier.padding(top = if (groupedWithPrev) 2.dp else 10.dp)) {
+                // Design .mr margin is a uniform 2px; the app keeps a small
+                // group distinction (2dp inside a group, 4dp between), and
+                // a reacted message keeps .mr.hx's extra bottom room so
+                // its pill (bottom -13) clears the next bubble.
+                Box(Modifier.padding(
+                    top = if (groupedWithPrev) 2.dp else 4.dp,
+                    bottom = if (m.reactions.isNotEmpty()) 12.dp else 2.dp,
+                )) {
                 MessageBubble(
                     m = m, threadId = threadId, settings = settings,
                     playing = playingId == m.id,
@@ -549,20 +557,19 @@ private fun ChatContent(thread: ChatThread) {
             // the E2EE banner is declared LAST — in the reversed layout it
             // renders at the very TOP of the history, as designed.
             item(key = "e2ee-banner") {
+                // The design carries no banner pill; the encryption note
+                // renders as quiet centred sub text (copy unchanged).
                 Box(
-                    Modifier.fillMaxWidth().padding(bottom = 8.dp),
+                    Modifier.fillMaxWidth().padding(bottom = 8.dp, start = 30.dp, end = 30.dp),
                     contentAlignment = Alignment.Center,
                 ) {
-                    Row(
-                        Modifier.clip(RoundedCornerShape(12.dp)).background(TikuTokens.Mint)
-                            .padding(horizontal = 12.dp, vertical = 6.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        TikuLockIcon(Modifier.size(12.dp), tint = TikuTokens.Muted)
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        TikuLockIcon(Modifier.size(12.dp), tint = Tik.Sub)
                         Spacer(Modifier.width(6.dp))
                         Text(
                             "Messages are end-to-end encrypted. Only you and ${thread.displayName} can read them.",
-                            fontSize = 12.sp, color = TikuTokens.Muted, fontFamily = Manrope,
+                            fontSize = 12.sp, color = Tik.Sub, fontFamily = Manrope,
+                            textAlign = androidx.compose.ui.text.style.TextAlign.Center,
                         )
                     }
                 }
@@ -581,8 +588,8 @@ private fun ChatContent(thread: ChatThread) {
             Row(
                 Modifier.testTag("jump_to_latest")
                     .shadow(10.dp, RoundedCornerShape(20.dp))
-                    .clip(RoundedCornerShape(20.dp)).background(TikuTokens.Card)
-                    .border(1.dp, TikuTokens.Line, RoundedCornerShape(20.dp))
+                    .clip(RoundedCornerShape(20.dp)).background(Tik.S2)
+                    .border(1.dp, Tik.Ln, RoundedCornerShape(20.dp))
                     .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {
                         scope.launch { runCatching { listState.animateScrollToItem(0) } }
                         unseenNew = 0
@@ -595,7 +602,7 @@ private fun ChatContent(thread: ChatThread) {
                 Text(
                     if (unseenNew > 0) "$unseenNew new" else "Latest",
                     fontSize = 12.5.sp, fontWeight = FontWeight.SemiBold,
-                    color = TikuTokens.Ink, fontFamily = Manrope,
+                    color = Tik.Tx, fontFamily = Manrope,
                 )
             }
         }
@@ -605,68 +612,32 @@ private fun ChatContent(thread: ChatThread) {
             ImageViewerOverlay(vm) { viewerMsg = null }
         }
         } // close messages Box
-        // reply quote bar — ROUND 8 restyle: IG form. A small accent header
-        // ("Replying to …") over the quote itself at ~70% opacity, with a
-        // left accent bar; closing returns the composer to plain mode.
-        if (replyTarget != null) {
-            val rt = replyTarget!!
-            Row(
-                Modifier.fillMaxWidth().padding(start = 14.dp, end = 14.dp, top = 8.dp)
-                    .clip(RoundedCornerShape(14.dp)).background(TikuTokens.Mint)
-                    .padding(horizontal = 12.dp, vertical = 8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Box(Modifier.width(3.dp).height(32.dp).clip(RoundedCornerShape(2.dp)).background(settings.accent))
-                Spacer(Modifier.width(10.dp))
-                Column(Modifier.weight(1f)) {
-                    Text(
-                        if (rt.mine) "Replying to yourself" else "Replying to ${thread.displayName}",
-                        fontSize = 12.sp, fontWeight = FontWeight.SemiBold,
-                        fontFamily = Manrope, color = settings.accent,
-                    )
-                    Text(
-                        rt.quote, fontSize = 13.sp, fontFamily = Manrope,
-                        color = TikuTokens.Ink.copy(alpha = 0.7f),
-                        maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
-                    )
-                }
-                Box(Modifier.clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) { replyTarget = null }) {
-                    Text("✕", fontSize = 13.sp, color = TikuTokens.Ink)
-                }
-            }
-        }
-        // ROUND 10 (C5): editing bar — same IG form as the reply bar.
-        // Cancelling restores the composer to a blank plain mode.
-        if (editTarget != null) {
-            val et = editTarget!!
-            Row(
-                Modifier.fillMaxWidth().padding(start = 14.dp, end = 14.dp, top = 8.dp)
-                    .clip(RoundedCornerShape(14.dp)).background(TikuTokens.Mint)
-                    .padding(horizontal = 12.dp, vertical = 8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Box(Modifier.width(3.dp).height(32.dp).clip(RoundedCornerShape(2.dp)).background(settings.accent))
-                Spacer(Modifier.width(10.dp))
-                Column(Modifier.weight(1f)) {
-                    Text(
-                        "Editing message",
-                        fontSize = 12.sp, fontWeight = FontWeight.SemiBold,
-                        fontFamily = Manrope, color = settings.accent,
-                    )
-                    Text(
-                        et.text, fontSize = 13.sp, fontFamily = Manrope,
-                        color = TikuTokens.Ink.copy(alpha = 0.7f),
-                        maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
-                    )
-                }
-                Box(Modifier.clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {
-                    editTarget = null; input = ""
-                }) {
-                    Text("✕", fontSize = 13.sp, color = TikuTokens.Ink)
-                }
-            }
-        }
-        // quick chips
+        // reply / edit bars — the design's .rbar: s1 card r16 with an
+        // accent left border, expanding/collapsing over .28s (the CSS
+        // animates max-height; Compose expands the layout height, the
+        // closest equivalent). The last values are kept through the
+        // collapse so the exit doesn't flash empty.
+        val shownReply = remember { mutableStateOf<ReplyTarget?>(null) }
+        LaunchedEffect(replyTarget) { if (replyTarget != null) shownReply.value = replyTarget }
+        ChatContextBar(
+            visible = replyTarget != null,
+            title = shownReply.value?.let {
+                if (it.mine) "Replying to yourself" else "Replying to ${thread.displayName}"
+            } ?: "",
+            quote = shownReply.value?.quote ?: "",
+            accent = settings.accent,
+            onClose = { replyTarget = null },
+        )
+        val shownEdit = remember { mutableStateOf<TikuMessage?>(null) }
+        LaunchedEffect(editTarget) { if (editTarget != null) shownEdit.value = editTarget }
+        ChatContextBar(
+            visible = editTarget != null,
+            title = "Editing message",
+            quote = shownEdit.value?.text ?: "",
+            accent = settings.accent,
+            onClose = { editTarget = null; input = "" },
+        )
+        // quick chips (app feature; skinned to the design's chip language)
         Row(
             Modifier.fillMaxWidth().padding(top = 8.dp)
                 .horizontalScroll(rememberScrollState())
@@ -675,8 +646,7 @@ private fun ChatContent(thread: ChatThread) {
         ) {
             listOf("👋" to "Hey!", "😂" to "Haha", "📍" to "Let’s meet", "❤️" to "Love it").forEach { (emoji, label) ->
                 Box(
-                    Modifier.clip(RoundedCornerShape(16.dp)).background(TikuTokens.Card)
-                        .border(1.dp, TikuTokens.Line, RoundedCornerShape(16.dp))
+                    Modifier.clip(RoundedCornerShape(16.dp)).background(Tik.S2)
                         .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {
                             AppState.repo.sendText(threadId, label, replyTarget?.quote)
                             replyTarget = null
@@ -686,55 +656,90 @@ private fun ChatContent(thread: ChatThread) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         EmojiArt(emoji, 16.dp)
                         Spacer(Modifier.width(5.dp))
-                        Text(label, fontSize = 13.sp, fontFamily = Manrope, color = TikuTokens.Ink)
+                        Text(label, fontSize = 13.sp, fontFamily = Manrope, color = Tik.Tx)
                     }
                 }
             }
         }
-        // bottom bar: recording or input
+        // .bar — the design's composer: margin 8/12/10, bg s2, r26,
+        // padding 5/6. One bar hosts all three states: typing (camera
+        // disc + field + Send text), idle (camera + field + mic/img/plus
+        // tools), and recording (.recui: blink dot, timer, live wave,
+        // trash, send disc).
+        Row(
+            Modifier.fillMaxWidth().padding(horizontal = 12.dp).padding(top = 8.dp, bottom = 10.dp)
+                .clip(RoundedCornerShape(26.dp)).background(Tik.S2)
+                .padding(horizontal = 6.dp, vertical = 5.dp),
+            verticalAlignment = Alignment.Bottom,
+        ) {
         if (recording) {
-            Row(
-                Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                GlassIconButton(Icons.Filled.Close, onClick = {
-                    recorder.stop(false); recording = false
-                })
+            // .recui — .rd blink (bl keyframes), timer, .rw wave, trash, .cm send
+            val blink = rememberInfiniteTransition(label = "recblink")
+            val blinkA by blink.animateFloat(1f, 0.3f, infiniteRepeatable(tween(1000), RepeatMode.Reverse), label = "recblinkA")
+            val wave = rememberInfiniteTransition(label = "recwave")
+            val waveP by wave.animateFloat(0.4f, 1f, infiniteRepeatable(tween(900), RepeatMode.Reverse), label = "recwaveP")
+            Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
                 Spacer(Modifier.width(8.dp))
-                RecordingTimer(recSecs)
-                Spacer(Modifier.weight(1f))
-                GradientCircleButton {
-                    val f = recorder.stop(true)
-                    recording = false
-                    if (f != null) AppState.repo.sendVoice(threadId, f, recSecs.coerceAtLeast(1), recorder.normalizedAmps())
+                Box(Modifier.size(9.dp).alpha(blinkA).clip(CircleShape).background(Tik.RecDot))
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    "%d:%02d".format(recSecs / 60, recSecs % 60),
+                    fontSize = 15.sp, fontWeight = FontWeight.Medium, fontFamily = Manrope, color = Tik.Tx,
+                    modifier = Modifier.widthIn(min = 34.dp),
+                )
+                Spacer(Modifier.width(6.dp))
+                // .rw — the recorder's REAL sampled amplitudes (5 samples
+                // per second, last 24), breathing on the wv keyframe curve.
+                val liveAmps = recorder.amps.takeLast(24)
+                Row(
+                    Modifier.weight(1f).height(24.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(2.dp),
+                ) {
+                    val bars = if (liveAmps.isEmpty()) List(24) { 6 + ((it * 7) % 12) } else liveAmps
+                    bars.forEachIndexed { i, a ->
+                        val phase = when (i % 3) { 0 -> waveP; 1 -> 1f - (waveP - 0.4f) * 0.5f; else -> waveP * 0.8f }
+                        Box(
+                            Modifier.weight(1f).height((a.coerceIn(3, 24) * phase).dp)
+                                .clip(RoundedCornerShape(2.dp))
+                                .background(settings.accent),
+                        )
+                    }
+                }
+                TikBtn("trash", iconSize = 20.dp, tint = Tik.Sub) {
+                    recorder.stop(false); recording = false
                 }
             }
-        } else {
-            // ROUND 10 (C7): IG-style composer — the pill GROWS with
-            // multiline text (46dp → up to 128dp, then the field scrolls);
-            // the side buttons bottom-align as it grows. Empty text keeps
-            // the media/voice affordances; typing morphs in a round accent
-            // send button with a drawn up-arrow.
-            Row(
-                Modifier.fillMaxWidth().padding(horizontal = 12.dp).padding(bottom = 14.dp, top = 10.dp),
-                verticalAlignment = Alignment.Bottom,
+            Box(
+                Modifier.size(36.dp).clip(CircleShape).background(settings.accent)
+                    .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {
+                        val f = recorder.stop(true)
+                        recording = false
+                        if (f != null) AppState.repo.sendVoice(threadId, f, recSecs.coerceAtLeast(1), recorder.normalizedAmps())
+                    },
+                contentAlignment = Alignment.Center,
             ) {
-                GlassIconButton(Icons.Filled.Image, onClick = { ChatSession.expectExternalActivity = true; pickImage.launch("image/*") })
-                Spacer(Modifier.width(8.dp))
-                Row(
-                    Modifier.weight(1f).heightIn(min = 46.dp, max = 128.dp)
-                        .clip(RoundedCornerShape(23.dp)).background(TikuTokens.Card)
-                        .border(1.dp, TikuTokens.Line, RoundedCornerShape(23.dp))
-                        .padding(horizontal = 16.dp, vertical = 4.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    BasicTextField(
+                TikIcon("send", Modifier.size(18.dp), tint = Color.White)
+            }
+        } else {
+            // .cm — the camera disc (opens the photo picker, as before)
+            Box(
+                Modifier.size(36.dp).clip(CircleShape).background(settings.accent)
+                    .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {
+                        ChatSession.expectExternalActivity = true; pickImage.launch("image/*")
+                    },
+                contentAlignment = Alignment.Center,
+            ) {
+                TikIcon("cam", Modifier.size(19.dp), tint = Color.White)
+            }
+            Spacer(Modifier.width(6.dp))
+            BasicTextField(
                         value = input,
                         onValueChange = {
                             input = it
                             if (it.isNotEmpty()) AppState.repo.setTyping(threadId, true)
                         },
-                        textStyle = TextStyle(fontSize = settings.textSizeSp.sp, fontFamily = Manrope, color = TikuTokens.Ink),
+                        textStyle = TextStyle(fontSize = settings.textSizeSp.sp, fontFamily = Manrope, color = Tik.Tx, lineHeight = 22.sp),
                         cursorBrush = SolidColor(settings.accent),
                         singleLine = false,
                         maxLines = 5,
@@ -745,43 +750,86 @@ private fun ChatContent(thread: ChatThread) {
                         keyboardActions = androidx.compose.foundation.text.KeyboardActions(
                             onSend = { if (settings.enterToSend) sendCurrent() },
                         ),
-                        modifier = Modifier.weight(1f).padding(vertical = 8.dp),
+                        modifier = Modifier.weight(1f).heightIn(max = 96.dp).padding(horizontal = 4.dp, vertical = 7.dp),
                         decorationBox = { inner ->
-                            if (input.isEmpty()) Text("Message", fontSize = settings.textSizeSp.sp, color = TikuTokens.Muted, fontFamily = Manrope)
+                            if (input.isEmpty()) Text("Message…", fontSize = settings.textSizeSp.sp, color = Tik.Sub, fontFamily = Manrope)
                             inner()
                         },
                     )
-                    Box(
-                        Modifier.clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {
-                            ChatSheets.emoji { e -> input += e }
-                        },
-                    ) {
-                        EmojiArt("🙂", 20.dp)
-                    }
-                }
-                Spacer(Modifier.width(8.dp))
+            if (editTarget == null) {
+                // .tools — bare mic / image / plus buttons, shown only
+                // while the field is empty (.bar.tx hides them for Send).
+                // The plus opens the emoji sheet (its app function).
                 androidx.compose.animation.AnimatedVisibility(
-                    visible = input.isNotEmpty(),
-                    enter = scaleIn(initialScale = 0.6f, animationSpec = tween(180, easing = TikuEase)) + fadeIn(tween(150)),
-                    exit = scaleOut(targetScale = 0.6f, animationSpec = tween(140)) + fadeOut(tween(120)),
+                    visible = input.isEmpty(),
+                    enter = fadeIn(tween(200, easing = TikEase)),
+                    exit = fadeOut(tween(150, easing = TikEase)),
                 ) {
-                    SendArrowButton(settings.accent) { sendCurrent() }
-                }
-                if (input.isEmpty()) {
-                    Box(
-                        Modifier.size(46.dp).clip(CircleShape).background(settings.gradBrush)
-                            .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {
-                                if (androidx.core.content.ContextCompat.checkSelfPermission(ctx, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
-                                    startRecording(recorder) { recording = true }
-                                } else askMic.launch(Manifest.permission.RECORD_AUDIO)
-                            },
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Icon(Icons.Filled.Mic, null, Modifier.size(20.dp), tint = Color.White)
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        TikBtn("mic", iconSize = 22.dp) {
+                            if (androidx.core.content.ContextCompat.checkSelfPermission(ctx, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
+                                startRecording(recorder) { recording = true }
+                            } else askMic.launch(Manifest.permission.RECORD_AUDIO)
+                        }
+                        TikBtn("img", iconSize = 22.dp) {
+                            ChatSession.expectExternalActivity = true; pickImage.launch("image/*")
+                        }
+                        TikBtn("plus", iconSize = 22.dp) {
+                            ChatSheets.emoji { e -> input += e }
+                        }
                     }
                 }
             }
+            // .snd — the design's Send is a TEXT button (accent, w600),
+            // fading in over .2s whenever there is something to send.
+            androidx.compose.animation.AnimatedVisibility(
+                visible = input.isNotEmpty(),
+                enter = fadeIn(tween(200, easing = TikEase)),
+                exit = fadeOut(tween(150, easing = TikEase)),
+            ) {
+                Box(
+                    Modifier.clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) { sendCurrent() }
+                        .padding(horizontal = 10.dp, vertical = 6.dp),
+                ) {
+                    Text("Send", fontSize = 15.sp, fontWeight = FontWeight.SemiBold,
+                        color = settings.accent, fontFamily = Manrope)
+                }
+            }
         }
+        }
+        }
+    }
+}
+
+/** The design's .rbar — reply/edit context bar above the composer. */
+@Composable
+private fun ChatContextBar(
+    visible: Boolean,
+    title: String,
+    quote: String,
+    accent: Color,
+    onClose: () -> Unit,
+) {
+    AnimatedVisibility(
+        visible = visible,
+        enter = expandVertically(tween(280, easing = TikEase)) + fadeIn(tween(280, easing = TikEase)),
+        exit = shrinkVertically(tween(220, easing = TikEase)) + fadeOut(tween(220, easing = TikEase)),
+    ) {
+        Row(
+            Modifier.fillMaxWidth().padding(horizontal = 12.dp).padding(top = 8.dp)
+                .clip(RoundedCornerShape(16.dp)).background(Tik.S1)
+                .padding(start = 14.dp, end = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Box(Modifier.width(2.dp).height(30.dp).background(accent))
+            Spacer(Modifier.width(10.dp))
+            Column(Modifier.weight(1f).padding(vertical = 8.dp)) {
+                Text(title, fontSize = 12.5.sp, fontWeight = FontWeight.Medium,
+                    fontFamily = Manrope, color = Tik.Tx)
+                Text(quote, fontSize = 12.5.sp, fontFamily = Manrope, color = Tik.Sub,
+                    maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
+            }
+            TikBtn("x", iconSize = 18.dp, tint = Tik.Sub) { onClose() }
         }
     }
 }
@@ -796,9 +844,9 @@ fun RecordingTimer(secs: Int) {
     val inf = rememberInfiniteTransition(label = "recpulse")
     val a by inf.animateFloat(0.3f, 1f, infiniteRepeatable(tween(1000), RepeatMode.Reverse), label = "rp")
     Row(verticalAlignment = Alignment.CenterVertically) {
-        Box(Modifier.size(10.dp).alpha(a).clip(CircleShape).background(TikuTokens.Red))
+        Box(Modifier.size(10.dp).alpha(a).clip(CircleShape).background(Tik.RecDot))
         Spacer(Modifier.width(8.dp))
-        Text("%d:%02d".format(secs / 60, secs % 60), color = TikuTokens.Red,
+        Text("%d:%02d".format(secs / 60, secs % 60), color = Tik.Tx,
             fontWeight = FontWeight.SemiBold, fontSize = 16.sp, fontFamily = Manrope)
     }
 }
@@ -836,19 +884,32 @@ fun SendArrowButton(accent: Color, onClick: () -> Unit) {
     }
 }
 
+/** .ty — the design's typing row: three accent hearts breathing on the
+ *  hb keyframes (scale .72 <-> 1, opacity .45 <-> 1, 1.2s ease-in-out,
+ *  staggered .16s). No bubble behind them in the design. */
 @Composable
 fun TypingBubble() {
+    val settings = tikuSettings().value
     val inf = rememberInfiniteTransition(label = "typing")
     Row(
-        Modifier.clip(RoundedCornerShape(20.dp)).background(TikuTokens.Bubble)
-            .border(1.dp, TikuTokens.Line, RoundedCornerShape(20.dp))
-            .padding(horizontal = 15.dp, vertical = 13.dp),
-        horizontalArrangement = Arrangement.spacedBy(4.dp),
+        Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
+        horizontalArrangement = Arrangement.spacedBy(5.dp),
+        verticalAlignment = Alignment.CenterVertically,
     ) {
         repeat(3) { i ->
-            val off by inf.animateFloat(0f, -5f, infiniteRepeatable(tween(500), RepeatMode.Reverse,
-                initialStartOffset = androidx.compose.animation.core.StartOffset(i * 150)), label = "td$i")
-            Box(Modifier.size(7.dp).offset(y = off.dp).clip(CircleShape).background(TikuTokens.Muted))
+            val p by inf.animateFloat(0f, 1f, infiniteRepeatable(
+                tween(600, easing = androidx.compose.animation.core.FastOutSlowInEasing),
+                RepeatMode.Reverse,
+                initialStartOffset = androidx.compose.animation.core.StartOffset(i * 160),
+            ), label = "th$i")
+            TikHeart(
+                Modifier.size(11.dp).graphicsLayer {
+                    val s = 0.72f + 0.28f * p
+                    scaleX = s; scaleY = s
+                    alpha = 0.45f + 0.55f * p
+                },
+                tint = settings.accent,
+            )
         }
     }
 }
@@ -871,30 +932,28 @@ fun callEventLabel(m: TikuMessage, iAmCaller: Boolean): String {
     }
 }
 
-/** Centred system pill for a call event — same visual family as the E2EE
- *  banner above the messages. Never a bubble, never side-aligned. */
+/** Centred system pill for a call event, in the design's chip language
+ *  (s1 bg, r12, padding 12/6, 12px sub text). Never a bubble, never
+ *  side-aligned. A missed incoming call tints its glyph with the error
+ *  red, as the old skin did. */
 @Composable
 fun CallEventPill(m: TikuMessage) {
     val iAmCaller = m.callMine
-    val icon = when {
-        m.callOutcome == "noanswer" && !iAmCaller -> Icons.Filled.CallMissed
-        m.callOutcome == "declined" -> Icons.Filled.CallEnd
-        else -> Icons.Filled.Call
-    }
+    val missedIn = m.callOutcome == "noanswer" && !iAmCaller
     Row(
         Modifier.fillMaxWidth().padding(vertical = 2.dp),
         horizontalArrangement = Arrangement.Center,
     ) {
         Row(
-            Modifier.clip(RoundedCornerShape(12.dp)).background(TikuTokens.Mint)
+            Modifier.clip(RoundedCornerShape(12.dp)).background(Tik.S1)
                 .padding(horizontal = 12.dp, vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Icon(icon, null, Modifier.size(13.dp), tint = TikuTokens.Muted)
+            TikIcon("call", Modifier.size(13.dp), tint = if (missedIn) Tik.Danger else Tik.Sub)
             Spacer(Modifier.width(6.dp))
             Text(
                 "${callEventLabel(m, iAmCaller)} · ${m.time}",
-                fontSize = 12.sp, color = TikuTokens.Muted, fontFamily = Manrope,
+                fontSize = 12.sp, color = Tik.Sub, fontFamily = Manrope,
             )
         }
     }
@@ -940,7 +999,8 @@ fun ImageViewerOverlay(m: TikuMessage, onClose: () -> Unit) {
         if (zoom > 1f) { panX += panChange.x; panY += panChange.y } else { panX = 0f; panY = 0f }
     }
     Box(
-        Modifier.fillMaxSize().background(Color(0xF21F0E0D)).testTag("image_viewer"),
+        // .lb — the design's lightbox scrim: #000e
+        Modifier.fillMaxSize().background(Color(0xE6000000)).testTag("image_viewer"),
     ) {
         androidx.compose.foundation.Image(
             bmp.asBmp(), null,
@@ -1004,13 +1064,12 @@ fun MessageBubble(
     showAvatar: Boolean = false,
     peer: Person? = null,
 ) {
-    // ROUND 8 entrance (item 8): subtle rise + fade + settle, transform/alpha
-    // only (graphicsLayer — no layout work), matching the reference UI's
-    // keyframes (translateY + scale → 1) with the spring ease.
-    // ROUND 10 (C2): gated by [animateIn] — history and pagination prepends
-    // compose already-settled; only genuinely new tail arrivals play it.
+    // Entrance = the design's `pop` keyframes: from opacity 0,
+    // translateY(8px), scale(.96), .3s on --e. Gated by [animateIn] —
+    // history and pagination prepends compose already-settled; only
+    // genuinely new tail arrivals play it.
     val enter = remember { Animatable(if (animateIn) 0f else 1f) }
-    LaunchedEffect(Unit) { if (animateIn) enter.animateTo(1f, tween(380, easing = TikuSpringEase)) }
+    LaunchedEffect(Unit) { if (animateIn) enter.animateTo(1f, tween(300, easing = TikEase)) }
     // ROUND 10 (C1): double-tap heart pop — a drawn heart springs over the
     // bubble while the ❤ reaction lands through the existing plumbing.
     var heartPopKey by remember { mutableIntStateOf(0) }
@@ -1023,14 +1082,10 @@ fun MessageBubble(
             heartScale.animateTo(0f, tween(180))
         }
     }
-    // ROUND 10 (C3): only the LAST message of a same-sender group keeps the
-    // small tail corner; grouped middles are fully rounded.
-    val shape = when {
-        !groupLast -> RoundedCornerShape(20.dp)
-        m.me -> RoundedCornerShape(20.dp, 20.dp, 6.dp, 20.dp)
-        else -> RoundedCornerShape(20.dp, 20.dp, 20.dp, 6.dp)
-    }
-    val textColor = if (m.me) Color.White else TikuTokens.Ink
+    // The design's .b is a uniform 20px radius on every bubble (no tail
+    // corners in the file) — grouping still reads from the avatar + gaps.
+    val shape = RoundedCornerShape(20.dp)
+    val textColor = if (m.me) Color.White else Tik.Tx
 
     // ROUND 8 swipe-to-reply (item 1): drag state lives in plain snapshot
     // state (synchronous, tracks the finger exactly); an Animatable runs
@@ -1051,31 +1106,47 @@ fun MessageBubble(
     // bottom edge (they rendered flipped — caption under the bubble). A
     // Column always stacks in emission order, top-down.
     Column {
-    // IG quote caption (item 2): sits just above a reply bubble.
+    // .qx — the design's quote block: OUTSIDE the bubble, above it, with
+    // a 2px accent left border; the direction line bold (tx at 80%), the
+    // quoted text sub, single line. (The app stores only the quote text,
+    // not its author — the direction line carries that role.)
     if (m.replyQuote != null) {
         Row(
-            Modifier.fillMaxWidth().padding(bottom = 3.dp, start = 2.dp, end = 2.dp),
+            Modifier.fillMaxWidth().padding(bottom = 4.dp, start = 4.dp, end = 4.dp),
             horizontalArrangement = if (m.me) Arrangement.End else Arrangement.Start,
         ) {
-            Text(
-                if (m.me) "You replied" else "Replied to you",
-                fontSize = 11.sp, color = TikuTokens.Muted, fontFamily = Manrope,
-            )
+            if (!m.me) Spacer(Modifier.width(34.dp))
+            Row(Modifier.widthIn(max = 280.dp)) {
+                Box(Modifier.width(2.dp).height(30.dp).background(settings.accent))
+                Spacer(Modifier.width(8.dp))
+                Column {
+                    Text(
+                        if (m.me) "You replied" else "Replied to you",
+                        fontSize = 12.sp, fontWeight = FontWeight.Medium,
+                        color = Tik.Tx.copy(alpha = 0.8f), fontFamily = Manrope,
+                    )
+                    Text(
+                        m.replyQuote, fontSize = 12.sp, color = Tik.Sub, fontFamily = Manrope,
+                        maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                    )
+                }
+            }
         }
     }
     Box(Modifier.fillMaxWidth()) {
-        // the reply arrow the swipe reveals, on the edge the bubble vacates
+        // .sr — the swipe-reveal: 28px s2 circle, sub reply glyph,
+        // scale .5 + p*.5, opacity p, on the edge the bubble vacates.
         Box(
             Modifier.align(if (m.me) Alignment.CenterEnd else Alignment.CenterStart)
-                .padding(horizontal = 8.dp).size(30.dp)
+                .padding(horizontal = 4.dp).size(28.dp)
                 .graphicsLayer {
                     alpha = swipeProgress
-                    val s = 0.6f + 0.4f * swipeProgress
+                    val s = 0.5f + 0.5f * swipeProgress
                     scaleX = s; scaleY = s
                 }
-                .clip(CircleShape).background(settings.accent),
+                .clip(CircleShape).background(Tik.S2),
             contentAlignment = Alignment.Center,
-        ) { Icon(Icons.Filled.Reply, null, Modifier.size(16.dp), tint = Color.White) }
+        ) { TikIcon("reply", Modifier.size(15.dp), tint = Tik.Sub) }
     Row(
         Modifier.fillMaxWidth()
             .offset { androidx.compose.ui.unit.IntOffset(dragX.roundToInt(), 0) }
@@ -1124,7 +1195,7 @@ fun MessageBubble(
         // members keeps every bubble in the group on the same left edge.
         if (!m.me) {
             if (showAvatar && peer != null) {
-                Box(Modifier.align(Alignment.Bottom)) { AvatarBox(peer, 28.dp, 10.dp, 12f) }
+                Box(Modifier.align(Alignment.Bottom)) { AvatarBox(peer, 28.dp, 14.dp, 12f) }
             } else {
                 Spacer(Modifier.width(28.dp))
             }
@@ -1148,46 +1219,46 @@ fun MessageBubble(
                 Modifier.graphicsLayer {
                     val v = enter.value
                     alpha = v
-                    val s = 0.86f + 0.14f * v
+                    val s = 0.96f + 0.04f * v
                     scaleX = s; scaleY = s
-                    translationY = (1f - v) * 22f
+                    translationY = (1f - v) * with(density) { 8.dp.toPx() }
                 },
             ) {
+            // .b — padding 9/14, r20; mine = accent (couple wallpaper:
+            // the design's 160deg accent -> color-mix(accent, #5A2A8A)
+            // gradient), theirs = s2. Media bubbles (.b.md) pad 3px.
+            val bubbleBg = when {
+                !m.me -> Brush.linearGradient(listOf(Tik.S2, Tik.S2))
+                settings.wallpaper == WallpaperMode.COUPLE -> Brush.linearGradient(
+                    listOf(settings.accent, coupleGradientEnd(settings.accent)))
+                else -> Brush.linearGradient(listOf(settings.accent, settings.accent))
+            }
             Column(
                 Modifier.clip(shape)
-                    .then(if (m.me) Modifier.background(settings.gradBrush)
-                          else Modifier.background(TikuTokens.Bubble).border(1.dp, TikuTokens.Line, shape))
-                    .padding(horizontal = 13.dp, vertical = 9.dp),
+                    .background(bubbleBg)
+                    .then(
+                        if (m.kind == MsgKind.IMAGE && m.photo != null) Modifier.padding(3.dp)
+                        else Modifier.padding(horizontal = 14.dp, vertical = 9.dp),
+                    ),
             ) {
-                if (m.replyQuote != null) {
-                    // ROUND 8 (item 2): the quote is its own soft block inside
-                    // the bubble — a translucent fill, rounded, and the quoted
-                    // text at ~70% opacity so it reads as a step quieter
-                    // than the message body (the owner's IG reference).
-                    Column(
-                        Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp))
-                            .background(if (m.me) Color.White.copy(alpha = 0.20f)
-                                else TikuTokens.Ink.copy(alpha = 0.06f))
-                            .padding(horizontal = 9.dp, vertical = 6.dp),
-                    ) {
-                        Text(m.replyQuote, fontSize = 12.sp, color = textColor.copy(alpha = 0.7f),
-                            fontFamily = Manrope, maxLines = 2,
-                            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
-                    }
-                    Spacer(Modifier.height(6.dp))
-                }
                 if (m.kind == MsgKind.IMAGE && m.photo != null) {
                     androidx.compose.foundation.Image(
                         m.photo.asBmp(), null,
-                        Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)),
+                        // .pic — max-width 240, radius 17
+                        Modifier.widthIn(max = 240.dp).fillMaxWidth().clip(RoundedCornerShape(17.dp)),
                         contentScale = ContentScale.FillWidth,
                     )
                     if (m.text.isNotEmpty()) Spacer(Modifier.height(4.dp))
                 }
                 if (m.kind == MsgKind.VOICE) {
-                    VoiceBubbleContent(m, textColor, playing, onPlayToggle)
+                    VoiceBubbleContent(m, textColor, playing, onPlayToggle, m.me, settings.accent)
                 } else if (m.text.isNotEmpty()) {
-                    Text(m.text, fontSize = settings.textSizeSp.sp, color = textColor, fontFamily = Manrope)
+                    Text(
+                        m.text, fontSize = settings.textSizeSp.sp, color = textColor, fontFamily = Manrope,
+                        lineHeight = (settings.textSizeSp * 1.38f).sp,
+                        modifier = if (m.kind == MsgKind.IMAGE && m.photo != null)
+                            Modifier.padding(horizontal = 11.dp, vertical = 4.dp) else Modifier,
+                    )
                 }
                 Row(Modifier.align(Alignment.End).padding(top = 2.dp)) {
                     Text(
@@ -1206,8 +1277,8 @@ fun MessageBubble(
                     )
                 }
             }
-            // ROUND 10 (C1): the double-tap heart itself — drawn with the
-            // same heart path as the couple wallpaper, in the couple rose.
+            // The double-tap heart — the design's heart in the chat
+            // accent, springing over the bubble (rp-family overshoot).
             if (heartScale.value > 0f) {
                 Canvas(
                     Modifier.size(46.dp).align(Alignment.Center)
@@ -1218,17 +1289,27 @@ fun MessageBubble(
                 ) {
                     drawPath(
                         heartPath(size.width / 2f, size.height / 2f, size.minDimension / 2.3f),
-                        Color(0xFFCE4E79),
+                        settings.accent,
                     )
                 }
             }
             val reactions = m.reactions.values.distinct()
             if (reactions.isNotEmpty()) {
+                // .rx — pill at the bubble's bottom edge (bottom -13,
+                // inset 12 from the outer edge): bg s1, 2px border in the
+                // WALL colour, r12, padding 0/5; pops with the rp curve.
+                val rxPop = remember { Animatable(0f) }
+                LaunchedEffect(reactions) {
+                    rxPop.snapTo(0f)
+                    rxPop.animateTo(1f, tween(380, easing = TikPopEase))
+                }
                 Box(
-                    Modifier.align(Alignment.BottomEnd).offset(x = 6.dp, y = 8.dp)
-                        .clip(RoundedCornerShape(12.dp)).background(TikuTokens.Card)
-                        .border(1.dp, TikuTokens.Line, RoundedCornerShape(12.dp))
-                        .padding(horizontal = 6.dp, vertical = 1.dp),
+                    Modifier.align(if (m.me) Alignment.BottomEnd else Alignment.BottomStart)
+                        .offset(x = if (m.me) (-12).dp else 12.dp, y = 10.dp)
+                        .graphicsLayer { scaleX = rxPop.value; scaleY = rxPop.value }
+                        .clip(RoundedCornerShape(12.dp)).background(Tik.S1)
+                        .border(2.dp, Tik.WallColors[settings.wallpaper.ordinal], RoundedCornerShape(12.dp))
+                        .padding(horizontal = 5.dp, vertical = 1.dp),
                 ) {
                     Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
                         reactions.forEach { EmojiArt(it, 14.dp) }
@@ -1249,7 +1330,7 @@ fun MessageBubble(
             Text(
                 "⚠ Couldn't send — tap to retry",
                 fontSize = 12.sp, fontWeight = FontWeight.SemiBold,
-                color = TikuTokens.Red, fontFamily = Manrope,
+                color = Tik.Danger, fontFamily = Manrope,
                 modifier = Modifier.clickable(
                     interactionSource = remember { MutableInteractionSource() }, indication = null,
                 ) { onRetry() },
@@ -1260,15 +1341,21 @@ fun MessageBubble(
     } // close bubble Column
 }
 
+/** .b.vn — voice bubble: min-width 210, 34px play disc (mine: white 15%;
+ *  theirs: accent, white glyph), 26px waveform in currentColor at .35
+ *  (played = full), duration 12 w500 right. The bars are the message's
+ *  REAL recorded amplitudes; playback progress isn't exposed by the
+ *  player, so "played" lights the whole wave while playing. */
 @Composable
-fun VoiceBubbleContent(m: TikuMessage, textColor: Color, playing: Boolean, onToggle: () -> Unit) {
-    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+fun VoiceBubbleContent(m: TikuMessage, textColor: Color, playing: Boolean, onToggle: () -> Unit, mine: Boolean, accent: Color) {
+    Row(Modifier.fillMaxWidth().widthIn(min = 210.dp), verticalAlignment = Alignment.CenterVertically) {
         Box(
-            Modifier.size(34.dp).clip(CircleShape).background(Color(0x337F7F7F))
+            Modifier.size(34.dp).clip(CircleShape)
+                .background(if (mine) Color(0x26FFFFFF) else accent)
                 .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null, onClick = onToggle),
             contentAlignment = Alignment.Center,
         ) {
-            Text(if (playing) "❚❚" else "▶", fontSize = 12.sp, color = textColor)
+            TikIcon(if (playing) "pauseFill" else "playFill", Modifier.size(16.dp), tint = Color.White)
         }
         Spacer(Modifier.width(10.dp))
         Row(
@@ -1280,13 +1367,18 @@ fun VoiceBubbleContent(m: TikuMessage, textColor: Color, playing: Boolean, onTog
             amps.forEach { a ->
                 Box(
                     Modifier.weight(1f).height(a.coerceIn(4, 24).dp)
-                        .clip(RoundedCornerShape(3.dp))
-                        .background(textColor.copy(alpha = if (playing) 0.9f else 0.55f))
+                        .clip(RoundedCornerShape(2.dp))
+                        .background(textColor.copy(alpha = if (playing) 1f else 0.35f))
                 )
             }
         }
         Spacer(Modifier.width(8.dp))
-        Text("0:%02d".format(m.voiceDurSec), fontSize = 12.sp, color = textColor.copy(alpha = 0.8f), fontFamily = Manrope)
+        Text(
+            "0:%02d".format(m.voiceDurSec), fontSize = 12.sp, fontWeight = FontWeight.Medium,
+            color = textColor.copy(alpha = 0.8f), fontFamily = Manrope,
+            modifier = Modifier.widthIn(min = 30.dp),
+            textAlign = androidx.compose.ui.text.style.TextAlign.End,
+        )
     }
 }
 
@@ -1294,12 +1386,13 @@ fun VoiceBubbleContent(m: TikuMessage, textColor: Color, playing: Boolean, onTog
 object ChatSheets {
     private val EMOJIS = listOf("😊", "😂", "🥹", "😍", "🤍", "🔥", "✨", "🌿", "🌸", "☕", "🎧", "🎨",
         "🙌", "👀", "💫", "🍋", "☁️", "🫶", "🥳", "😌", "🤭", "💬", "📍", "🌙")
-    private val REACTIONS = listOf("❤️", "😂", "😮", "😢", "👍", "🔥")
+    // The design's context reactions (EM), in the file's order.
+    private val REACTIONS = Tik.Reactions
 
     fun emoji(onPick: (String) -> Unit) {
         AppState.sheet {
-            SerifTitle("Emoji", 28.sp, modifier = Modifier.padding(top = 2.dp, bottom = 10.dp))
-            Column {
+            TikSheetTitle("Emoji")
+            Column(Modifier.padding(horizontal = 12.dp)) {
                 EMOJIS.chunked(6).forEach { row ->
                     Row(Modifier.fillMaxWidth()) {
                         row.forEach { e ->
@@ -1317,48 +1410,62 @@ object ChatSheets {
         }
     }
 
+    // NOTE on parameter order: onReply sits LAST so the screenshot
+    // harness's trailing-lambda call `context(id, msg) { }` binds to it
+    // (production passes every callback by name, so order is free there).
     fun context(
         threadId: String, m: TikuMessage,
-        onReply: (TikuMessage) -> Unit,
         onEdit: (TikuMessage) -> Unit = {},
         pinned: Boolean = false,
         onTogglePin: () -> Unit = {},
+        onReply: (TikuMessage) -> Unit,
     ) {
         AppState.sheet {
-            // reaction row
+            // .rp — reaction bar: pill r26, padding 5/8, 24px emoji that
+            // pop in staggered (.36s rp curve, +30ms per button). The
+            // design floats it over a black scrim; inside the s2 sheet it
+            // sits on s1 so the pill still reads.
             Row(
-                Modifier.fillMaxWidth().clip(RoundedCornerShape(22.dp)).background(TikuTokens.BgTop)
-                    .padding(horizontal = 10.dp, vertical = 8.dp),
+                Modifier.fillMaxWidth().padding(horizontal = 18.dp)
+                    .clip(RoundedCornerShape(26.dp)).background(Tik.S1)
+                    .padding(horizontal = 8.dp, vertical = 5.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
             ) {
-                REACTIONS.forEach { e ->
+                REACTIONS.forEachIndexed { i, e ->
+                    val pop = remember { Animatable(0f) }
+                    LaunchedEffect(Unit) {
+                        delay(i * 30L)
+                        pop.animateTo(1f, tween(360, easing = TikPopEase))
+                    }
                     Box(
                         Modifier.size(44.dp)
+                            .graphicsLayer { scaleX = pop.value; scaleY = pop.value }
                             .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {
                                 val cur = m.reactions.values.firstOrNull()
                                 AppState.repo.react(threadId, m.id, if (cur == e) null else e)
                                 AppState.closeSheet()
                             },
                         contentAlignment = Alignment.Center,
-                    ) { EmojiArt(e, 27.dp) }
+                    ) { EmojiArt(e, 24.dp) }
                 }
             }
             Spacer(Modifier.height(10.dp))
-            SheetAction("Reply") {
+            SheetAction("Reply", icon = "reply", first = true) {
                 onReply(m); AppState.closeSheet()
             }
-            // ROUND 10 (C5): Edit — own TEXT messages only, inside the
-            // 15-minute window (the composer switches to edit mode).
+            // Edit — own TEXT messages only, inside the 15-minute window
+            // (the composer switches to edit mode).
             if (m.me && m.kind == MsgKind.TEXT && m.status == SendStatus.SENT &&
                 m.tsMs > 0 && System.currentTimeMillis() - m.tsMs <= 15 * 60_000L) {
-                SheetAction("Edit") {
+                SheetAction("Edit", icon = "edit") {
                     onEdit(m); AppState.closeSheet()
                 }
             }
-            SheetAction("Copy") {
-                // ROUND 8: Copy actually copies now (it used to only toast).
-                // The text is already decrypted on this device; the user
-                // explicitly chose to put it on their own clipboard.
+            SheetAction("Copy", icon = "copy") {
+                // Copy actually copies. The text is already decrypted on
+                // this device; the user explicitly chose to put it on
+                // their own clipboard.
                 if (m.kind == MsgKind.TEXT) {
                     val cm = AppState.appCtx.getSystemService(android.content.Context.CLIPBOARD_SERVICE)
                         as? android.content.ClipboardManager
@@ -1366,19 +1473,19 @@ object ChatSheets {
                 }
                 AppState.toast("Copied"); AppState.closeSheet()
             }
-            SheetAction(if (m.starredByMe) "Unstar" else "Star") {
+            SheetAction(if (m.starredByMe) "Unstar" else "Star", icon = "heart") {
                 AppState.repo.toggleStar(threadId, m.id)
                 AppState.toast("Star updated"); AppState.closeSheet()
             }
-            // ROUND 10 (C6): pin/unpin this message (chat doc pinnedMsgs,
-            // max 3 — the cap toast comes from the engine).
-            SheetAction(if (pinned) "Unpin" else "Pin") {
+            // Pin/unpin this message (chat doc pinnedMsgs, max 3 — the
+            // cap toast comes from the engine).
+            SheetAction(if (pinned) "Unpin" else "Pin", icon = "pin") {
                 onTogglePin(); AppState.closeSheet()
             }
             // Media rule (owner): NOTHING auto-saves to the gallery. This explicit tap
             // is the only exit — decrypted photo -> Pictures/Tiku, voice -> Music/Tiku.
             if (m.kind == MsgKind.IMAGE || m.kind == MsgKind.VOICE) {
-                SheetAction("Save to device") {
+                SheetAction("Save to device", icon = "img") {
                     if (Config.PREVIEW_UI_ONLY) {
                         AppState.toast("Saved to device")
                     } else {
@@ -1388,57 +1495,70 @@ object ChatSheets {
                     AppState.closeSheet()
                 }
             }
-            SheetAction("Delete") {
+            SheetAction("Delete", icon = "trash", danger = true) {
                 AppState.repo.deleteForMe(threadId, m.id); AppState.closeSheet()
             }
         }
     }
 
-    // ROUND 10: the old "more" details bottom-sheet is GONE — Chat Details
-    // (ChatDetailsScreen, opened from the chat header) is the single entry
-    // point for nickname/theme/receipts/clear-chat now. The nickname EDITOR
-    // below is reused by that screen unchanged.
+    /**
+     * Details sheet (identity + the detail actions). Chat Details
+     * (ChatDetailsScreen, from the chat header) remains the full surface;
+     * this sheet is its compact companion — and the entry the screenshot
+     * harness drives for the nickname flow.
+     */
+    fun more(thread: ChatThread, person: Person) {
+        AppState.sheet {
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                AvatarBox(person, 54.dp, 27.dp, 22f)
+                Spacer(Modifier.width(14.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(thread.displayName, fontWeight = FontWeight.Medium, fontSize = 15.sp,
+                        fontFamily = Manrope, color = Tik.Tx,
+                        maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
+                    Text("@" + person.username, fontSize = 13.5.sp, color = Tik.Sub, fontFamily = Manrope)
+                }
+            }
+            Spacer(Modifier.height(8.dp))
+            SheetAction("Edit nickname", icon = "edit", first = true) {
+                nickname(thread)
+            }
+            SheetAction("Chat details", icon = "chevR") {
+                AppState.closeSheet()
+                AppState.go(Screen.ChatDetails(thread.id))
+            }
+            SheetAction("Clear chat", icon = "trash", danger = true) {
+                AppState.repo.clearChat(thread.id)
+                AppState.closeSheet()
+                AppState.toast("Chat cleared")
+            }
+        }
+    }
 
     /** Nickname editor: prefilled with the current nickname; Save writes it
      *  (blank input clears), Clear removes it and the profile name returns. */
     fun nickname(thread: ChatThread) {
         AppState.sheet {
             var nick by remember { mutableStateOf(thread.nickname ?: "") }
-            SerifTitle("Nickname", 28.sp, modifier = Modifier.padding(top = 2.dp, bottom = 6.dp))
+            TikSheetTitle("Nickname")
             Text(
                 "Shown instead of ${thread.person.name} in this chat — for both of you.",
-                fontSize = 13.5.sp, color = TikuTokens.Muted, fontFamily = Manrope,
-                modifier = Modifier.padding(bottom = 12.dp),
+                fontSize = 13.5.sp, color = Tik.Sub, fontFamily = Manrope,
+                modifier = Modifier.padding(horizontal = 18.dp, bottom = 12.dp),
             )
-            Box(
-                Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(TikuTokens.BgTop)
-                    .border(1.dp, TikuTokens.Line, RoundedCornerShape(16.dp))
-                    .padding(horizontal = 14.dp, vertical = 13.dp),
-            ) {
-                BasicTextField(
-                    value = nick,
-                    onValueChange = { nick = it.take(40) },
-                    singleLine = true,
-                    textStyle = TextStyle(fontSize = 16.sp, color = TikuTokens.Ink, fontFamily = Manrope),
-                    cursorBrush = SolidColor(TikuTokens.Ink),
-                    modifier = Modifier.fillMaxWidth(),
-                    decorationBox = { inner ->
-                        if (nick.isEmpty()) {
-                            Text("Nickname", fontSize = 16.sp, color = TikuTokens.Muted, fontFamily = Manrope)
-                        }
-                        inner()
-                    },
-                )
-            }
+            TikField(nick, { nick = it.take(40) }, "Nickname")
             Spacer(Modifier.height(14.dp))
-            PrimaryButton("Save nickname") {
+            TikPrimaryButton("Save nickname") {
                 AppState.repo.setNickname(thread.id, nick)
                 AppState.closeSheet()
                 AppState.toast(if (nick.isBlank()) "Nickname cleared" else "Nickname saved")
             }
             if (!thread.nickname.isNullOrBlank()) {
                 Spacer(Modifier.height(6.dp))
-                SheetAction("Clear nickname") {
+                SheetAction("Clear nickname", danger = true, first = true) {
                     AppState.repo.setNickname(thread.id, null)
                     AppState.closeSheet()
                     AppState.toast("Nickname cleared")
@@ -1448,15 +1568,48 @@ object ChatSheets {
     }
 }
 
+/** .sa — sheet action row: padding 15/22, 16px, top hairline (except the
+ *  first), label left + design icon right; danger rows in the error red. */
 @Composable
-fun SheetAction(label: String, onClick: () -> Unit) {
+fun SheetAction(
+    label: String,
+    icon: String? = null,
+    danger: Boolean = false,
+    first: Boolean = false,
+    onClick: () -> Unit,
+) {
+    val interaction = remember { MutableInteractionSource() }
+    val pressed by interaction.collectIsPressedAsState()
     Row(
         Modifier.fillMaxWidth()
-            .border(0.5.dp, TikuTokens.Line)
-            .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null, onClick = onClick)
-            .padding(horizontal = 6.dp, vertical = 15.dp),
+            .background(if (pressed) Tik.RowActive else Color.Transparent)
+            .then(
+                if (first) Modifier
+                else Modifier.drawTopBorderLn(),
+            )
+            .clickable(interactionSource = interaction, indication = null, onClick = onClick)
+            .padding(horizontal = 22.dp, vertical = 15.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(label, fontWeight = FontWeight.Medium, fontSize = 16.sp, fontFamily = Manrope, color = TikuTokens.Ink)
+        Text(
+            label, fontSize = 16.sp, fontFamily = Manrope,
+            color = if (danger) Tik.Danger else Tik.Tx,
+            modifier = Modifier.weight(1f),
+        )
+        if (icon != null) {
+            TikIcon(icon, Modifier.size(21.dp), tint = if (danger) Tik.Danger else Tik.Sub)
+        }
     }
 }
+
+private fun Modifier.drawTopBorderLn(): Modifier = this.then(
+    androidx.compose.ui.draw.drawWithContent {
+        drawContent()
+        drawLine(
+            Tik.Ln,
+            start = Offset(0f, 0f),
+            end = Offset(size.width, 0f),
+            strokeWidth = 1.dp.toPx(),
+        )
+    },
+)

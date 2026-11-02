@@ -66,18 +66,24 @@ fun FormScaffold(title: String, sub: String, content: @Composable ColumnScope.()
 }
 
 @Composable
-fun PasswordField(value: String, onValue: (String) -> Unit, placeholder: String) {
+fun PasswordField(value: String, onValue: (String) -> Unit, placeholder: String, dark: Boolean = false) {
     var shown by remember { mutableStateOf(false) }
+    // ROUND 12: [dark] = the Tik design's .fld skin (black field, ln border)
+    // for the in-Tik Change password sheet; gate screens keep the peach field.
+    val bg = if (dark) Tik.Bg else TikuTokens.Card
+    val line = if (dark) Tik.Ln else TikuTokens.Line
+    val ink = if (dark) Tik.Tx else TikuTokens.Ink
+    val muted = if (dark) Tik.Sub else TikuTokens.Muted
     Box(
         Modifier.fillMaxWidth().height(56.dp)
-            .clip(RoundedCornerShape(18.dp))
-            .background(TikuTokens.Card)
-            .border(1.dp, TikuTokens.Line, RoundedCornerShape(18.dp)),
+            .clip(RoundedCornerShape(if (dark) 12.dp else 18.dp))
+            .background(bg)
+            .border(1.dp, line, RoundedCornerShape(if (dark) 12.dp else 18.dp)),
     ) {
         BasicTextField(
             value = value, onValueChange = onValue,
-            textStyle = TextStyle(fontSize = 16.sp, fontFamily = Manrope, color = TikuTokens.Ink),
-            cursorBrush = SolidColor(TikuTokens.Ink),
+            textStyle = TextStyle(fontSize = 16.sp, fontFamily = Manrope, color = ink),
+            cursorBrush = SolidColor(ink),
             visualTransformation = if (shown) VisualTransformation.None else PasswordVisualTransformation(),
             // OWNER BUG 0: a password field MUST present a password IME — plain-text
             // keyboards auto-correct / auto-capitalize / suggest, so the string the
@@ -91,7 +97,7 @@ fun PasswordField(value: String, onValue: (String) -> Unit, placeholder: String)
             modifier = Modifier.fillMaxWidth().align(Alignment.CenterStart)
                 .padding(start = 18.dp, end = 56.dp),
             decorationBox = { inner ->
-                if (value.isEmpty()) Text(placeholder, fontSize = 16.sp, fontFamily = Manrope, color = TikuTokens.Muted)
+                if (value.isEmpty()) Text(placeholder, fontSize = 16.sp, fontFamily = Manrope, color = muted)
                 inner()
             },
         )
@@ -100,7 +106,7 @@ fun PasswordField(value: String, onValue: (String) -> Unit, placeholder: String)
                 .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) { shown = !shown },
             contentAlignment = Alignment.Center,
         ) {
-            Icon(if (shown) Icons.Filled.VisibilityOff else Icons.Filled.Visibility, null, Modifier.size(20.dp), tint = TikuTokens.Muted)
+            Icon(if (shown) Icons.Filled.VisibilityOff else Icons.Filled.Visibility, null, Modifier.size(20.dp), tint = muted)
         }
     }
 }

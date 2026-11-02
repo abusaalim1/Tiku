@@ -225,7 +225,7 @@ private fun CallToggle(icon: androidx.compose.ui.graphics.vector.ImageVector, ac
 @Composable
 private fun CallEndButton(onClick: () -> Unit) {
     Box(
-        Modifier.size(62.dp).clip(CircleShape).background(TikuTokens.Red)
+        Modifier.size(62.dp).clip(CircleShape).background(Tik.Danger)
             .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null, onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {
@@ -331,9 +331,9 @@ fun CallScreen(threadId: String, video: Boolean) {
 
     Box(
         Modifier.fillMaxSize()
-            .background(Brush.linearGradient(listOf(Color(0xFF5A1F1A), Color(0xFF1F0E0D))))
+            .background(Brush.linearGradient(listOf(Color(0xFF1C1C1F), Color(0xFF000000))))
             .then(if (isVideo) Modifier.background(
-                Brush.radialGradient(listOf(Color(0x66F0885B), Color.Transparent)),
+                Brush.radialGradient(listOf(Color(0x40E5677F), Color.Transparent)),
             ) else Modifier),
         contentAlignment = Alignment.Center,
     ) {
@@ -490,7 +490,7 @@ fun FloatingCallWindow() {
             Modifier.offset(x = offX, y = offY).size(winW, winH)
                 .shadow(16.dp, RoundedCornerShape(20.dp))
                 .clip(RoundedCornerShape(20.dp))
-                .background(Brush.linearGradient(listOf(Color(0xFF5A1F1A), Color(0xFF1F0E0D))))
+                .background(Brush.linearGradient(listOf(Color(0xFF1C1C1F), Color(0xFF000000))))
                 .border(1.dp, Color(0x33FFFFFF), RoundedCornerShape(20.dp))
                 .pointerInput(Unit) {
                     detectDragGestures { change, drag ->
@@ -537,7 +537,7 @@ fun FloatingCallWindow() {
             // never a mere dismiss of the window.
             Box(
                 Modifier.align(Alignment.BottomEnd).padding(8.dp).size(30.dp)
-                    .clip(CircleShape).background(TikuTokens.Red)
+                    .clip(CircleShape).background(Tik.Danger)
                     .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {
                         CallController.hangup()
                     },
