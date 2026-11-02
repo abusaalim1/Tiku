@@ -262,7 +262,7 @@ class RtcSession(
         runCatching {
             audioManager.mode = AudioManager.MODE_IN_COMMUNICATION
             @Suppress("DEPRECATION")
-            audioManager.isSpeakerphoneOn = hasVideo && speakerOn
+            audioManager.isSpeakerphoneOn = speakerOn
         }
     }
 
@@ -527,6 +527,7 @@ object CallController {
         ringJob?.cancel(); ringJob = null
         callDocReg?.remove(); callDocReg = null
         session?.dispose(); session = null
+        runCatching { CallFeedbackManager.stopAll() }
         state.value = CallUiState.Idle
         pipMinimized.value = false
         answerApplied = false; processedCallerCands = 0; processedCalleeCands = 0
@@ -849,6 +850,7 @@ object CallController {
         ringJob?.cancel(); ringJob = null
         callDocReg?.remove(); callDocReg = null
         session?.dispose(); session = null
+        runCatching { CallFeedbackManager.stopAll() }
         state.value = CallUiState.Idle
         pipMinimized.value = false
         answerApplied = false; processedCallerCands = 0; processedCalleeCands = 0

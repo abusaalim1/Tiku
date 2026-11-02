@@ -162,8 +162,8 @@ interface ChatRepo {
     fun sendText(id: String, text: String, quote: String?)
     /** Re-attempt a FAILED outgoing message (tap-to-retry on the bubble). */
     fun retrySend(id: String, msgId: String) {}
-    fun sendPhoto(id: String, bmp: Bitmap)
-    fun sendVoice(id: String, audioFile: java.io.File?, durSec: Int, amps: List<Int>)
+    fun sendPhoto(id: String, bmp: Bitmap, quote: String? = null)
+    fun sendVoice(id: String, audioFile: java.io.File?, durSec: Int, amps: List<Int>, quote: String? = null)
     fun react(id: String, msgId: String, emoji: String?)
     fun toggleStar(id: String, msgId: String)
     fun deleteForMe(id: String, msgId: String)

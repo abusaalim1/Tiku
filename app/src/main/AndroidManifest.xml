@@ -5,6 +5,7 @@
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
+    <uses-permission android:name="android.permission.VIBRATE" />
     <!-- ROUND 9: notification permission, used ONLY by the owner account's
          opt-in alerts on his own phone (OwnerNotify). No other account ever
          posts a notification; nothing is requested at runtime for them. -->

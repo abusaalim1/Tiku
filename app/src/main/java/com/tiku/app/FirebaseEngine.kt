@@ -95,17 +95,16 @@ object FirebaseEngine : ChatRepo {
     // ================= AUTH =================
     suspend fun googleSignIn(activity: Activity): Result<Unit> {
         return try {
-        val nonce = UUID.randomUUID().toString()
-        val option = GetSignInWithGoogleOption.Builder(Config.WEB_CLIENT_ID).setNonce(nonce).build()
-        val request = GetCredentialRequest.Builder().addCredentialOption(option).build()
-        val result = CredentialManager.create(activity).getCredential(activity, request)
-        val cred = result.credential as? CustomCredential
-            ?: return Result.failure(IllegalStateException("Not a Google credential"))
-        if (cred.type != GoogleIdTokenCredential.TYPE_GOOGLE_ID_TOKEN_CREDENTIAL)
-            return Result.failure(IllegalStateException("Wrong credential type"))
-        val idToken = GoogleIdTokenCredential.createFrom(cred.data).idToken
-        auth.signInWithCredential(GoogleAuthProvider.getCredential(idToken, null)).await()
-        Result.success(Unit)
+            val option = GetSignInWithGoogleOption.Builder(Config.WEB_CLIENT_ID).build()
+            val request = GetCredentialRequest.Builder().addCredentialOption(option).build()
+            val result = CredentialManager.create(activity).getCredential(activity, request)
+            val cred = result.credential as? CustomCredential
+                ?: return Result.failure(IllegalStateException("Not a Google credential"))
+            if (cred.type != GoogleIdTokenCredential.TYPE_GOOGLE_ID_TOKEN_CREDENTIAL)
+                return Result.failure(IllegalStateException("Wrong credential type: ${cred.type}"))
+            val idToken = GoogleIdTokenCredential.createFrom(cred.data).idToken
+            auth.signInWithCredential(GoogleAuthProvider.getCredential(idToken, null)).await()
+            Result.success(Unit)
         } catch (e: Exception) {
             Result.failure(e)
         }
@@ -800,6 +799,8 @@ object FirebaseEngine : ChatRepo {
     private fun handleIncomingCall(chatId: String, callId: String, doc: com.google.firebase.firestore.DocumentSnapshot) {
         val caller = doc.getString("caller") ?: return
         if (caller == uid) return // my own outgoing call echo
+        val callState = doc.getString("state") ?: ""
+        if (callState != "ringing") return // only actively ringing calls are handled
         // ROUND 7 ROOT FIX ("Offer missing" on receive): this watcher re-fires
         // on EVERY update to the ringing doc — and the caller pushes ICE
         // candidates (arrayUnion writes) continuously from the moment the
@@ -817,6 +818,8 @@ object FirebaseEngine : ChatRepo {
                 // re-check inside the coroutine: the state may have become
                 // this very call while fetchPerson was in flight elsewhere.
                 if (CallController.activeCallId() == callId) return@runCatching
+                val checkDoc = db.collection(Schema.Chats.COLL).document(chatId).collection("calls").document(callId).get().await()
+                if (!checkDoc.exists() || checkDoc.getString("state") != "ringing") return@runCatching
                 when {
                     // stale ringing doc (caller crashed) — sweep it silently
                     System.currentTimeMillis() - createdAt > Config.CALL_RING_TIMEOUT_MS ->
@@ -826,6 +829,7 @@ object FirebaseEngine : ChatRepo {
                         CallSignal.deleteCallTree(chatId, callId)
                     ChatSession.unlocked && ChatSession.foreground -> {
                         val person = fetchPerson(caller)
+                        if (CallController.state.value !is CallUiState.Idle) return@runCatching
                         // ROUND 7: hand the offer from THIS snapshot to the
                         // controller — accept() uses the cached copy first.
                         CallController.onIncoming(chatId, callId, kind, person, offerEnc)
@@ -1325,18 +1329,19 @@ object FirebaseEngine : ChatRepo {
         }
     }
 
-    override fun sendPhoto(id: String, bmp: Bitmap) {
+    override fun sendPhoto(id: String, bmp: Bitmap, quote: String?) {
         val th = AppState.thread(id) ?: return
         val local = TikuMessage(
             id = newLocalId(), senderUid = uid, kind = MsgKind.IMAGE,
             time = fmtTime(System.currentTimeMillis()), me = true, photo = bmp,
+            replyQuote = quote,
             tsMs = System.currentTimeMillis(), status = SendStatus.SENDING,
         )
         AppState.upsertMessage(id, local)
         scope.launch { deliverMedia(id, th.person.uid, local, MediaStore.compressPhoto(bmp)) }
     }
 
-    override fun sendVoice(id: String, audioFile: File?, durSec: Int, amps: List<Int>) {
+    override fun sendVoice(id: String, audioFile: File?, durSec: Int, amps: List<Int>, quote: String?) {
         val th = AppState.thread(id) ?: return
         if (audioFile == null || !audioFile.exists()) {
             AppState.toast("Couldn't send the voice note — recording missing")
@@ -1346,6 +1351,7 @@ object FirebaseEngine : ChatRepo {
             id = newLocalId(), senderUid = uid, kind = MsgKind.VOICE,
             time = fmtTime(System.currentTimeMillis()), me = true,
             voiceDurSec = durSec, amps = amps, localPath = audioFile.absolutePath,
+            replyQuote = quote,
             tsMs = System.currentTimeMillis(), status = SendStatus.SENDING,
         )
         AppState.upsertMessage(id, local)
@@ -1370,11 +1376,12 @@ object FirebaseEngine : ChatRepo {
                 ?: throw IllegalStateException("encryption key not ready — the other person may not have finished setting up")
             val (iv, ctB64) = Crypto.encrypt(key, plainBytes)
             val ctBytes = Crypto.unb64(ctB64)
+            val (rqIv, rqCt) = if (local.replyQuote != null) Crypto.encryptText(key, local.replyQuote) else ("" to "")
             val ref = msgRef(id, local.id)
             ref.set(mapOf(
                 "senderId" to uid, "kind" to kind, "ct" to "", "iv" to iv,
                 "ts" to FieldValue.serverTimestamp(),
-                "rqCt" to "", "rqIv" to "",
+                "rqCt" to rqCt, "rqIv" to rqIv,
                 "reaction" to emptyMap<String, String>(), "starredBy" to emptyList<String>(),
                 "deletedFor" to emptyList<String>(), "seenBy" to listOf(uid),
                 "durationMs" to local.voiceDurSec * 1000, "amps" to local.amps, "mediaChunks" to 0,

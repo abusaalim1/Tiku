@@ -114,7 +114,17 @@ class MainActivity : ComponentActivity() {
             val result = FirebaseEngine.googleSignIn(this@MainActivity)
             AppState.authBusy = false
             if (result.isFailure) {
-                AppState.toast("Sign-in failed. Please try again.")
+                val err = result.exceptionOrNull()
+                val isCancelled = err is androidx.credentials.exceptions.GetCredentialCancellationException ||
+                        err?.javaClass?.simpleName?.contains("Cancel", ignoreCase = true) == true
+                if (!isCancelled) {
+                    val msg = err?.localizedMessage ?: err?.message ?: "Sign-in failed."
+                    if (msg.contains("10") || msg.contains("DEVELOPER_ERROR", ignoreCase = true)) {
+                        AppState.toast("Google Sign-In SHA-1 mismatch. Please add the debug SHA-1 to Firebase Console.")
+                    } else {
+                        AppState.toast("Sign-in failed: $msg")
+                    }
+                }
                 return@launch
             }
             // ROUND 5: tri-state — a failed account check must never fall

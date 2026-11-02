@@ -4,6 +4,14 @@ import android.Manifest
 import android.content.pm.PackageManager
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import android.media.AudioManager
+import android.media.Ringtone
+import android.media.RingtoneManager
+import android.media.ToneGenerator
+import android.os.Build
+import android.os.VibrationEffect
+import android.os.Vibrator
+import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
@@ -43,6 +51,7 @@ import androidx.compose.material.icons.filled.VideocamOff
 import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.material3.Icon
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -54,6 +63,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
@@ -71,6 +81,69 @@ import androidx.core.content.ContextCompat
 import kotlinx.coroutines.delay
 import org.webrtc.RendererCommon
 import org.webrtc.SurfaceViewRenderer
+
+/** Manages ringing sounds, ringback tones, and phone vibration during calls. */
+object CallFeedbackManager {
+    private var ringtone: Ringtone? = null
+    private var toneGen: ToneGenerator? = null
+    private var vibrator: Vibrator? = null
+
+    fun onCallStateChanged(context: android.content.Context, state: CallUiState) {
+        val settings = SettingsStore.state.value
+        when (state) {
+            is CallUiState.Incoming -> {
+                stopAll()
+                if (settings.vibration) {
+                    runCatching {
+                        val vib = context.getSystemService(android.content.Context.VIBRATOR_SERVICE) as? Vibrator
+                        if (vib != null && vib.hasVibrator()) {
+                            vibrator = vib
+                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                                vib.vibrate(VibrationEffect.createWaveform(longArrayOf(0, 1000, 1000), 0))
+                            } else {
+                                @Suppress("DEPRECATION")
+                                vib.vibrate(longArrayOf(0, 1000, 1000), 0)
+                            }
+                        }
+                    }
+                }
+                if (settings.sounds) {
+                    runCatching {
+                        val uri = RingtoneManager.getActualDefaultRingtoneUri(context, RingtoneManager.TYPE_RINGTONE)
+                            ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE)
+                        ringtone = RingtoneManager.getRingtone(context, uri)?.apply {
+                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                                isLooping = true
+                            }
+                            play()
+                        }
+                    }
+                }
+            }
+            is CallUiState.Outgoing -> {
+                stopAll()
+                if (settings.sounds) {
+                    runCatching {
+                        toneGen = ToneGenerator(AudioManager.STREAM_VOICE_CALL, 80)
+                        toneGen?.startTone(ToneGenerator.TONE_SUP_RINGTONE)
+                    }
+                }
+            }
+            is CallUiState.Connected, is CallUiState.Failed, CallUiState.Idle -> {
+                stopAll()
+            }
+        }
+    }
+
+    fun stopAll() {
+        runCatching { toneGen?.stopTone(); toneGen?.release() }
+        toneGen = null
+        runCatching { ringtone?.stop() }
+        ringtone = null
+        runCatching { vibrator?.cancel() }
+        vibrator = null
+    }
+}
 
 /**
  * Call entry points ask for mic/camera ONLY at the moment a call starts
@@ -171,6 +244,16 @@ fun CallScreen(threadId: String, video: Boolean) {
     val callState by CallController.state.collectAsState()
     val rtcSession by CallController.sessionState.collectAsState()
 
+    // manage ringtones and vibration feedback
+    LaunchedEffect(callState) {
+        CallFeedbackManager.onCallStateChanged(ctx, callState)
+    }
+    DisposableEffect(Unit) {
+        onDispose {
+            CallFeedbackManager.stopAll()
+        }
+    }
+
     // accept-side permission gate (mic, plus camera for video calls)
     var pendingAccept by remember { mutableStateOf<CallUiState.Incoming?>(null) }
     val acceptLauncher = rememberLauncherForActivityResult(
@@ -241,6 +324,10 @@ fun CallScreen(threadId: String, video: Boolean) {
 
     val inf = rememberInfiniteTransition(label = "callfloat")
     val fy by inf.animateFloat(0f, -8f, infiniteRepeatable(tween(2000), RepeatMode.Reverse), label = "fy")
+    val pScale1 by inf.animateFloat(1f, 1.42f, infiniteRepeatable(tween(1800, easing = FastOutSlowInEasing), RepeatMode.Restart), label = "ps1")
+    val pAlpha1 by inf.animateFloat(0.55f, 0f, infiniteRepeatable(tween(1800, easing = FastOutSlowInEasing), RepeatMode.Restart), label = "pa1")
+    val pScale2 by inf.animateFloat(1f, 1.72f, infiniteRepeatable(tween(1800, delayMillis = 450, easing = FastOutSlowInEasing), RepeatMode.Restart), label = "ps2")
+    val pAlpha2 by inf.animateFloat(0.4f, 0f, infiniteRepeatable(tween(1800, delayMillis = 450, easing = FastOutSlowInEasing), RepeatMode.Restart), label = "pa2")
 
     Box(
         Modifier.fillMaxSize()
@@ -294,7 +381,20 @@ fun CallScreen(threadId: String, video: Boolean) {
         ) {
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                 if (!(isVideo && connected != null && !Config.PREVIEW_UI_ONLY)) {
-                    Box(Modifier.offset(y = fy.dp)) {
+                    Box(
+                        Modifier.offset(y = fy.dp),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        if (connected == null && callState !is CallUiState.Failed) {
+                            Box(
+                                Modifier.size((120 * pScale2).dp).alpha(pAlpha2)
+                                    .clip(CircleShape).background(Color(0x44F0885B))
+                            )
+                            Box(
+                                Modifier.size((120 * pScale1).dp).alpha(pAlpha1)
+                                    .clip(CircleShape).background(Color(0x66CE4E79))
+                            )
+                        }
                         AvatarBox(person, 120.dp, 44.dp, 48f)
                     }
                     Spacer(Modifier.height(18.dp))

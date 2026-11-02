@@ -150,16 +150,16 @@ object PreviewRepo : ChatRepo {
         simulateReply(id)
     }
 
-    override fun sendPhoto(id: String, bmp: Bitmap) {
+    override fun sendPhoto(id: String, bmp: Bitmap, quote: String?) {
         push(id, TikuMessage(UUID.randomUUID().toString(), "", MsgKind.IMAGE, "", "now", me = true,
-            amps = List(22) { 8 }, photo = PreviewStore.scaled(bmp)))
+            amps = List(22) { 8 }, photo = PreviewStore.scaled(bmp), replyQuote = quote))
         simulateReply(id)
     }
 
-    override fun sendVoice(id: String, audioFile: File?, durSec: Int, amps: List<Int>) {
+    override fun sendVoice(id: String, audioFile: File?, durSec: Int, amps: List<Int>, quote: String?) {
         push(id, TikuMessage(UUID.randomUUID().toString(), "", MsgKind.VOICE, "", "now", me = true,
             voiceDurSec = durSec, amps = amps.ifEmpty { List(22) { 8 } },
-            localPath = audioFile?.absolutePath))
+            localPath = audioFile?.absolutePath, replyQuote = quote))
         simulateReply(id)
     }
 

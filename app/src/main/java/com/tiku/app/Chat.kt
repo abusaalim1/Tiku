@@ -10,6 +10,7 @@ import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.spring
@@ -18,6 +19,10 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -152,6 +157,8 @@ private fun ChatContent(thread: ChatThread) {
     val peerTyping = typingMap[threadId] == true
 
     var input by remember { mutableStateOf("") }
+    val focusRequester = remember { FocusRequester() }
+    var highlightedMsgId by remember { mutableStateOf<String?>(null) }
     // ROUND 8: reply state carries the quote AND whose it was, so the
     // composer bar can render the IG-form header ("Replying to …").
     var replyTarget by remember { mutableStateOf<ReplyTarget?>(null) }
@@ -166,11 +173,29 @@ private fun ChatContent(thread: ChatThread) {
 
     DisposableEffect(threadId) { onDispose { player.stop(); AppState.repo.closeThread(threadId) } }
 
+    // automatically focus composer when replying
+    LaunchedEffect(replyTarget) {
+        if (replyTarget != null) {
+            delay(50)
+            runCatching { focusRequester.requestFocus() }
+        }
+    }
+
+    LaunchedEffect(highlightedMsgId) {
+        if (highlightedMsgId != null) {
+            delay(1400)
+            highlightedMsgId = null
+        }
+    }
+
     // image picker
     val pickImage = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
         if (uri != null) {
             ctx.contentResolver.openInputStream(uri)?.use { s ->
-                BitmapFactory.decodeStream(s)?.let { AppState.repo.sendPhoto(threadId, it) }
+                BitmapFactory.decodeStream(s)?.let {
+                    AppState.repo.sendPhoto(threadId, it, replyTarget?.quote)
+                    replyTarget = null
+                }
             }
         }
     }
@@ -190,7 +215,10 @@ private fun ChatContent(thread: ChatThread) {
             if (recSecs >= 180) {
                 val f = recorder.stop(true)
                 recording = false
-                if (f != null) AppState.repo.sendVoice(threadId, f, 180, recorder.normalizedAmps())
+                if (f != null) {
+                    AppState.repo.sendVoice(threadId, f, 180, recorder.normalizedAmps(), replyTarget?.quote)
+                    replyTarget = null
+                }
                 AppState.toast("Voice notes are capped at 3 minutes")
             }
         }
@@ -367,6 +395,7 @@ private fun ChatContent(thread: ChatThread) {
                 MessageBubble(
                     m = m, threadId = threadId, settings = settings,
                     playing = playingId == m.id,
+                    isHighlighted = highlightedMsgId == m.id,
                     onPlayToggle = {
                         val path = m.localPath
                         if (path != null) {
@@ -381,18 +410,36 @@ private fun ChatContent(thread: ChatThread) {
                             }
                         }
                     },
+                    onQuoteClick = { quoteText ->
+                        val reversed = visibleMessages.asReversed()
+                        val targetIdx = reversed.indexOfFirst {
+                            it.text == quoteText || replyQuoteLabel(it) == quoteText
+                        }
+                        if (targetIdx >= 0) {
+                            highlightedMsgId = reversed[targetIdx].id
+                            scope.launch { listState.animateScrollToItem(targetIdx) }
+                        }
+                    },
                     onReact = { emoji ->
-                        val cur = m.reactions.values.firstOrNull()
+                        val myUid = if (Config.PREVIEW_UI_ONLY) "me" else FirebaseEngine.myUid()
+                        val cur = m.reactions[myUid]
                         AppState.repo.react(threadId, m.id, if (cur == emoji) null else emoji)
+                    },
+                    onDoubleTapReact = {
+                        val myUid = if (Config.PREVIEW_UI_ONLY) "me" else FirebaseEngine.myUid()
+                        val cur = m.reactions[myUid]
+                        AppState.repo.react(threadId, m.id, if (cur == "❤️") null else "❤️")
                     },
                     onRetry = { AppState.repo.retrySend(threadId, m.id) },
                     onLongPress = {
                         ChatSheets.context(threadId, m) { msg ->
                             replyTarget = ReplyTarget(replyQuoteLabel(msg), msg.me)
+                            scope.launch { delay(50); runCatching { focusRequester.requestFocus() } }
                         }
                     },
                     onSwipeReply = {
                         replyTarget = ReplyTarget(replyQuoteLabel(m), m.me)
+                        scope.launch { delay(50); runCatching { focusRequester.requestFocus() } }
                     },
                     onImageClick = { viewerMsg = m },
                 )
@@ -457,33 +504,45 @@ private fun ChatContent(thread: ChatThread) {
             ImageViewerOverlay(vm) { viewerMsg = null }
         }
         } // close messages Box
-        // reply quote bar — ROUND 8 restyle: IG form. A small accent header
-        // ("Replying to …") over the quote itself at ~70% opacity, with a
-        // left accent bar; closing returns the composer to plain mode.
-        if (replyTarget != null) {
-            val rt = replyTarget!!
-            Row(
-                Modifier.fillMaxWidth().padding(start = 14.dp, end = 14.dp, top = 8.dp)
-                    .clip(RoundedCornerShape(14.dp)).background(TikuTokens.Mint)
-                    .padding(horizontal = 12.dp, vertical = 8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Box(Modifier.width(3.dp).height(32.dp).clip(RoundedCornerShape(2.dp)).background(settings.accent))
-                Spacer(Modifier.width(10.dp))
-                Column(Modifier.weight(1f)) {
-                    Text(
-                        if (rt.mine) "Replying to yourself" else "Replying to ${thread.displayName}",
-                        fontSize = 12.sp, fontWeight = FontWeight.SemiBold,
-                        fontFamily = Manrope, color = settings.accent,
-                    )
-                    Text(
-                        rt.quote, fontSize = 13.sp, fontFamily = Manrope,
-                        color = TikuTokens.Ink.copy(alpha = 0.7f),
-                        maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
-                    )
-                }
-                Box(Modifier.clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) { replyTarget = null }) {
-                    Text("✕", fontSize = 13.sp, color = TikuTokens.Ink)
+        // reply quote bar — Animated IG form
+        androidx.compose.animation.AnimatedVisibility(
+            visible = replyTarget != null,
+            enter = slideInVertically(initialOffsetY = { it / 2 }) + fadeIn(tween(180)),
+            exit = slideOutVertically(targetOffsetY = { it / 2 }) + fadeOut(tween(140)),
+        ) {
+            val rt = replyTarget
+            if (rt != null) {
+                Row(
+                    Modifier.fillMaxWidth().padding(start = 14.dp, end = 14.dp, top = 8.dp)
+                        .shadow(4.dp, RoundedCornerShape(16.dp))
+                        .clip(RoundedCornerShape(16.dp)).background(TikuTokens.Card)
+                        .border(1.dp, TikuTokens.Line, RoundedCornerShape(16.dp))
+                        .padding(horizontal = 12.dp, vertical = 9.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Box(Modifier.width(3.dp).height(34.dp).clip(RoundedCornerShape(2.dp)).background(settings.accent))
+                    Spacer(Modifier.width(10.dp))
+                    Icon(Icons.Filled.Reply, null, Modifier.size(16.dp), tint = settings.accent)
+                    Spacer(Modifier.width(6.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            if (rt.mine) "Replying to yourself" else "Replying to ${thread.displayName}",
+                            fontSize = 12.sp, fontWeight = FontWeight.SemiBold,
+                            fontFamily = Manrope, color = settings.accent,
+                        )
+                        Text(
+                            rt.quote, fontSize = 13.sp, fontFamily = Manrope,
+                            color = TikuTokens.Ink.copy(alpha = 0.75f),
+                            maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                        )
+                    }
+                    Box(
+                        Modifier.size(26.dp).clip(CircleShape).background(TikuTokens.BgTop)
+                            .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) { replyTarget = null },
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text("✕", fontSize = 12.sp, color = TikuTokens.Muted, fontWeight = FontWeight.Bold)
+                    }
                 }
             }
         }
@@ -527,7 +586,10 @@ private fun ChatContent(thread: ChatThread) {
                 GradientCircleButton {
                     val f = recorder.stop(true)
                     recording = false
-                    if (f != null) AppState.repo.sendVoice(threadId, f, recSecs.coerceAtLeast(1), recorder.normalizedAmps())
+                    if (f != null) {
+                        AppState.repo.sendVoice(threadId, f, recSecs.coerceAtLeast(1), recorder.normalizedAmps(), replyTarget?.quote)
+                        replyTarget = null
+                    }
                 }
             }
         } else {
@@ -560,7 +622,7 @@ private fun ChatContent(thread: ChatThread) {
                         keyboardActions = androidx.compose.foundation.text.KeyboardActions(
                             onSend = { if (settings.enterToSend) sendCurrent() },
                         ),
-                        modifier = Modifier.weight(1f),
+                        modifier = Modifier.weight(1f).focusRequester(focusRequester),
                         decorationBox = { inner ->
                             if (input.isEmpty()) Text("Message", fontSize = settings.textSizeSp.sp, color = TikuTokens.Muted, fontFamily = Manrope)
                             inner()
@@ -629,15 +691,27 @@ fun GradientCircleButton(onClick: () -> Unit) {
 fun TypingBubble() {
     val inf = rememberInfiniteTransition(label = "typing")
     Row(
-        Modifier.clip(RoundedCornerShape(20.dp)).background(TikuTokens.Bubble)
-            .border(1.dp, TikuTokens.Line, RoundedCornerShape(20.dp))
-            .padding(horizontal = 15.dp, vertical = 13.dp),
-        horizontalArrangement = Arrangement.spacedBy(4.dp),
+        Modifier.clip(RoundedCornerShape(20.dp, 20.dp, 20.dp, 5.dp))
+            .background(TikuTokens.Bubble)
+            .border(1.dp, TikuTokens.Line, RoundedCornerShape(20.dp, 20.dp, 20.dp, 5.dp))
+            .padding(horizontal = 16.dp, vertical = 12.dp),
+        horizontalArrangement = Arrangement.spacedBy(5.dp),
+        verticalAlignment = Alignment.CenterVertically,
     ) {
         repeat(3) { i ->
-            val off by inf.animateFloat(0f, -5f, infiniteRepeatable(tween(500), RepeatMode.Reverse,
-                initialStartOffset = androidx.compose.animation.core.StartOffset(i * 150)), label = "td$i")
-            Box(Modifier.size(7.dp).offset(y = off.dp).clip(CircleShape).background(TikuTokens.Muted))
+            val off by inf.animateFloat(
+                0f, -6f,
+                infiniteRepeatable(tween(420, easing = FastOutSlowInEasing), RepeatMode.Reverse,
+                    initialStartOffset = androidx.compose.animation.core.StartOffset(i * 140)),
+                label = "td$i"
+            )
+            val a by inf.animateFloat(
+                0.35f, 1f,
+                infiniteRepeatable(tween(420, easing = FastOutSlowInEasing), RepeatMode.Reverse,
+                    initialStartOffset = androidx.compose.animation.core.StartOffset(i * 140)),
+                label = "ta$i"
+            )
+            Box(Modifier.size(7.dp).offset(y = off.dp).alpha(a).clip(CircleShape).background(TikuTokens.Ink))
         }
     }
 }
@@ -781,8 +855,11 @@ fun MessageBubble(
     threadId: String,
     settings: TikuUiSettings,
     playing: Boolean,
+    isHighlighted: Boolean = false,
     onPlayToggle: () -> Unit,
     onReact: (String) -> Unit,
+    onDoubleTapReact: () -> Unit = {},
+    onQuoteClick: (String) -> Unit = {},
     onLongPress: () -> Unit,
     onRetry: () -> Unit = {},
     onSwipeReply: () -> Unit = {},
@@ -797,13 +874,41 @@ fun MessageBubble(
         else RoundedCornerShape(20.dp, 20.dp, 20.dp, 6.dp)
     val textColor = if (m.me) Color.White else TikuTokens.Ink
 
-    // ROUND 8 swipe-to-reply (item 1): drag state lives in plain snapshot
-    // state (synchronous, tracks the finger exactly); an Animatable runs
-    // ONLY the release spring-back. Own messages swipe LEFT, peer messages
-    // swipe RIGHT (IG directions), clamped to 84dp; 56dp arms the reply.
+    // Instagram double-tap heart burst effect
+    var heartAnimTrigger by remember { mutableIntStateOf(0) }
+    val heartScale = remember { Animatable(0f) }
+    val heartAlpha = remember { Animatable(0f) }
+    val heartOffsetY = remember { Animatable(0f) }
+
+    LaunchedEffect(heartAnimTrigger) {
+        if (heartAnimTrigger == 0) return@LaunchedEffect
+        heartScale.snapTo(0.2f)
+        heartAlpha.snapTo(1f)
+        heartOffsetY.snapTo(0f)
+        launch {
+            heartScale.animateTo(1.25f, spring(dampingRatio = 0.5f, stiffness = Spring.StiffnessMedium))
+            heartScale.animateTo(1.0f, tween(150))
+        }
+        launch {
+            heartOffsetY.animateTo(-24f, tween(550, easing = FastOutSlowInEasing))
+        }
+        delay(450)
+        heartAlpha.animateTo(0f, tween(200))
+        heartScale.snapTo(0f)
+    }
+
+    val highlightAnim = remember { Animatable(0f) }
+    LaunchedEffect(isHighlighted) {
+        if (isHighlighted) {
+            highlightAnim.snapTo(1f)
+            highlightAnim.animateTo(0f, tween(1200))
+        }
+    }
+
+    // Instagram smooth swipe-to-reply: universal drag with spring physics & haptics
     val density = LocalDensity.current
     val maxSwipePx = with(density) { 84.dp.toPx() }
-    val thresholdPx = with(density) { 56.dp.toPx() }
+    val thresholdPx = with(density) { 52.dp.toPx() }
     var dragX by remember { mutableFloatStateOf(0f) }
     val springBack = remember { Animatable(0f) }
     val bubbleScope = rememberCoroutineScope()
@@ -830,13 +935,15 @@ fun MessageBubble(
     }
     Box(Modifier.fillMaxWidth()) {
         // the reply arrow the swipe reveals, on the edge the bubble vacates
+        val isLeftDrag = dragX < 0f
         Box(
-            Modifier.align(if (m.me) Alignment.CenterEnd else Alignment.CenterStart)
-                .padding(horizontal = 8.dp).size(30.dp)
+            Modifier.align(if (isLeftDrag) Alignment.CenterEnd else Alignment.CenterStart)
+                .padding(horizontal = 8.dp).size(32.dp)
                 .graphicsLayer {
                     alpha = swipeProgress
-                    val s = 0.6f + 0.4f * swipeProgress
+                    val s = 0.5f + 0.5f * swipeProgress
                     scaleX = s; scaleY = s
+                    rotationZ = (1f - swipeProgress) * (if (isLeftDrag) 45f else -45f)
                 }
                 .clip(CircleShape).background(settings.accent),
             contentAlignment = Alignment.Center,
@@ -844,13 +951,6 @@ fun MessageBubble(
     Row(
         Modifier.fillMaxWidth()
             .offset { androidx.compose.ui.unit.IntOffset(dragX.roundToInt(), 0) }
-            .pointerInput(m.id) {
-                detectTapGestures(
-                    onDoubleTap = { onReact("❤️") },
-                    onLongPress = { onLongPress() },
-                    onTap = { if (m.kind == MsgKind.IMAGE && m.photo != null) onImageClick() },
-                )
-            }
             .pointerInput(m.id + "_swipe") {
                 detectHorizontalDragGestures(
                     onDragEnd = {
@@ -858,7 +958,7 @@ fun MessageBubble(
                         val from = dragX
                         bubbleScope.launch {
                             springBack.snapTo(from)
-                            springBack.animateTo(0f, spring(dampingRatio = 0.72f, stiffness = Spring.StiffnessMediumLow)) { dragX = value }
+                            springBack.animateTo(0f, spring(dampingRatio = 0.68f, stiffness = Spring.StiffnessMediumLow)) { dragX = value }
                         }
                         if (hit) onSwipeReply()
                         swipeArmed = false
@@ -867,13 +967,13 @@ fun MessageBubble(
                         val from = dragX
                         bubbleScope.launch {
                             springBack.snapTo(from)
-                            springBack.animateTo(0f, spring(dampingRatio = 0.72f, stiffness = Spring.StiffnessMediumLow)) { dragX = value }
+                            springBack.animateTo(0f, spring(dampingRatio = 0.68f, stiffness = Spring.StiffnessMediumLow)) { dragX = value }
                         }
                         swipeArmed = false
                     },
                 ) { change, dragAmount ->
                     change.consume()
-                    dragX = if (m.me) (dragX + dragAmount).coerceIn(-maxSwipePx, 0f)
+                    dragX = if (m.me) (dragX + dragAmount).coerceIn(-maxSwipePx, maxSwipePx)
                         else (dragX + dragAmount).coerceIn(0f, maxSwipePx)
                     val nowArmed = abs(dragX) >= thresholdPx
                     if (nowArmed && !swipeArmed) {
@@ -884,16 +984,6 @@ fun MessageBubble(
             },
         horizontalArrangement = if (m.me) Arrangement.End else Arrangement.Start,
     ) {
-        // ROUND 6 (bug 1 — bubbles not flush): the 78%-cap box previously had
-        // NO contentAlignment, so the wrap-content bubble Column always sat at
-        // the box's TopStart — own bubbles began at a uniform ~22% offset (a
-        // centre column) instead of hugging the right edge, exactly as the
-        // owner's screenshot showed. contentAlignment now pins the bubble to
-        // its own edge; text bubbles wrap and sit FLUSH right (mine) / left
-        // (theirs), long/media bubbles still cap at 78%. The reactions badge
-        // moved to a wrap box around the bubble itself, so it anchors to the
-        // bubble's real corner at any length (it used to float at the 78%
-        // box's corner, away from short bubbles).
         Box(
             Modifier.fillMaxWidth(0.78f),
             contentAlignment = if (m.me) Alignment.TopEnd else Alignment.TopStart,
@@ -911,6 +1001,18 @@ fun MessageBubble(
                 Modifier.clip(shape)
                     .then(if (m.me) Modifier.background(settings.gradBrush)
                           else Modifier.background(TikuTokens.Bubble).border(1.dp, TikuTokens.Line, shape))
+                    .then(if (highlightAnim.value > 0f) Modifier.border(2.dp, settings.accent.copy(alpha = highlightAnim.value * 0.9f), shape) else Modifier)
+                    .pointerInput(m.id + "_tap") {
+                        detectTapGestures(
+                            onDoubleTap = {
+                                heartAnimTrigger++
+                                haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                                onDoubleTapReact()
+                            },
+                            onLongPress = { onLongPress() },
+                            onTap = { if (m.kind == MsgKind.IMAGE && m.photo != null) onImageClick() },
+                        )
+                    }
                     .padding(horizontal = 13.dp, vertical = 9.dp),
             ) {
                 if (m.replyQuote != null) {
@@ -922,6 +1024,9 @@ fun MessageBubble(
                         Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp))
                             .background(if (m.me) Color.White.copy(alpha = 0.20f)
                                 else TikuTokens.Ink.copy(alpha = 0.06f))
+                            .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {
+                                onQuoteClick(m.replyQuote)
+                            }
                             .padding(horizontal = 9.dp, vertical = 6.dp),
                     ) {
                         Text(m.replyQuote, fontSize = 12.sp, color = textColor.copy(alpha = 0.7f),
@@ -956,6 +1061,24 @@ fun MessageBubble(
                         },
                         fontSize = 11.sp, color = textColor.copy(alpha = 0.7f), fontFamily = Manrope,
                     )
+                }
+            }
+            // Instagram heart burst popup overlay
+            if (heartAlpha.value > 0f) {
+                Box(
+                    Modifier.align(Alignment.Center)
+                        .graphicsLayer {
+                            scaleX = heartScale.value
+                            scaleY = heartScale.value
+                            alpha = heartAlpha.value
+                            translationY = heartOffsetY.value
+                        }
+                        .shadow(12.dp, CircleShape, spotColor = Color(0xFFFF2D55))
+                        .size(52.dp).clip(CircleShape)
+                        .background(Color.White.copy(alpha = 0.95f)),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    EmojiArt("❤️", 34.dp)
                 }
             }
             val reactions = m.reactions.values.distinct()
@@ -1013,11 +1136,21 @@ fun VoiceBubbleContent(m: TikuMessage, textColor: Color, playing: Boolean, onTog
             horizontalArrangement = Arrangement.spacedBy(2.dp),
         ) {
             val amps = if (m.amps.size == 22) m.amps else List(22) { 8 + ((it * 7) % 14) }
-            amps.forEach { a ->
+            val inf = rememberInfiniteTransition(label = "voice_progress")
+            val prog by inf.animateFloat(
+                initialValue = 0f, targetValue = 22f,
+                animationSpec = infiniteRepeatable(
+                    animation = tween((m.voiceDurSec.coerceAtLeast(1) * 1000).coerceIn(2000, 180000), easing = androidx.compose.animation.core.LinearEasing),
+                    repeatMode = RepeatMode.Restart
+                ),
+                label = "vp"
+            )
+            amps.forEachIndexed { idx, a ->
+                val passed = playing && idx <= prog
                 Box(
                     Modifier.weight(1f).height(a.coerceIn(4, 24).dp)
                         .clip(RoundedCornerShape(3.dp))
-                        .background(textColor.copy(alpha = if (playing) 0.9f else 0.55f))
+                        .background(textColor.copy(alpha = if (passed) 1f else if (playing) 0.65f else 0.45f))
                 )
             }
         }
@@ -1055,23 +1188,40 @@ object ChatSheets {
 
     fun context(threadId: String, m: TikuMessage, onReply: (TikuMessage) -> Unit) {
         AppState.sheet {
-            // reaction row
+            // Instagram-style floating reaction row with + emoji button
             Row(
-                Modifier.fillMaxWidth().clip(RoundedCornerShape(22.dp)).background(TikuTokens.BgTop)
-                    .padding(horizontal = 10.dp, vertical = 8.dp),
+                Modifier.fillMaxWidth().clip(RoundedCornerShape(24.dp)).background(TikuTokens.BgTop)
+                    .border(1.dp, TikuTokens.Line, RoundedCornerShape(24.dp))
+                    .padding(horizontal = 8.dp, vertical = 6.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
             ) {
                 REACTIONS.forEach { e ->
+                    val myUid = if (Config.PREVIEW_UI_ONLY) "me" else FirebaseEngine.myUid()
+                    val isMyReact = m.reactions[myUid] == e
                     Box(
-                        Modifier.size(44.dp)
+                        Modifier.size(42.dp)
+                            .then(if (isMyReact) Modifier.clip(CircleShape).background(Color(0x22CE4E79)) else Modifier)
                             .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {
-                                val cur = m.reactions.values.firstOrNull()
-                                AppState.repo.react(threadId, m.id, if (cur == e) null else e)
+                                AppState.repo.react(threadId, m.id, if (isMyReact) null else e)
                                 AppState.closeSheet()
                             },
                         contentAlignment = Alignment.Center,
                     ) { EmojiArt(e, 27.dp) }
                 }
+                Box(
+                    Modifier.size(36.dp).clip(CircleShape).background(TikuTokens.Card)
+                        .border(1.dp, TikuTokens.Line, CircleShape)
+                        .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {
+                            AppState.closeSheet()
+                            emoji { picked ->
+                                val myUid = if (Config.PREVIEW_UI_ONLY) "me" else FirebaseEngine.myUid()
+                                val isMyReact = m.reactions[myUid] == picked
+                                AppState.repo.react(threadId, m.id, if (isMyReact) null else picked)
+                            }
+                        },
+                    contentAlignment = Alignment.Center,
+                ) { Text("+", fontSize = 18.sp, color = TikuTokens.Muted, fontWeight = FontWeight.Bold) }
             }
             Spacer(Modifier.height(10.dp))
             SheetAction("Reply") {
