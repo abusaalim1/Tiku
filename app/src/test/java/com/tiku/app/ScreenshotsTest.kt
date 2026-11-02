@@ -249,6 +249,9 @@ class ScreenshotsTest {
 
     @Test fun shot15_messageSheet() {
         val th = AppState.threads.value.first()
+        // Mirror the device state: the sheet host skins itself by the live
+        // navigation state, which is Screen.Chat when this sheet opens.
+        AppState.go(Screen.Chat(th.id))
         frame { ChatScreen(th.id) }
         val msg = th.messages.firstOrNull { !it.me } ?: th.messages.first()
         ChatSheets.context(th.id, msg) { }
@@ -343,6 +346,7 @@ class ScreenshotsTest {
             PreviewStore.people.filter { SearchNorm.matches(it.username, it.name, q) }
         }
         AppState.homeTab = HomeTab.CHATS
+        AppState.go(Screen.Home) // sheet host skins by live nav state (device: Home)
         NewChatSheet.open()
         frame { HomeScreen() }
         val fields = composeRule.onAllNodes(hasSetTextAction()).fetchSemanticsNodes()
@@ -452,6 +456,7 @@ class ScreenshotsTest {
         // @username and the nickname action (the seeded first thread already
         // has nickname "Aaru" — header/list shots 11/14 show it in place).
         val th = AppState.threads.value.first()
+        AppState.go(Screen.Chat(th.id)) // sheet host skins by live nav state (device: Chat)
         frame { ChatScreen(th.id) }
         ChatSheets.more(th, th.person)
         composeRule.waitForIdle()
@@ -559,6 +564,7 @@ class ScreenshotsTest {
         // the signup-mirroring validation + save.
         AppState.myUsername = "abu_saalim"
         AppState.homeTab = HomeTab.ME
+        AppState.go(Screen.Home) // sheet host skins by live nav state (device: Home)
         frame { HomeScreen() }
         EditProfileSheet.open()
         composeRule.waitForIdle()
