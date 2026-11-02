@@ -78,10 +78,11 @@ import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
-private val TabsIcons = listOf(
-    Icons.Outlined.ChatBubbleOutline,
-    Icons.Filled.Call,
-    Icons.Outlined.PersonOutline,
+private val TabsIcons = mapOf(
+    HomeTab.CHATS to Icons.Outlined.ChatBubbleOutline,
+    HomeTab.CALLS to Icons.Filled.Call,
+    HomeTab.ME to Icons.Outlined.PersonOutline,
+    // WATCH has no entry: its tab renders the drawn WatchGlyph instead.
 )
 
 @Composable
@@ -91,7 +92,10 @@ fun HomeScreen() {
     androidx.activity.compose.BackHandler { ChatSession.quickExit(ctx) }
     val settings = tikuSettings().value
     val tab = AppState.homeTab
-    val title = when (tab) { HomeTab.CHATS -> "Chats"; HomeTab.CALLS -> "Calls"; HomeTab.ME -> "Me" }
+    val title = when (tab) {
+        HomeTab.CHATS -> "Chats"; HomeTab.CALLS -> "Calls"
+        HomeTab.WATCH -> "Watch"; HomeTab.ME -> "Me"
+    }
     Box(Modifier.fillMaxSize()) {
         Column(Modifier.fillMaxSize()) {
             // .top header
@@ -130,6 +134,7 @@ fun HomeScreen() {
                     when (t) {
                         HomeTab.CHATS -> ChatsPane()
                         HomeTab.CALLS -> CallsPane()
+                        HomeTab.WATCH -> WatchPane()
                         HomeTab.ME -> MePane()
                     }
                 }
@@ -150,9 +155,12 @@ fun HomeScreen() {
             horizontalArrangement = Arrangement.spacedBy(4.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            listOf(HomeTab.CHATS, HomeTab.CALLS, HomeTab.ME).zip(listOf("Chats", "Calls", "Me")).zip(TabsIcons).forEach { (tt, icon) ->
-                val (t, label) = tt
+            listOf(
+                HomeTab.CHATS to "Chats", HomeTab.CALLS to "Calls",
+                HomeTab.WATCH to "Watch", HomeTab.ME to "Me",
+            ).forEach { (t, label) ->
                 val on = t == tab
+                val tint = if (on) settings.accent else TikuTokens.Muted
                 Column(
                     Modifier.weight(1f).height(52.dp)
                         .clip(RoundedCornerShape(20.dp))
@@ -161,9 +169,12 @@ fun HomeScreen() {
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.Center,
                 ) {
-                    Icon(icon, null, Modifier.size(22.dp), tint = if (on) settings.accent else TikuTokens.Muted)
+                    // ROUND 10: Watch's tab mark is the drawn glyph (rounded
+                    // rect + play triangle), never the official logo.
+                    if (t == HomeTab.WATCH) WatchGlyph(tint, Modifier.size(22.dp))
+                    else Icon(TabsIcons.getValue(t), null, Modifier.size(22.dp), tint = tint)
                     Text(label, fontSize = 12.sp, fontFamily = Manrope, fontWeight = if (on) FontWeight.SemiBold else FontWeight.Normal,
-                        color = if (on) settings.accent else TikuTokens.Muted)
+                        color = tint)
                 }
             }
         }
@@ -289,7 +300,8 @@ fun ChatRow(th: ChatThread) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 // ROUND 8 (item 7b): the row tick is gone — a subtle "Seen"
                 // stands in its place when my latest message was seen.
-                if (last?.me == true && last.kind != MsgKind.CALL && last.seenByPeer) {
+                // ROUND 10: hidden while MY receipts are off in this chat.
+                if (last?.me == true && last.kind != MsgKind.CALL && last.seenByPeer && !th.receiptsOffMine) {
                     Text("Seen", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = TikuTokens.Muted, fontFamily = Manrope)
                     Spacer(Modifier.width(5.dp))
                 }
@@ -310,8 +322,13 @@ fun ChatRow(th: ChatThread) {
             Text(th.time, fontSize = 12.sp, color = TikuTokens.Muted, fontFamily = Manrope)
             if (th.unread > 0) {
                 Spacer(Modifier.height(4.dp))
+                // ROUND 10: the unread badge tints with the chat's OWN theme
+                // accent when it has one (else the global accent, as before).
+                val badgeAccent = th.themeAccent?.let {
+                    TikuTokens.Accents[it.coerceIn(0, TikuTokens.Accents.lastIndex)].second
+                } ?: settings.accent
                 Box(
-                    Modifier.clip(RoundedCornerShape(10.dp)).background(settings.accent)
+                    Modifier.clip(RoundedCornerShape(10.dp)).background(badgeAccent)
                         .padding(horizontal = 6.dp, vertical = 2.dp),
                 ) {
                     Text(th.unread.toString(), fontSize = 11.sp, fontWeight = FontWeight.SemiBold,

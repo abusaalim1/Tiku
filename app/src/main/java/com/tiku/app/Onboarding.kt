@@ -231,19 +231,56 @@ fun RestorePasswordScreen() {
                 }
             }
         }
+        // ROUND 10 PARITY: a forgotten password must have a way forward from
+        // HERE too — this restore screen is where a returning user actually
+        // lands after sign-in. The link leads to the same reset flow the
+        // gate offers (Mode F on this phone: no local key lives here).
+        if (!Config.PREVIEW_UI_ONLY) {
+            Spacer(Modifier.height(14.dp))
+            Text("Forgot your password?",
+                fontSize = 14.sp, fontFamily = Manrope, fontWeight = FontWeight.SemiBold,
+                color = tikuSettings().value.accent,
+                modifier = Modifier.fillMaxWidth()
+                    .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {
+                        AppState.go(Screen.PasswordReset)
+                    },
+                textAlign = androidx.compose.ui.text.style.TextAlign.Center)
+        }
     }
 }
 
 /**
- * RESCUE (owner Bug 0): this phone still holds the journal key (device-Keystore
- * wrapped, password-independent) but the password verifier is missing/damaged.
- * The user re-authenticates the SAME Google account, then sets a new password —
- * the existing local key is re-wrapped under it and the cloud backup re-uploaded.
- * Never offered while a valid verifier exists, so it can never bypass a password.
+ * FORGOT-PASSWORD RESET (owner Bug 0 + ROUND 10 PARITY). Two modes, chosen
+ * by whether THIS phone still holds the journal key:
+ *  - Mode R ([ResetPasswordRewrap]): the key is here (device-Keystore
+ *    wrapped, password-independent). Re-auth the SAME Google account, set a
+ *    new password — the existing key is re-wrapped under it and the cloud
+ *    backup re-uploaded. History survives intact.
+ *  - Mode F ([ResetPasswordFreshStart]): no key on this phone and the old
+ *    password gone — the cloud backup can never be opened again. After the
+ *    same Google re-auth + uid binding and an explicit one-way warning, the
+ *    old key material is retired server-side and the user starts a FRESH
+ *    journal (same account, same username, new keypair + new password).
+ *
+ * ROUND 10 PARITY RULE: this flow is IDENTICAL for every account. There is
+ * deliberately NO OwnerState / isOwner / OWNER_EMAIL check anywhere in
+ * either mode — the owner was previously the only account with no reset
+ * path at all when his phone lost the local key to an uninstall, which is
+ * exactly the gap Mode F closes.
  */
 @Composable
 fun ResetPasswordScreen() {
     androidx.activity.compose.BackHandler { AppState.go(Screen.TikGate) }
+    val ctx = LocalContext.current
+    val hasIdentity = remember {
+        !Config.PREVIEW_UI_ONLY && FirebaseEngine.hasLocalIdentity(ctx)
+    }
+    if (hasIdentity) ResetPasswordRewrap() else ResetPasswordFreshStart()
+}
+
+/** Mode R — the original Bug-0 rescue body, unchanged. */
+@Composable
+private fun ResetPasswordRewrap() {
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
     var stage by remember { mutableStateOf(0) }
@@ -317,6 +354,87 @@ fun ResetPasswordScreen() {
                     } else {
                         busy = false
                         note = r.exceptionOrNull()?.message ?: "Couldn't reset. Try again."
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Mode F — START FRESH (Round 10). Same two-stage shape as Mode R: stage 0
+ * is the identical Google re-auth with uid binding (the re-authed uid must
+ * equal the uid captured on entry — a different account can never retire
+ * this journal); stage 1 is the one-way warning + the single explicit
+ * "Start fresh" button. On tap the engine retires the old key material
+ * (server + local) and this routes into the SAME fresh-journal onboarding
+ * new users get (CreatePassword → ProfileSetup → finishNewUser), so the
+ * new keypair, password and backup are created by the existing code.
+ */
+@Composable
+private fun ResetPasswordFreshStart() {
+    val ctx = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var stage by remember { mutableStateOf(0) }
+    var busy by remember { mutableStateOf(false) }
+    var note by remember { mutableStateOf("") }
+    // captured ONCE — same binding discipline as Mode R
+    val expectedUid = remember { FirebaseEngine.uid }
+    if (stage == 0) {
+        FormScaffold("Reset your password",
+            "This phone no longer holds your journal key. Confirm your Google account to continue.") {
+            Text("Sign in with the same Google account this journal was created with. Your phone plus your Google account together unlock this reset — without them it can't happen.",
+                fontSize = 14.sp, fontFamily = Manrope, color = TikuTokens.Muted)
+            if (note.isNotEmpty()) {
+                Spacer(Modifier.height(10.dp))
+                Text(note, fontSize = 13.sp, color = TikuTokens.Red, fontFamily = Manrope)
+            }
+            Spacer(Modifier.weight(1f))
+            PrimaryButton(if (busy) "Checking…" else "Verify with Google", enabled = !busy, modifier = Modifier.fillMaxWidth()) {
+                val act = ctx as? android.app.Activity
+                if (act == null) { note = "Something went wrong — go back and try again."; return@PrimaryButton }
+                busy = true
+                note = ""
+                scope.launch {
+                    val res = FirebaseEngine.googleSignIn(act)
+                    val freshUid = FirebaseEngine.uid
+                    when {
+                        res.isFailure -> { busy = false; note = "Google sign-in didn't complete. Try again." }
+                        expectedUid.isNotEmpty() && freshUid != expectedUid -> {
+                            busy = false
+                            note = "That's a different Google account — use the one this journal was created with."
+                        }
+                        else -> { busy = false; stage = 1 }
+                    }
+                }
+            }
+        }
+    } else {
+        FormScaffold("Start a fresh journal",
+            "Read this once — there is no undo.") {
+            Text("Your old password is gone and this phone doesn't hold your journal key, so your existing chats can never be opened again — by anyone, on any phone. They stay locked away exactly as they are.",
+                fontSize = 14.sp, fontFamily = Manrope, color = TikuTokens.Ink)
+            Spacer(Modifier.height(10.dp))
+            Text("Starting fresh keeps the same account and the same username. You will set a new password and get a brand-new journal — new chats work exactly as before.",
+                fontSize = 14.sp, fontFamily = Manrope, color = TikuTokens.Muted)
+            if (note.isNotEmpty()) {
+                Spacer(Modifier.height(10.dp))
+                Text(note, fontSize = 13.sp, color = TikuTokens.Red, fontFamily = Manrope)
+            }
+            Spacer(Modifier.weight(1f))
+            PrimaryButton(if (busy) "Starting…" else "Start fresh with a new journal", enabled = !busy, modifier = Modifier.fillMaxWidth()) {
+                busy = true
+                note = ""
+                scope.launch {
+                    val r = FirebaseEngine.startFreshAfterKeyLoss(ctx)
+                    if (r.isSuccess) {
+                        // route into the standard fresh-journal onboarding
+                        ChatSession.unlocked = true
+                        AppState.toast("Old journal closed — set a new password to start fresh")
+                        AppState.go(Screen.Password)
+                    } else {
+                        busy = false
+                        note = "Couldn't start fresh (${r.exceptionOrNull()?.message ?: "try again"}) — check your connection and try again. Nothing was changed."
                     }
                 }
             }

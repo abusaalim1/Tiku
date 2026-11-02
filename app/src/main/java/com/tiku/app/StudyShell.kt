@@ -451,6 +451,13 @@ fun TikGateScreen() {
     val rescuable = remember {
         !Config.PREVIEW_UI_ONLY && FirebaseEngine.hasLocalIdentity(ctx)
     }
+    // ROUND 10 PARITY: the forgot-password link belongs to EVERY signed-in
+    // account, key or no key — the reset screen itself picks Mode R (key
+    // present) vs Mode F (key lost). GateGuard's backoff throttles password
+    // GUESSES only; it must never hide or block this link.
+    val signedInUser = remember {
+        !Config.PREVIEW_UI_ONLY && FirebaseEngine.signedIn
+    }
 
     BackHandler { AppState.go(Screen.Facade) }
     FormScaffold("Your journal is locked", "Enter your password to open your study journal.") {
@@ -464,14 +471,14 @@ fun TikGateScreen() {
                 } else {
                     Text(error, fontSize = 13.sp, color = TikuTokens.Red, fontFamily = Manrope)
                 }
-                if (rescuable) {
-                    // ROUND 3.1: the rescue is offered whenever this phone holds
-                    // the journal key — NOT only when the verifier is missing or
-                    // damaged. A well-formed hash can still encode a string its
-                    // owner never chose (IME-mangled at setup; Bug 0's real case),
-                    // which reads as "Wrong password" forever. Visibility widens;
-                    // the reset itself stays exactly as gated as before (Google
-                    // re-auth + uid binding inside ResetPasswordScreen).
+                if (signedInUser) {
+                    // ROUND 3.1 widened this link to every key-holder; ROUND 10
+                    // completes the parity: it now shows for every SIGNED-IN
+                    // account regardless of hasLocalIdentity (the owner lost
+                    // his key to an uninstall and was the only user with no
+                    // reset path). The reset itself stays exactly as gated as
+                    // before (Google re-auth + uid binding inside
+                    // ResetPasswordScreen; Mode F adds the one-way warning).
                     Spacer(Modifier.height(10.dp))
                     Text("Forgot password? Reset with Google",
                         fontSize = 14.sp, fontFamily = Manrope, fontWeight = FontWeight.SemiBold,
@@ -532,6 +539,18 @@ fun TikGateScreen() {
                 Spacer(Modifier.height(8.dp))
                 Text("Used your journal on another phone before? Tap Get started, sign in with the same Google account, and your password brings everything back on this phone.",
                     fontSize = 14.sp, color = TikuTokens.Muted, fontFamily = Manrope)
+                if (signedInUser) {
+                    // ROUND 10 PARITY: signed in but nothing set up on THIS
+                    // phone (e.g. after a reinstall) — the forgot-password
+                    // link lives here too, not only behind a saved verifier.
+                    Spacer(Modifier.height(10.dp))
+                    Text("Forgot password? Reset with Google",
+                        fontSize = 14.sp, fontFamily = Manrope, fontWeight = FontWeight.SemiBold,
+                        color = settings.accent,
+                        modifier = Modifier.clickable(
+                            interactionSource = remember { MutableInteractionSource() }, indication = null,
+                        ) { AppState.go(Screen.PasswordReset) })
+                }
                 Spacer(Modifier.weight(1f))
                 PrimaryButton("Get started", onClick = { ChatSession.unlocked = true; AppState.go(Screen.Welcome) })
             }

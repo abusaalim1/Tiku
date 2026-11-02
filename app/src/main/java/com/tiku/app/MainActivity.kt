@@ -74,6 +74,11 @@ class MainActivity : ComponentActivity() {
     override fun onPause() {
         super.onPause()
         ChatSession.foreground = false
+        // ROUND 10 (Watch): backgrounding WITHOUT a lock (e.g. the owner's
+        // relaxed mode, or a transient system surface) pauses the in-vault
+        // video — playback never continues invisibly. The lock path itself
+        // (onStop → ChatSession.lock) destroys the WebView outright.
+        WatchHolder.pause()
         if (!Config.PREVIEW_UI_ONLY && ChatSession.unlocked && FirebaseEngine.signedIn) {
             FirebaseEngine.setPresence(false)
         }
@@ -114,17 +119,7 @@ class MainActivity : ComponentActivity() {
             val result = FirebaseEngine.googleSignIn(this@MainActivity)
             AppState.authBusy = false
             if (result.isFailure) {
-                val err = result.exceptionOrNull()
-                val isCancelled = err is androidx.credentials.exceptions.GetCredentialCancellationException ||
-                        err?.javaClass?.simpleName?.contains("Cancel", ignoreCase = true) == true
-                if (!isCancelled) {
-                    val msg = err?.localizedMessage ?: err?.message ?: "Sign-in failed."
-                    if (msg.contains("10") || msg.contains("DEVELOPER_ERROR", ignoreCase = true)) {
-                        AppState.toast("Google Sign-In SHA-1 mismatch. Please add the debug SHA-1 to Firebase Console.")
-                    } else {
-                        AppState.toast("Sign-in failed: $msg")
-                    }
-                }
+                AppState.toast("Sign-in failed. Please try again.")
                 return@launch
             }
             // ROUND 5: tri-state — a failed account check must never fall
@@ -194,9 +189,11 @@ fun TikuRoot(onGoogleClick: () -> Unit) {
                         // still has content to animate after navigation flips.
                         var lastChat by remember { mutableStateOf<Screen.Chat?>(null) }
                         var lastCall by remember { mutableStateOf<Screen.Call?>(null) }
+                        var lastDetails by remember { mutableStateOf<Screen.ChatDetails?>(null) }
                         LaunchedEffect(screen) {
                             (screen as? Screen.Chat)?.let { lastChat = it }
                             (screen as? Screen.Call)?.let { lastCall = it }
+                            (screen as? Screen.ChatDetails)?.let { lastDetails = it }
                         }
                         AnimatedVisibility(
                             visible = screen is Screen.Chat,
@@ -206,6 +203,18 @@ fun TikuRoot(onGoogleClick: () -> Unit) {
                                 fadeOut(tween(220, easing = TikuEase)),
                         ) {
                             (screen as? Screen.Chat ?: lastChat)?.let { ChatScreen(it.threadId) }
+                        }
+                        // ROUND 10: chat details rides the same overlay
+                        // pattern (header tap in the chat opens it; Back
+                        // returns to the chat).
+                        AnimatedVisibility(
+                            visible = screen is Screen.ChatDetails,
+                            enter = slideInHorizontally(tween(420, easing = TikuEase)) { it } +
+                                fadeIn(tween(300, easing = TikuEase)),
+                            exit = slideOutHorizontally(tween(320, easing = TikuEase)) { it } +
+                                fadeOut(tween(220, easing = TikuEase)),
+                        ) {
+                            (screen as? Screen.ChatDetails ?: lastDetails)?.let { ChatDetailsScreen(it.threadId) }
                         }
                         AnimatedVisibility(
                             visible = screen is Screen.Call,
@@ -221,6 +230,9 @@ fun TikuRoot(onGoogleClick: () -> Unit) {
                         // chat surfaces (below sheets + toast, which render
                         // after this Box).
                         FloatingCallWindow()
+                        // ROUND 10: the Watch mini player floats here too —
+                        // same layer, same FLAG_SECURE window.
+                        WatchMiniOverlay()
                     }
                 }
             }

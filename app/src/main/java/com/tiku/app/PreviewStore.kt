@@ -69,7 +69,18 @@ object PreviewStore {
                     callDurationSec = 125, callVideo = true, callMine = false, tsMs = 3000))
         // ROUND 6 seed: the first thread carries a nickname for its peer —
         // header + chat list must show "Aaru", details keep the real name.
-        if (t.isNotEmpty()) t[0] = t[0].copy(nickname = "Aaru")
+        // ROUND 10 seed: the same thread also pins its first text message,
+        // so the pinned strip + Chat Details theme/nicknames render in the
+        // harness without a backend.
+        if (t.isNotEmpty()) {
+            val firstText = t[0].messages.firstOrNull { it.kind == MsgKind.TEXT }
+            t[0] = t[0].copy(
+                nickname = "Aaru",
+                pinnedMsgIds = listOfNotNull(firstText?.id),
+                themeAccent = 4,
+                themeWallpaper = WallpaperMode.COUPLE.ordinal,
+            )
+        }
         return t
     }
 
@@ -135,7 +146,7 @@ object PreviewRepo : ChatRepo {
             AppState.setTyping(id, false)
             push(id, TikuMessage(UUID.randomUUID().toString(), "", MsgKind.TEXT,
                 text = replies(), me = false, time = "now",
-                amps = List(22) { 8 }))
+                amps = List(22) { 8 }, tsMs = System.currentTimeMillis()))
         }
     }
 
@@ -146,20 +157,20 @@ object PreviewRepo : ChatRepo {
 
     override fun sendText(id: String, text: String, quote: String?) {
         push(id, TikuMessage(UUID.randomUUID().toString(), "", MsgKind.TEXT, text, "now", me = true,
-            amps = List(22) { 8 }, replyQuote = quote))
+            amps = List(22) { 8 }, replyQuote = quote, tsMs = System.currentTimeMillis()))
         simulateReply(id)
     }
 
-    override fun sendPhoto(id: String, bmp: Bitmap, quote: String?) {
+    override fun sendPhoto(id: String, bmp: Bitmap) {
         push(id, TikuMessage(UUID.randomUUID().toString(), "", MsgKind.IMAGE, "", "now", me = true,
-            amps = List(22) { 8 }, photo = PreviewStore.scaled(bmp), replyQuote = quote))
+            amps = List(22) { 8 }, photo = PreviewStore.scaled(bmp)))
         simulateReply(id)
     }
 
-    override fun sendVoice(id: String, audioFile: File?, durSec: Int, amps: List<Int>, quote: String?) {
+    override fun sendVoice(id: String, audioFile: File?, durSec: Int, amps: List<Int>) {
         push(id, TikuMessage(UUID.randomUUID().toString(), "", MsgKind.VOICE, "", "now", me = true,
             voiceDurSec = durSec, amps = amps.ifEmpty { List(22) { 8 } },
-            localPath = audioFile?.absolutePath, replyQuote = quote))
+            localPath = audioFile?.absolutePath))
         simulateReply(id)
     }
 
@@ -175,6 +186,44 @@ object PreviewRepo : ChatRepo {
     override fun setNickname(id: String, nickname: String?) {
         AppState.threads.value = AppState.threads.value.map {
             if (it.id == id) it.copy(nickname = nickname?.trim()?.takeIf { n -> n.isNotEmpty() }) else it
+        }
+    }
+
+    // ---- ROUND 10 preview sinks (local-only mirrors of the engine) ----
+    override fun editText(id: String, msgId: String, newText: String) {
+        AppState.updateThread(id) {
+            it.messages.replaceAll { m ->
+                if (m.id == msgId) m.copy(text = newText.trim(), editedAtMs = System.currentTimeMillis()) else m
+            }
+        }
+    }
+
+    override fun setPinnedMsg(id: String, msgId: String, pin: Boolean) {
+        val th = AppState.thread(id) ?: return
+        if (pin && msgId !in th.pinnedMsgIds && th.pinnedMsgIds.size >= 3) {
+            AppState.toast("Up to 3 pinned messages")
+            return
+        }
+        AppState.threads.value = AppState.threads.value.map {
+            if (it.id == id) it.copy(
+                pinnedMsgIds = if (pin) (it.pinnedMsgIds + msgId).distinct().takeLast(3)
+                    else it.pinnedMsgIds - msgId,
+            ) else it
+        }
+    }
+
+    override fun setTheme(id: String, accentIdx: Int?, wallpaperIdx: Int?) {
+        AppState.threads.value = AppState.threads.value.map {
+            if (it.id == id) it.copy(
+                themeAccent = accentIdx ?: it.themeAccent,
+                themeWallpaper = wallpaperIdx ?: it.themeWallpaper,
+            ) else it
+        }
+    }
+
+    override fun setReceipts(id: String, on: Boolean) {
+        AppState.threads.value = AppState.threads.value.map {
+            if (it.id == id) it.copy(receiptsOffMine = !on) else it
         }
     }
 

@@ -10,7 +10,6 @@ import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloat
-import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.spring
@@ -19,10 +18,6 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
-import androidx.compose.animation.slideInVertically
-import androidx.compose.animation.slideOutVertically
-import androidx.compose.ui.focus.FocusRequester
-import androidx.compose.ui.focus.focusRequester
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -41,12 +36,14 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -61,7 +58,7 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Mic
-import androidx.compose.material.icons.filled.MoreHoriz
+import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.filled.Reply
 import androidx.compose.material.icons.filled.SaveAlt
 import androidx.compose.material.icons.filled.Send
@@ -152,13 +149,15 @@ private fun ChatContent(thread: ChatThread) {
     val threadId = thread.id
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
-    val settings by SettingsStore.state.collectAsState()
+    val globalSettings by SettingsStore.state.collectAsState()
+    // ROUND 10: this chat's own theme (chat doc themeAccent/themeWallpaper,
+    // set from Chat Details) overrides the global appearance for everything
+    // rendered inside this chat — bubbles, wallpaper, accents.
+    val settings = thread.effectiveSettings(globalSettings)
     val typingMap by AppState.typing.collectAsState()
     val peerTyping = typingMap[threadId] == true
 
     var input by remember { mutableStateOf("") }
-    val focusRequester = remember { FocusRequester() }
-    var highlightedMsgId by remember { mutableStateOf<String?>(null) }
     // ROUND 8: reply state carries the quote AND whose it was, so the
     // composer bar can render the IG-form header ("Replying to …").
     var replyTarget by remember { mutableStateOf<ReplyTarget?>(null) }
@@ -173,29 +172,11 @@ private fun ChatContent(thread: ChatThread) {
 
     DisposableEffect(threadId) { onDispose { player.stop(); AppState.repo.closeThread(threadId) } }
 
-    // automatically focus composer when replying
-    LaunchedEffect(replyTarget) {
-        if (replyTarget != null) {
-            delay(50)
-            runCatching { focusRequester.requestFocus() }
-        }
-    }
-
-    LaunchedEffect(highlightedMsgId) {
-        if (highlightedMsgId != null) {
-            delay(1400)
-            highlightedMsgId = null
-        }
-    }
-
     // image picker
     val pickImage = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
         if (uri != null) {
             ctx.contentResolver.openInputStream(uri)?.use { s ->
-                BitmapFactory.decodeStream(s)?.let {
-                    AppState.repo.sendPhoto(threadId, it, replyTarget?.quote)
-                    replyTarget = null
-                }
+                BitmapFactory.decodeStream(s)?.let { AppState.repo.sendPhoto(threadId, it) }
             }
         }
     }
@@ -215,10 +196,7 @@ private fun ChatContent(thread: ChatThread) {
             if (recSecs >= 180) {
                 val f = recorder.stop(true)
                 recording = false
-                if (f != null) {
-                    AppState.repo.sendVoice(threadId, f, 180, recorder.normalizedAmps(), replyTarget?.quote)
-                    replyTarget = null
-                }
+                if (f != null) AppState.repo.sendVoice(threadId, f, 180, recorder.normalizedAmps())
                 AppState.toast("Voice notes are capped at 3 minutes")
             }
         }
@@ -244,14 +222,58 @@ private fun ChatContent(thread: ChatThread) {
         else -> "online"
     }
 
+    // ROUND 10 (C5): the message being edited, if any — the composer
+    // prefills with its text and Send re-encrypts in place instead of
+    // posting a new message.
+    var editTarget by remember { mutableStateOf<TikuMessage?>(null) }
+
     fun sendCurrent() {
         val v = input.trim()
         if (v.isEmpty()) return
+        val et = editTarget
+        if (et != null) {
+            AppState.repo.editText(threadId, et.id, v)
+            editTarget = null
+            input = ""
+            scope.launch { AppState.repo.setTyping(threadId, false) }
+            return
+        }
         AppState.repo.sendText(threadId, v, replyTarget?.quote)
         input = ""; replyTarget = null
         scope.launch { AppState.repo.setTyping(threadId, false) }
         // ROUND 8: my own send always lands me at the latest message (IG)
         scope.launch { runCatching { listState.animateScrollToItem(0) } }
+    }
+
+    /** ROUND 10 (C6): scroll to a message (the pinned strip's tap) — if it
+     *  is beyond the loaded window, page older messages in until it lands
+     *  (capped at ~10 pages), then scroll. The lazy index is computed from
+     *  live state: [typing item?, seen item?, …messages reversed…]. */
+    fun jumpToMessage(msgId: String) {
+        scope.launch {
+            var tries = 0
+            while (true) {
+                val th = AppState.thread(threadId) ?: return@launch
+                val msgs = th.messages.filter { !it.deletedForMe }
+                val chronoIdx = msgs.indexOfFirst { it.id == msgId }
+                if (chronoIdx >= 0) {
+                    val lastV = msgs.lastOrNull()
+                    val seenItem = lastV != null && lastV.me && lastV.kind != MsgKind.CALL &&
+                        lastV.status == SendStatus.SENT && lastV.seenByPeer && !th.receiptsOffMine
+                    val offsetItems = (if (AppState.typing.value[threadId] == true) 1 else 0) +
+                        (if (seenItem) 1 else 0)
+                    runCatching { listState.animateScrollToItem(offsetItems + (msgs.lastIndex - chronoIdx)) }
+                    return@launch
+                }
+                if (!th.hasOlder || tries >= 10) {
+                    AppState.toast("Couldn't find that message")
+                    return@launch
+                }
+                AppState.repo.loadOlder(threadId)
+                tries++
+                delay(700)
+            }
+        }
     }
 
     Box(Modifier.fillMaxSize().background(ChatWallpaperBrush(settings))) {
@@ -304,19 +326,68 @@ private fun ChatContent(thread: ChatThread) {
         ) {
             GlassIconButton(Icons.Filled.ChevronLeft, size = 38.dp, iconSize = 20.dp, onClick = { AppState.go(Screen.Home) })
             Spacer(Modifier.width(10.dp))
-            AvatarBox(person, 42.dp, 15.dp, 18f)
-            Spacer(Modifier.width(10.dp))
-            Column(Modifier.weight(1f)) {
-                // ROUND 6: the header title is the chat's display name — the
-                // peer's nickname when one is set, else their profile name.
-                Text(thread.displayName, fontFamily = Bricolage, fontWeight = FontWeight.Bold, fontSize = 17.sp, color = TikuTokens.Ink)
-                Text(statusText, fontSize = 12.sp, color = settings.accent, fontFamily = Manrope)
+            // ROUND 10: tapping the header (avatar or name) opens Chat
+            // Details — theme, nicknames, read receipts. The old ⋯ details
+            // sheet's entry point is gone; this screen is the single home
+            // for all of it (its composables are reused there).
+            Row(
+                Modifier.weight(1f)
+                    .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {
+                        AppState.go(Screen.ChatDetails(threadId))
+                    },
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                AvatarBox(person, 42.dp, 15.dp, 18f)
+                Spacer(Modifier.width(10.dp))
+                Column {
+                    // ROUND 6: the header title is the chat's display name — the
+                    // peer's nickname when one is set, else their profile name.
+                    Text(thread.displayName, fontFamily = Bricolage, fontWeight = FontWeight.Bold, fontSize = 17.sp, color = TikuTokens.Ink)
+                    Text(statusText, fontSize = 12.sp, color = settings.accent, fontFamily = Manrope)
+                }
             }
             GlassIconButton(Icons.Filled.Call, size = 38.dp, iconSize = 18.dp, onClick = { startCall(threadId, false) })
             Spacer(Modifier.width(8.dp))
             GlassIconButton(Icons.Filled.Videocam, size = 38.dp, iconSize = 18.dp, onClick = { startCall(threadId, true) })
-            Spacer(Modifier.width(8.dp))
-            GlassIconButton(Icons.Filled.MoreHoriz, size = 38.dp, iconSize = 18.dp, onClick = { ChatSheets.more(thread, person) })
+        }
+        // ROUND 10 (C6): pinned strip — a slim bar under the header showing
+        // the most recent pin; tap jumps to the message, long-press unpins.
+        if (thread.pinnedMsgIds.isNotEmpty()) {
+            val pinId = thread.pinnedMsgIds.last()
+            val pinnedMsg = thread.messages.firstOrNull { it.id == pinId }
+            val pinPreview = when (pinnedMsg?.kind) {
+                MsgKind.IMAGE -> "Photo"
+                MsgKind.VOICE -> "Voice message"
+                MsgKind.CALL -> "Call"
+                else -> pinnedMsg?.text?.take(60) ?: "Pinned message"
+            }
+            Row(
+                Modifier.fillMaxWidth().background(TikuTokens.Mint)
+                    .pointerInput(pinId) {
+                        detectTapGestures(
+                            onTap = { jumpToMessage(pinId) },
+                            onLongPress = {
+                                AppState.repo.setPinnedMsg(threadId, pinId, false)
+                                AppState.toast("Message unpinned")
+                            },
+                        )
+                    }
+                    .padding(horizontal = 14.dp, vertical = 7.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(Icons.Filled.PushPin, null, Modifier.size(13.dp), tint = settings.accent)
+                Spacer(Modifier.width(6.dp))
+                Text(
+                    "Pinned · $pinPreview",
+                    fontSize = 12.5.sp, fontFamily = Manrope, color = TikuTokens.Ink,
+                    maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f),
+                )
+                if (thread.pinnedMsgIds.size > 1) {
+                    Text("${thread.pinnedMsgIds.size} pinned", fontSize = 11.5.sp,
+                        color = TikuTokens.Muted, fontFamily = Manrope)
+                }
+            }
         }
         // messages — ROUND 8 REWORK (items 4 + 7b):
         // The list is REVERSED: index 0 IS the latest message, glued to the
@@ -362,17 +433,32 @@ private fun ChatContent(thread: ChatThread) {
         }
         // IG "Seen": under my latest message, only when it is also the
         // latest message overall and the peer's uid is in its seenBy.
+        // ROUND 10: hidden while MY read receipts are off in this chat.
         val lastVisible = visibleMessages.lastOrNull()
         val showSeen = lastVisible != null && lastVisible.me &&
             lastVisible.kind != MsgKind.CALL && lastVisible.status == SendStatus.SENT &&
-            lastVisible.seenByPeer
+            lastVisible.seenByPeer && !thread.receiptsOffMine
+        // ROUND 10 (C2): entrance bookkeeping — a bubble animates in ONLY
+        // when it is a genuinely new TAIL arrival: not part of the first
+        // loaded window, not an older pagination prepend (its ts predates
+        // the first window's newest), and never seen composed before.
+        val knownIds = remember(threadId) { mutableSetOf<String>() }
+        var firstNewestTs by remember(threadId) { mutableStateOf<Long?>(null) }
+        LaunchedEffect(threadId, visibleMessages.isNotEmpty()) {
+            if (firstNewestTs == null && visibleMessages.isNotEmpty()) {
+                firstNewestTs = visibleMessages.maxOf { it.tsMs }
+            }
+        }
         Box(Modifier.weight(1f).fillMaxWidth()) {
         LazyColumn(
             Modifier.fillMaxSize().padding(horizontal = 14.dp).testTag("message_list"),
             state = listState,
             reverseLayout = true,
             contentPadding = androidx.compose.foundation.layout.PaddingValues(vertical = 16.dp),
-            verticalArrangement = Arrangement.spacedBy(6.dp),
+            // ROUND 10 (C3): no fixed arrangement spacing — each bubble item
+            // carries its own top gap (2dp inside a same-sender group, 10dp
+            // between groups), which a uniform spacedBy could never express.
+            verticalArrangement = Arrangement.spacedBy(0.dp),
         ) {
             if (peerTyping) {
                 item(key = "typing") { TypingBubble() }
@@ -387,15 +473,35 @@ private fun ChatContent(thread: ChatThread) {
                     }
                 }
             }
-            items(visibleMessages.asReversed(), key = { it.id }) { m ->
+            itemsIndexed(visibleMessages.asReversed(), key = { _, m -> m.id }) { revIdx, m ->
+                // ROUND 10 (C3): grouping math on the CHRONOLOGICAL list —
+                // consecutive same-sender messages ≤2 min apart form a group.
+                val chronoIdx = visibleMessages.lastIndex - revIdx
+                val prevMsg = visibleMessages.getOrNull(chronoIdx - 1)
+                val nextMsg = visibleMessages.getOrNull(chronoIdx + 1)
+                val groupedWithPrev = prevMsg != null && m.kind != MsgKind.CALL &&
+                    prevMsg.kind != MsgKind.CALL && prevMsg.senderUid == m.senderUid &&
+                    (m.tsMs - prevMsg.tsMs) in 0..120_000L
+                val groupLast = nextMsg == null || m.kind == MsgKind.CALL ||
+                    nextMsg.kind == MsgKind.CALL || nextMsg.senderUid != m.senderUid ||
+                    (nextMsg.tsMs - m.tsMs) > 120_000L
+                // ROUND 10 (C2): genuinely-new tail arrivals only (see the
+                // bookkeeping above the list); composing marks the id known.
+                val animateIn = firstNewestTs != null && m.id !in knownIds &&
+                    m.tsMs >= (firstNewestTs ?: Long.MAX_VALUE)
+                LaunchedEffect(m.id) { knownIds += m.id }
                 if (m.kind == MsgKind.CALL) {
                     // round 4: call events are centred system pills, never bubbles
                     CallEventPill(m)
                 } else {
+                Box(Modifier.padding(top = if (groupedWithPrev) 2.dp else 10.dp)) {
                 MessageBubble(
                     m = m, threadId = threadId, settings = settings,
                     playing = playingId == m.id,
-                    isHighlighted = highlightedMsgId == m.id,
+                    animateIn = animateIn,
+                    groupLast = groupLast,
+                    showAvatar = !m.me && groupLast,
+                    peer = person,
                     onPlayToggle = {
                         val path = m.localPath
                         if (path != null) {
@@ -410,39 +516,34 @@ private fun ChatContent(thread: ChatThread) {
                             }
                         }
                     },
-                    onQuoteClick = { quoteText ->
-                        val reversed = visibleMessages.asReversed()
-                        val targetIdx = reversed.indexOfFirst {
-                            it.text == quoteText || replyQuoteLabel(it) == quoteText
-                        }
-                        if (targetIdx >= 0) {
-                            highlightedMsgId = reversed[targetIdx].id
-                            scope.launch { listState.animateScrollToItem(targetIdx) }
-                        }
-                    },
                     onReact = { emoji ->
-                        val myUid = if (Config.PREVIEW_UI_ONLY) "me" else FirebaseEngine.myUid()
-                        val cur = m.reactions[myUid]
+                        val cur = m.reactions.values.firstOrNull()
                         AppState.repo.react(threadId, m.id, if (cur == emoji) null else emoji)
-                    },
-                    onDoubleTapReact = {
-                        val myUid = if (Config.PREVIEW_UI_ONLY) "me" else FirebaseEngine.myUid()
-                        val cur = m.reactions[myUid]
-                        AppState.repo.react(threadId, m.id, if (cur == "❤️") null else "❤️")
                     },
                     onRetry = { AppState.repo.retrySend(threadId, m.id) },
                     onLongPress = {
-                        ChatSheets.context(threadId, m) { msg ->
-                            replyTarget = ReplyTarget(replyQuoteLabel(msg), msg.me)
-                            scope.launch { delay(50); runCatching { focusRequester.requestFocus() } }
-                        }
+                        ChatSheets.context(
+                            threadId, m,
+                            onReply = { msg ->
+                                replyTarget = ReplyTarget(replyQuoteLabel(msg), msg.me)
+                            },
+                            onEdit = { msg ->
+                                editTarget = msg
+                                input = msg.text
+                                replyTarget = null
+                            },
+                            pinned = m.id in thread.pinnedMsgIds,
+                            onTogglePin = {
+                                AppState.repo.setPinnedMsg(threadId, m.id, m.id !in thread.pinnedMsgIds)
+                            },
+                        )
                     },
                     onSwipeReply = {
                         replyTarget = ReplyTarget(replyQuoteLabel(m), m.me)
-                        scope.launch { delay(50); runCatching { focusRequester.requestFocus() } }
                     },
                     onImageClick = { viewerMsg = m },
                 )
+                }
                 }
             }
             // the E2EE banner is declared LAST — in the reversed layout it
@@ -504,45 +605,64 @@ private fun ChatContent(thread: ChatThread) {
             ImageViewerOverlay(vm) { viewerMsg = null }
         }
         } // close messages Box
-        // reply quote bar — Animated IG form
-        androidx.compose.animation.AnimatedVisibility(
-            visible = replyTarget != null,
-            enter = slideInVertically(initialOffsetY = { it / 2 }) + fadeIn(tween(180)),
-            exit = slideOutVertically(targetOffsetY = { it / 2 }) + fadeOut(tween(140)),
-        ) {
-            val rt = replyTarget
-            if (rt != null) {
-                Row(
-                    Modifier.fillMaxWidth().padding(start = 14.dp, end = 14.dp, top = 8.dp)
-                        .shadow(4.dp, RoundedCornerShape(16.dp))
-                        .clip(RoundedCornerShape(16.dp)).background(TikuTokens.Card)
-                        .border(1.dp, TikuTokens.Line, RoundedCornerShape(16.dp))
-                        .padding(horizontal = 12.dp, vertical = 9.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Box(Modifier.width(3.dp).height(34.dp).clip(RoundedCornerShape(2.dp)).background(settings.accent))
-                    Spacer(Modifier.width(10.dp))
-                    Icon(Icons.Filled.Reply, null, Modifier.size(16.dp), tint = settings.accent)
-                    Spacer(Modifier.width(6.dp))
-                    Column(Modifier.weight(1f)) {
-                        Text(
-                            if (rt.mine) "Replying to yourself" else "Replying to ${thread.displayName}",
-                            fontSize = 12.sp, fontWeight = FontWeight.SemiBold,
-                            fontFamily = Manrope, color = settings.accent,
-                        )
-                        Text(
-                            rt.quote, fontSize = 13.sp, fontFamily = Manrope,
-                            color = TikuTokens.Ink.copy(alpha = 0.75f),
-                            maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
-                        )
-                    }
-                    Box(
-                        Modifier.size(26.dp).clip(CircleShape).background(TikuTokens.BgTop)
-                            .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) { replyTarget = null },
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Text("✕", fontSize = 12.sp, color = TikuTokens.Muted, fontWeight = FontWeight.Bold)
-                    }
+        // reply quote bar — ROUND 8 restyle: IG form. A small accent header
+        // ("Replying to …") over the quote itself at ~70% opacity, with a
+        // left accent bar; closing returns the composer to plain mode.
+        if (replyTarget != null) {
+            val rt = replyTarget!!
+            Row(
+                Modifier.fillMaxWidth().padding(start = 14.dp, end = 14.dp, top = 8.dp)
+                    .clip(RoundedCornerShape(14.dp)).background(TikuTokens.Mint)
+                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Box(Modifier.width(3.dp).height(32.dp).clip(RoundedCornerShape(2.dp)).background(settings.accent))
+                Spacer(Modifier.width(10.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        if (rt.mine) "Replying to yourself" else "Replying to ${thread.displayName}",
+                        fontSize = 12.sp, fontWeight = FontWeight.SemiBold,
+                        fontFamily = Manrope, color = settings.accent,
+                    )
+                    Text(
+                        rt.quote, fontSize = 13.sp, fontFamily = Manrope,
+                        color = TikuTokens.Ink.copy(alpha = 0.7f),
+                        maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                    )
+                }
+                Box(Modifier.clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) { replyTarget = null }) {
+                    Text("✕", fontSize = 13.sp, color = TikuTokens.Ink)
+                }
+            }
+        }
+        // ROUND 10 (C5): editing bar — same IG form as the reply bar.
+        // Cancelling restores the composer to a blank plain mode.
+        if (editTarget != null) {
+            val et = editTarget!!
+            Row(
+                Modifier.fillMaxWidth().padding(start = 14.dp, end = 14.dp, top = 8.dp)
+                    .clip(RoundedCornerShape(14.dp)).background(TikuTokens.Mint)
+                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Box(Modifier.width(3.dp).height(32.dp).clip(RoundedCornerShape(2.dp)).background(settings.accent))
+                Spacer(Modifier.width(10.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        "Editing message",
+                        fontSize = 12.sp, fontWeight = FontWeight.SemiBold,
+                        fontFamily = Manrope, color = settings.accent,
+                    )
+                    Text(
+                        et.text, fontSize = 13.sp, fontFamily = Manrope,
+                        color = TikuTokens.Ink.copy(alpha = 0.7f),
+                        maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                    )
+                }
+                Box(Modifier.clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {
+                    editTarget = null; input = ""
+                }) {
+                    Text("✕", fontSize = 13.sp, color = TikuTokens.Ink)
                 }
             }
         }
@@ -586,24 +706,26 @@ private fun ChatContent(thread: ChatThread) {
                 GradientCircleButton {
                     val f = recorder.stop(true)
                     recording = false
-                    if (f != null) {
-                        AppState.repo.sendVoice(threadId, f, recSecs.coerceAtLeast(1), recorder.normalizedAmps(), replyTarget?.quote)
-                        replyTarget = null
-                    }
+                    if (f != null) AppState.repo.sendVoice(threadId, f, recSecs.coerceAtLeast(1), recorder.normalizedAmps())
                 }
             }
         } else {
+            // ROUND 10 (C7): IG-style composer — the pill GROWS with
+            // multiline text (46dp → up to 128dp, then the field scrolls);
+            // the side buttons bottom-align as it grows. Empty text keeps
+            // the media/voice affordances; typing morphs in a round accent
+            // send button with a drawn up-arrow.
             Row(
                 Modifier.fillMaxWidth().padding(horizontal = 12.dp).padding(bottom = 14.dp, top = 10.dp),
-                verticalAlignment = Alignment.CenterVertically,
+                verticalAlignment = Alignment.Bottom,
             ) {
                 GlassIconButton(Icons.Filled.Image, onClick = { ChatSession.expectExternalActivity = true; pickImage.launch("image/*") })
                 Spacer(Modifier.width(8.dp))
                 Row(
-                    Modifier.weight(1f).height(46.dp)
+                    Modifier.weight(1f).heightIn(min = 46.dp, max = 128.dp)
                         .clip(RoundedCornerShape(23.dp)).background(TikuTokens.Card)
                         .border(1.dp, TikuTokens.Line, RoundedCornerShape(23.dp))
-                        .padding(horizontal = 16.dp),
+                        .padding(horizontal = 16.dp, vertical = 4.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     BasicTextField(
@@ -614,7 +736,8 @@ private fun ChatContent(thread: ChatThread) {
                         },
                         textStyle = TextStyle(fontSize = settings.textSizeSp.sp, fontFamily = Manrope, color = TikuTokens.Ink),
                         cursorBrush = SolidColor(settings.accent),
-                        singleLine = true,
+                        singleLine = false,
+                        maxLines = 5,
                         keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
                             imeAction = if (settings.enterToSend) androidx.compose.ui.text.input.ImeAction.Send
                             else androidx.compose.ui.text.input.ImeAction.Default,
@@ -622,7 +745,7 @@ private fun ChatContent(thread: ChatThread) {
                         keyboardActions = androidx.compose.foundation.text.KeyboardActions(
                             onSend = { if (settings.enterToSend) sendCurrent() },
                         ),
-                        modifier = Modifier.weight(1f).focusRequester(focusRequester),
+                        modifier = Modifier.weight(1f).padding(vertical = 8.dp),
                         decorationBox = { inner ->
                             if (input.isEmpty()) Text("Message", fontSize = settings.textSizeSp.sp, color = TikuTokens.Muted, fontFamily = Manrope)
                             inner()
@@ -637,9 +760,14 @@ private fun ChatContent(thread: ChatThread) {
                     }
                 }
                 Spacer(Modifier.width(8.dp))
-                if (input.isNotEmpty()) {
-                    GradientCircleButton { sendCurrent() }
-                } else {
+                androidx.compose.animation.AnimatedVisibility(
+                    visible = input.isNotEmpty(),
+                    enter = scaleIn(initialScale = 0.6f, animationSpec = tween(180, easing = TikuEase)) + fadeIn(tween(150)),
+                    exit = scaleOut(targetScale = 0.6f, animationSpec = tween(140)) + fadeOut(tween(120)),
+                ) {
+                    SendArrowButton(settings.accent) { sendCurrent() }
+                }
+                if (input.isEmpty()) {
                     Box(
                         Modifier.size(46.dp).clip(CircleShape).background(settings.gradBrush)
                             .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {
@@ -687,31 +815,40 @@ fun GradientCircleButton(onClick: () -> Unit) {
     }
 }
 
+/** ROUND 10 (C7): the composer's send button — a round accent disc with a
+ *  DRAWN up-arrow (IG form), stroked on a Canvas in the app's style rather
+ *  than a stock glyph. */
+@Composable
+fun SendArrowButton(accent: Color, onClick: () -> Unit) {
+    Box(
+        Modifier.size(46.dp).clip(CircleShape).background(accent)
+            .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null, onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        Canvas(Modifier.size(20.dp)) {
+            val w = size.width; val h = size.height
+            val sw = 2.4.dp.toPx()
+            val cap = androidx.compose.ui.graphics.StrokeCap.Round
+            drawLine(Color.White, Offset(w * 0.5f, h * 0.84f), Offset(w * 0.5f, h * 0.16f), strokeWidth = sw, cap = cap)
+            drawLine(Color.White, Offset(w * 0.22f, h * 0.44f), Offset(w * 0.5f, h * 0.15f), strokeWidth = sw, cap = cap)
+            drawLine(Color.White, Offset(w * 0.78f, h * 0.44f), Offset(w * 0.5f, h * 0.15f), strokeWidth = sw, cap = cap)
+        }
+    }
+}
+
 @Composable
 fun TypingBubble() {
     val inf = rememberInfiniteTransition(label = "typing")
     Row(
-        Modifier.clip(RoundedCornerShape(20.dp, 20.dp, 20.dp, 5.dp))
-            .background(TikuTokens.Bubble)
-            .border(1.dp, TikuTokens.Line, RoundedCornerShape(20.dp, 20.dp, 20.dp, 5.dp))
-            .padding(horizontal = 16.dp, vertical = 12.dp),
-        horizontalArrangement = Arrangement.spacedBy(5.dp),
-        verticalAlignment = Alignment.CenterVertically,
+        Modifier.clip(RoundedCornerShape(20.dp)).background(TikuTokens.Bubble)
+            .border(1.dp, TikuTokens.Line, RoundedCornerShape(20.dp))
+            .padding(horizontal = 15.dp, vertical = 13.dp),
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
     ) {
         repeat(3) { i ->
-            val off by inf.animateFloat(
-                0f, -6f,
-                infiniteRepeatable(tween(420, easing = FastOutSlowInEasing), RepeatMode.Reverse,
-                    initialStartOffset = androidx.compose.animation.core.StartOffset(i * 140)),
-                label = "td$i"
-            )
-            val a by inf.animateFloat(
-                0.35f, 1f,
-                infiniteRepeatable(tween(420, easing = FastOutSlowInEasing), RepeatMode.Reverse,
-                    initialStartOffset = androidx.compose.animation.core.StartOffset(i * 140)),
-                label = "ta$i"
-            )
-            Box(Modifier.size(7.dp).offset(y = off.dp).alpha(a).clip(CircleShape).background(TikuTokens.Ink))
+            val off by inf.animateFloat(0f, -5f, infiniteRepeatable(tween(500), RepeatMode.Reverse,
+                initialStartOffset = androidx.compose.animation.core.StartOffset(i * 150)), label = "td$i")
+            Box(Modifier.size(7.dp).offset(y = off.dp).clip(CircleShape).background(TikuTokens.Muted))
         }
     }
 }
@@ -855,60 +992,53 @@ fun MessageBubble(
     threadId: String,
     settings: TikuUiSettings,
     playing: Boolean,
-    isHighlighted: Boolean = false,
     onPlayToggle: () -> Unit,
     onReact: (String) -> Unit,
-    onDoubleTapReact: () -> Unit = {},
-    onQuoteClick: (String) -> Unit = {},
     onLongPress: () -> Unit,
     onRetry: () -> Unit = {},
     onSwipeReply: () -> Unit = {},
     onImageClick: () -> Unit = {},
+    // ROUND 10: entrance/grouping inputs computed by the list (ChatContent)
+    animateIn: Boolean = true,
+    groupLast: Boolean = true,
+    showAvatar: Boolean = false,
+    peer: Person? = null,
 ) {
     // ROUND 8 entrance (item 8): subtle rise + fade + settle, transform/alpha
     // only (graphicsLayer — no layout work), matching the reference UI's
     // keyframes (translateY + scale → 1) with the spring ease.
-    val enter = remember { Animatable(0f) }
-    LaunchedEffect(Unit) { enter.animateTo(1f, tween(380, easing = TikuSpringEase)) }
-    val shape = if (m.me) RoundedCornerShape(20.dp, 20.dp, 6.dp, 20.dp)
-        else RoundedCornerShape(20.dp, 20.dp, 20.dp, 6.dp)
+    // ROUND 10 (C2): gated by [animateIn] — history and pagination prepends
+    // compose already-settled; only genuinely new tail arrivals play it.
+    val enter = remember { Animatable(if (animateIn) 0f else 1f) }
+    LaunchedEffect(Unit) { if (animateIn) enter.animateTo(1f, tween(380, easing = TikuSpringEase)) }
+    // ROUND 10 (C1): double-tap heart pop — a drawn heart springs over the
+    // bubble while the ❤ reaction lands through the existing plumbing.
+    var heartPopKey by remember { mutableIntStateOf(0) }
+    val heartScale = remember { Animatable(0f) }
+    LaunchedEffect(heartPopKey) {
+        if (heartPopKey > 0) {
+            heartScale.snapTo(0f)
+            heartScale.animateTo(1f, spring(dampingRatio = 0.45f, stiffness = Spring.StiffnessMedium))
+            delay(450)
+            heartScale.animateTo(0f, tween(180))
+        }
+    }
+    // ROUND 10 (C3): only the LAST message of a same-sender group keeps the
+    // small tail corner; grouped middles are fully rounded.
+    val shape = when {
+        !groupLast -> RoundedCornerShape(20.dp)
+        m.me -> RoundedCornerShape(20.dp, 20.dp, 6.dp, 20.dp)
+        else -> RoundedCornerShape(20.dp, 20.dp, 20.dp, 6.dp)
+    }
     val textColor = if (m.me) Color.White else TikuTokens.Ink
 
-    // Instagram double-tap heart burst effect
-    var heartAnimTrigger by remember { mutableIntStateOf(0) }
-    val heartScale = remember { Animatable(0f) }
-    val heartAlpha = remember { Animatable(0f) }
-    val heartOffsetY = remember { Animatable(0f) }
-
-    LaunchedEffect(heartAnimTrigger) {
-        if (heartAnimTrigger == 0) return@LaunchedEffect
-        heartScale.snapTo(0.2f)
-        heartAlpha.snapTo(1f)
-        heartOffsetY.snapTo(0f)
-        launch {
-            heartScale.animateTo(1.25f, spring(dampingRatio = 0.5f, stiffness = Spring.StiffnessMedium))
-            heartScale.animateTo(1.0f, tween(150))
-        }
-        launch {
-            heartOffsetY.animateTo(-24f, tween(550, easing = FastOutSlowInEasing))
-        }
-        delay(450)
-        heartAlpha.animateTo(0f, tween(200))
-        heartScale.snapTo(0f)
-    }
-
-    val highlightAnim = remember { Animatable(0f) }
-    LaunchedEffect(isHighlighted) {
-        if (isHighlighted) {
-            highlightAnim.snapTo(1f)
-            highlightAnim.animateTo(0f, tween(1200))
-        }
-    }
-
-    // Instagram smooth swipe-to-reply: universal drag with spring physics & haptics
+    // ROUND 8 swipe-to-reply (item 1): drag state lives in plain snapshot
+    // state (synchronous, tracks the finger exactly); an Animatable runs
+    // ONLY the release spring-back. Own messages swipe LEFT, peer messages
+    // swipe RIGHT (IG directions), clamped to 84dp; 56dp arms the reply.
     val density = LocalDensity.current
     val maxSwipePx = with(density) { 84.dp.toPx() }
-    val thresholdPx = with(density) { 52.dp.toPx() }
+    val thresholdPx = with(density) { 56.dp.toPx() }
     var dragX by remember { mutableFloatStateOf(0f) }
     val springBack = remember { Animatable(0f) }
     val bubbleScope = rememberCoroutineScope()
@@ -935,15 +1065,13 @@ fun MessageBubble(
     }
     Box(Modifier.fillMaxWidth()) {
         // the reply arrow the swipe reveals, on the edge the bubble vacates
-        val isLeftDrag = dragX < 0f
         Box(
-            Modifier.align(if (isLeftDrag) Alignment.CenterEnd else Alignment.CenterStart)
-                .padding(horizontal = 8.dp).size(32.dp)
+            Modifier.align(if (m.me) Alignment.CenterEnd else Alignment.CenterStart)
+                .padding(horizontal = 8.dp).size(30.dp)
                 .graphicsLayer {
                     alpha = swipeProgress
-                    val s = 0.5f + 0.5f * swipeProgress
+                    val s = 0.6f + 0.4f * swipeProgress
                     scaleX = s; scaleY = s
-                    rotationZ = (1f - swipeProgress) * (if (isLeftDrag) 45f else -45f)
                 }
                 .clip(CircleShape).background(settings.accent),
             contentAlignment = Alignment.Center,
@@ -951,6 +1079,13 @@ fun MessageBubble(
     Row(
         Modifier.fillMaxWidth()
             .offset { androidx.compose.ui.unit.IntOffset(dragX.roundToInt(), 0) }
+            .pointerInput(m.id) {
+                detectTapGestures(
+                    onDoubleTap = { heartPopKey++; onReact("❤️") },
+                    onLongPress = { onLongPress() },
+                    onTap = { if (m.kind == MsgKind.IMAGE && m.photo != null) onImageClick() },
+                )
+            }
             .pointerInput(m.id + "_swipe") {
                 detectHorizontalDragGestures(
                     onDragEnd = {
@@ -958,7 +1093,7 @@ fun MessageBubble(
                         val from = dragX
                         bubbleScope.launch {
                             springBack.snapTo(from)
-                            springBack.animateTo(0f, spring(dampingRatio = 0.68f, stiffness = Spring.StiffnessMediumLow)) { dragX = value }
+                            springBack.animateTo(0f, spring(dampingRatio = 0.72f, stiffness = Spring.StiffnessMediumLow)) { dragX = value }
                         }
                         if (hit) onSwipeReply()
                         swipeArmed = false
@@ -967,13 +1102,13 @@ fun MessageBubble(
                         val from = dragX
                         bubbleScope.launch {
                             springBack.snapTo(from)
-                            springBack.animateTo(0f, spring(dampingRatio = 0.68f, stiffness = Spring.StiffnessMediumLow)) { dragX = value }
+                            springBack.animateTo(0f, spring(dampingRatio = 0.72f, stiffness = Spring.StiffnessMediumLow)) { dragX = value }
                         }
                         swipeArmed = false
                     },
                 ) { change, dragAmount ->
                     change.consume()
-                    dragX = if (m.me) (dragX + dragAmount).coerceIn(-maxSwipePx, maxSwipePx)
+                    dragX = if (m.me) (dragX + dragAmount).coerceIn(-maxSwipePx, 0f)
                         else (dragX + dragAmount).coerceIn(0f, maxSwipePx)
                     val nowArmed = abs(dragX) >= thresholdPx
                     if (nowArmed && !swipeArmed) {
@@ -984,6 +1119,27 @@ fun MessageBubble(
             },
         horizontalArrangement = if (m.me) Arrangement.End else Arrangement.Start,
     ) {
+        // ROUND 10 (C3): incoming avatar — on the group's LAST message only,
+        // bottom-aligned with the bubble; an empty slot on the other group
+        // members keeps every bubble in the group on the same left edge.
+        if (!m.me) {
+            if (showAvatar && peer != null) {
+                Box(Modifier.align(Alignment.Bottom)) { AvatarBox(peer, 28.dp, 10.dp, 12f) }
+            } else {
+                Spacer(Modifier.width(28.dp))
+            }
+            Spacer(Modifier.width(6.dp))
+        }
+        // ROUND 6 (bug 1 — bubbles not flush): the 78%-cap box previously had
+        // NO contentAlignment, so the wrap-content bubble Column always sat at
+        // the box's TopStart — own bubbles began at a uniform ~22% offset (a
+        // centre column) instead of hugging the right edge, exactly as the
+        // owner's screenshot showed. contentAlignment now pins the bubble to
+        // its own edge; text bubbles wrap and sit FLUSH right (mine) / left
+        // (theirs), long/media bubbles still cap at 78%. The reactions badge
+        // moved to a wrap box around the bubble itself, so it anchors to the
+        // bubble's real corner at any length (it used to float at the 78%
+        // box's corner, away from short bubbles).
         Box(
             Modifier.fillMaxWidth(0.78f),
             contentAlignment = if (m.me) Alignment.TopEnd else Alignment.TopStart,
@@ -1001,18 +1157,6 @@ fun MessageBubble(
                 Modifier.clip(shape)
                     .then(if (m.me) Modifier.background(settings.gradBrush)
                           else Modifier.background(TikuTokens.Bubble).border(1.dp, TikuTokens.Line, shape))
-                    .then(if (highlightAnim.value > 0f) Modifier.border(2.dp, settings.accent.copy(alpha = highlightAnim.value * 0.9f), shape) else Modifier)
-                    .pointerInput(m.id + "_tap") {
-                        detectTapGestures(
-                            onDoubleTap = {
-                                heartAnimTrigger++
-                                haptics.performHapticFeedback(HapticFeedbackType.LongPress)
-                                onDoubleTapReact()
-                            },
-                            onLongPress = { onLongPress() },
-                            onTap = { if (m.kind == MsgKind.IMAGE && m.photo != null) onImageClick() },
-                        )
-                    }
                     .padding(horizontal = 13.dp, vertical = 9.dp),
             ) {
                 if (m.replyQuote != null) {
@@ -1024,9 +1168,6 @@ fun MessageBubble(
                         Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp))
                             .background(if (m.me) Color.White.copy(alpha = 0.20f)
                                 else TikuTokens.Ink.copy(alpha = 0.06f))
-                            .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {
-                                onQuoteClick(m.replyQuote)
-                            }
                             .padding(horizontal = 9.dp, vertical = 6.dp),
                     ) {
                         Text(m.replyQuote, fontSize = 12.sp, color = textColor.copy(alpha = 0.7f),
@@ -1050,7 +1191,9 @@ fun MessageBubble(
                 }
                 Row(Modifier.align(Alignment.End).padding(top = 2.dp)) {
                     Text(
-                        when {
+                        // ROUND 10 (C5): edited messages carry a muted
+                        // "Edited" caption ahead of the time.
+                        (if (m.editedAtMs > 0) "Edited · " else "") + when {
                             m.me && m.status == SendStatus.SENDING -> "Sending…"
                             m.me && m.status == SendStatus.FAILED -> "Not sent"
                             // ROUND 8 (item 7b): ticks are GONE. Read state
@@ -1063,22 +1206,20 @@ fun MessageBubble(
                     )
                 }
             }
-            // Instagram heart burst popup overlay
-            if (heartAlpha.value > 0f) {
-                Box(
-                    Modifier.align(Alignment.Center)
+            // ROUND 10 (C1): the double-tap heart itself — drawn with the
+            // same heart path as the couple wallpaper, in the couple rose.
+            if (heartScale.value > 0f) {
+                Canvas(
+                    Modifier.size(46.dp).align(Alignment.Center)
                         .graphicsLayer {
-                            scaleX = heartScale.value
-                            scaleY = heartScale.value
-                            alpha = heartAlpha.value
-                            translationY = heartOffsetY.value
-                        }
-                        .shadow(12.dp, CircleShape, spotColor = Color(0xFFFF2D55))
-                        .size(52.dp).clip(CircleShape)
-                        .background(Color.White.copy(alpha = 0.95f)),
-                    contentAlignment = Alignment.Center,
+                            scaleX = heartScale.value; scaleY = heartScale.value
+                            alpha = heartScale.value
+                        },
                 ) {
-                    EmojiArt("❤️", 34.dp)
+                    drawPath(
+                        heartPath(size.width / 2f, size.height / 2f, size.minDimension / 2.3f),
+                        Color(0xFFCE4E79),
+                    )
                 }
             }
             val reactions = m.reactions.values.distinct()
@@ -1136,21 +1277,11 @@ fun VoiceBubbleContent(m: TikuMessage, textColor: Color, playing: Boolean, onTog
             horizontalArrangement = Arrangement.spacedBy(2.dp),
         ) {
             val amps = if (m.amps.size == 22) m.amps else List(22) { 8 + ((it * 7) % 14) }
-            val inf = rememberInfiniteTransition(label = "voice_progress")
-            val prog by inf.animateFloat(
-                initialValue = 0f, targetValue = 22f,
-                animationSpec = infiniteRepeatable(
-                    animation = tween((m.voiceDurSec.coerceAtLeast(1) * 1000).coerceIn(2000, 180000), easing = androidx.compose.animation.core.LinearEasing),
-                    repeatMode = RepeatMode.Restart
-                ),
-                label = "vp"
-            )
-            amps.forEachIndexed { idx, a ->
-                val passed = playing && idx <= prog
+            amps.forEach { a ->
                 Box(
                     Modifier.weight(1f).height(a.coerceIn(4, 24).dp)
                         .clip(RoundedCornerShape(3.dp))
-                        .background(textColor.copy(alpha = if (passed) 1f else if (playing) 0.65f else 0.45f))
+                        .background(textColor.copy(alpha = if (playing) 0.9f else 0.55f))
                 )
             }
         }
@@ -1186,46 +1317,43 @@ object ChatSheets {
         }
     }
 
-    fun context(threadId: String, m: TikuMessage, onReply: (TikuMessage) -> Unit) {
+    fun context(
+        threadId: String, m: TikuMessage,
+        onReply: (TikuMessage) -> Unit,
+        onEdit: (TikuMessage) -> Unit = {},
+        pinned: Boolean = false,
+        onTogglePin: () -> Unit = {},
+    ) {
         AppState.sheet {
-            // Instagram-style floating reaction row with + emoji button
+            // reaction row
             Row(
-                Modifier.fillMaxWidth().clip(RoundedCornerShape(24.dp)).background(TikuTokens.BgTop)
-                    .border(1.dp, TikuTokens.Line, RoundedCornerShape(24.dp))
-                    .padding(horizontal = 8.dp, vertical = 6.dp),
+                Modifier.fillMaxWidth().clip(RoundedCornerShape(22.dp)).background(TikuTokens.BgTop)
+                    .padding(horizontal = 10.dp, vertical = 8.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
             ) {
                 REACTIONS.forEach { e ->
-                    val myUid = if (Config.PREVIEW_UI_ONLY) "me" else FirebaseEngine.myUid()
-                    val isMyReact = m.reactions[myUid] == e
                     Box(
-                        Modifier.size(42.dp)
-                            .then(if (isMyReact) Modifier.clip(CircleShape).background(Color(0x22CE4E79)) else Modifier)
+                        Modifier.size(44.dp)
                             .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {
-                                AppState.repo.react(threadId, m.id, if (isMyReact) null else e)
+                                val cur = m.reactions.values.firstOrNull()
+                                AppState.repo.react(threadId, m.id, if (cur == e) null else e)
                                 AppState.closeSheet()
                             },
                         contentAlignment = Alignment.Center,
                     ) { EmojiArt(e, 27.dp) }
                 }
-                Box(
-                    Modifier.size(36.dp).clip(CircleShape).background(TikuTokens.Card)
-                        .border(1.dp, TikuTokens.Line, CircleShape)
-                        .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {
-                            AppState.closeSheet()
-                            emoji { picked ->
-                                val myUid = if (Config.PREVIEW_UI_ONLY) "me" else FirebaseEngine.myUid()
-                                val isMyReact = m.reactions[myUid] == picked
-                                AppState.repo.react(threadId, m.id, if (isMyReact) null else picked)
-                            }
-                        },
-                    contentAlignment = Alignment.Center,
-                ) { Text("+", fontSize = 18.sp, color = TikuTokens.Muted, fontWeight = FontWeight.Bold) }
             }
             Spacer(Modifier.height(10.dp))
             SheetAction("Reply") {
                 onReply(m); AppState.closeSheet()
+            }
+            // ROUND 10 (C5): Edit — own TEXT messages only, inside the
+            // 15-minute window (the composer switches to edit mode).
+            if (m.me && m.kind == MsgKind.TEXT && m.status == SendStatus.SENT &&
+                m.tsMs > 0 && System.currentTimeMillis() - m.tsMs <= 15 * 60_000L) {
+                SheetAction("Edit") {
+                    onEdit(m); AppState.closeSheet()
+                }
             }
             SheetAction("Copy") {
                 // ROUND 8: Copy actually copies now (it used to only toast).
@@ -1241,6 +1369,11 @@ object ChatSheets {
             SheetAction(if (m.starredByMe) "Unstar" else "Star") {
                 AppState.repo.toggleStar(threadId, m.id)
                 AppState.toast("Star updated"); AppState.closeSheet()
+            }
+            // ROUND 10 (C6): pin/unpin this message (chat doc pinnedMsgs,
+            // max 3 — the cap toast comes from the engine).
+            SheetAction(if (pinned) "Unpin" else "Pin") {
+                onTogglePin(); AppState.closeSheet()
             }
             // Media rule (owner): NOTHING auto-saves to the gallery. This explicit tap
             // is the only exit — decrypted photo -> Pictures/Tiku, voice -> Music/Tiku.
@@ -1261,38 +1394,10 @@ object ChatSheets {
         }
     }
 
-    fun more(thread: ChatThread, person: Person) {
-        AppState.sheet {
-            // Details keep the REAL identity (round 6): profile name as the
-            // title + @username under it — the nickname only replaces the
-            // name in the chat header and the chat list.
-            SerifTitle(person.name, 28.sp, modifier = Modifier.padding(top = 2.dp))
-            if (person.username.isNotEmpty()) {
-                Text("@${person.username}", fontSize = 13.sp, color = TikuTokens.Muted,
-                    fontFamily = Manrope, modifier = Modifier.padding(bottom = 10.dp))
-            } else {
-                Spacer(Modifier.height(10.dp))
-            }
-            // ROUND 6 nicknames (IG-style): sets the PEER's nickname for this
-            // chat — applies to both members (stored on the chat doc).
-            SheetAction(if (thread.nickname.isNullOrBlank()) "Set nickname" else "Edit nickname") {
-                nickname(thread)
-            }
-            SheetAction("Mute notifications") { AppState.toast("Muted for 8 hours"); AppState.closeSheet() }
-            // ROUND 8: pinning is REAL now (IG-style) — a per-user local
-            // preference; pinned chats sort to the top of the list.
-            SheetAction(if (thread.pinned) "Unpin chat" else "Pin chat") {
-                AppState.repo.setPinned(thread.id, !thread.pinned)
-                AppState.toast(if (thread.pinned) "Chat unpinned" else "Chat pinned")
-                AppState.closeSheet()
-            }
-            SheetAction("Export chat") { AppState.toast("Chat exported (encrypted)"); AppState.closeSheet() }
-            SheetAction("Clear chat") {
-                AppState.repo.clearChat(thread.id); AppState.closeSheet()
-            }
-            SheetAction("Block") { AppState.toast("Contact blocked"); AppState.closeSheet() }
-        }
-    }
+    // ROUND 10: the old "more" details bottom-sheet is GONE — Chat Details
+    // (ChatDetailsScreen, opened from the chat header) is the single entry
+    // point for nickname/theme/receipts/clear-chat now. The nickname EDITOR
+    // below is reused by that screen unchanged.
 
     /** Nickname editor: prefilled with the current nickname; Save writes it
      *  (blank input clears), Clear removes it and the profile name returns. */

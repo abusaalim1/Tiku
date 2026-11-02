@@ -40,7 +40,10 @@ import javax.crypto.SecretKey
  *   usernames/{username} -> {uid}
  *   chats/{chatId} {members:[uidA, uidB], typing:{uid:bool}, clearedBefore:{uid:ms}, updatedAt,
  *       nicknames:{uid:nickname} (round 6 — IG semantics: key = the nickname OWNER's uid,
- *       written by either member, rendered by both)}
+ *       written by either member, rendered by both),
+ *       themeAccent/themeWallpaper (round 10 — per-chat theme indices),
+ *       receiptsOff:[uid] (round 10 — members who muted their read receipts here),
+ *       pinnedMsgs:[msgId] (round 10 — pinned messages, max 3)}
  *   chats/{chatId}/messages/{id} {senderId, kind, ct, iv, ts, rqCt, rqIv, reaction:{uid:emoji},
  *       starredBy:[], deletedFor:[], seenBy:[], durationMs, amps, mediaChunks}
  *   chats/{chatId}/messages/{id}/chunks/{i} {d: base64 chunk of ciphertext}
@@ -95,16 +98,17 @@ object FirebaseEngine : ChatRepo {
     // ================= AUTH =================
     suspend fun googleSignIn(activity: Activity): Result<Unit> {
         return try {
-            val option = GetSignInWithGoogleOption.Builder(Config.WEB_CLIENT_ID).build()
-            val request = GetCredentialRequest.Builder().addCredentialOption(option).build()
-            val result = CredentialManager.create(activity).getCredential(activity, request)
-            val cred = result.credential as? CustomCredential
-                ?: return Result.failure(IllegalStateException("Not a Google credential"))
-            if (cred.type != GoogleIdTokenCredential.TYPE_GOOGLE_ID_TOKEN_CREDENTIAL)
-                return Result.failure(IllegalStateException("Wrong credential type: ${cred.type}"))
-            val idToken = GoogleIdTokenCredential.createFrom(cred.data).idToken
-            auth.signInWithCredential(GoogleAuthProvider.getCredential(idToken, null)).await()
-            Result.success(Unit)
+        val nonce = UUID.randomUUID().toString()
+        val option = GetSignInWithGoogleOption.Builder(Config.WEB_CLIENT_ID).setNonce(nonce).build()
+        val request = GetCredentialRequest.Builder().addCredentialOption(option).build()
+        val result = CredentialManager.create(activity).getCredential(activity, request)
+        val cred = result.credential as? CustomCredential
+            ?: return Result.failure(IllegalStateException("Not a Google credential"))
+        if (cred.type != GoogleIdTokenCredential.TYPE_GOOGLE_ID_TOKEN_CREDENTIAL)
+            return Result.failure(IllegalStateException("Wrong credential type"))
+        val idToken = GoogleIdTokenCredential.createFrom(cred.data).idToken
+        auth.signInWithCredential(GoogleAuthProvider.getCredential(idToken, null)).await()
+        Result.success(Unit)
         } catch (e: Exception) {
             Result.failure(e)
         }
@@ -231,6 +235,42 @@ object FirebaseEngine : ChatRepo {
             }.isSuccess
             Result.success(cloudOk)
         } catch (e: Exception) { Result.failure(e) }
+    }
+
+    /**
+     * ROUND 10 — START FRESH AFTER KEY LOSS (forgot-password parity, Mode F).
+     * The caller has ALREADY re-authenticated the same Google account and
+     * bound it to this uid (ResetPasswordScreen stage 0). This phone holds
+     * no local identity and the journal password is gone, so the cloud
+     * keyBackup can never be opened again — the only way forward is to
+     * retire it: delete keyBackup + publicKey from MY OWN user doc (the
+     * users rule allows exactly this write), wipe every local remnant
+     * (device-wrapped identity keys, password verifier, in-RAM key
+     * material), and let the caller route into the normal fresh-journal
+     * onboarding, where finishNewUser creates a brand-new keypair +
+     * password + backup. The account and username survive untouched;
+     * existing chats stay on the server as ciphertext that no key can
+     * ever open again — the reset screen says so before this ever runs.
+     */
+    suspend fun startFreshAfterKeyLoss(ctx: Context): Result<Unit> {
+        return try {
+            if (uid.isEmpty()) return Result.failure(IllegalStateException("Not signed in."))
+            db.collection(Schema.Users.COLL).document(uid).update(mapOf(
+                "keyBackup" to FieldValue.delete(),
+                "publicKey" to FieldValue.delete(),
+            )).await()
+            securePrefs(ctx).edit()
+                .remove("idk_iv").remove("idk_ct").remove("idk_uid").remove("pw_hash")
+                .apply()
+            runCatching { myPrivBytes?.fill(0) }
+            myPrivBytes = null
+            convKeyCache.clear()
+            Log.d("TikuGate", "start-fresh after key loss completed for uid $uid")
+            Result.success(Unit)
+        } catch (e: Exception) {
+            Log.e("TikuGate", "startFreshAfterKeyLoss failed", e)
+            Result.failure(e)
+        }
     }
 
     /** New user: generate identity, claim username, write user doc + backup. */
@@ -660,6 +700,15 @@ object FirebaseEngine : ChatRepo {
                             @Suppress("UNCHECKED_CAST")
                             val cbMap = doc.get("clearedBefore") as? Map<String, Any?>
                             clearedBeforeCache[doc.id] = (cbMap?.get(uid) as? Number)?.toLong() ?: 0L
+                            // ROUND 10: per-chat details ride this same
+                            // snapshot (theme, receipts, pinned messages, MY
+                            // nickname) — zero extra reads, both members see
+                            // the same chat-doc values.
+                            val myNickname = (nickMap?.get(uid) as? String)?.takeIf { it.isNotBlank() }
+                            val receiptsOffList = (doc.get("receiptsOff") as? List<*>)?.mapNotNull { it as? String } ?: emptyList()
+                            val pinnedMsgsList = (doc.get("pinnedMsgs") as? List<*>)?.mapNotNull { it as? String } ?: existing?.pinnedMsgIds ?: emptyList()
+                            val themeAccentVal = doc.getLong("themeAccent")?.toInt()
+                            val themeWallpaperVal = doc.getLong("themeWallpaper")?.toInt()
                             val pinnedIds = pinPrefs?.getStringSet("ids", emptySet()) ?: emptySet()
                             ts to ChatThread(id = doc.id, person = peer,
                                 messages = existing?.messages ?: mutableListOf(),
@@ -667,7 +716,12 @@ object FirebaseEngine : ChatRepo {
                                 time = fmtTime(ts),
                                 pinned = doc.id in pinnedIds,
                                 nickname = nickname,
-                                hasOlder = existing?.hasOlder ?: (hasOlderCache[doc.id] ?: false))
+                                hasOlder = existing?.hasOlder ?: (hasOlderCache[doc.id] ?: false),
+                                myNickname = myNickname,
+                                themeAccent = themeAccentVal,
+                                themeWallpaper = themeWallpaperVal,
+                                receiptsOffMine = uid in receiptsOffList,
+                                pinnedMsgIds = pinnedMsgsList)
                         } ?: emptyList()
                         // client-side updatedAt DESC (the query no longer orders)
                         val list = built.sortedByDescending { it.first }.map { it.second }
@@ -799,8 +853,6 @@ object FirebaseEngine : ChatRepo {
     private fun handleIncomingCall(chatId: String, callId: String, doc: com.google.firebase.firestore.DocumentSnapshot) {
         val caller = doc.getString("caller") ?: return
         if (caller == uid) return // my own outgoing call echo
-        val callState = doc.getString("state") ?: ""
-        if (callState != "ringing") return // only actively ringing calls are handled
         // ROUND 7 ROOT FIX ("Offer missing" on receive): this watcher re-fires
         // on EVERY update to the ringing doc — and the caller pushes ICE
         // candidates (arrayUnion writes) continuously from the moment the
@@ -818,8 +870,6 @@ object FirebaseEngine : ChatRepo {
                 // re-check inside the coroutine: the state may have become
                 // this very call while fetchPerson was in flight elsewhere.
                 if (CallController.activeCallId() == callId) return@runCatching
-                val checkDoc = db.collection(Schema.Chats.COLL).document(chatId).collection("calls").document(callId).get().await()
-                if (!checkDoc.exists() || checkDoc.getString("state") != "ringing") return@runCatching
                 when {
                     // stale ringing doc (caller crashed) — sweep it silently
                     System.currentTimeMillis() - createdAt > Config.CALL_RING_TIMEOUT_MS ->
@@ -829,7 +879,6 @@ object FirebaseEngine : ChatRepo {
                         CallSignal.deleteCallTree(chatId, callId)
                     ChatSession.unlocked && ChatSession.foreground -> {
                         val person = fetchPerson(caller)
-                        if (CallController.state.value !is CallUiState.Idle) return@runCatching
                         // ROUND 7: hand the offer from THIS snapshot to the
                         // controller — accept() uses the cached copy first.
                         CallController.onIncoming(chatId, callId, kind, person, offerEnc)
@@ -1021,6 +1070,10 @@ object FirebaseEngine : ChatRepo {
      */
     private fun markIncomingSeen(id: String, docs: List<com.google.firebase.firestore.DocumentSnapshot>) {
         if (!SettingsStore.state.value.readReceipts) return
+        // ROUND 10: this chat's own receipts switch wins over the global one —
+        // my uid in the chat doc's receiptsOff means my client never writes
+        // seenBy marks here.
+        if (AppState.thread(id)?.receiptsOffMine == true) return
         val unseen = docs.filter { d ->
             d.getString("senderId") != uid && d.getString("kind") != "call" &&
                 !((d.get("seenBy") as? List<*>) ?: emptyList<Any>()).contains(uid)
@@ -1280,7 +1333,8 @@ object FirebaseEngine : ChatRepo {
             callCallerUid = callCallerUid, callOutcome = callOutcome,
             callDurationSec = callDurSec, callVideo = callVideo,
             callMine = callCallerUid.isNotEmpty() && callCallerUid == my,
-            mediaChunks = mediaChunks)
+            mediaChunks = mediaChunks,
+            editedAtMs = doc.getTimestamp("editedAt")?.toDate()?.time ?: 0L)
     }
 
     // ================= SEND PATH (round 3: optimistic + NO silent failures) ====
@@ -1329,19 +1383,18 @@ object FirebaseEngine : ChatRepo {
         }
     }
 
-    override fun sendPhoto(id: String, bmp: Bitmap, quote: String?) {
+    override fun sendPhoto(id: String, bmp: Bitmap) {
         val th = AppState.thread(id) ?: return
         val local = TikuMessage(
             id = newLocalId(), senderUid = uid, kind = MsgKind.IMAGE,
             time = fmtTime(System.currentTimeMillis()), me = true, photo = bmp,
-            replyQuote = quote,
             tsMs = System.currentTimeMillis(), status = SendStatus.SENDING,
         )
         AppState.upsertMessage(id, local)
         scope.launch { deliverMedia(id, th.person.uid, local, MediaStore.compressPhoto(bmp)) }
     }
 
-    override fun sendVoice(id: String, audioFile: File?, durSec: Int, amps: List<Int>, quote: String?) {
+    override fun sendVoice(id: String, audioFile: File?, durSec: Int, amps: List<Int>) {
         val th = AppState.thread(id) ?: return
         if (audioFile == null || !audioFile.exists()) {
             AppState.toast("Couldn't send the voice note — recording missing")
@@ -1351,7 +1404,6 @@ object FirebaseEngine : ChatRepo {
             id = newLocalId(), senderUid = uid, kind = MsgKind.VOICE,
             time = fmtTime(System.currentTimeMillis()), me = true,
             voiceDurSec = durSec, amps = amps, localPath = audioFile.absolutePath,
-            replyQuote = quote,
             tsMs = System.currentTimeMillis(), status = SendStatus.SENDING,
         )
         AppState.upsertMessage(id, local)
@@ -1376,12 +1428,11 @@ object FirebaseEngine : ChatRepo {
                 ?: throw IllegalStateException("encryption key not ready — the other person may not have finished setting up")
             val (iv, ctB64) = Crypto.encrypt(key, plainBytes)
             val ctBytes = Crypto.unb64(ctB64)
-            val (rqIv, rqCt) = if (local.replyQuote != null) Crypto.encryptText(key, local.replyQuote) else ("" to "")
             val ref = msgRef(id, local.id)
             ref.set(mapOf(
                 "senderId" to uid, "kind" to kind, "ct" to "", "iv" to iv,
                 "ts" to FieldValue.serverTimestamp(),
-                "rqCt" to rqCt, "rqIv" to rqIv,
+                "rqCt" to "", "rqIv" to "",
                 "reaction" to emptyMap<String, String>(), "starredBy" to emptyList<String>(),
                 "deletedFor" to emptyList<String>(), "seenBy" to listOf(uid),
                 "durationMs" to local.voiceDurSec * 1000, "amps" to local.amps, "mediaChunks" to 0,
@@ -1534,6 +1585,95 @@ object FirebaseEngine : ChatRepo {
                 else ref.update("nicknames.$peerUid", clean).await()
                 Log.d("TikuChat", "nickname ${if (clean == null) "cleared" else "set"} in chat $id")
             }.onFailure { Log.e("TikuChat", "setNickname failed for chat $id", it) }
+        }
+    }
+
+    // ================= ROUND 10 — CHAT DETAILS + MESSAGE OPS =================
+
+    /** EDIT MY OWN TEXT MESSAGE: re-encrypt the new body through the exact
+     *  same conversation-key path as a fresh send and replace ct/iv on the
+     *  doc, stamping editedAt. The messages rule grants member writes, so
+     *  this is the same class of update as reactions/seen (proven live).
+     *  The 15-minute window is enforced by the UI (the only caller). */
+    override fun editText(id: String, msgId: String, newText: String) {
+        val th = AppState.thread(id) ?: return
+        val trimmed = newText.trim()
+        if (trimmed.isEmpty()) return
+        scope.launch {
+            runCatching {
+                val key = convKeyOrNull(id, th.person.uid)
+                    ?: throw IllegalStateException("encryption key not ready")
+                val (iv, ct) = Crypto.encryptText(key, trimmed)
+                msgRef(id, msgId).update(mapOf(
+                    "ct" to ct, "iv" to iv,
+                    "editedAt" to FieldValue.serverTimestamp(),
+                )).await()
+                Log.d("TikuChat", "message $msgId edited in chat $id")
+            }.onFailure {
+                Log.e("TikuChat", "editText failed for $msgId in chat $id", it)
+                AppState.toast("Couldn't edit — try again")
+            }
+        }
+    }
+
+    /** PIN / UNPIN A MESSAGE (chat doc pinnedMsgs, shared, max 3). The cap
+     *  is enforced here (the engine is authoritative), not just in the UI. */
+    override fun setPinnedMsg(id: String, msgId: String, pin: Boolean) {
+        val th = AppState.thread(id) ?: return
+        val current = th.pinnedMsgIds
+        if (pin && msgId !in current && current.size >= 3) {
+            AppState.toast("Up to 3 pinned messages")
+            return
+        }
+        val next = if (pin) (current + msgId).distinct().takeLast(3)
+            else current - msgId
+        AppState.threads.value = AppState.threads.value.map {
+            if (it.id == id) it.copy(pinnedMsgIds = next) else it
+        }
+        scope.launch {
+            runCatching {
+                db.collection(Schema.Chats.COLL).document(id).update("pinnedMsgs", next).await()
+                Log.d("TikuChat", "pinnedMsgs -> $next in chat $id")
+            }.onFailure { Log.e("TikuChat", "setPinnedMsg failed for chat $id", it) }
+        }
+    }
+
+    /** PER-CHAT THEME: themeAccent / themeWallpaper on the chat doc — both
+     *  members' thread listeners pick the same values up, like IG. */
+    override fun setTheme(id: String, accentIdx: Int?, wallpaperIdx: Int?) {
+        AppState.threads.value = AppState.threads.value.map {
+            if (it.id == id) it.copy(
+                themeAccent = accentIdx ?: it.themeAccent,
+                themeWallpaper = wallpaperIdx ?: it.themeWallpaper,
+            ) else it
+        }
+        scope.launch {
+            runCatching {
+                val updates = mutableMapOf<String, Any>()
+                accentIdx?.let { updates["themeAccent"] = it }
+                wallpaperIdx?.let { updates["themeWallpaper"] = it }
+                if (updates.isNotEmpty()) {
+                    db.collection(Schema.Chats.COLL).document(id).update(updates).await()
+                }
+                Log.d("TikuChat", "theme updated in chat $id: $updates")
+            }.onFailure { Log.e("TikuChat", "setTheme failed for chat $id", it) }
+        }
+    }
+
+    /** MY READ RECEIPTS IN THIS CHAT: receiptsOff on the chat doc carries
+     *  MY uid while my receipts are off here. markIncomingSeen honours it;
+     *  the chat screen also hides my "Seen" caption while it is set. */
+    override fun setReceipts(id: String, on: Boolean) {
+        AppState.threads.value = AppState.threads.value.map {
+            if (it.id == id) it.copy(receiptsOffMine = !on) else it
+        }
+        scope.launch {
+            runCatching {
+                val ref = db.collection(Schema.Chats.COLL).document(id)
+                if (on) ref.update("receiptsOff", FieldValue.arrayRemove(uid)).await()
+                else ref.update("receiptsOff", FieldValue.arrayUnion(uid)).await()
+                Log.d("TikuChat", "receipts ${if (on) "on" else "off"} in chat $id")
+            }.onFailure { Log.e("TikuChat", "setReceipts failed for chat $id", it) }
         }
     }
 

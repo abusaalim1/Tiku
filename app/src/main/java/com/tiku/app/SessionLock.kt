@@ -207,6 +207,12 @@ object ChatSession {
     /** Drop keys + decrypted state from RAM and snap back to the study facade. */
     fun lock(ctx: Context) {
         val c = ctx.applicationContext
+        // ROUND 10 (Watch lock safety): this lock() is the single choke point
+        // every lock path funnels through (quick exit, Back-out, backgrounding
+        // via MainActivity.onStop, the owner's explicit "Lock now"). The
+        // in-vault YouTube WebView dies HERE — JS pause, about:blank, destroy —
+        // so no video frame and no audio can survive any lock.
+        WatchHolder.destroy()
         if (!Config.PREVIEW_UI_ONLY && unlocked && FirebaseEngine.signedIn) {
             FirebaseEngine.setPresence(false)
         }
@@ -227,6 +233,11 @@ object ChatSession {
      *  identical-to-lock() behaviour, as always. */
     fun quickExit(ctx: Context) {
         if (OwnerGate.lockOffActive()) {
+            // ROUND 10: the relaxed exit keeps the chat SESSION alive, but a
+            // playing Watch video must never leak audio into the study
+            // facade — the WebView is destroyed here too (only the keys and
+            // threads survive this path, never media).
+            WatchHolder.destroy()
             if (!Config.PREVIEW_UI_ONLY && unlocked && FirebaseEngine.signedIn) {
                 FirebaseEngine.setPresence(false)
             }

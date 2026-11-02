@@ -56,6 +56,10 @@ data class TikuMessage(
      *  reuse the in-memory payload, skip the chunk re-download) from "payload
      *  actually changed" (upload finished — download it). */
     val mediaChunks: Int = 0,
+    /** ROUND 10: server timestamp (ms) of the last in-place edit of a TEXT
+     *  message (0 = never edited). Drives the muted "Edited" caption; the
+     *  ciphertext itself is replaced through the normal encrypt path. */
+    val editedAtMs: Long = 0L,
 )
 
 /** One 1:1 conversation. */
@@ -77,11 +81,41 @@ data class ChatThread(
      *  window (pagination — the chat opens at the newest ~60 messages and
      *  pages older ones in on scroll-up). UI-only bookkeeping. */
     val hasOlder: Boolean = false,
+    // ---- ROUND 10: per-chat details (chat-doc metadata, shared by both
+    // members exactly like the nicknames map) ----
+    /** MY nickname in this chat (nicknames[myUid] on the chat doc) — the
+     *  peer sets it, I only display it. [nickname] above is the peer's. */
+    val myNickname: String? = null,
+    /** Per-chat theme: index into TikuTokens.Accents / WallpaperMode,
+     *  stored on the chat doc (themeAccent / themeWallpaper). Null = fall
+     *  back to the global appearance settings. */
+    val themeAccent: Int? = null,
+    val themeWallpaper: Int? = null,
+    /** True when MY uid sits in the chat doc's receiptsOff array: my client
+     *  must not write seenBy marks in this chat, and the "Seen" caption
+     *  under my own messages stays hidden. */
+    val receiptsOffMine: Boolean = false,
+    /** Pinned message ids for this chat (chat doc pinnedMsgs, max 3,
+     *  oldest first — the strip shows the most recent pin). */
+    val pinnedMsgIds: List<String> = emptyList(),
 ) {
     /** What every surface renders as this chat's title: nickname first,
      *  profile name otherwise. Real name + @username stay visible in the
      *  chat details sheet. */
     val displayName: String get() = nickname?.takeIf { it.isNotBlank() } ?: person.name
+}
+
+/** ROUND 10: the settings a chat surface actually renders with — the global
+ *  appearance, overridden by this chat's own theme (accent + wallpaper)
+ *  wherever the chat doc carries one. Everything else (text size, toggles)
+ *  stays global. */
+fun ChatThread.effectiveSettings(global: TikuUiSettings): TikuUiSettings {
+    var s = global
+    themeAccent?.let { s = s.copy(accentIdx = it.coerceIn(0, TikuTokens.Accents.lastIndex)) }
+    themeWallpaper?.let { idx ->
+        s = s.copy(wallpaper = WallpaperMode.entries[idx.coerceIn(0, WallpaperMode.entries.lastIndex)])
+    }
+    return s
 }
 
 /** Contact / person. In real mode, username/uid come from Firestore. */

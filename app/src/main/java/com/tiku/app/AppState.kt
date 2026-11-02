@@ -37,11 +37,14 @@ sealed interface Screen {
     data object ProfileSetup : Screen
     data object Home : Screen
     data class Chat(val threadId: String) : Screen
+    /** ROUND 10: IG-style chat details (per-chat theme, nicknames, read
+     *  receipts) — opened by tapping the chat header; Back returns to the chat. */
+    data class ChatDetails(val threadId: String) : Screen
     data class Call(val threadId: String, val video: Boolean) : Screen
     data object Story : Screen
 }
 
-enum class HomeTab { CHATS, CALLS, ME }
+enum class HomeTab { CHATS, CALLS, WATCH, ME }
 
 /** Engine-wide crash guard: no engine coroutine may ever kill the process with an
  *  uncaught exception (this was the crash vector on the chat-open path). */
@@ -139,7 +142,8 @@ object AppState {
 
     fun isChatRoot(dest: Screen): Boolean = when (dest) {
         is Screen.Welcome, is Screen.Password, is Screen.Restore, is Screen.ProfileSetup,
-        is Screen.TikGate, is Screen.Home, is Screen.Chat, is Screen.Call, is Screen.Story -> true
+        is Screen.TikGate, is Screen.Home, is Screen.Chat, is Screen.ChatDetails,
+        is Screen.Call, is Screen.Story -> true
         else -> false
     }
 
@@ -162,8 +166,8 @@ interface ChatRepo {
     fun sendText(id: String, text: String, quote: String?)
     /** Re-attempt a FAILED outgoing message (tap-to-retry on the bubble). */
     fun retrySend(id: String, msgId: String) {}
-    fun sendPhoto(id: String, bmp: Bitmap, quote: String? = null)
-    fun sendVoice(id: String, audioFile: java.io.File?, durSec: Int, amps: List<Int>, quote: String? = null)
+    fun sendPhoto(id: String, bmp: Bitmap)
+    fun sendVoice(id: String, audioFile: java.io.File?, durSec: Int, amps: List<Int>)
     fun react(id: String, msgId: String, emoji: String?)
     fun toggleStar(id: String, msgId: String)
     fun deleteForMe(id: String, msgId: String)
@@ -180,4 +184,17 @@ interface ChatRepo {
     /** ROUND 8: pin/unpin a chat in the list (IG-style). A per-user, local
      *  view preference — never written to the chat doc. Default no-op. */
     fun setPinned(id: String, on: Boolean) {}
+    // ---- ROUND 10 ----
+    /** Edit one of MY OWN text messages in place (re-encrypts through the
+     *  existing path; the doc gains an editedAt stamp). Default no-op. */
+    fun editText(id: String, msgId: String, newText: String) {}
+    /** Pin/unpin a MESSAGE inside the chat (chat doc pinnedMsgs, max 3,
+     *  shared by both members). Default no-op. */
+    fun setPinnedMsg(id: String, msgId: String, pin: Boolean) {}
+    /** Set this chat's own theme (chat doc themeAccent/themeWallpaper;
+     *  null leaves that half unchanged). Default no-op. */
+    fun setTheme(id: String, accentIdx: Int?, wallpaperIdx: Int?) {}
+    /** My per-chat read-receipts switch (chat doc receiptsOff array).
+     *  Default no-op. */
+    fun setReceipts(id: String, on: Boolean) {}
 }
