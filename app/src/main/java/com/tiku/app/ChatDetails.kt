@@ -409,7 +409,7 @@ private fun NicknamesPage(thread: ChatThread, onBack: () -> Unit) {
                 Text(
                     "Shown instead of ${thread.person.name} in this chat — for both of you.",
                     fontSize = 12.5.sp, color = Tik.Sub, fontFamily = Manrope,
-                    modifier = Modifier.padding(horizontal = 18.dp, top = 2.dp),
+                    modifier = Modifier.padding(start = 18.dp, end = 18.dp, top = 2.dp),
                 )
                 TikSectionHeader("Your nickname")
                 TikField(
@@ -418,7 +418,7 @@ private fun NicknamesPage(thread: ChatThread, onBack: () -> Unit) {
                 Text(
                     "Set by ${thread.person.name} — only they can change it.",
                     fontSize = 12.5.sp, color = Tik.Sub, fontFamily = Manrope,
-                    modifier = Modifier.padding(horizontal = 18.dp, top = 2.dp),
+                    modifier = Modifier.padding(start = 18.dp, end = 18.dp, top = 2.dp),
                 )
                 Spacer(Modifier.height(14.dp))
                 TikPrimaryButton("Save nickname") {

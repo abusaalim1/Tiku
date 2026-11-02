@@ -8,6 +8,7 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Box
@@ -33,6 +34,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
@@ -222,7 +224,7 @@ fun TikBtn(
     val interaction = remember { MutableInteractionSource() }
     val pressed by interaction.collectIsPressedAsState()
     val scale by androidx.compose.animation.core.animateFloatAsState(
-        if (pressed) 0.88f else 1f, tween(160, TikEase), label = "btnScale")
+        if (pressed) 0.88f else 1f, tween(160, easing = TikEase), label = "btnScale")
     Box(
         modifier
             .size(36.dp)
@@ -261,7 +263,7 @@ fun TikTopBar(
             Modifier.weight(1f).then(
                 if (onTitleLongPress != null)
                     Modifier.pointerInput(onTitleLongPress) {
-                        androidx.compose.foundation.gestures.detectTapGestures(
+                        detectTapGestures(
                             onLongPress = { onTitleLongPress() },
                         )
                     }
@@ -290,9 +292,9 @@ private fun Text22(title: String) {
 @Composable
 fun TikToggle(checked: Boolean, accent: Color, onCheckedChange: (Boolean) -> Unit) {
     val track by animateColorAsState(
-        if (checked) accent else Tik.TrackOff, tween(250, TikEase), label = "tgTrack")
+        if (checked) accent else Tik.TrackOff, tween(250, easing = TikEase), label = "tgTrack")
     val knobX by animateDpAsState(
-        if (checked) 20.dp else 2.dp, tween(300, TikEase), label = "tgKnob")
+        if (checked) 20.dp else 2.dp, tween(300, easing = TikEase), label = "tgKnob")
     Box(
         Modifier
             .size(width = 44.dp, height = 26.dp)
@@ -325,7 +327,7 @@ fun TikSwatches(
         colors.forEachIndexed { i, c ->
             val isSel = i == selected
             val scale by androidx.compose.animation.core.animateFloatAsState(
-                if (isSel) 1.05f else 1f, tween(200, TikEase), label = "swScale")
+                if (isSel) 1.05f else 1f, tween(200, easing = TikEase), label = "swScale")
             Box(
                 Modifier
                     .size(28.dp)
@@ -376,7 +378,7 @@ fun TikPrimaryButton(
     val interaction = remember { MutableInteractionSource() }
     val pressed by interaction.collectIsPressedAsState()
     val scale by androidx.compose.animation.core.animateFloatAsState(
-        if (pressed) 0.97f else 1f, tween(160, TikEase), label = "pbScale")
+        if (pressed) 0.97f else 1f, tween(160, easing = TikEase), label = "pbScale")
     val settings = SettingsStore.state.value
     Box(
         modifier
@@ -424,7 +426,7 @@ fun TikField(
     var focused by remember { mutableStateOf(false) }
     val borderColor by animateColorAsState(
         if (focused) SettingsStore.state.value.accent else Tik.Ln,
-        tween(200, TikEase), label = "fldBorder")
+        tween(200, easing = TikEase), label = "fldBorder")
     Box(
         modifier
             .padding(horizontal = 18.dp)
@@ -527,8 +529,7 @@ fun TikInfoRow(
     }
 }
 
-private fun Modifier.borderTopLn(): Modifier = this.then(
-    androidx.compose.ui.draw.drawWithContent {
+private fun Modifier.borderTopLn(): Modifier = this.drawWithContent {
         drawContent()
         drawLine(
             Tik.Ln,
@@ -536,8 +537,8 @@ private fun Modifier.borderTopLn(): Modifier = this.then(
             end = androidx.compose.ui.geometry.Offset(size.width, 0f),
             strokeWidth = 1.dp.toPx(),
         )
-    },
-)
+    }
+
 
 /** .emp — empty state: centred sub text, b = 16 w600 tx block. */
 @Composable

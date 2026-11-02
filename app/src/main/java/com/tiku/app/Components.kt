@@ -297,7 +297,7 @@ object PresetAvatars {
  *  [dark] = the Tik-section skin (Edit profile sheet); the signup surface
  *  keeps the peach skin. */
 @Composable
-fun PresetAvatarPicker(onPick: (Bitmap) -> Unit, dark: Boolean = false) {
+fun PresetAvatarPicker(dark: Boolean = false, onPick: (Bitmap) -> Unit) {
     val ctx = androidx.compose.ui.platform.LocalContext.current
     Column(Modifier.fillMaxWidth()) {
         Text(

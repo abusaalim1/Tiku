@@ -26,6 +26,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.foundation.gestures.rememberTransformableState
 import androidx.compose.foundation.gestures.transformable
 import androidx.compose.foundation.horizontalScroll
@@ -141,8 +142,8 @@ fun ChatScreen(threadId: String) {
     val threads by AppState.threads.collectAsState()
     val thread = threads.firstOrNull { it.id == threadId }
     if (thread == null) {
-        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            Text("Chat unavailable", color = TikuTokens.Muted, fontFamily = Manrope)
+        Box(Modifier.fillMaxSize().background(Tik.Bg), contentAlignment = Alignment.Center) {
+            Text("Chat unavailable", color = Tik.Sub, fontFamily = Manrope)
         }
         return
     }
@@ -1547,7 +1548,7 @@ object ChatSheets {
             Text(
                 "Shown instead of ${thread.person.name} in this chat — for both of you.",
                 fontSize = 13.5.sp, color = Tik.Sub, fontFamily = Manrope,
-                modifier = Modifier.padding(horizontal = 18.dp, bottom = 12.dp),
+                modifier = Modifier.padding(start = 18.dp, end = 18.dp, bottom = 12.dp),
             )
             TikField(nick, { nick = it.take(40) }, "Nickname")
             Spacer(Modifier.height(14.dp))
@@ -1602,8 +1603,7 @@ fun SheetAction(
     }
 }
 
-private fun Modifier.drawTopBorderLn(): Modifier = this.then(
-    androidx.compose.ui.draw.drawWithContent {
+private fun Modifier.drawTopBorderLn(): Modifier = this.drawWithContent {
         drawContent()
         drawLine(
             Tik.Ln,
@@ -1611,5 +1611,5 @@ private fun Modifier.drawTopBorderLn(): Modifier = this.then(
             end = Offset(size.width, 0f),
             strokeWidth = 1.dp.toPx(),
         )
-    },
-)
+    }
+
