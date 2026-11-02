@@ -16,8 +16,9 @@ package com.tiku.app
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.Spring
-import androidx.compose.animation.core.animateColorAsState
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
@@ -67,19 +68,24 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Outline
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.DrawScope
+import androidx.compose.ui.graphics.drawscope.Fill
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.graphics.drawscope.withTransform
@@ -150,9 +156,16 @@ fun Modifier.glassSurface(
         .drawWithContent {
             drawContent()
             val outline = shape.createOutline(size, layoutDirection, this)
+            // DrawScope.drawOutline needs UI 1.8+; this app is on 1.7, so the
+            // same sheen/edge is drawn as a Path built from the outline.
+            val outlinePath = when (outline) {
+                is Outline.Generic -> outline.path
+                is Outline.Rounded -> Path().apply { addRoundRect(outline.roundRect) }
+                is Outline.Rectangle -> Path().apply { addRect(outline.rect) }
+            }
             // soft specular sheen from the top-left
-            drawOutline(
-                outline = outline,
+            drawPath(
+                path = outlinePath,
                 brush = Brush.radialGradient(
                     colors = listOf(Color.White.copy(alpha = if (p.isDark) 0.10f else 0.35f), Color.Transparent),
                     center = Offset(size.width * 0.18f, 0f),
@@ -160,8 +173,8 @@ fun Modifier.glassSurface(
                 )
             )
             // edge light: bright on top, soft border below
-            drawOutline(
-                outline = outline,
+            drawPath(
+                path = outlinePath,
                 brush = Brush.verticalGradient(
                     colors = listOf(p.hi, p.gb, p.gb.copy(alpha = p.gb.alpha * 0.55f))
                 ),
@@ -666,11 +679,11 @@ fun TikuuAvatar(
 @Composable
 fun GlassCircleIconButton(
     iconName: String,
-    onClick: () -> Unit,
     modifier: Modifier = Modifier,
     size: Dp = 42.dp,
     iconSize: Dp = 22.dp,
-    tint: Color = LocalPalette.current.tx
+    tint: Color = LocalPalette.current.tx,
+    onClick: () -> Unit
 ) {
     val interactionSource = remember { MutableInteractionSource() }
     val isPressed by interactionSource.collectIsPressedAsState()

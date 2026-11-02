@@ -531,7 +531,7 @@ private fun FacadePlayer(drama: DramaContent.Drama, onClose: () -> Unit) {
     }
 
     fun exitFullscreen() {
-        runCatching { webView.webChromeClient?.onCustomViewHidden() }
+        // Completing the callback runs the client's onHideCustomView.
         if (fsView != null) {
             val cb = fsCallback
             fsView = null

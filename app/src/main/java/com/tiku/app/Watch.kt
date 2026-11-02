@@ -281,9 +281,9 @@ fun WatchPane() {
     }
 
     fun exitFullscreen() {
-        // The chrome client's onHideCustomView clears the state + completes
-        // the callback; the guards below cover the already-cleared case.
-        runCatching { webView.webChromeClient?.onCustomViewHidden() }
+        // Completing the CustomViewCallback makes the chrome client run its
+        // onHideCustomView, which clears the state; the guards below cover
+        // the already-cleared case.
         if (fsView != null) {
             val cb = fsCallback
             fsView = null
