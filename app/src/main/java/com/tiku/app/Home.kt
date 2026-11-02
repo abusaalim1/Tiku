@@ -111,11 +111,21 @@ fun HomeScreen() {
                     },
                 ) { SerifTitle(title, 30.sp) }
                 Row {
-                    GlassIconButton(Icons.Filled.DarkMode, label = "Theme") {
-                        AppState.toast("Light mode is Tikuu’s home")
+                    if (tab == HomeTab.WATCH) {
+                        // ROUND 11 (owner's Tikuu_11 design): the Watch
+                        // header is the serif title + ONE round plus button
+                        // — no moon/theme dummy chrome (the theme is
+                        // light-locked). The plus is real: YouTube home.
+                        GlassIconButton(Icons.Filled.Add, label = "YouTube home") {
+                            WatchHolder.goHome(ctx)
+                        }
+                    } else {
+                        GlassIconButton(Icons.Filled.DarkMode, label = "Theme") {
+                            AppState.toast("Light mode is Tikuu’s home")
+                        }
+                        Spacer(Modifier.width(8.dp))
+                        GlassIconButton(Icons.Filled.Add, label = "New chat") { NewChatSheet.open() }
                     }
-                    Spacer(Modifier.width(8.dp))
-                    GlassIconButton(Icons.Filled.Add, label = "New chat") { NewChatSheet.open() }
                 }
             }
             Box(Modifier.weight(1f)) {
