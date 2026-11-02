@@ -8,8 +8,10 @@ import androidx.core.content.ContextCompat
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -17,6 +19,7 @@ import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.clickable
@@ -24,6 +27,7 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -40,8 +44,6 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
-import androidx.compose.material3.Slider
-import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -54,25 +56,27 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import dev.chrisbanes.haze.hazeSource
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 /**
- * ROUND 12 — the Tik home shell in the owner's design (Tikuu_11): `.top`
- * header, panes entering with the design's `in` motion (fade + 8px rise,
- * .26s, cubic-bezier(.22,.8,.22,1)), and the design's `.nav` — a flat
- * black bar with a hairline top border, the file's own drawn icons and
- * the labels Message / Call / Watch / Setting. All data + behaviour is
- * Build 42's; only the skin changed.
+ * ROUND 13 — the Tik home shell in the owner-supplied liquid-glass design:
+ * per-tab 32sp headers, panes entering with the design's `in` motion
+ * (fade + 8px rise, .26s), and the floating glass bottom nav with its
+ * sliding lens. Panes are the Haze source for the nav's real blur. All
+ * data + behaviour is the real engine's; only the skin changed.
  */
 @Composable
 fun HomeScreen() {
@@ -80,29 +84,20 @@ fun HomeScreen() {
     // QUICK EXIT (lock rule): Back at ChatRoot home re-locks instantly to the facade.
     androidx.activity.compose.BackHandler { ChatSession.quickExit(ctx) }
     val settings = tikuSettings().value
+    val pal = LocalPalette.current
     val tab = AppState.homeTab
     val threads by AppState.threads.collectAsState()
-    val title = when (tab) {
-        HomeTab.CHATS -> "Messages"; HomeTab.CALLS -> "Calls"
-        HomeTab.WATCH -> "Watch"; HomeTab.ME -> "Settings"
-    }
-    Box(Modifier.fillMaxSize().background(Tik.Bg)) {
+    val hazeState = LocalHazeState.current
+    Box(Modifier.fillMaxSize().background(pal.bg)) {
         Column(Modifier.fillMaxSize()) {
-            TikTopBar(
-                title = title,
-                // discreet quick-exit control: long-press the home title re-locks instantly
-                onTitleLongPress = { ChatSession.quickExit(ctx) },
-                trailing = {
-                    when (tab) {
-                        // .btn edit — opens the new-chat sheet (real action).
-                        HomeTab.CHATS -> TikBtn("edit") { NewChatSheet.open() }
-                        // .btn plus — the design's Watch action: YouTube home.
-                        HomeTab.WATCH -> TikBtn("plus") { WatchHolder.goHome(ctx) }
-                        else -> Spacer(Modifier.width(36.dp))
-                    }
-                },
-            )
-            Box(Modifier.weight(1f)) {
+            HomeHeader(tab)
+            // The panes are the Haze SOURCE: the floating glass nav (and the
+            // now-watching bar) blur whatever scrolls beneath them. No
+            // HazeState in preview mode — glass falls back to gradients.
+            Box(
+                Modifier.weight(1f)
+                    .then(if (hazeState != null) Modifier.hazeSource(hazeState) else Modifier),
+            ) {
                 // Screen enter = the design's `in` keyframes: opacity 0 ->
                 // 1 with translateY(8px) -> 0 over .26s on --e.
                 AnimatedContent(
@@ -122,58 +117,127 @@ fun HomeScreen() {
                     }
                 }
             }
-            // .nav — flat bar, bg var(--bg), 1px ln top border, padding 8.
-            Column(Modifier.fillMaxWidth().background(Tik.Bg)) {
-                Box(Modifier.fillMaxWidth().height(1.dp).background(Tik.Ln))
-                Row(
-                    Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    val anyUnread = threads.any { it.unread > 0 }
-                    listOf(
-                        Triple(HomeTab.CHATS, "Message", "msg"),
-                        Triple(HomeTab.CALLS, "Call", "call"),
-                        Triple(HomeTab.WATCH, "Watch", "play"),
-                        Triple(HomeTab.ME, "Setting", "set"),
-                    ).forEach { (t, label, icon) ->
-                        val on = t == tab
-                        val interaction = remember { MutableInteractionSource() }
-                        val pressed by interaction.collectIsPressedAsState()
-                        val iconScale by animateFloatAsState(
-                            if (pressed) 0.88f else if (on) 1.08f else 1f,
-                            tween(280, easing = TikEase), label = "navIconScale")
-                        val iconLift by animateDpAsState(
-                            if (on) (-1).dp else 0.dp,
-                            tween(280, easing = TikEase), label = "navIconLift")
-                        Box(Modifier.weight(1f)) {
-                            Column(
-                                Modifier.fillMaxWidth()
-                                    .clickable(interactionSource = interaction, indication = null) {
-                                        AppState.homeTab = t
-                                    },
-                                horizontalAlignment = Alignment.CenterHorizontally,
-                            ) {
-                                TikIcon(
-                                    icon,
-                                    Modifier.size(24.dp).offset(y = iconLift)
-                                        .graphicsLayer { scaleX = iconScale; scaleY = iconScale },
-                                    tint = if (on) Tik.Tx else Tik.Sub,
-                                    strokeWidth = if (on) 2f else 1.6f,
-                                )
-                                Spacer(Modifier.height(3.dp))
-                                Text(
-                                    label, fontSize = 10.5.sp, fontFamily = Manrope,
-                                    fontWeight = FontWeight.Medium,
-                                    color = if (on) Tik.Tx else Tik.Sub,
-                                )
-                            }
-                            // #nd — the design's unread dot on the Message tab.
-                            if (t == HomeTab.CHATS && anyUnread) {
-                                Box(
-                                    Modifier.align(Alignment.TopEnd).offset(x = (-20).dp)
-                                        .size(7.dp).clip(CircleShape).background(settings.accent),
-                                )
-                            }
+        }
+        BottomGlassNavBar(
+            tab = tab,
+            anyUnread = threads.any { it.unread > 0 },
+            accent = settings.accent,
+            modifier = Modifier.align(Alignment.BottomCenter)
+                .padding(start = 16.dp, end = 16.dp, bottom = 14.dp),
+        )
+    }
+}
+
+/** Per-tab header in the owner design's shape: a 32sp Bold title at the
+ *  left (the inbox shows your own username, like the design) and one glass
+ *  circle action at the right. Long-pressing the title is the discreet
+ *  quick-exit control, as before. */
+@Composable
+private fun HomeHeader(tab: HomeTab) {
+    val ctx = LocalContext.current
+    val pal = LocalPalette.current
+    val titleText = when (tab) {
+        HomeTab.CHATS -> AppState.myUsername.ifEmpty { "Messages" }
+        HomeTab.CALLS -> "Calls"
+        HomeTab.WATCH -> "Watch"
+        HomeTab.ME -> "Settings"
+    }
+    Row(
+        Modifier.fillMaxWidth().padding(start = 22.dp, end = 22.dp, top = 16.dp, bottom = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Row(
+            Modifier.weight(1f)
+                .pointerInput(tab) {
+                    detectTapGestures(onLongPress = { ChatSession.quickExit(ctx) })
+                },
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                titleText, fontFamily = InterTight, fontWeight = FontWeight.Bold,
+                fontSize = 32.sp, letterSpacing = (-1.2).sp, color = pal.tx,
+                maxLines = 1, overflow = TextOverflow.Ellipsis,
+            )
+            if (tab == HomeTab.CHATS) {
+                Spacer(Modifier.width(6.dp))
+                TikIcon("chev", Modifier.size(18.dp), tint = pal.tx, strokeWidth = 2f)
+            }
+        }
+        when (tab) {
+            HomeTab.CHATS -> GlassCircleIconButton("edit") { NewChatSheet.open() }
+            // A call starts from a chat — the sheet is the real people search.
+            HomeTab.CALLS -> GlassCircleIconButton("call") { NewChatSheet.open() }
+            // the design's Watch action: YouTube home (via the pane controller)
+            HomeTab.WATCH -> GlassCircleIconButton("plus") { WatchControl.goHome() }
+            HomeTab.ME -> Spacer(Modifier.width(42.dp))
+        }
+    }
+}
+
+/** The owner design's floating glass nav: a pill with a sliding lens under
+ *  the selected tab (Message / Call / Watch / Setting). Real backdrop blur
+ *  when a HazeState exists; the unread dot on Message is the global accent. */
+@Composable
+private fun BottomGlassNavBar(
+    tab: HomeTab,
+    anyUnread: Boolean,
+    accent: Color,
+    modifier: Modifier = Modifier,
+) {
+    val pal = LocalPalette.current
+    val tabs = listOf(
+        Triple(HomeTab.CHATS, "Message", "msg"),
+        Triple(HomeTab.CALLS, "Call", "call"),
+        Triple(HomeTab.WATCH, "Watch", "play"),
+        Triple(HomeTab.ME, "Setting", "set"),
+    )
+    val selIdx = tabs.indexOfFirst { it.first == tab }.coerceAtLeast(0)
+    BoxWithConstraints(modifier.fillMaxWidth()) {
+        val segW = (maxWidth - 10.dp) / 4
+        val lensX by animateDpAsState(
+            segW * selIdx,
+            spring(dampingRatio = 0.68f, stiffness = 380f), label = "lensX",
+        )
+        Box(
+            Modifier.glassSurface(RoundedCornerShape(999.dp), useLargeGlass = true, blur = true)
+                .padding(5.dp),
+        ) {
+            // sliding lens
+            Box(
+                Modifier.offset(x = lensX).width(segW).height(50.dp)
+                    .clip(RoundedCornerShape(999.dp)).background(pal.lens)
+                    .border(1.dp, pal.gb, RoundedCornerShape(999.dp)),
+            )
+            Row(Modifier.fillMaxWidth()) {
+                tabs.forEach { (t, label, icon) ->
+                    val on = t == tab
+                    Box(Modifier.weight(1f).height(50.dp)) {
+                        Column(
+                            Modifier.fillMaxSize()
+                                .clickable(
+                                    interactionSource = remember { MutableInteractionSource() },
+                                    indication = null,
+                                ) { AppState.homeTab = t },
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.Center,
+                        ) {
+                            TikIcon(
+                                icon, Modifier.size(24.dp),
+                                tint = if (on) pal.ac else pal.sub,
+                                strokeWidth = if (on) 2f else 1.6f,
+                            )
+                            Text(
+                                label, fontSize = 10.5.sp, fontFamily = InterTight,
+                                fontWeight = FontWeight.Medium,
+                                color = if (on) pal.ac else pal.sub,
+                            )
+                        }
+                        if (t == HomeTab.CHATS && anyUnread) {
+                            Box(
+                                Modifier.align(Alignment.TopCenter).offset(x = 13.dp, y = 5.dp)
+                                    .size(9.dp).clip(CircleShape).background(accent)
+                                    .border(2.dp, pal.bg, CircleShape),
+                            )
                         }
                     }
                 }
@@ -188,36 +252,37 @@ fun ChatsPane() {
     var query by remember { mutableStateOf("") }
     val threads by AppState.threads.collectAsState()
     val settings = tikuSettings().value
-    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 84.dp)) {
+    val pal = LocalPalette.current
+    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 116.dp)) {
         item {
-            // .search — margin 8/18/14, bg s2, r12, padding 10/12, icon 18.
+            // .search — the design's glass search pill (r18, h46).
             Row(
-                Modifier.fillMaxWidth().padding(start = 18.dp, end = 18.dp, top = 8.dp, bottom = 14.dp)
-                    .clip(RoundedCornerShape(12.dp)).background(Tik.S2)
-                    .padding(horizontal = 12.dp, vertical = 10.dp),
+                Modifier.fillMaxWidth().padding(start = 14.dp, end = 14.dp, top = 4.dp, bottom = 10.dp)
+                    .glassSurface(RoundedCornerShape(18.dp))
+                    .height(46.dp)
+                    .padding(horizontal = 14.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                TikIcon("srch", Modifier.size(18.dp), tint = Tik.Sub)
-                Spacer(Modifier.width(8.dp))
+                TikIcon("srch", Modifier.size(19.dp), tint = pal.sub)
+                Spacer(Modifier.width(9.dp))
                 BasicTextField(
                     value = query, onValueChange = { query = it },
-                    textStyle = TextStyle(fontSize = 15.sp, fontFamily = Manrope, color = Tik.Tx),
+                    textStyle = TextStyle(fontSize = 15.sp, fontFamily = InterTight, color = pal.tx),
                     cursorBrush = SolidColor(settings.accent), singleLine = true,
                     modifier = Modifier.weight(1f),
                     decorationBox = { inner ->
-                        if (query.isEmpty()) Text("Search", fontSize = 15.sp, color = Tik.Sub, fontFamily = Manrope)
+                        if (query.isEmpty()) Text("Search", fontSize = 15.sp, color = pal.sub, fontFamily = InterTight)
                         inner()
                     },
                 )
             }
             MomentsRow()
-            // .sec — the section header above the rows ("Messages" + the
-            // design's Requests link; the app has no requests surface, so
-            // the header stands alone).
+            // .sec — section header (the design's Requests link has no real
+            // surface in this app, so the header stands alone).
             Text(
-                "Messages", fontSize = 15.sp, fontFamily = Manrope, fontWeight = FontWeight.SemiBold,
-                color = Tik.Tx,
-                modifier = Modifier.padding(start = 18.dp, end = 18.dp, top = 12.dp, bottom = 4.dp),
+                "Messages", fontSize = 17.sp, fontFamily = InterTight, fontWeight = FontWeight.SemiBold,
+                color = pal.tx,
+                modifier = Modifier.padding(start = 24.dp, end = 24.dp, top = 14.dp, bottom = 2.dp),
             )
         }
         // the list filter matches the DISPLAY name (nickname when set) and
@@ -244,19 +309,21 @@ fun MomentsRow() {
     val scope = rememberCoroutineScope()
     val threads by AppState.threads.collectAsState()
     val settings = tikuSettings().value
+    val pal = LocalPalette.current
     val people = if (Config.PREVIEW_UI_ONLY) PreviewStore.people else threads.map { it.person }
-    // Design .nt metrics: 72-wide items, 68px round avatars, 12px sub
-    // labels. The 2dp accent ring is the app's moments affordance (the
-    // mock's note-bubble has no app equivalent) — kept, in accent.
+    // Moments (the app's stories) in the design's notes-row metrics:
+    // 74-wide items, 68px round avatars inside a 2dp accent ring with the
+    // page-colour gap, 12px sub labels. (The design's note-text bubble has
+    // no data source here — dropped, per the no-fake-data rule.)
     Row(
         Modifier.fillMaxWidth().padding(bottom = 2.dp)
             .horizontalScroll(rememberScrollState())
-            .padding(horizontal = 18.dp),
+            .padding(horizontal = 14.dp),
         horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         people.forEachIndexed { i, p ->
             Column(
-                Modifier.width(72.dp)
+                Modifier.width(74.dp)
                     .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {
                         scope.launch { StoryHelper.open(p, i) }
                     },
@@ -265,12 +332,13 @@ fun MomentsRow() {
                 Box(
                     Modifier.size(68.dp)
                         .border(2.dp, settings.accent, CircleShape)
-                        .padding(3.dp),
+                        .background(pal.bg, CircleShape)
+                        .padding(2.dp),
                 ) {
-                    AvatarBox(p, 62.dp, 31.dp)
+                    AvatarBox(p, 60.dp, 30.dp)
                 }
                 Spacer(Modifier.height(6.dp))
-                Text(p.name.split(" ").first(), fontSize = 12.sp, color = Tik.Sub, fontFamily = Manrope,
+                Text(p.name.split(" ").first(), fontSize = 12.sp, color = pal.sub, fontFamily = InterTight,
                     maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
         }
@@ -280,6 +348,7 @@ fun MomentsRow() {
 @Composable
 fun ChatRow(th: ChatThread) {
     val settings = tikuSettings().value
+    val pal = LocalPalette.current
     val last = th.messages.lastOrNull { !it.deletedForMe }
     val preview = when {
         last == null -> ""
@@ -289,17 +358,18 @@ fun ChatRow(th: ChatThread) {
         last.kind == MsgKind.CALL -> callEventLabel(last, last.callMine)
         else -> last.text
     }
-    val interaction = remember { MutableInteractionSource() }
-    val pressed by interaction.collectIsPressedAsState()
-    // .row — gap 14, padding 9/18, :active bg #ffffff0a.
+    // The design's .lrow: a floating glass card (margin 14/6, r26, padding
+    // 14/11); the time folds into the subtitle ("preview · 2h"), and the
+    // unread mark is a 10dp accent dot at the row's end.
     Row(
         Modifier.fillMaxWidth()
-            .background(if (pressed) Tik.RowActive else Color.Transparent)
-            .clickable(interactionSource = interaction, indication = null) {
+            .padding(horizontal = 14.dp, vertical = 6.dp)
+            .glassSurface(RoundedCornerShape(26.dp))
+            .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {
                 AppState.repo.openThread(th.id)
                 AppState.go(Screen.Chat(th.id))
             }
-            .padding(horizontal = 18.dp, vertical = 9.dp),
+            .padding(horizontal = 14.dp, vertical = 11.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         AvatarBox(th.person, 54.dp, 27.dp, 22f)
@@ -307,15 +377,15 @@ fun ChatRow(th: ChatThread) {
         Column(Modifier.weight(1f)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 // nickname replaces the profile name in the list too
-                Text(th.displayName, fontWeight = FontWeight.Medium, fontSize = 15.sp, fontFamily = Manrope, color = Tik.Tx,
+                Text(th.displayName, fontWeight = FontWeight.SemiBold, fontSize = 15.sp, fontFamily = InterTight, color = pal.tx,
                     maxLines = 1, overflow = TextOverflow.Ellipsis)
                 if (th.muted) {
                     Spacer(Modifier.width(6.dp))
-                    TikIcon("bellOff", Modifier.size(14.dp), tint = Tik.Sub)
+                    TikIcon("bellOff", Modifier.size(14.dp), tint = pal.sub)
                 }
                 if (th.pinned) {
                     Spacer(Modifier.width(6.dp))
-                    TikIcon("pin", Modifier.size(12.dp), tint = Tik.Sub)
+                    TikIcon("pin", Modifier.size(12.dp), tint = pal.sub)
                 }
             }
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -323,7 +393,7 @@ fun ChatRow(th: ChatThread) {
                 // when my latest message was seen; hidden while MY read
                 // receipts are off in this chat (per-chat receiptsOff).
                 if (last?.me == true && last.kind != MsgKind.CALL && last.seenByPeer && !th.receiptsOffMine) {
-                    Text("Seen", fontSize = 13.5.sp, fontWeight = FontWeight.Medium, color = Tik.Sub, fontFamily = Manrope)
+                    Text("Seen", fontSize = 13.5.sp, fontWeight = FontWeight.Medium, color = pal.sub, fontFamily = InterTight)
                     Spacer(Modifier.width(5.dp))
                 }
                 val pvIcon = when {
@@ -333,28 +403,26 @@ fun ChatRow(th: ChatThread) {
                     else -> null
                 }
                 if (pvIcon != null) {
-                    TikIcon(pvIcon, Modifier.size(14.dp), tint = Tik.Sub)
+                    TikIcon(pvIcon, Modifier.size(14.dp), tint = pal.sub)
                     Spacer(Modifier.width(3.dp))
                 }
                 Text(
-                    preview, fontSize = 13.5.sp, fontFamily = Manrope,
+                    if (preview.isEmpty()) th.time else if (th.time.isEmpty()) preview else "$preview · ${th.time}",
+                    fontSize = 13.5.sp, fontFamily = InterTight,
                     fontWeight = if (th.unread > 0) FontWeight.Medium else FontWeight.Normal,
-                    color = if (th.unread > 0) Tik.Tx else Tik.Sub,
+                    color = if (th.unread > 0) pal.tx else pal.sub,
                     maxLines = 1, overflow = TextOverflow.Ellipsis,
                 )
             }
         }
-        Column(horizontalAlignment = Alignment.End) {
-            Text(th.time, fontSize = 12.sp, color = Tik.Sub, fontFamily = Manrope)
-            if (th.unread > 0) {
-                Spacer(Modifier.height(5.dp))
-                // .dot — the design's unread mark: an 8px accent dot
-                // (tinted with the chat's own theme accent when it has one).
-                val dotAccent = th.themeAccent?.let {
-                    TikuTokens.Accents[it.coerceIn(0, TikuTokens.Accents.lastIndex)].second
-                } ?: settings.accent
-                Box(Modifier.size(8.dp).clip(CircleShape).background(dotAccent))
-            }
+        if (th.unread > 0) {
+            Spacer(Modifier.width(10.dp))
+            // .dot — the design's unread mark: a 10dp accent dot (tinted
+            // with the chat's own couple-theme accent when it has one).
+            val dotAccent = th.themeAccent?.let {
+                COUPLE_THEMES[ThemeCodec.toCoupleIndex(it)].ac
+            } ?: settings.accent
+            Box(Modifier.size(10.dp).clip(CircleShape).background(dotAccent))
         }
     }
 }
@@ -372,7 +440,6 @@ fun CallsPane() {
         threads.flatMap { th -> th.messages.filter { it.kind == MsgKind.CALL }.map { th to it } }
             .sortedByDescending { it.second.tsMs }
     }
-    // .sec header, as in the design's Calls screen.
     Column(Modifier.fillMaxSize()) {
         if (events.isEmpty()) {
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -385,7 +452,7 @@ fun CallsPane() {
             }
             return
         }
-        LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 84.dp, top = 6.dp)) {
+        LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 116.dp, top = 6.dp)) {
             items(events, key = { (th, m) -> th.id + "_" + m.id }) { (th, m) -> CallHistoryRow(th, m) }
         }
     }
@@ -393,36 +460,35 @@ fun CallsPane() {
 
 @Composable
 fun CallHistoryRow(th: ChatThread, m: TikuMessage) {
-    val settings = tikuSettings().value
+    val pal = LocalPalette.current
     val startCall = rememberCallStarter()
     // missed = an incoming call that never got answered (my perspective)
     val missed = m.callOutcome == "noanswer" && !m.callMine
-    val interaction = remember { MutableInteractionSource() }
-    val pressed by interaction.collectIsPressedAsState()
-    // .row metrics; the design colours a missed call's name with --ac and
-    // puts a call/video .btn at the row's end (here: really starts it).
+    // Design calls row: glass card like the inbox rows; a missed call's
+    // name takes the accent, and the trailing button really starts the call.
     Row(
         Modifier.fillMaxWidth()
-            .background(if (pressed) Tik.RowActive else Color.Transparent)
-            .clickable(interactionSource = interaction, indication = null) {
+            .padding(horizontal = 14.dp, vertical = 6.dp)
+            .glassSurface(RoundedCornerShape(26.dp))
+            .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {
                 AppState.repo.openThread(th.id)
                 AppState.go(Screen.Chat(th.id))
             }
-            .padding(horizontal = 18.dp, vertical = 9.dp),
+            .padding(horizontal = 14.dp, vertical = 11.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         AvatarBox(th.person, 50.dp, 25.dp, 20f)
         Spacer(Modifier.width(14.dp))
         Column(Modifier.weight(1f)) {
-            Text(th.displayName, fontWeight = FontWeight.Medium, fontSize = 15.sp, fontFamily = Manrope,
-                color = if (missed) settings.accent else Tik.Tx,
+            Text(th.displayName, fontWeight = FontWeight.SemiBold, fontSize = 15.sp, fontFamily = InterTight,
+                color = if (missed) pal.ac else pal.tx,
                 maxLines = 1, overflow = TextOverflow.Ellipsis)
             // callEventLabel is perspective-correct and carries the
             // duration for ended calls ("Call ended · 12:34").
             val label = callEventLabel(m, m.callMine)
             Text(
                 if (label.contains(m.time)) label else "$label · ${m.time}",
-                fontSize = 13.5.sp, color = Tik.Sub, fontFamily = Manrope,
+                fontSize = 13.5.sp, color = pal.sub, fontFamily = InterTight,
                 maxLines = 1, overflow = TextOverflow.Ellipsis,
             )
         }
@@ -435,18 +501,17 @@ fun CallHistoryRow(th: ChatThread, m: TikuMessage) {
 // ================= Me pane =================
 @Composable
 fun MePane() {
-    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 84.dp)) {
+    val pal = LocalPalette.current
+    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 116.dp)) {
         item {
-            // .prof — avatar 60 round, name 17 w600, sub 13, .ob edit button.
-            val interaction = remember { MutableInteractionSource() }
-            val pressed by interaction.collectIsPressedAsState()
-            val obScale by animateFloatAsState(if (pressed) 0.95f else 1f, tween(160, easing = TikEase), label = "obScale")
+            // .prof — avatar 60 round, name 18 w600, sub "… · Encrypted",
+            // and the design's gradient "Edit profile" pill.
             Row(
-                Modifier.fillMaxWidth().padding(start = 18.dp, end = 18.dp, top = 6.dp, bottom = 10.dp),
+                Modifier.fillMaxWidth().padding(start = 22.dp, end = 22.dp, top = 10.dp, bottom = 16.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Box(
-                    Modifier.size(60.dp).clip(CircleShape).background(Tik.S2),
+                    Modifier.size(60.dp).clip(CircleShape).background(pal.s2),
                     contentAlignment = Alignment.Center,
                 ) {
                     val bmp = AppState.myAvatar
@@ -459,21 +524,20 @@ fun MePane() {
                 }
                 Spacer(Modifier.width(14.dp))
                 Column(Modifier.weight(1f)) {
-                    Text("@" + AppState.myUsername.ifEmpty { "you" }, fontFamily = Manrope,
-                        fontWeight = FontWeight.SemiBold, fontSize = 17.sp, color = Tik.Tx)
-                    Text("Encrypted · Verified", fontSize = 13.sp, color = Tik.Sub, fontFamily = Manrope)
+                    Text(AppState.myUsername.ifEmpty { "you" }, fontFamily = InterTight,
+                        fontWeight = FontWeight.SemiBold, fontSize = 18.sp, color = pal.tx)
+                    Text("Encrypted", fontSize = 13.sp, color = pal.sub, fontFamily = InterTight)
                 }
                 Box(
-                    Modifier.graphicsLayer { scaleX = obScale; scaleY = obScale }
-                        .clip(RoundedCornerShape(9.dp))
-                        .border(1.dp, Tik.OutlineBtn, RoundedCornerShape(9.dp))
-                        .clickable(interactionSource = interaction, indication = null) {
+                    Modifier.clip(RoundedCornerShape(999.dp))
+                        .background(pal.buttonGradient)
+                        .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {
                             EditProfileSheet.open()
                         }
-                        .padding(horizontal = 16.dp, vertical = 7.dp),
+                        .padding(horizontal = 18.dp, vertical = 9.dp),
                 ) {
-                    Text("Edit profile", fontSize = 13.5.sp, fontWeight = FontWeight.Medium,
-                        fontFamily = Manrope, color = Tik.Tx)
+                    Text("Edit profile", fontSize = 13.5.sp, fontWeight = FontWeight.SemiBold,
+                        fontFamily = InterTight, color = Color.White)
                 }
             }
         }
@@ -498,6 +562,7 @@ fun MePane() {
 @Composable
 fun OwnerSection() {
     val ctx = LocalContext.current
+    val pal = LocalPalette.current
     val permLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { }
     TikSectionHeader("Owner")
     TikGroup {
@@ -544,74 +609,75 @@ fun OwnerSection() {
                 ChatSession.lock(ctx)
             },
         ) {
-            TikIcon("chevR", Modifier.size(18.dp), tint = Tik.Sub)
+            TikIcon("chevR", Modifier.size(18.dp), tint = pal.sub)
         }
     }
 }
 
 // ================= Settings groups =================
 /**
- * ROUND 12 settings map — the design's drawSet rows, but ONLY rows backed
- * by real, wired functionality (each toggle below is read by the engine):
- *   Appearance — accent / wallpaper (design ACC + WALL swatches), couple
- *     theme, text size (design range).
+ * ROUND 13 settings map — the owner design's Settings groups, but ONLY
+ * rows backed by real, wired functionality (each control below is read
+ * by the engine):
+ *   Appearance — Mode (dark/light), Colour theme (the 5 couple themes),
+ *     chat wallpaper, couple-theme preset, font size (design slider row).
  *   Privacy — app lock, read receipts, last seen (heartbeat honours it),
  *     block screenshots (FLAG_SECURE), hide typing (engine honours it).
  *   Notifications — sounds + vibration (both drive the call feedback).
  *   Data — clear cache. Account — change password (real re-wrap flow),
  *     log out (danger, as in the design).
  *   Additional — camera / speaker defaults (RTC honours both), enter to send.
- * Skipped design rows (listed in the round report): Dark mode (the Tik
- * section IS the design's dark), Disappearing messages, Message preview,
- * Quiet hours, Data saver, Auto-download, Linked devices — unplumbed or
- * banned by the owner's hard laws.
+ * Skipped design rows (listed in the round report): Disappearing messages,
+ * Message preview, Quiet hours, Data saver, Auto-download, Linked devices,
+ * Blocked accounts — unplumbed or banned by the owner's hard laws.
  */
 @Composable
 fun SettingsGroups() {
     val settings by SettingsStore.state.collectAsState()
     val scope = rememberCoroutineScope()
     val ctx = LocalContext.current
+    val pal = LocalPalette.current
 
     TikSectionHeader("Appearance")
     TikGroup {
-        TikInfoRow("Accent", "Pick your glow", first = true) {
-            TikSwatches(
-                colors = (0..4).map { TikuTokens.Accents[it].second },
+        TikInfoRow("Mode", "Dark or light look", first = true) {
+            ModeSegmentedToggle(
+                mode = if (settings.darkMode) "dark" else "light",
+            ) { m -> SettingsStore.setDarkMode(m == "dark") }
+        }
+        TikInfoRow("Colour theme", "One theme for all your chats") {
+            ThemeSwatches(
                 selected = settings.accentIdx,
                 onPick = { SettingsStore.setAccent(it); AppState.toast("Updated") },
             )
         }
         TikInfoRow("Chat wallpaper", "Behind your messages") {
             TikSwatches(
-                colors = Tik.WallColors,
+                colors = WallpaperMode.entries.map { mode ->
+                    val c = wallTint(mode, settings.darkMode)
+                    if (c == Color.Unspecified) pal.bg else c
+                },
                 selected = settings.wallpaper.ordinal,
                 onPick = { SettingsStore.setWallpaper(it); AppState.toast("Updated") },
             )
         }
-        TikInfoRow("Couple theme", "Soft rose glow in chats") {
-            // Derived state — ON exactly when the rose accent AND the
-            // couple wallpaper are both active, however they were set, so
-            // this toggle and the swatch rows never disagree.
-            val coupleOn = settings.accentIdx == TikuTokens.Accents.lastIndex &&
+        TikInfoRow("Couple theme", "Rose Petal with the heart wallpaper") {
+            // Derived state — ON exactly when Rose Petal AND the couple
+            // wallpaper are both active, however they were set, so this
+            // toggle and the rows above never disagree.
+            val coupleOn = settings.accentIdx == 0 &&
                 settings.wallpaper == WallpaperMode.COUPLE
             ToggleSwitch(coupleOn) { on ->
                 SettingsStore.setCoupleTheme(on)
                 AppState.toast("Couple theme " + if (on) "on" else "off")
             }
         }
-        TikInfoRow("Text size", "Message font size") {
-            Slider(
-                value = settings.textSizeSp,
-                onValueChange = { SettingsStore.setTextSize(it) },
-                valueRange = 13f..20f,
-                modifier = Modifier.width(110.dp),
-                colors = SliderDefaults.colors(
-                    thumbColor = settings.accent,
-                    activeTrackColor = settings.accent,
-                    inactiveTrackColor = Tik.TrackOff,
-                ),
-            )
-        }
+        // the design's font-size slider row (its own divider + padding)
+        Box(Modifier.fillMaxWidth().padding(horizontal = 18.dp).height(1.dp).background(pal.ln))
+        FontSizeSliderRow(
+            fontSizeSp = settings.textSizeSp,
+            onFontSizeChange = { SettingsStore.setTextSize(it) },
+        )
     }
 
     TikSectionHeader("Privacy")
@@ -633,7 +699,7 @@ fun SettingsGroups() {
     TikGroup {
         TikInfoRow("Clear cache", "Frees up 128 MB", first = true,
             onClick = { onSettingTap("cc", "Clear cache", settings, scope, ctx) }) {
-            TikIcon("chevR", Modifier.size(18.dp), tint = Tik.Sub)
+            TikIcon("chevR", Modifier.size(18.dp), tint = pal.sub)
         }
     }
 
@@ -641,7 +707,7 @@ fun SettingsGroups() {
     TikGroup {
         TikInfoRow("Change password", "Update your lock password", first = true,
             onClick = { onSettingTap("cp", "Change password", settings, scope, ctx) }) {
-            TikIcon("chevR", Modifier.size(18.dp), tint = Tik.Sub)
+            TikIcon("chevR", Modifier.size(18.dp), tint = pal.sub)
         }
         TikInfoRow("Log out", null, danger = true,
             onClick = { onSettingTap("lo", "Log out", settings, scope, ctx) })
@@ -652,6 +718,33 @@ fun SettingsGroups() {
         TikSettingsToggle("Camera on for video calls", "Front camera starts enabled on outgoing calls", "vcd", first = true)
         TikSettingsToggle("Speaker for video calls", "Audio through the speaker on video calls", "vsp")
         TikSettingsToggle("Enter to send", "Pressing Enter sends the message", "ets")
+    }
+}
+
+/** Couple-theme swatches: gradient discs (ac -> ac2) for the 5 themes,
+ *  ring on the selected one (the design's theme picker, compact form). */
+@Composable
+private fun ThemeSwatches(selected: Int, onPick: (Int) -> Unit) {
+    val pal = LocalPalette.current
+    Row(horizontalArrangement = Arrangement.spacedBy(9.dp)) {
+        COUPLE_THEMES.forEachIndexed { i, th ->
+            val isSel = i == selected
+            Box(
+                Modifier.size(28.dp)
+                    .then(if (isSel) Modifier.border(2.dp, pal.tx, CircleShape) else Modifier)
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null,
+                    ) { onPick(i) },
+                contentAlignment = Alignment.Center,
+            ) {
+                Box(
+                    Modifier.size(24.dp).clip(CircleShape)
+                        .background(Brush.linearGradient(listOf(th.ac, th.ac2)))
+                        .border(1.dp, pal.ln, CircleShape),
+                )
+            }
+        }
     }
 }
 
@@ -715,24 +808,24 @@ object NewChatSheet {
                 searching = false
             }
             val settings = tikuSettings().value
+            val pal = LocalPalette.current
             TikSheetTitle("New chat")
-            // .fld search field
+            // search field (design .fld2: s2 fill, r16)
             Box(
                 Modifier.fillMaxWidth().padding(horizontal = 18.dp)
-                    .clip(RoundedCornerShape(12.dp)).background(Tik.Bg)
-                    .border(1.dp, Tik.Ln, RoundedCornerShape(12.dp))
-                    .padding(horizontal = 14.dp, vertical = 12.dp),
+                    .clip(RoundedCornerShape(16.dp)).background(pal.s2)
+                    .padding(horizontal = 16.dp, vertical = 14.dp),
                 contentAlignment = Alignment.CenterStart,
             ) {
-                Text("@", color = Tik.Sub, fontSize = 15.sp, fontFamily = Manrope)
+                Text("@", color = pal.sub, fontSize = 15.sp, fontFamily = InterTight)
                 BasicTextField(
                     value = q,
                     onValueChange = { q = it.take(30) },
-                    textStyle = TextStyle(fontSize = 15.sp, fontFamily = Manrope, color = Tik.Tx),
+                    textStyle = TextStyle(fontSize = 15.sp, fontFamily = InterTight, color = pal.tx),
                     cursorBrush = SolidColor(settings.accent), singleLine = true,
                     modifier = Modifier.fillMaxWidth().padding(start = 16.dp),
                     decorationBox = { inner ->
-                        if (q.isEmpty()) Text("name or username", fontSize = 15.sp, color = Tik.Sub, fontFamily = Manrope)
+                        if (q.isEmpty()) Text("name or username", fontSize = 15.sp, color = pal.sub, fontFamily = InterTight)
                         inner()
                     },
                 )
@@ -741,13 +834,13 @@ object NewChatSheet {
             when {
                 q.isBlank() ->
                     Text("Start typing — matches appear as you type. You don't need the exact username.",
-                        fontSize = 13.sp, color = Tik.Sub, fontFamily = Manrope,
+                        fontSize = 13.sp, color = pal.sub, fontFamily = InterTight,
                         modifier = Modifier.padding(horizontal = 18.dp))
                 searching && results.isEmpty() ->
-                    Text("Searching…", fontSize = 13.sp, color = Tik.Sub, fontFamily = Manrope,
+                    Text("Searching…", fontSize = 13.sp, color = pal.sub, fontFamily = InterTight,
                         modifier = Modifier.padding(horizontal = 18.dp))
                 results.isEmpty() ->
-                    Text("No one found for “${q.trim()}”", fontSize = 13.sp, color = Tik.Sub, fontFamily = Manrope,
+                    Text("No one found for “${q.trim()}”", fontSize = 13.sp, color = pal.sub, fontFamily = InterTight,
                         modifier = Modifier.padding(horizontal = 18.dp))
             }
             results.forEach { p ->
@@ -764,8 +857,8 @@ object NewChatSheet {
                     AvatarBox(p, 54.dp, 27.dp, 22f)
                     Spacer(Modifier.width(14.dp))
                     Column(Modifier.weight(1f)) {
-                        Text(p.name, fontWeight = FontWeight.Medium, fontSize = 15.sp, fontFamily = Manrope, color = Tik.Tx)
-                        Text("@" + p.username, fontSize = 13.5.sp, color = Tik.Sub, fontFamily = Manrope)
+                        Text(p.name, fontWeight = FontWeight.Medium, fontSize = 15.sp, fontFamily = InterTight, color = pal.tx)
+                        Text("@" + p.username, fontSize = 13.5.sp, color = pal.sub, fontFamily = InterTight)
                     }
                 }
             }
@@ -795,6 +888,7 @@ object EditProfileSheet {
             var err by remember { mutableStateOf("") }
             val changed = username != AppState.myUsername
             val settings = tikuSettings().value
+            val pal = LocalPalette.current
 
             val pick = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
                 if (uri != null) {
@@ -845,7 +939,7 @@ object EditProfileSheet {
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Box(
-                    Modifier.size(54.dp).clip(CircleShape).background(Tik.S1),
+                    Modifier.size(54.dp).clip(CircleShape).background(pal.s1),
                     contentAlignment = Alignment.Center,
                 ) {
                     val bmp = AppState.myAvatar
@@ -858,8 +952,8 @@ object EditProfileSheet {
                 }
                 Spacer(Modifier.width(13.dp))
                 Column {
-                    Text("Change photo", fontWeight = FontWeight.SemiBold, fontSize = 16.sp, fontFamily = Manrope, color = Tik.Tx)
-                    Text("Shown on your profile", fontSize = 13.sp, color = Tik.Sub, fontFamily = Manrope)
+                    Text("Change photo", fontWeight = FontWeight.SemiBold, fontSize = 16.sp, fontFamily = InterTight, color = pal.tx)
+                    Text("Shown on your profile", fontSize = 13.sp, color = pal.sub, fontFamily = InterTight)
                 }
             }
             Spacer(Modifier.height(16.dp))
@@ -879,39 +973,38 @@ object EditProfileSheet {
                 }
             }
             Spacer(Modifier.height(16.dp))
-            // username field — .fld skin, same input filter as signup
+            // username field — design .fld2 skin, same input filter as signup
             Box(
                 Modifier.fillMaxWidth().padding(horizontal = 18.dp)
-                    .clip(RoundedCornerShape(12.dp)).background(Tik.Bg)
-                    .border(1.dp, Tik.Ln, RoundedCornerShape(12.dp)),
+                    .clip(RoundedCornerShape(16.dp)).background(pal.s2),
                 contentAlignment = Alignment.CenterStart,
             ) {
-                Text("@", color = Tik.Sub, fontSize = 15.sp, fontFamily = Manrope,
-                    modifier = Modifier.padding(start = 14.dp))
+                Text("@", color = pal.sub, fontSize = 15.sp, fontFamily = InterTight,
+                    modifier = Modifier.padding(start = 16.dp))
                 BasicTextField(
                     value = username,
                     onValueChange = { raw ->
                         username = raw.lowercase().filter { it.isLetterOrDigit() || it == '.' || it == '_' }.take(20)
                     },
-                    textStyle = TextStyle(fontSize = 15.sp, fontFamily = Manrope, color = Tik.Tx),
+                    textStyle = TextStyle(fontSize = 15.sp, fontFamily = InterTight, color = pal.tx),
                     cursorBrush = SolidColor(settings.accent),
                     singleLine = true,
-                    modifier = Modifier.fillMaxWidth().padding(start = 32.dp, end = 14.dp, top = 12.dp, bottom = 12.dp),
+                    modifier = Modifier.fillMaxWidth().padding(start = 34.dp, end = 16.dp, top = 14.dp, bottom = 14.dp),
                     decorationBox = { inner ->
-                        if (username.isEmpty()) Text("username", fontSize = 15.sp, fontFamily = Manrope, color = Tik.Sub)
+                        if (username.isEmpty()) Text("username", fontSize = 15.sp, fontFamily = InterTight, color = pal.sub)
                         inner()
                     },
                 )
             }
             Spacer(Modifier.height(6.dp))
-            Text(hint, fontSize = 13.sp, color = if (available) settings.accent else Tik.Sub, fontFamily = Manrope,
+            Text(hint, fontSize = 13.sp, color = if (available) settings.accent else pal.sub, fontFamily = InterTight,
                 modifier = Modifier.padding(horizontal = 18.dp))
             Text("Friends find you by your username — chats and history are not affected.",
-                fontSize = 13.sp, color = Tik.Sub, fontFamily = Manrope,
+                fontSize = 13.sp, color = pal.sub, fontFamily = InterTight,
                 modifier = Modifier.padding(horizontal = 18.dp))
             if (err.isNotEmpty()) {
                 Spacer(Modifier.height(6.dp))
-                Text(err, fontSize = 13.sp, color = Tik.Danger, fontFamily = Manrope,
+                Text(err, fontSize = 13.sp, color = pal.danger, fontFamily = InterTight,
                     modifier = Modifier.padding(horizontal = 18.dp))
             }
             Spacer(Modifier.height(14.dp))
@@ -949,6 +1042,7 @@ object ChangePasswordSheet {
         var busy by mutableStateOf(false)
         var err by mutableStateOf("")
         AppState.sheet {
+            val pal = LocalPalette.current
             TikSheetTitle("Change password")
             Box(Modifier.padding(horizontal = 18.dp)) { PasswordField(cur, { cur = it }, "Current password", dark = true) }
             Spacer(Modifier.height(10.dp))
@@ -956,7 +1050,7 @@ object ChangePasswordSheet {
             Spacer(Modifier.height(10.dp))
             Box(Modifier.padding(horizontal = 18.dp)) { PasswordField(p2, { p2 = it }, "Confirm new password", dark = true) }
             Spacer(Modifier.height(6.dp))
-            if (err.isNotEmpty()) Text(err, fontSize = 13.sp, color = Tik.Danger, fontFamily = Manrope,
+            if (err.isNotEmpty()) Text(err, fontSize = 13.sp, color = pal.danger, fontFamily = InterTight,
                 modifier = Modifier.padding(horizontal = 18.dp))
             Spacer(Modifier.height(10.dp))
             TikPrimaryButton(if (busy) "Updating…" else "Update password",

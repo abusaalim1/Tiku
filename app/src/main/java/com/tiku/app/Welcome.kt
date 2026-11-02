@@ -56,11 +56,11 @@ import kotlinx.coroutines.delay
 import kotlin.random.Random
 
 private val Scenes = listOf(
-    Triple("Physics MCQs, fresh every day", "Class 11 • NCERT — daily practice, notes and formulas in one quiet place.", 0),
-    Triple("Chemistry important questions", "Chapter-wise key points, written for quick revision.", 1),
-    Triple("Notes • Formulas • Diagrams", "Physics • Chemistry • Biology • Maths — your Class 11 companion.", 2),
+    Triple("Queen of Tears, now in Hindi", "Korean love stories dubbed in Hindi & Bangla — every episode in one quiet place.", 0),
+    Triple("Love stories to read", "Short romantic stories from Seoul — perfect between episodes.", 1),
+    Triple("Photos • Moments • Butterflies", "Cute, romantic stills and scenes from the dramas you love.", 2),
 )
-private const val PLAIN_LINE = "Physics • Chapter 4 — key points"
+private const val PLAIN_LINE = "Queen of Tears • Ep 2 — Hindi Dubbed"
 private const val RND_CHARS = "▓▒░#@%&*ø§¤"
 
 @Composable
@@ -208,14 +208,14 @@ fun WelcomeScreen(onGoogleClick: () -> Unit) {
                 ) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         if (Scenes[sceneIdx].third == 2) {
-                            EmojiArt("📘", 18.dp)
+                            EmojiArt("❤️", 18.dp)
                             Spacer(Modifier.width(8.dp))
                         }
                         Text(
                             text = when (Scenes[sceneIdx].third) {
                                 0 -> PLAIN_LINE
                                 1 -> cipherText
-                                else -> "notes · ∫ formulas · △ diagrams"
+                                else -> "love · fate · first snow"
                             },
                             fontFamily = SerifItalic,
                             fontSize = 17.sp,
@@ -358,7 +358,7 @@ fun WelcomeScreen(onGoogleClick: () -> Unit) {
                 Spacer(Modifier.height(12.dp))
 
                 Text(
-                    text = "Continue with Google to sync your chats, notes & progress securely.",
+                    text = "Continue with Google to sync your journal, favourites & progress securely.",
                     fontSize = 12.sp,
                     color = TikuTokens.Muted,
                     fontFamily = Manrope,

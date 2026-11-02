@@ -16,15 +16,11 @@ import kotlinx.coroutines.launch
 
 /** Screens, mirroring the prototype's sections. Chat/Call/Story overlay Home. */
 sealed interface Screen {
-    // ---- study facade (default surface — what the APK opens to) ----
+    // ---- K-drama facade (default surface — what the APK opens to) ----
     data object Facade : Screen
-    data class StudySubject(val name: String) : Screen
-    data class StudyChapter(val subject: String, val index: Int) : Screen
-    data object StudyNotes : Screen
-    data object StudyTimer : Screen
-    data object StudyRevision : Screen
-    data object StudyFormulas : Screen
-    /** Password gate behind the discreet book row on the Chemistry page. */
+    /** Password gate behind the discreet "For You, Always" row on the
+     *  facade's For You page (ROUND 13; the facade's sub-surfaces — tabs,
+     *  player, reader, viewer — are facade-local state, not Screens). */
     data object TikGate : Screen
     // ---- ChatRoot (hidden behind the gate) ----
     data object Welcome : Screen
@@ -147,11 +143,12 @@ object AppState {
         else -> false
     }
 
-    /** True for any study-facade destination (the study surface; never gated). */
+    /** True for the K-drama facade destination (the outer surface; never
+     *  gated). Every facade sub-surface lives inside Screen.Facade as
+     *  facade-local state, so this stays a single case — exactly the set
+     *  the lock paths treated as "already home" before ROUND 13. */
     fun isFacade(dest: Screen): Boolean = when (dest) {
-        is Screen.Facade, is Screen.StudySubject, is Screen.StudyChapter,
-        is Screen.StudyNotes, is Screen.StudyTimer, is Screen.StudyRevision,
-        is Screen.StudyFormulas -> true
+        is Screen.Facade -> true
         else -> false
     }
 

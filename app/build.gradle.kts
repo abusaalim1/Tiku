@@ -99,6 +99,10 @@ dependencies {
     implementation("androidx.security:security-crypto:1.1.0-alpha06")
     // Real audio+video calls: maintained WebRTC fork (org.webrtc API), Maven Central.
     implementation("io.getstream:stream-webrtc-android:1.1.1")
+    // ROUND 13: real backdrop blur for the owner-supplied liquid-glass design
+    // system (GlassDesign.kt). 1.x API line (hazeEffect / hazeSource /
+    // HazeStyle) — the owner's TikuuGlass code is written against it.
+    implementation("dev.chrisbanes.haze:haze:1.6.10")
     // ---- UI screenshot tests (Roborazzi + Robolectric, headless CI) ----
     testImplementation("junit:junit:4.13.2")
     testImplementation("androidx.compose.ui:ui-test-junit4")

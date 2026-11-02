@@ -27,11 +27,13 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -40,10 +42,13 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -74,15 +79,22 @@ fun ChatDetailsScreen(threadId: String) {
         if (sub != null) sub = null else AppState.go(Screen.Chat(threadId))
     }
     if (thread == null) {
-        Box(Modifier.fillMaxSize().background(Tik.Bg), contentAlignment = Alignment.Center) {
-            Text("Chat unavailable", color = Tik.Sub, fontFamily = Manrope)
+        val pal = LocalPalette.current
+        Box(Modifier.fillMaxSize().background(pal.bg), contentAlignment = Alignment.Center) {
+            Text("Chat unavailable", color = pal.sub, fontFamily = InterTight)
         }
         return
     }
     val globalSettings by SettingsStore.state.collectAsState()
     val settings = thread.effectiveSettings(globalSettings)
     val person = thread.person
+    // ROUND 13: the whole details surface renders in THIS chat's palette
+    // (global mode + the chat's couple theme).
+    val detailsPalette = remember(globalSettings.darkMode, settings.accentIdx) {
+        buildPalette(if (globalSettings.darkMode) "dark" else "light", settings.accentIdx)
+    }
 
+    CompositionLocalProvider(LocalPalette provides detailsPalette) {
     // Sub-pages enter with the design's screen motion (`in`: fade + rise).
     AnimatedContent(
         targetState = sub,
@@ -106,13 +118,15 @@ fun ChatDetailsScreen(threadId: String) {
             )
         }
     }
+    }
 }
 
-/** .top2 + back .btn scaffold for the sub-pages (.top with back + h1). */
+/** Sub-page scaffold: the design's .top2 (glass back disc + bold title). */
 @Composable
 private fun SubPage(title: String, onBack: () -> Unit, content: @Composable () -> Unit) {
-    Column(Modifier.fillMaxSize().background(Tik.Bg)) {
-        TikTopBar(title = title, leading = { TikBtn("back") { onBack() } })
+    val pal = LocalPalette.current
+    Column(Modifier.fillMaxSize().background(pal.bg)) {
+        TikTopBar(title = title, leading = { GlassCircleIconButton("back", onClick = onBack) })
         content()
     }
 }
@@ -124,67 +138,78 @@ private fun InfoMainPage(
     onBack: () -> Unit,
     onOpen: (String) -> Unit,
 ) {
+    val pal = LocalPalette.current
     val person = thread.person
     val media = thread.messages.filter { it.kind == MsgKind.IMAGE && it.photo != null && !it.deletedForMe }
     LazyColumn(
-        Modifier.fillMaxSize().background(Tik.Bg),
+        Modifier.fillMaxSize().background(pal.bg),
         contentPadding = PaddingValues(bottom = 32.dp),
     ) {
         item {
-            // .top2 — just the back button
-            Row(Modifier.fillMaxWidth().padding(start = 10.dp, end = 10.dp, top = 10.dp)) {
-                TikBtn("back") { onBack() }
+            // .top2 — just the glass back button
+            Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 12.dp)) {
+                GlassCircleIconButton("back", onClick = onBack)
             }
         }
         item {
-            // .ihd — avatar 92 round, name 22 w600, @username sub.
-            // Round-6 rule stands: the REAL profile name leads here —
-            // the nickname never hides who this actually is.
+            // .ihd — avatar 92 round inside the accent ring, name 26 Bold,
+            // @username sub. Round-6 rule stands: the REAL profile name
+            // leads here — the nickname never hides who this actually is.
+            // (The design's "days together" pill needs an anniversary date
+            // the app does not store — dropped, never faked.)
             Column(
                 Modifier.fillMaxWidth(),
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
                 Spacer(Modifier.height(8.dp))
-                AvatarBox(person, 92.dp, 46.dp, 38f)
+                Box(
+                    Modifier.border(2.dp, pal.ac, CircleShape)
+                        .background(pal.bg, CircleShape)
+                        .padding(3.dp),
+                ) {
+                    AvatarBox(person, 92.dp, 46.dp, 38f)
+                }
                 Spacer(Modifier.height(12.dp))
                 Text(
-                    person.name, fontFamily = Manrope, fontWeight = FontWeight.SemiBold,
-                    fontSize = 22.sp, letterSpacing = (-0.66).sp, color = Tik.Tx,
+                    person.name, fontFamily = InterTight, fontWeight = FontWeight.Bold,
+                    fontSize = 26.sp, letterSpacing = (-1).sp, color = pal.tx,
                 )
                 if (person.username.isNotEmpty()) {
                     Text(
-                        "@${person.username}", fontSize = 15.sp, color = Tik.Sub, fontFamily = Manrope,
+                        "@${person.username}", fontSize = 15.sp, color = pal.sub, fontFamily = InterTight,
                         modifier = Modifier.padding(top = 4.dp),
                     )
                 }
             }
         }
         item {
-            // .acts — round action buttons (46px s2 discs, 12px labels).
-            // The design's Search / Mute have no app function behind
-            // them, so the row carries the two real ones.
+            // .acts — 54px glass action discs, 12px labels. Only REAL
+            // actions: the design's Search (no in-chat search exists) and
+            // Mute (no engine op) are dropped.
             val startCall = rememberCallStarter()
             Row(
                 Modifier.fillMaxWidth().padding(top = 20.dp, bottom = 6.dp),
                 horizontalArrangement = Arrangement.Center,
             ) {
                 ActButton("user", "Profile") { onOpen("profile") }
-                Spacer(Modifier.width(10.dp))
+                Spacer(Modifier.width(2.dp))
                 ActButton("call", "Call") { startCall(thread.id, false) }
-                Spacer(Modifier.width(10.dp))
+                Spacer(Modifier.width(2.dp))
+                ActButton("vid", "Video") { startCall(thread.id, true) }
+                Spacer(Modifier.width(2.dp))
                 ActButton("dots", "Options") { ChatSheets.more(thread, person) }
             }
         }
         item {
             TikGroup {
-                TikInfoRow("Customize", "Theme and font", first = true, onClick = { onOpen("customize") }) {
-                    TikIcon("chevR", Modifier.size(18.dp), tint = Tik.Sub)
+                TikInfoRow("Customize", "Couple themes and text size", first = true, onClick = { onOpen("customize") }) {
+                    TikIcon("chevR", Modifier.size(18.dp), tint = pal.sub)
                 }
                 TikInfoRow("Privacy & safety", null, onClick = { onOpen("privacy") }) {
-                    TikIcon("chevR", Modifier.size(18.dp), tint = Tik.Sub)
+                    TikIcon("chevR", Modifier.size(18.dp), tint = pal.sub)
                 }
                 TikInfoRow("Nicknames", null, onClick = { onOpen("nick") }) {
-                    TikIcon("chevR", Modifier.size(18.dp), tint = Tik.Sub)
+                    TikIcon("chevR", Modifier.size(18.dp), tint = pal.sub)
                 }
                 TikInfoRow(
                     "Clear chat", "Hides this conversation's history on this phone only",
@@ -204,18 +229,18 @@ private fun InfoMainPage(
                     Modifier.fillMaxWidth(),
                 )
             } else {
-                // .mg — 3 columns, gap 2, radius 6 (loaded window only)
+                // .mg — 3 columns, gap 4, radius 16 (loaded window only)
                 Column(
                     Modifier.fillMaxWidth().padding(horizontal = 18.dp),
-                    verticalArrangement = Arrangement.spacedBy(2.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
                 ) {
                     media.chunked(3).forEach { rowMsgs ->
-                        Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+                        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                             rowMsgs.forEach { m ->
                                 Image(
                                     m.photo!!.asImageBitmap(), null,
                                     Modifier.weight(1f).aspectRatio(1f)
-                                        .clip(RoundedCornerShape(6.dp))
+                                        .clip(RoundedCornerShape(16.dp))
                                         .clickable(
                                             interactionSource = remember { MutableInteractionSource() },
                                             indication = null,
@@ -232,9 +257,10 @@ private fun InfoMainPage(
     }
 }
 
-/** .acts button: 78 wide, 46px s2 disc, 12px w500 label, press scale .92. */
+/** .acts button: 78 wide, 54px glass disc, 12px w500 label, press scale .92. */
 @Composable
 private fun ActButton(icon: String, label: String, onClick: () -> Unit) {
+    val pal = LocalPalette.current
     val interaction = remember { MutableInteractionSource() }
     val pressed by interaction.collectIsPressedAsState()
     val scale by androidx.compose.animation.core.animateFloatAsState(
@@ -245,14 +271,14 @@ private fun ActButton(icon: String, label: String, onClick: () -> Unit) {
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         Box(
-            Modifier.size(46.dp).graphicsLayer { scaleX = scale; scaleY = scale }
-                .clip(androidx.compose.foundation.shape.CircleShape).background(Tik.S2),
+            Modifier.size(54.dp).graphicsLayer { scaleX = scale; scaleY = scale }
+                .glassSurface(CircleShape),
             contentAlignment = Alignment.Center,
         ) {
-            TikIcon(icon, Modifier.size(21.dp), tint = Tik.Tx)
+            TikIcon(icon, Modifier.size(22.dp), tint = pal.tx)
         }
         Spacer(Modifier.height(8.dp))
-        Text(label, fontSize = 12.sp, fontWeight = FontWeight.Medium, fontFamily = Manrope, color = Tik.Tx)
+        Text(label, fontSize = 12.sp, fontWeight = FontWeight.Medium, fontFamily = InterTight, color = pal.tx)
     }
 }
 
@@ -263,95 +289,208 @@ private fun CustomizePage(
     globalSettings: TikuUiSettings,
     onBack: () -> Unit,
 ) {
+    val pal = LocalPalette.current
+    // The chat's resolved couple theme (effectiveSettings already ran the
+    // stored int through ThemeCodec).
+    val selectedIdx = settings.accentIdx
     SubPage("Customize", onBack) {
         LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 32.dp)) {
             item {
+                // The design's couple-theme picker: one glass card, a row
+                // per theme (pattern tile + name + subtitle + check).
+                TikSectionHeader("Couple themes")
                 TikGroup {
-                    TikInfoRow("Accent", null, first = true) {
-                        TikSwatches(
-                            colors = TikuTokens.Accents.map { it.first },
-                            selected = thread.themeAccent ?: globalSettings.accentIdx,
-                            onPick = { AppState.repo.setTheme(thread.id, it, null) },
-                        )
+                    COUPLE_THEMES.forEachIndexed { i, th ->
+                        ThemePickRow(th, selected = i == selectedIdx, first = i == 0) {
+                            // ROUND 13 storage: new writes use the >=10
+                            // space so both generations read them sanely
+                            // (see ThemeCodec in Models.kt).
+                            AppState.repo.setTheme(thread.id, ThemeCodec.toStored(i), null)
+                        }
                     }
-                    TikInfoRow("Wallpaper", null) {
+                }
+                Text(
+                    "One theme for this chat — both of you see it.",
+                    fontSize = 12.5.sp, color = pal.sub, fontFamily = InterTight,
+                    modifier = Modifier.padding(start = 34.dp, end = 18.dp, top = 6.dp),
+                )
+            }
+            item {
+                // The design's Preview card, rendered in the SELECTED
+                // theme's palette over this chat's wallpaper.
+                TikSectionHeader("Preview")
+                ThemePreviewCard(selectedIdx, settings.wallpaper)
+            }
+            item {
+                TikSectionHeader("Wallpaper")
+                TikGroup {
+                    TikInfoRow("Wallpaper", null, first = true) {
                         TikSwatches(
-                            colors = Tik.WallColors,
+                            colors = WallpaperMode.entries.map { mode ->
+                                val c = wallTint(mode, globalSettings.darkMode)
+                                if (c == androidx.compose.ui.graphics.Color.Unspecified) pal.bg else c
+                            },
                             selected = thread.themeWallpaper ?: globalSettings.wallpaper.ordinal,
                             onPick = { AppState.repo.setTheme(thread.id, null, it) },
                         )
                     }
-                    TikInfoRow("Couple theme", "Soft rose glow in chats") {
-                        val coupleOn = settings.accentIdx == TikuTokens.Accents.lastIndex &&
+                    TikInfoRow("Couple theme", "Rose Petal with the heart wallpaper") {
+                        val coupleOn = settings.accentIdx == 0 &&
                             settings.wallpaper == WallpaperMode.COUPLE
                         ToggleSwitch(coupleOn) { on ->
                             if (on) {
                                 AppState.repo.setTheme(
-                                    thread.id, TikuTokens.Accents.lastIndex,
+                                    thread.id, ThemeCodec.toStored(0),
                                     WallpaperMode.COUPLE.ordinal,
                                 )
                             } else {
                                 AppState.repo.setTheme(
-                                    thread.id, globalSettings.accentIdx,
+                                    thread.id, ThemeCodec.toStored(globalSettings.accentIdx),
                                     globalSettings.wallpaper.ordinal,
                                 )
                             }
                             AppState.toast("Couple theme " + if (on) "on" else "off")
                         }
                     }
-                    TikInfoRow("Text size", "Message font size") {
-                        Slider(
-                            value = globalSettings.textSizeSp,
-                            onValueChange = { SettingsStore.setTextSize(it) },
-                            valueRange = 13f..20f,
-                            modifier = Modifier.width(110.dp),
-                            colors = SliderDefaults.colors(
-                                thumbColor = settings.accent,
-                                activeTrackColor = settings.accent,
-                                inactiveTrackColor = Tik.TrackOff,
-                            ),
-                        )
-                    }
                 }
-                Text(
-                    "One theme for this chat — both of you see it.",
-                    fontSize = 12.5.sp, color = Tik.Sub, fontFamily = Manrope,
-                    modifier = Modifier.padding(start = 34.dp, end = 18.dp, top = 6.dp),
-                )
             }
             item {
-                // .prev — the design's preview card: two sample bubbles on
-                // this chat's wallpaper colour.
-                Column(
-                    Modifier.fillMaxWidth().padding(horizontal = 18.dp).padding(top = 10.dp)
-                        .clip(RoundedCornerShape(14.dp))
-                        .background(Tik.WallColors[settings.wallpaper.ordinal])
-                        .border(1.dp, Tik.Ln, RoundedCornerShape(14.dp))
-                        .padding(14.dp),
+                TikSectionHeader("Text")
+                TikGroup {
+                    FontSizeSliderRow(
+                        fontSizeSp = globalSettings.textSizeSp,
+                        onFontSizeChange = { SettingsStore.setTextSize(it) },
+                    )
+                }
+            }
+        }
+    }
+}
+
+/** One couple-theme row (design Customize): 64dp pattern tile with two
+ *  mini bubble chips, name + subtitle, check indicator when selected. */
+@Composable
+private fun ThemePickRow(
+    th: CoupleTheme,
+    selected: Boolean,
+    first: Boolean,
+    onClick: () -> Unit,
+) {
+    val pal = LocalPalette.current
+    val density = LocalDensity.current
+    Column(Modifier.fillMaxWidth()) {
+        if (!first) {
+            Box(Modifier.fillMaxWidth().padding(horizontal = 18.dp).height(1.dp).background(pal.ln))
+        }
+        Row(
+            Modifier.fillMaxWidth()
+                .clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null, onClick = onClick,
+                )
+                .padding(horizontal = 16.dp, vertical = 13.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Box(
+                Modifier.size(64.dp)
+                    .clip(RoundedCornerShape(20.dp))
+                    .background(
+                        Brush.linearGradient(
+                            listOf(lerp(pal.bg, th.ac, 0.30f), pal.bg),
+                        ),
+                    )
+                    .border(
+                        if (selected) 2.dp else 1.dp,
+                        if (selected) th.ac else pal.gb,
+                        RoundedCornerShape(20.dp),
+                    )
+                    .drawBehind {
+                        with(density) { drawThemePattern(th.pat, th.ac, pal.isDark, 64.dp.toPx()) }
+                    },
+            ) {
+                Row(
+                    Modifier.align(Alignment.BottomStart).padding(8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
                 ) {
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Start) {
-                        Box(
-                            Modifier.clip(RoundedCornerShape(20.dp)).background(Tik.S2)
-                                .padding(horizontal = 14.dp, vertical = 9.dp),
-                        ) {
-                            Text("Good morning", fontSize = 15.sp, color = Tik.Tx, fontFamily = Manrope)
+                    Box(
+                        Modifier.size(width = 18.dp, height = 10.dp)
+                            .clip(RoundedCornerShape(5.dp))
+                            .background(Brush.linearGradient(listOf(th.ac, th.ac2))),
+                    )
+                    Box(
+                        Modifier.size(width = 18.dp, height = 10.dp)
+                            .glassSurface(RoundedCornerShape(5.dp)),
+                    )
+                }
+            }
+            Column(Modifier.weight(1f).padding(start = 14.dp)) {
+                Text(th.name, fontFamily = InterTight, fontWeight = FontWeight.Medium,
+                    fontSize = 15.sp, color = pal.tx)
+                Text(th.subtitle, fontFamily = InterTight, fontSize = 12.5.sp, color = pal.sub,
+                    modifier = Modifier.padding(top = 2.dp))
+            }
+            CheckCircleIndicator(selected)
+        }
+    }
+}
+
+/** The design's Preview card: sample bubbles in the candidate theme's
+ *  palette (nested provider) over the chat's current wallpaper. */
+@Composable
+private fun ThemePreviewCard(themeIdx: Int, wallpaper: WallpaperMode) {
+    val mode = tikuSettings().value.darkMode
+    val candidate = remember(mode, themeIdx) { buildPalette(if (mode) "dark" else "light", themeIdx) }
+    val density = LocalDensity.current
+    CompositionLocalProvider(LocalPalette provides candidate) {
+        Column(
+            Modifier.fillMaxWidth().padding(horizontal = 18.dp)
+                .clip(RoundedCornerShape(28.dp))
+                .background(
+                    if (wallpaper == WallpaperMode.DEFAULT) candidate.bg
+                    else wallTint(wallpaper, candidate.isDark),
+                )
+                .drawBehind {
+                    if (wallpaper != WallpaperMode.DEFAULT && wallpaper != WallpaperMode.DOTS) {
+                        drawRect(
+                            brush = Brush.radialGradient(
+                                listOf(candidate.ac.copy(alpha = 0.20f), androidx.compose.ui.graphics.Color.Transparent),
+                                center = androidx.compose.ui.geometry.Offset(size.width / 2f, 0f),
+                                radius = size.width * 0.9f,
+                            ),
+                        )
+                        with(density) {
+                            drawThemePattern(candidate.pat, candidate.ac, candidate.isDark, 160.dp.toPx())
                         }
                     }
-                    Spacer(Modifier.height(8.dp))
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                        val mineBg = if (settings.wallpaper == WallpaperMode.COUPLE) {
-                            Brush.linearGradient(listOf(settings.accent, coupleGradientEnd(settings.accent)))
-                        } else {
-                            Brush.linearGradient(listOf(settings.accent, settings.accent))
-                        }
-                        Box(
-                            Modifier.clip(RoundedCornerShape(20.dp)).background(mineBg)
-                                .padding(horizontal = 14.dp, vertical = 9.dp),
-                        ) {
-                            Text("Morning, you", fontSize = 15.sp,
-                                color = androidx.compose.ui.graphics.Color.White, fontFamily = Manrope)
-                        }
-                    }
+                }
+                .border(1.dp, candidate.gb, RoundedCornerShape(28.dp))
+                .padding(16.dp),
+        ) {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Start) {
+                Box(
+                    Modifier.glassSurface(RoundedCornerShape(23.dp))
+                        .padding(horizontal = 15.dp, vertical = 10.dp),
+                ) {
+                    Text("Good morning", fontSize = 15.sp, color = candidate.tx, fontFamily = InterTight)
+                }
+            }
+            Spacer(Modifier.height(10.dp))
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                Box(
+                    Modifier.clip(RoundedCornerShape(23.dp)).background(candidate.acGradient)
+                        .padding(horizontal = 15.dp, vertical = 10.dp),
+                ) {
+                    Text("Morning, you", fontSize = 15.sp,
+                        color = androidx.compose.ui.graphics.Color.White, fontFamily = InterTight)
+                }
+            }
+            Spacer(Modifier.height(10.dp))
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Start) {
+                Box(
+                    Modifier.glassSurface(RoundedCornerShape(23.dp))
+                        .padding(horizontal = 15.dp, vertical = 10.dp),
+                ) {
+                    Text("See you tonight", fontSize = 15.sp, color = candidate.tx, fontFamily = InterTight)
                 }
             }
         }
@@ -400,6 +539,7 @@ private fun PrivacyPage(thread: ChatThread, onBack: () -> Unit) {
 
 @Composable
 private fun NicknamesPage(thread: ChatThread, onBack: () -> Unit) {
+    val pal = LocalPalette.current
     var nick by remember(thread.id) { mutableStateOf(thread.nickname ?: "") }
     SubPage("Nicknames", onBack) {
         LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 32.dp)) {
@@ -408,7 +548,7 @@ private fun NicknamesPage(thread: ChatThread, onBack: () -> Unit) {
                 TikField(nick, { nick = it.take(40) }, thread.person.name)
                 Text(
                     "Shown instead of ${thread.person.name} in this chat — for both of you.",
-                    fontSize = 12.5.sp, color = Tik.Sub, fontFamily = Manrope,
+                    fontSize = 12.5.sp, color = pal.sub, fontFamily = InterTight,
                     modifier = Modifier.padding(start = 18.dp, end = 18.dp, top = 2.dp),
                 )
                 TikSectionHeader("Your nickname")
@@ -417,7 +557,7 @@ private fun NicknamesPage(thread: ChatThread, onBack: () -> Unit) {
                 )
                 Text(
                     "Set by ${thread.person.name} — only they can change it.",
-                    fontSize = 12.5.sp, color = Tik.Sub, fontFamily = Manrope,
+                    fontSize = 12.5.sp, color = pal.sub, fontFamily = InterTight,
                     modifier = Modifier.padding(start = 18.dp, end = 18.dp, top = 2.dp),
                 )
                 Spacer(Modifier.height(14.dp))
@@ -433,6 +573,7 @@ private fun NicknamesPage(thread: ChatThread, onBack: () -> Unit) {
 
 @Composable
 private fun ProfilePage(thread: ChatThread, onBack: () -> Unit) {
+    val pal = LocalPalette.current
     val person = thread.person
     val startCall = rememberCallStarter()
     SubPage(person.name, onBack) {
@@ -441,16 +582,22 @@ private fun ProfilePage(thread: ChatThread, onBack: () -> Unit) {
                 Modifier.fillMaxWidth(),
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
-                AvatarBox(person, 92.dp, 46.dp, 38f)
+                Box(
+                    Modifier.border(2.dp, pal.ac, CircleShape)
+                        .background(pal.bg, CircleShape)
+                        .padding(3.dp),
+                ) {
+                    AvatarBox(person, 92.dp, 46.dp, 38f)
+                }
                 Spacer(Modifier.height(12.dp))
                 Text(
-                    person.name, fontFamily = Manrope, fontWeight = FontWeight.SemiBold,
-                    fontSize = 22.sp, letterSpacing = (-0.66).sp, color = Tik.Tx,
+                    person.name, fontFamily = InterTight, fontWeight = FontWeight.Bold,
+                    fontSize = 26.sp, letterSpacing = (-1).sp, color = pal.tx,
                     textAlign = TextAlign.Center,
                 )
                 if (person.username.isNotEmpty()) {
                     Text(
-                        "@${person.username}", fontSize = 15.sp, color = Tik.Sub, fontFamily = Manrope,
+                        "@${person.username}", fontSize = 15.sp, color = pal.sub, fontFamily = InterTight,
                         modifier = Modifier.padding(top = 4.dp),
                     )
                 }

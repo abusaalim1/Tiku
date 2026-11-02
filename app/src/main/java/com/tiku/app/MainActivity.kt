@@ -24,19 +24,24 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.systemBars
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.unit.dp
 import androidx.lifecycle.lifecycleScope
+import dev.chrisbanes.haze.rememberHazeState
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -57,9 +62,9 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         AppState.appCtx = applicationContext
-        // The APK always opens to the study facade; ChatRoot is reachable only via the gate.
+        // The APK always opens to the K-drama facade; ChatRoot is reachable only via the gate.
         AppState.repo = if (Config.PREVIEW_UI_ONLY) PreviewRepo else FirebaseEngine
-        StudyContent.load(this)
+        DramaContent.load(this)
         AppState.instantGo(Screen.Facade)
         setContent { TikuRoot(onGoogleClick = ::onGoogleClick) }
     }
@@ -80,7 +85,9 @@ class MainActivity : ComponentActivity() {
         // relaxed mode, or a transient system surface) pauses the in-vault
         // video — playback never continues invisibly. The lock path itself
         // (onStop → ChatSession.lock) destroys the WebView outright.
-        WatchHolder.pause()
+        // ROUND 13: the pause goes through WatchControl to the ACTIVE pane's
+        // WebView; no pane composed = nothing playing (view destroyed).
+        WatchControl.requestPause()
         if (!Config.PREVIEW_UI_ONLY && ChatSession.unlocked && FirebaseEngine.signedIn) {
             FirebaseEngine.setPresence(false)
         }
@@ -150,16 +157,30 @@ fun TikuRoot(onGoogleClick: () -> Unit) {
     // app-wide light gradient (the design's .s background)
     val bgBrush = Brush.verticalGradient(listOf(TikuTokens.BgTop, TikuTokens.BgBottom))
     val screen = AppState.screen
+    val rootSettings by SettingsStore.state.collectAsState()
+    // ROUND 13 (A4): the Tik palette + Haze state for the whole tree. The
+    // facade provides its own LIGHT palette inside FacadeRouter; gate screens
+    // do not read LocalPalette (their dark password field only renders inside
+    // Tik sheets). PREVIEW_UI_ONLY provides NO HazeState — every glass
+    // surface then falls back to its gradient form (GlassDesign), so the
+    // Roborazzi suite never touches a real blur pipeline.
+    val tikPalette = remember(rootSettings.darkMode, rootSettings.accentIdx) {
+        buildPalette(if (rootSettings.darkMode) "dark" else "light", rootSettings.accentIdx)
+    }
+    val hazeState = rememberHazeState()
     // EDGE-TO-EDGE (owner bug fix): the gradient stays full-bleed, but EVERY piece of
     // interactive content lives in an inner box padded by the system-bar insets, so
     // nothing renders under the status bar or the gesture nav bar on any screen.
     Box(Modifier.fillMaxSize().background(bgBrush)) {
+     CompositionLocalProvider(
+        LocalPalette provides tikPalette,
+        LocalHazeState provides if (Config.PREVIEW_UI_ONLY) null else hazeState,
+     ) {
       Box(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.systemBars).imePadding()) {
         val kind = when (screen) {
             is Screen.Welcome, is Screen.Password, is Screen.Restore, is Screen.ProfileSetup,
             is Screen.PasswordReset -> "gate"
-            is Screen.Facade, is Screen.StudySubject, is Screen.StudyChapter, is Screen.StudyNotes,
-            is Screen.StudyTimer, is Screen.StudyRevision, is Screen.StudyFormulas, is Screen.TikGate -> "facade"
+            is Screen.Facade, is Screen.TikGate -> "facade"
             else -> "home"
         }
         AnimatedContent(
@@ -236,9 +257,14 @@ fun TikuRoot(onGoogleClick: () -> Unit) {
                         // chat surfaces (below sheets + toast, which render
                         // after this Box).
                         FloatingCallWindow()
-                        // ROUND 10: the Watch mini player floats here too —
-                        // same layer, same FLAG_SECURE window.
-                        WatchMiniOverlay()
+                        // ROUND 13: the "Now watching" glass bar floats
+                        // above the glass nav (the build-44 mini player is
+                        // deleted — Watch.kt). It self-hides unless a Watch
+                        // session exists on a non-Watch Home tab.
+                        NowWatchingBar(
+                            Modifier.align(Alignment.BottomCenter)
+                                .padding(start = 16.dp, end = 16.dp, bottom = 102.dp),
+                        )
                     }
                 }
             }
@@ -246,10 +272,11 @@ fun TikuRoot(onGoogleClick: () -> Unit) {
         DesignToast()
         BottomSheetHost()
       }
+     }
     }
 
     // FLAG_SECURE hook: set while ANY ChatRoot destination is visible (blocks screenshots +
-    // the Android recents preview of gated content); cleared on the study facade.
+    // the Android recents preview of gated content); cleared on the drama facade.
     // ROUND 3 — single source of truth: Privacy ▸ "Block screenshots"
     // (SettingsStore key "bs", default ON). This effect reads the LIVE settings
     // state (not just the destination), so flipping the switch while standing in
@@ -281,12 +308,6 @@ fun FacadeRouter() {
     ) { s ->
         when (s) {
             is Screen.Facade -> FacadeHome()
-            is Screen.StudySubject -> SubjectScreen(s.name)
-            is Screen.StudyChapter -> ChapterScreen(s.subject, s.index)
-            is Screen.StudyNotes -> NotesScreen()
-            is Screen.StudyTimer -> TimerScreen()
-            is Screen.StudyRevision -> RevisionScreen()
-            is Screen.StudyFormulas -> FormulasScreen()
             is Screen.TikGate -> TikGateScreen()
             else -> FacadeHome()
         }

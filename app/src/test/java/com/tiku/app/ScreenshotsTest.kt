@@ -39,8 +39,9 @@ import org.robolectric.annotation.GraphicsMode
  * UI preview screenshots — rendered headless from the app's REAL Compose code
  * (Roborazzi + Robolectric, native graphics) at 1080×2400, light theme only.
  * ChatRoot states run against the preview demo store (the same data path the
- * PREVIEW_UI_ONLY flag uses); the facade consumes the real bundled content pack.
- * PNGs land in build/outputs/roborazzi/shots/ and ship as a release asset.
+ * PREVIEW_UI_ONLY flag uses); the facade consumes the real bundled drama pack
+ * (assets/facade/). PNGs land in build/outputs/roborazzi/shots/ and ship as
+ * a release asset.
  */
 @RunWith(RobolectricTestRunner::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
@@ -62,7 +63,8 @@ class ScreenshotsTest {
         OwnerPrefs.setNotify(false)
         OwnerPrefs.setAppLock(true)
         OwnerPrefs.consumeGateOnce()
-        StudyContent.load(ctx)
+        // ROUND 13: the facade's bundled drama pack (dramas + stories).
+        DramaContent.load(ctx)
         AppState.repo = PreviewRepo
         val seeded = PreviewStore.seedThreads()
         AppState.threads.value = seeded
@@ -72,17 +74,6 @@ class ScreenshotsTest {
         AppState.sheetContent = null
         AppState.toastText = null
         AppState.story = null
-        // one real local note so the notes page isn't empty
-        if (StudyStore.notes(ctx).isEmpty()) {
-            StudyStore.saveNote(
-                ctx,
-                StudyStore.Note(
-                    subject = "Physics",
-                    title = "Units & dimensions — quick notes",
-                    body = "Dimensional formula of energy = [M L^2 T^-2]. Always check homogeneity before solving.",
-                ),
-            )
-        }
         // the gate opens with the password field once a journal password exists
         SettingsStore.savePasswordHash(ctx, Crypto.passwordHash("journal123"))
     }
@@ -105,41 +96,83 @@ class ScreenshotsTest {
         composeRule.onRoot().captureRoboImage("$outDir/$name")
     }
 
-    // ---------- facade ----------
-    @Test fun shot01_facadeHome() {
+    // ---------- facade (ROUND 13: K-drama) ----------
+    @Test fun shot01_dramaHome() {
         AppState.go(Screen.Facade)
         frame { FacadeRouter() }
-        // ROUND 3.2 PROOF (negative): the study-tools grid no longer carries a
-        // "Tik" tile — the word must not appear anywhere on the facade home.
+        // ZERO-TRACE PROOF (negative): the word "Tik" must not appear
+        // anywhere on the facade home — "Tikuu" is the drama brand, and
+        // the exact-match query does not match it.
         org.junit.Assert.assertTrue(
-            "facade home must not contain a Tik entry",
+            "facade home must not contain any Tik wording",
             composeRule.onAllNodesWithText("Tik").fetchSemanticsNodes().isEmpty(),
         )
-        shot("01-facade-home.png")
+        org.junit.Assert.assertTrue(
+            "facade home must carry the Tikuu wordmark",
+            composeRule.onAllNodesWithText("Tikuu").fetchSemanticsNodes().isNotEmpty(),
+        )
+        shot("01-drama-home.png")
     }
 
-    @Test fun shot02_subject() {
-        frame { SubjectScreen("Physics") }
-        shot("02-subject.png")
+    @Test fun shot02_storiesList() {
+        frame { FacadeHome(initialTab = FacadeTab.STORIES) }
+        org.junit.Assert.assertTrue(
+            "stories tab must list the bundled love stories",
+            composeRule.onAllNodesWithText("The Yellow Umbrella").fetchSemanticsNodes().isNotEmpty(),
+        )
+        shot("02-stories-list.png")
     }
 
-    @Test fun shot03_chapter() {
-        // revealFirst opens the first practice answer (deterministic for the preview)
-        frame { ChapterScreen("Physics", 0, revealFirst = true) }
-        // scroll the first (revealed) question into view
-        composeRule.onRoot().performTouchInput { swipeUp() }
+    @Test fun shot03_storyReader() {
+        frame { FacadeHome(initialTab = FacadeTab.STORIES, initialStoryId = "umbrella") }
+        org.junit.Assert.assertTrue(
+            "reader must open on the story itself",
+            composeRule.onAllNodesWithText("The Yellow Umbrella").fetchSemanticsNodes().isNotEmpty(),
+        )
+        org.junit.Assert.assertTrue(
+            "reader must render the story body",
+            composeRule.onAllNodesWithText("yellow umbrella appeared", substring = true)
+                .fetchSemanticsNodes().isNotEmpty(),
+        )
+        shot("03-story-reader.png")
+    }
+
+    @Test fun shot04_photosGrid() {
+        frame { FacadeHome(initialTab = FacadeTab.PHOTOS) }
+        org.junit.Assert.assertTrue(
+            "photos tab must show the bundled stills with their captions",
+            composeRule.onAllNodesWithText("Cherry Blossom Walk").fetchSemanticsNodes().isNotEmpty(),
+        )
+        shot("04-photos-grid.png")
+    }
+
+    @Test fun shot05_forYouEntry() {
+        frame { FacadeHome(initialTab = FacadeTab.FOR_YOU) }
+        // ZERO-TRACE PROOF (negative + positive): the For You page carries
+        // the discreet entry row — and the word "Tik" NOWHERE on the page.
+        org.junit.Assert.assertTrue(
+            "for-you page must not contain any Tik wording",
+            composeRule.onAllNodesWithText("Tik").fetchSemanticsNodes().isEmpty(),
+        )
+        org.junit.Assert.assertTrue(
+            "for-you page must carry the entry row",
+            composeRule.onAllNodesWithText("For You, Always").fetchSemanticsNodes().isNotEmpty(),
+        )
+        org.junit.Assert.assertTrue(
+            "entry row must carry its private-corner sub",
+            composeRule.onAllNodesWithText("Your private corner").fetchSemanticsNodes().isNotEmpty(),
+        )
+        shot("05-for-you-entry.png")
+    }
+
+    @Test fun shot06_playerPlaceholder() {
+        // The facade player: in a PREVIEW_UI_ONLY build it renders the
+        // poster + play placeholder with NO WebView; the shipped harness
+        // exercises the pane-owned WebView under Robolectric's shadow
+        // WebView instead — either way it composes headless and offline.
+        frame { FacadeHome(playerDramaId = DramaContent.hero?.id ?: "StNS0mPjrOg") }
         composeRule.waitForIdle()
-        shot("03-chapter.png")
-    }
-
-    @Test fun shot04_timer() {
-        frame { TimerScreen() }
-        shot("04-timer.png")
-    }
-
-    @Test fun shot05_notes() {
-        frame { NotesScreen() }
-        shot("05-notes.png")
+        shot("06-player-placeholder.png")
     }
 
     @Test fun shot07_tikGate() {
@@ -152,42 +185,15 @@ class ScreenshotsTest {
         shot("07-tik-gate.png")
     }
 
-    @Test fun shot06_chemistryBookRow() {
-        // ROUND 8 PROOF (positive + negative): the Chemistry page's secret
-        // entry is now a plain "Reference books" row with a book icon — and
-        // the word "Tik" appears NOWHERE on the page. Scroll the list to the
-        // bottom, capture the page (row in context), then the row itself.
-        frame { SubjectScreen("Chemistry") }
-        repeat(6) { composeRule.onRoot().performTouchInput { swipeUp() } }
+    @Test fun shot39_watchPane() {
+        // ROUND 13: the re-architected Watch pane (pane-owned WebView,
+        // preview placeholder branch in preview builds) composes headless.
+        frame { WatchPane() }
         composeRule.waitForIdle()
-        org.junit.Assert.assertTrue(
-            "Chemistry page must not contain any Tik wording",
-            composeRule.onAllNodesWithText("Tik").fetchSemanticsNodes().isEmpty(),
-        )
-        shot("06-chemistry-subject.png")
-        composeRule.onNodeWithText("Reference books").captureRoboImage("$outDir/06-chemistry-book-row.png")
+        shot("39-watch-pane.png")
     }
 
-    @Test fun shot19_qotdAnswered() {
-        AppState.go(Screen.Facade)
-        frame { FacadeRouter() }
-        val q = StudyContent.questionOfTheDay()
-        if (q != null) {
-            // the QOTD card starts below the fold — scroll it into view FIRST
-            // (a tap on a composed-but-off-screen node lands outside the surface)
-            composeRule.onRoot().performTouchInput { swipeUp() }
-            composeRule.waitForIdle()
-            // options are full-width rows tagged mcq_option_<i> (item 5 layout)
-            composeRule.onNodeWithTag("mcq_option_${q.correct}").performClick()
-            composeRule.waitForIdle()
-            // bring the explanation under the options into view
-            composeRule.onRoot().performTouchInput { swipeUp() }
-            composeRule.waitForIdle()
-        }
-        shot("19-qotd-answered.png")
-    }
-
-    // ---------- onboarding (study-framed) ----------
+    // ---------- onboarding (journal-framed) ----------
     @Test fun shot08_welcome() {
         frame { WelcomeScreen {} }
         shot("08-welcome.png")
@@ -272,47 +278,7 @@ class ScreenshotsTest {
         shot("17-story-viewer.png")
     }
 
-    // ---------- round 2 additions ----------
-    @Test fun shot20_chapterMcq() {
-        // first chapter that carries a per-chapter MCQ section (content v2);
-        // falls back to a plain chapter page if the pack has none
-        val target = StudyContent.subjects.firstNotNullOfOrNull { s ->
-            s.chapters.indexOfFirst { it.mcqs.isNotEmpty() }.takeIf { it >= 0 }?.let { s.name to it }
-        }
-        if (target != null) {
-            frame { ChapterScreen(target.first, target.second) }
-            composeRule.onRoot().performTouchInput { swipeUp(); swipeUp() }
-            composeRule.waitForIdle()
-            // pick one option if the rows are composed (reveals correct/wrong states)
-            if (composeRule.onAllNodesWithTag("mcq_option_1").fetchSemanticsNodes().isNotEmpty()) {
-                runCatching { composeRule.onNodeWithTag("mcq_option_1").performClick() }
-                composeRule.waitForIdle()
-            }
-        } else {
-            frame { ChapterScreen("Physics", 0) }
-        }
-        shot("20-chapter-mcq.png")
-    }
-
     // ---------- round 3 additions ----------
-    @Test fun shot23_chapterMcqOptions() {
-        // ITEM 5 PROOF: one chapter MCQ rendered alone — options must appear as a
-        // VERTICAL list of full-width rows (letter chip + wrapping text). A wrong
-        // pick is clicked so the correct (green) + wrong (red) states both show.
-        val mq = StudyContent.subjects.firstNotNullOfOrNull { s ->
-            s.chapters.firstNotNullOfOrNull { ch -> ch.mcqs.firstOrNull() }
-        }
-        if (mq != null) {
-            frame { Column(Modifier.fillMaxSize().padding(20.dp)) { ChapterMcq(mq) } }
-            val wrongIdx = (mq.correct + 1) % mq.options.size
-            composeRule.onNodeWithTag("mcq_option_$wrongIdx").performClick()
-            composeRule.waitForIdle()
-        } else {
-            frame { ChapterScreen("Physics", 0) }
-        }
-        shot("23-chapter-mcq-options.png")
-    }
-
     @Test fun shot21_additionalSettings() {
         AppState.homeTab = HomeTab.ME
         frame { HomeScreen() }
@@ -441,6 +407,9 @@ class ScreenshotsTest {
         // applied to the chat surface — round 7 drives it through the SAME
         // preset entry the owner taps (SettingsStore.setCoupleTheme, the
         // labelled Me ▸ Appearance toggle). Settings are restored after.
+        // ROUND 13: setAccent now selects the couple theme (0..4) and
+        // setCoupleTheme writes theme + wallpaper together; the signatures
+        // (and this proof's path) are unchanged.
         val prevAccent = SettingsStore.state.value.accentIdx
         val prevWp = SettingsStore.state.value.wallpaper
         SettingsStore.setCoupleTheme(true)
@@ -460,6 +429,9 @@ class ScreenshotsTest {
         // fits above the tab bar (proven by 13-me-pane), so the row is
         // captured visibly in frame — an earlier full swipeUp overshot the
         // group entirely and the label never appeared in the shot.
+        // ROUND 13: the row is the rebuilt Appearance group's couple-theme
+        // toggle (TikInfoRow "Couple theme" in Home.kt's MePane) — the
+        // label, and therefore this proof, is unchanged.
         val prevAccent = SettingsStore.state.value.accentIdx
         val prevWp = SettingsStore.state.value.wallpaper
         SettingsStore.setCoupleTheme(true)

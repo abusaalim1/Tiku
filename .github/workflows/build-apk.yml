@@ -69,62 +69,6 @@ jobs:
             echo "This fingerprint is registered in the Firebase Console (tiku-chat project) for Google sign-in."
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Bundle chapter art (round 3, item 7 — manifest-strict)
-        run: |
-          ART_DIR="app/src/main/assets/art"
-          rm -rf "$ART_DIR"
-          if [ -f art/manifest.json ]; then
-            mkdir -p "$ART_DIR"
-            python3 - <<'PYEOF'
-          import json, os, shutil
-          with open('art/manifest.json') as f:
-              manifest = json.load(f)
-          # MANIFEST-STRICT: only files the manifest lists are copied. Extra
-          # .webp files sitting in art/ (e.g. out-of-scope topics) never ship.
-          files = sorted(set(manifest.values()))
-          for f in files:
-              src = os.path.join('art', f)
-              if os.path.isfile(src):
-                  shutil.copy(src, os.path.join('app/src/main/assets/art', f))
-              else:
-                  print("MISSING from art/ (skipped):", f)
-          shutil.copy('art/manifest.json', 'app/src/main/assets/art/manifest.json')
-          copied = [f for f in files if os.path.isfile(os.path.join('app/src/main/assets/art', f))]
-          print("art entries in manifest:", len(files), "| copied:", len(copied))
-          # SUBJECT HEROES: the 4 subject-header images ship alongside (the only
-          # addition beyond the chapter list the owner's final scope allows);
-          # registered into the COPIED manifest under bare subject keys, which
-          # the app reads as subject-page heroes. Out-of-scope chapter art
-          # (Thermodynamics, Photosynthesis, Chemistry/Maths chapters) is never
-          # copied.
-          heroes = {"Physics": "physics.webp", "Chemistry": "chemistry.webp",
-                    "Mathematics": "mathematics.webp", "Biology": "biology.webp"}
-          dest_manifest_path = 'app/src/main/assets/art/manifest.json'
-          with open(dest_manifest_path) as f:
-              dest_manifest = json.load(f)
-          for subj, f in heroes.items():
-              src = os.path.join('art', f)
-              if os.path.isfile(src):
-                  shutil.copy(src, os.path.join('app/src/main/assets/art', f))
-                  dest_manifest[subj] = f
-          with open(dest_manifest_path, 'w') as f:
-              json.dump(dest_manifest, f, indent=1)
-          print("subject heroes registered:", [s for s in heroes if s in dest_manifest])
-          PYEOF
-            BYTES=$(du -sb "$ART_DIR" | cut -f1)
-            {
-              echo "## :framed_picture: Bundled chapter art"
-              echo ""
-              echo "- WebP files copied (manifest-strict): $(ls $ART_DIR/*.webp 2>/dev/null | wc -l)"
-              echo "- Total bundled art size: ${BYTES} bytes (~$((BYTES/1024)) KB)"
-            } >> "$GITHUB_STEP_SUMMARY"
-            if [ "$BYTES" -gt 512000 ]; then
-              echo ":warning: Bundled art exceeds the 500 KB flag threshold — flagged, not shipped silently." | tee -a "$GITHUB_STEP_SUMMARY"
-            fi
-          else
-            echo "No art/manifest.json at repo root — chapter art skipped gracefully (pages render the clean card layout)."
-          fi
-
       - name: Build release APK
         env:
           GRADLE_OPTS: "-Dorg.gradle.jvmargs=-Xmx3584m -Dorg.gradle.workers.max=2 -Dorg.gradle.parallel=false"
@@ -223,11 +167,11 @@ jobs:
         if: always()
         run: |
           SHOTDIR="app/build/outputs/roborazzi/shots"
-          # 06-chemistry-* are captured directly by ScreenshotsTest (the discreet
-          # book row inside the Chemistry subject page — round 8 replaced the
-          # old worded row; no "Tik" text remains on the facade)
-          if [ ! -f "$SHOTDIR/06-chemistry-book-row.png" ]; then echo "06-chemistry-book-row missing"; fi
-          if [ ! -f "$SHOTDIR/06-chemistry-subject.png" ]; then echo "06-chemistry-subject missing"; fi
+          # 05-for-you-entry is captured directly by ScreenshotsTest (the
+          # discreet "For You, Always" entry row on the K-drama facade's
+          # For You page — round 13 replaced the old Chemistry book row;
+          # no "Tik" text remains on the facade)
+          if [ ! -f "$SHOTDIR/05-for-you-entry.png" ]; then echo "05-for-you-entry missing"; fi
           python3 - <<'PYEOF2'
           import glob, os, zipfile
           shots = sorted(glob.glob('app/build/outputs/roborazzi/shots/*.png'))

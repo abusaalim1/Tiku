@@ -68,12 +68,13 @@ fun FormScaffold(title: String, sub: String, content: @Composable ColumnScope.()
 @Composable
 fun PasswordField(value: String, onValue: (String) -> Unit, placeholder: String, dark: Boolean = false) {
     var shown by remember { mutableStateOf(false) }
-    // ROUND 12: [dark] = the Tik design's .fld skin (black field, ln border)
+    // ROUND 12/13: [dark] = the Tik glass skin (palette field + hairline)
     // for the in-Tik Change password sheet; gate screens keep the peach field.
-    val bg = if (dark) Tik.Bg else TikuTokens.Card
-    val line = if (dark) Tik.Ln else TikuTokens.Line
-    val ink = if (dark) Tik.Tx else TikuTokens.Ink
-    val muted = if (dark) Tik.Sub else TikuTokens.Muted
+    val pal = LocalPalette.current
+    val bg = if (dark) pal.s2 else TikuTokens.Card
+    val line = if (dark) pal.ln else TikuTokens.Line
+    val ink = if (dark) pal.tx else TikuTokens.Ink
+    val muted = if (dark) pal.sub else TikuTokens.Muted
     Box(
         Modifier.fillMaxWidth().height(56.dp)
             .clip(RoundedCornerShape(if (dark) 12.dp else 18.dp))
@@ -128,7 +129,7 @@ fun CreatePasswordScreen() {
     val match = p2.isNotEmpty() && p1 == p2
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
-    FormScaffold("Lock your study journal", "Set a password only you know — your journal, notes and progress stay yours.") {
+    FormScaffold("Lock your journal", "Set a password only you know — your journal and everything inside it stays yours.") {
         PasswordField(p1, { p1 = it }, "Password")
         Spacer(Modifier.height(14.dp))
         Row(Modifier.fillMaxWidth()) {
@@ -482,7 +483,7 @@ fun ProfileSetupScreen() {
         }
     }
 
-    FormScaffold("Set up your student profile", "Add a photo and pick your Study ID.") {
+    FormScaffold("Set up your profile", "Add a photo and pick your Tikuu ID.") {
         // avatar picker: mint tile, + badge
         Box(Modifier.align(Alignment.CenterHorizontally)) {
             Box(
@@ -549,7 +550,7 @@ fun ProfileSetupScreen() {
         Spacer(Modifier.height(6.dp))
         Text(hint, fontSize = 13.sp, color = if (available) settings.accent else TikuTokens.Muted, fontFamily = Manrope)
         Spacer(Modifier.height(4.dp))
-        Text("Friends use your Study ID to share notes with you.", fontSize = 13.sp, color = TikuTokens.Muted, fontFamily = Manrope)
+        Text("Friends use your Tikuu ID to find you.", fontSize = 13.sp, color = TikuTokens.Muted, fontFamily = Manrope)
         Spacer(Modifier.weight(1f))
         PrimaryButton(if (busy) "Setting up…" else "Continue",
             enabled = available && !busy, modifier = Modifier.fillMaxWidth()) {

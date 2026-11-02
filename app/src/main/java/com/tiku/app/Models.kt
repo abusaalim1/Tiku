@@ -109,9 +109,32 @@ data class ChatThread(
  *  appearance, overridden by this chat's own theme (accent + wallpaper)
  *  wherever the chat doc carries one. Everything else (text size, toggles)
  *  stays global. */
+/** ROUND 13 — per-chat theme index codec.
+ *
+ *  Firestore's `themeAccent` int predates the couple themes: build-44 peers
+ *  wrote/read legacy swatch indices 0..5, and a build-44 client clamps any
+ *  stored value into its own couple slot. To keep both generations sane
+ *  WITHOUT touching the engine:
+ *   - values >= 10 are ROUND-13 space: stored - 10 = couple theme 0..4.
+ *     (A build-44 peer reading 10..14 clamps to its couple accent — graceful.)
+ *   - legacy 0..3 map to the same couple theme; 4 -> 1; 5 -> 0 (build 44's
+ *     couple index, and PreviewStore's seeded value, both mean Rose Petal).
+ *  New writes from this build always use [toStored]. */
+object ThemeCodec {
+    fun toCoupleIndex(stored: Int): Int = when {
+        stored in 10..14 -> stored - 10
+        stored in 0..3 -> stored
+        stored == 4 -> 1
+        stored == 5 -> 0
+        else -> 0
+    }
+
+    fun toStored(coupleIdx: Int): Int = 10 + coupleIdx.coerceIn(0, COUPLE_THEMES.lastIndex)
+}
+
 fun ChatThread.effectiveSettings(global: TikuUiSettings): TikuUiSettings {
     var s = global
-    themeAccent?.let { s = s.copy(accentIdx = it.coerceIn(0, TikuTokens.Accents.lastIndex)) }
+    themeAccent?.let { s = s.copy(accentIdx = ThemeCodec.toCoupleIndex(it)) }
     themeWallpaper?.let { idx ->
         s = s.copy(wallpaper = WallpaperMode.entries[idx.coerceIn(0, WallpaperMode.entries.lastIndex)])
     }

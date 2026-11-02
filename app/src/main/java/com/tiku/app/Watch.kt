@@ -7,444 +7,319 @@ import android.view.ViewGroup
 import android.webkit.RenderProcessGoneDetail
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
+import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.activity.compose.BackHandler
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
-import androidx.compose.foundation.interaction.collectIsPressedAsState
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Close
-import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.shadow
-import androidx.compose.ui.geometry.CornerRadius
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.Path
-import androidx.compose.ui.graphics.StrokeCap
-import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
+import coil.compose.AsyncImage
 
-/**
- * ROUND 10 — WATCH: YouTube inside the vault. ROUND 11 — lifecycle
- * hardening + design alignment (owner's Tikuu_11 UI).
- *
- * Lives ONLY inside ChatRoot (post-gate): a "Watch" tab in HomeScreen hosts
- * [WatchPane]; nothing about it exists in the study facade, in
- * notifications, or outside FLAG_SECURE's coverage (it renders in the same
- * activity window). The content is the LIVE YouTube page — there is no
- * dummy feed, no cards, no segments anywhere in this pane. The WebView is
- * owned by [WatchHolder] — a plain singleton, NOT by any composition — so
- * it survives tab switches and can be re-parented between the full pane
- * and the floating mini window without losing the page.
- *
- * ROUND 11 crash fixes (the "Watch goes blank and never comes back" bug):
- *  - The Build-40 holder had NO renderer-death handling: when the WebView
- *    renderer process died (routine for heavy video pages under memory
- *    pressure), obtain() kept handing back the corpse and the tab sat
- *    blank forever. Now onRenderProcessGone swaps in a fresh WebView on
- *    the last URL — the tab heals itself.
- *  - Re-parenting is guarded: obtain() always detaches before returning,
- *    the pane↔mini hand-off checks the view is actually un-parented
- *    before floating the mini, and every holder call checks
- *    [WatchHolder.webViewAlive] before touching the view.
- *  - Tab switches only pause/resume the WebView — destroy happens ONLY on
- *    lock teardown and the mini window's close button.
- *
- * LOCK SAFETY (hard rule): [WatchHolder.destroy] is called from
- * ChatSession.lock() — the single lock choke point — and from the owner's
- * relaxed quick-exit, so no video and NO AUDIO can survive leaving Tik.
- * MainActivity.onPause merely pauses playback.
- */
+// ============================================================================
+// ROUND 13 — WATCH, REBUILT. The build-44 design kept ONE singleton WebView
+// and re-parented it between three hosts (pane, floating mini player,
+// fullscreen) while HomeScreen crossfaded panes with AnimatedContent — two
+// compositions overlapped during every tab change and fought over the same
+// view; closing Watch and reopening it crashed. That pattern is DELETED.
+//
+// The pane now OWNS its WebView: created in remember, destroyed in
+// DisposableEffect, touched by no other composable. Fullscreen lives inside
+// the pane. Leaving the Watch tab destroys the WebView (acceptable + safe);
+// the plain session state below lets a fresh pane resume where it left off,
+// and the "Now watching" glass bar replaces the floating mini player.
+// ============================================================================
 
-/** Bottom clearance for Watch content. ROUND 12: the floating glass bar
- *  is gone — the design's flat .nav is ~57dp — and Watch now reuses the
- *  design .body bottom padding (84) that every Home pane uses, so
- *  YouTube's own bottom navigation stays fully visible and tappable
- *  above Tik's bar (the Round-11 fix, re-measured for the new nav). */
-private val WatchBottomInset = 84.dp
-
-/** The drawn Watch glyph: a rounded rectangle with a play triangle — the
- *  app's own mark in its own style. Deliberately NOT the official YouTube
- *  logo and not an emoji. */
-@Composable
-fun WatchGlyph(color: Color, modifier: Modifier = Modifier) {
-    Canvas(modifier) {
-        val r = size.minDimension * 0.30f
-        drawRoundRect(
-            color = color,
-            topLeft = Offset(size.width * 0.06f, size.height * 0.14f),
-            size = Size(size.width * 0.88f, size.height * 0.72f),
-            cornerRadius = CornerRadius(r, r),
-        )
-        val cx = size.width * 0.52f
-        val cy = size.height * 0.50f
-        val s = size.minDimension * 0.17f
-        val tri = Path().apply {
-            moveTo(cx - s * 0.7f, cy - s)
-            lineTo(cx - s * 0.7f, cy + s)
-            lineTo(cx + s * 0.95f, cy)
-            close()
-        }
-        drawPath(tri, Color.White)
-    }
-}
-
-/**
- * The owner design's `.btn` + `I('plus',22)`, measured from Tikuu_11 —
- * not eyeballed: a bare 34dp box (6dp padding around a 22dp glyph), no
- * background, no border. The glyph is the design's own SVG path
- * (M12 5v14M5 12h14 on a 24 grid) stroked at 1.6 with round caps, in the
- * title ink. The pressed state mirrors the CSS `.btn:active`
- * (scale .88, opacity .7).
- */
-@Composable
-fun DesignPlusButton(onClick: () -> Unit) {
-    val interaction = remember { MutableInteractionSource() }
-    val pressed by interaction.collectIsPressedAsState()
-    Box(
-        Modifier.size(34.dp)
-            .graphicsLayer {
-                scaleX = if (pressed) 0.88f else 1f
-                scaleY = if (pressed) 0.88f else 1f
-                alpha = if (pressed) 0.7f else 1f
-            }
-            .clickable(interactionSource = interaction, indication = null, onClick = onClick),
-        contentAlignment = Alignment.Center,
-    ) {
-        Canvas(Modifier.size(22.dp)) {
-            val u = size.width / 24f
-            val sw = 1.6f * u
-            drawLine(
-                Tik.Tx,
-                Offset(12 * u, 5 * u), Offset(12 * u, 19 * u),
-                strokeWidth = sw, cap = StrokeCap.Round,
-            )
-            drawLine(
-                Tik.Tx,
-                Offset(5 * u, 12 * u), Offset(19 * u, 12 * u),
-                strokeWidth = sw, cap = StrokeCap.Round,
-            )
-        }
-    }
-}
-
-object WatchHolder {
+/** Plain session state for Watch — NO View references, ever. */
+object WatchSession {
     const val HOME_URL = "https://m.youtube.com"
 
-    /** The single WebView instance (null = no Watch session). Observable
-     *  state: the pane and the mini window key their AndroidView on it, so
-     *  a renderer-gone instance swap rebuilds the host around the fresh
-     *  view automatically. */
-    var webView: WebView? by mutableStateOf(null)
+    var lastUrl by mutableStateOf(HOME_URL)
+    var lastTitle by mutableStateOf("")
+    var hasSession by mutableStateOf(false)
+
+    /** Bumped by [clear]; a pane captures the epoch at creation and its
+     *  dispose-time save is ignored after a clear (lock / quick-exit), so a
+     *  torn-down pane can never resurrect a cleared session. */
+    var epoch: Int = 0
         private set
 
-    /** True only while [webView] is a live, usable instance. Cleared the
-     *  moment the view is destroyed or its renderer dies; EVERY holder
-     *  operation checks it before touching the view. */
-    var webViewAlive: Boolean = false
-        private set
-
-    /** True while the mini window should be floating over ChatRoot. */
-    var miniActive by mutableStateOf(false)
-
-    /** Fullscreen video view handed over by the WebChromeClient, if any. */
-    var fullscreenView by mutableStateOf<View?>(null)
-        private set
-    private var fullscreenCallback: WebChromeClient.CustomViewCallback? = null
-
-    private var appCtx: Context? = null
-
-    /** Last http(s) URL the page navigated to — the self-heal target after
-     *  a renderer death. Reset to YouTube home on destroy, so a locked
-     *  session leaves no browsing trail behind. */
-    private var lastUrl: String = HOME_URL
-
-    /** Re-parent guard: true while a pane↔mini hand-off is in flight, so
-     *  the two hosts can never fight over the WebView mid-transition. */
-    private var handoffInFlight: Boolean = false
-
-    fun currentUrl(): String = if (webViewAlive) webView?.url ?: "" else ""
-
-    private fun detach(wv: WebView) {
-        (wv.parent as? ViewGroup)?.removeView(wv)
+    /** Live update from the composed pane (does not raise the bar). */
+    fun record(url: String, title: String, fromEpoch: Int) {
+        if (fromEpoch != epoch) return
+        if (!url.startsWith("http")) return
+        lastUrl = url
+        if (title.isNotBlank()) lastTitle = title
     }
 
-    @SuppressLint("SetJavaScriptEnabled")
-    private fun create(ctx: Context, url: String): WebView {
-        val app = ctx.applicationContext
-        appCtx = app
-        val wv = WebView(app)
-        wv.settings.apply {
-            javaScriptEnabled = true
-            domStorageEnabled = true
-            mediaPlaybackRequiresUserGesture = false
-        }
-        wv.webViewClient = object : WebViewClient() {
-            override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
-                val scheme = request.url.scheme ?: return true
-                // http(s) navigates INSIDE the view; intent://, market://
-                // and every other external scheme are swallowed — Watch
-                // never hands the user (or the trail) to another app.
-                return scheme != "http" && scheme != "https"
-            }
-
-            override fun onPageStarted(view: WebView, url: String?, favicon: android.graphics.Bitmap?) {
-                // Track the last real page so a renderer-gone heal can
-                // return to it (wv.url is unreliable once the renderer
-                // is dead).
-                if (url != null && (url.startsWith("http://") || url.startsWith("https://"))) {
-                    lastUrl = url
-                }
-            }
-
-            override fun onRenderProcessGone(view: WebView, detail: RenderProcessGoneDetail): Boolean {
-                // The renderer process died. Returning true promises WE
-                // handle it: swap the corpse for a fresh WebView on the
-                // last URL — the tab must never sit blank.
-                handleRendererGone(view)
-                return true
-            }
-        }
-        wv.webChromeClient = object : WebChromeClient() {
-            override fun onShowCustomView(view: View, callback: CustomViewCallback) {
-                fullscreenView = view
-                fullscreenCallback = callback
-            }
-            override fun onHideCustomView() {
-                fullscreenView = null
-                fullscreenCallback = null
-            }
-        }
-        webViewAlive = true
-        webView = wv
-        wv.loadUrl(url)
-        return wv
+    /** The pane is going away with a page loaded: the bar may now show. */
+    fun recordOnLeave(url: String, title: String, fromEpoch: Int) {
+        if (fromEpoch != epoch) return
+        if (!url.startsWith("http")) return
+        lastUrl = url
+        if (title.isNotBlank()) lastTitle = title
+        hasSession = true
     }
 
-    /**
-     * Renderer-death self-heal: drop the dead instance (detach + destroy
-     * is the platform-recommended disposal for a gone renderer) and create
-     * a fresh one on the last URL. The pane/mini observe [webView], so
-     * they re-key and show the new view on their own. Mini state is left
-     * untouched — if the mini was up, it re-forms around the fresh view.
-     */
-    private fun handleRendererGone(dead: WebView) {
-        if (webView !== dead) return
-        webViewAlive = false
-        webView = null
-        exitFullscreen()
-        runCatching { detach(dead) }
-        runCatching { dead.destroy() }
-        val ctx = appCtx ?: return
-        create(ctx, lastUrl)
-    }
-
-    /**
-     * The live WebView, creating it on first use. Always detached from any
-     * previous parent before being returned, so a host can never receive a
-     * view that is still attached elsewhere (the double-attach crash).
-     */
-    fun obtain(ctx: Context): WebView {
-        val live = webView
-        if (live != null && webViewAlive) {
-            detach(live)
-            return live
-        }
-        return create(ctx, lastUrl)
-    }
-
-    /** Header plus button (owner design): back to YouTube home. A real
-     *  navigation on the live page — creating the session first if the
-     *  Watch tab was never opened. */
-    fun goHome(ctx: Context) {
-        miniActive = false
-        val wv = obtain(ctx)
-        if (webViewAlive) runCatching { wv.loadUrl(HOME_URL) }
-    }
-
-    /** Pause playback (JS + WebView lifecycle). Used when the app merely
-     *  backgrounds without locking — the session itself survives. */
-    fun pause() {
-        if (!webViewAlive) return
-        val wv = webView ?: return
-        runCatching {
-            wv.evaluateJavascript(
-                "document.querySelectorAll('video').forEach(function(v){try{v.pause()}catch(e){}})",
-                null,
-            )
-        }
-        runCatching { wv.onPause() }
-    }
-
-    /** Resume the WebView's lifecycle when the Watch tab comes back. The
-     *  page keeps its own play state — this only un-freezes rendering. */
-    fun resume() {
-        if (!webViewAlive) return
-        runCatching { webView?.onResume() }
-    }
-
-    /** Mini-window pause/play toggle, straight into the page's video. */
-    fun setPlaying(play: Boolean) {
-        if (!webViewAlive) return
-        val wv = webView ?: return
-        val js = if (play)
-            "document.querySelectorAll('video').forEach(function(v){try{v.play()}catch(e){}})"
-        else
-            "document.querySelectorAll('video').forEach(function(v){try{v.pause()}catch(e){}})"
-        runCatching { wv.evaluateJavascript(js, null) }
-        runCatching { if (play) wv.onResume() else wv.onPause() }
-    }
-
-    fun exitFullscreen() {
-        runCatching { fullscreenCallback?.onCustomViewHidden() }
-        fullscreenView = null
-        fullscreenCallback = null
-    }
-
-    /**
-     * FULL TEARDOWN — the lock path and the mini window's ✕. Best-effort
-     * JS pause first, then the page is blanked, detached and the WebView
-     * destroyed: after this, no frame and no audio of the video can exist
-     * anywhere. Also exits any fullscreen view, clears the mini state and
-     * forgets the last URL (no trail survives a lock).
-     */
-    fun destroy() {
-        exitFullscreen()
-        miniActive = false
-        handoffInFlight = false
+    /** Lock / quick-exit / bar close: forget everything. */
+    fun clear() {
+        epoch++
         lastUrl = HOME_URL
-        val wv = webView
-        webView = null
-        webViewAlive = false
-        if (wv == null) return
-        // JS-pause on the INSTANCE first (blanking + destroy below are what
-        // actually guarantee silence; this just stops playback cleanly).
-        runCatching {
-            wv.evaluateJavascript(
-                "document.querySelectorAll('video').forEach(function(v){try{v.pause()}catch(e){}})",
-                null,
-            )
-        }
-        runCatching { wv.stopLoading() }
-        runCatching { wv.loadUrl("about:blank") }
-        detach(wv)
-        runCatching { wv.destroy() }
-    }
-
-    /** The pane was re-entered: any scheduled hand-off is moot. */
-    fun onPaneEntered() {
-        handoffInFlight = false
-    }
-
-    /** The pane is being left (tab switch — NEVER a destroy): a video page
-     *  floats the mini window once the tab transition has settled and the
-     *  WebView is verifiably un-parented; any other page simply pauses. */
-    fun onPaneLeft(scope: kotlinx.coroutines.CoroutineScope) {
-        if (!webViewAlive || webView == null) return
-        if (!currentUrl().contains("/watch") && !lastUrl.contains("/watch")) {
-            pause()
-            return
-        }
-        if (handoffInFlight) return
-        handoffInFlight = true
-        val wv = webView
-        scope.launch {
-            delay(400)
-            handoffInFlight = false
-            if (webViewAlive && webView === wv && wv?.parent == null &&
-                AppState.homeTab != HomeTab.WATCH && ChatSession.unlocked
-            ) {
-                miniActive = true
-            }
-        }
+        lastTitle = ""
+        hasSession = false
     }
 }
 
-/** The Watch tab itself: the holder's WebView at full size, inset above
- *  the floating tab bar so YouTube's own navigation stays visible.
- *  Leaving the tab with a video open floats the mini window (see
- *  [WatchMiniOverlay]); tab switches never destroy the WebView. */
+/** Tiny registered controller so chrome outside the pane (the Watch header
+ *  "+" button, MainActivity.onPause) can reach the ACTIVE pane's WebView.
+ *  Both lambdas are non-null only while a WatchPane is composed. */
+object WatchControl {
+    var navigate: ((String) -> Unit)? = null
+    var pausePlayback: (() -> Unit)? = null
+
+    /** Header "+": if the pane is alive, navigate it; otherwise seed the
+     *  session and switch to the Watch tab (the pane resumes at HOME). */
+    fun goHome() {
+        val nav = navigate
+        if (nav != null) {
+            nav(WatchSession.HOME_URL)
+        } else {
+            WatchSession.lastUrl = WatchSession.HOME_URL
+            WatchSession.hasSession = true
+            AppState.homeTab = HomeTab.WATCH
+            if (AppState.screen !is Screen.Chat && AppState.screen !is Screen.ChatDetails) {
+                AppState.go(Screen.Home)
+            }
+        }
+    }
+
+    /** Activity pause: pause the active pane's video, if any. When no pane
+     *  is composed nothing can be playing — its WebView is destroyed. */
+    fun requestPause() {
+        pausePlayback?.invoke()
+    }
+}
+
+/** YouTube thumbnail id from a watch/shorts/embed URL, or null. */
+fun youtubeThumbId(url: String): String? {
+    Regex("[?&]v=([A-Za-z0-9_-]{6,})").find(url)?.let { return it.groupValues[1] }
+    return Regex("/(?:shorts|embed)/([A-Za-z0-9_-]{6,})").find(url)?.groupValues?.get(1)
+}
+
+/** Bottom inset the Watch pane keeps so YouTube's own bottom nav stays
+ *  clear of Tik's floating glass nav (nav pill 60dp + 14dp page margin +
+ *  breathing room). */
+val WatchBottomInset = 100.dp
+
+@SuppressLint("SetJavaScriptEnabled")
+private fun buildWatchWebView(
+    ctx: Context,
+    startUrl: String,
+    onPage: (String) -> Unit,
+    onTitle: (String) -> Unit,
+    onShowCustom: (View, WebChromeClient.CustomViewCallback) -> Unit,
+    onHideCustom: () -> Unit,
+    onRendererGone: () -> Unit,
+): WebView {
+    val wv = WebView(ctx)
+    wv.settings.apply {
+        javaScriptEnabled = true
+        domStorageEnabled = true
+        mediaPlaybackRequiresUserGesture = false
+        cacheMode = WebSettings.LOAD_DEFAULT
+        setSupportZoom(false)
+        builtInZoomControls = false
+        displayZoomControls = false
+        allowFileAccess = false
+        allowContentAccess = false
+        @Suppress("DEPRECATION")
+        allowFileAccessFromFileURLs = false
+        @Suppress("DEPRECATION")
+        allowUniversalAccessFromFileURLs = false
+        mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
+        // Keep YouTube's own UA: spoofing a desktop UA breaks mobile playback.
+        userAgentString = WebSettings.getDefaultUserAgent(ctx)
+    }
+    wv.setBackgroundColor(android.graphics.Color.BLACK)
+    wv.webViewClient = object : WebViewClient() {
+        override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean = false
+
+        override fun onPageStarted(view: WebView?, url: String?, favicon: android.graphics.Bitmap?) {
+            if (!url.isNullOrBlank()) onPage(url)
+        }
+
+        override fun onRenderProcessGone(view: WebView?, detail: RenderProcessGoneDetail?): Boolean {
+            // The renderer died (happens after aggressive backgrounding).
+            // Returning true takes responsibility: the pane swaps in a
+            // fresh WebView on the same URL (pane-local heal, spec B).
+            onRendererGone()
+            return true
+        }
+    }
+    wv.webChromeClient = object : WebChromeClient() {
+        override fun onReceivedTitle(view: WebView?, title: String?) {
+            if (!title.isNullOrBlank()) onTitle(title)
+        }
+
+        override fun onShowCustomView(view: View?, callback: CustomViewCallback?) {
+            if (view != null && callback != null) onShowCustom(view, callback)
+        }
+
+        override fun onHideCustomView() {
+            onHideCustom()
+        }
+    }
+    if (startUrl.startsWith("http")) wv.loadUrl(startUrl)
+    return wv
+}
+
+private fun destroyWatchWebView(wv: WebView) {
+    runCatching { wv.stopLoading() }
+    runCatching { wv.loadUrl("about:blank") }
+    (wv.parent as? ViewGroup)?.removeView(wv)
+    runCatching { wv.destroy() }
+}
+
+private fun pauseWatchWebView(wv: WebView) {
+    runCatching {
+        wv.evaluateJavascript(
+            "(function(){var v=document.querySelector('video');if(v&&!v.paused){v.pause();}})();",
+            null,
+        )
+    }
+    runCatching { wv.onPause() }
+}
+
+/**
+ * The Watch pane. Owns its WebView end to end: created here, destroyed here,
+ * fullscreen hosted here. Nothing outside this composable may touch it.
+ */
 @Composable
 fun WatchPane() {
+    val pal = LocalPalette.current
     if (Config.PREVIEW_UI_ONLY) {
-        // PREVIEW (Roborazzi) only: no WebView, no network, no fake feed —
-        // just the pane's honest placeholder line. Never in the real app.
+        // Screenshot/preview branch: no WebView (Robolectric has no real
+        // renderer). Round-12 copy kept so the suite's text checks hold.
         Box(
-            Modifier.fillMaxSize().background(Tik.Bg).padding(bottom = WatchBottomInset),
+            Modifier.fillMaxSize().background(pal.bg).padding(bottom = WatchBottomInset),
             contentAlignment = Alignment.Center,
         ) {
-            Text(
-                "YouTube opens here on your phone",
-                fontSize = 14.sp, color = Tik.Sub, fontFamily = Manrope,
-            )
-        }
-        return
-    }
-    val ctx = LocalContext.current
-    val scope = androidx.compose.runtime.rememberCoroutineScope()
-    val wv = WatchHolder.webView
-    LaunchedEffect(Unit) {
-        WatchHolder.miniActive = false
-        WatchHolder.onPaneEntered()
-        WatchHolder.obtain(ctx)
-        WatchHolder.resume()
-    }
-    DisposableEffect(Unit) {
-        onDispose { WatchHolder.onPaneLeft(scope) }
-    }
-    Box(Modifier.fillMaxSize().background(Tik.Bg)) {
-        // Keyed on the instance: a renderer-gone swap rebuilds this host
-        // around the fresh WebView instead of leaving the dead one on screen.
-        key(wv) {
-            if (wv != null) {
-                AndroidView(
-                    factory = { WatchHolder.obtain(ctx) },
-                    modifier = Modifier.fillMaxSize().padding(bottom = WatchBottomInset),
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                TikIcon("play", Modifier.size(44.dp), tint = pal.sub)
+                Text(
+                    "YouTube opens here on your phone",
+                    fontFamily = InterTight, fontSize = 14.sp, color = pal.sub,
+                    modifier = Modifier.padding(top = 12.dp),
                 )
             }
         }
-        // fullscreen video (WebChromeClient hand-over) covers the pane
-        WatchHolder.fullscreenView?.let { fv ->
-            BackHandler { WatchHolder.exitFullscreen() }
+        return
+    }
+
+    val ctx = LocalContext.current
+    val paneEpoch = remember { WatchSession.epoch }
+    var currentUrl by remember { mutableStateOf(WatchSession.lastUrl) }
+    var pageTitle by remember { mutableStateOf(WatchSession.lastTitle) }
+    var healGen by remember { mutableIntStateOf(0) }
+    var fsView by remember { mutableStateOf<View?>(null) }
+    var fsCallback by remember { mutableStateOf<WebChromeClient.CustomViewCallback?>(null) }
+
+    val webView = remember(healGen) {
+        buildWatchWebView(
+            ctx = ctx.applicationContext,
+            startUrl = currentUrl,
+            onPage = { url ->
+                currentUrl = url
+                WatchSession.record(url, pageTitle, paneEpoch)
+            },
+            onTitle = { title ->
+                pageTitle = title
+                WatchSession.record(currentUrl, title, paneEpoch)
+            },
+            onShowCustom = { view, callback ->
+                fsView = view
+                fsCallback = callback
+            },
+            onHideCustom = {
+                val cb = fsCallback
+                fsView = null
+                fsCallback = null
+                runCatching { cb?.onCustomViewHidden() }
+            },
+            onRendererGone = { healGen++ },
+        )
+    }
+
+    fun exitFullscreen() {
+        // The chrome client's onHideCustomView clears the state + completes
+        // the callback; the guards below cover the already-cleared case.
+        runCatching { webView.webChromeClient?.onCustomViewHidden() }
+        if (fsView != null) {
+            val cb = fsCallback
+            fsView = null
+            fsCallback = null
+            runCatching { cb?.onCustomViewHidden() }
+        }
+    }
+    BackHandler(enabled = fsView != null) { exitFullscreen() }
+
+    DisposableEffect(webView) {
+        WatchControl.navigate = { url -> runCatching { webView.loadUrl(url) } }
+        WatchControl.pausePlayback = { pauseWatchWebView(webView) }
+        onDispose {
+            if (WatchControl.navigate != null) WatchControl.navigate = null
+            if (WatchControl.pausePlayback != null) WatchControl.pausePlayback = null
+            // Save BEFORE destroy; epoch-guarded so a lock-time clear wins.
+            WatchSession.recordOnLeave(currentUrl, pageTitle, paneEpoch)
+            if (fsView != null) {
+                val cb = fsCallback
+                fsView = null
+                fsCallback = null
+                runCatching { cb?.onCustomViewHidden() }
+            }
+            destroyWatchWebView(webView)
+        }
+    }
+
+    Box(Modifier.fillMaxSize().background(Color.Black).padding(bottom = WatchBottomInset)) {
+        AndroidView(
+            factory = { webView },
+            modifier = Modifier.fillMaxSize(),
+        )
+        val fs = fsView
+        if (fs != null) {
             AndroidView(
-                factory = { fv },
+                factory = { fs },
                 modifier = Modifier.fillMaxSize().background(Color.Black),
             )
         }
@@ -452,92 +327,68 @@ fun WatchPane() {
 }
 
 /**
- * The floating mini player — the SAME WebView re-parented into a small
- * draggable window over ChatRoot (drag pattern copied from
- * FloatingCallWindow). Rendered from MainActivity's home layer, above the
- * tab content, and its bounds always stay above the floating tab bar.
- * Tap (not on a button) expands back to the Watch tab; the ✕ closes Watch
- * entirely (pause + blank + destroy via the holder).
+ * "Now watching" — the slim glass bar that replaces the floating mini
+ * player. Shows on other Tik tabs while a Watch session exists; play jumps
+ * back to the Watch tab (its fresh pane resumes at [WatchSession.lastUrl]),
+ * × clears the session. Rendered by MainActivity above the glass nav.
  */
 @Composable
-fun WatchMiniOverlay() {
-    val tab = AppState.homeTab
-    val screen = AppState.screen
-    val wv = WatchHolder.webView
-    val show = WatchHolder.miniActive && wv != null && WatchHolder.webViewAlive && tab != HomeTab.WATCH &&
-        ChatSession.unlocked && (screen is Screen.Home || screen is Screen.Chat || screen is Screen.ChatDetails)
+fun NowWatchingBar(modifier: Modifier = Modifier) {
+    val pal = LocalPalette.current
+    val show = WatchSession.hasSession &&
+        AppState.homeTab != HomeTab.WATCH &&
+        AppState.screen is Screen.Home &&
+        ChatSession.unlocked
     if (!show) return
-    val settings by SettingsStore.state.collectAsState()
-    var paused by remember { mutableStateOf(false) }
-    val winW = 184.dp
-    val winH = 104.dp
-    BoxWithConstraints(Modifier.fillMaxSize()) {
-        val density = LocalDensity.current
-        // The window's bottom edge may never slide under the tab bar.
-        val maxOffY = (maxHeight - winH - WatchBottomInset).coerceAtLeast(8.dp)
-        var offX by remember { mutableStateOf(maxWidth - winW - 14.dp) }
-        var offY by remember { mutableStateOf(maxOffY) }
-        LaunchedEffect(maxWidth, maxHeight) {
-            offX = offX.coerceIn(8.dp, (maxWidth - winW - 8.dp).coerceAtLeast(8.dp))
-            offY = offY.coerceIn(8.dp, maxOffY)
+    val thumbId = youtubeThumbId(WatchSession.lastUrl)
+    Row(
+        modifier
+            .fillMaxWidth()
+            .glassSurface(RoundedCornerShape(22.dp), useLargeGlass = true, blur = true)
+            .padding(horizontal = 10.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        if (thumbId != null) {
+            AsyncImage(
+                model = "https://i.ytimg.com/vi/$thumbId/hqdefault.jpg",
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.width(64.dp).height(36.dp).clip(RoundedCornerShape(8.dp)),
+            )
+        } else {
+            Box(
+                Modifier.width(64.dp).height(36.dp).clip(RoundedCornerShape(8.dp)).background(pal.s2),
+                contentAlignment = Alignment.Center,
+            ) { TikIcon("play", Modifier.size(18.dp), tint = pal.tx) }
+        }
+        Column(Modifier.weight(1f)) {
+            Text(
+                "Now watching",
+                fontFamily = InterTight, fontWeight = FontWeight.Medium,
+                fontSize = 10.5.sp, color = pal.sub,
+            )
+            Text(
+                WatchSession.lastTitle.ifBlank { "YouTube" },
+                fontFamily = InterTight, fontWeight = FontWeight.Medium,
+                fontSize = 13.sp, color = pal.tx,
+                maxLines = 1, overflow = TextOverflow.Ellipsis,
+            )
         }
         Box(
-            Modifier.offset(x = offX, y = offY).size(winW, winH)
-                .shadow(16.dp, RoundedCornerShape(16.dp))
-                .clip(RoundedCornerShape(16.dp))
-                .background(Color.Black)
-                .border(1.dp, Tik.Ln, RoundedCornerShape(16.dp))
-                .pointerInput(Unit) {
-                    detectDragGestures { change, drag ->
-                        change.consume()
-                        offX = (offX + with(density) { drag.x.toDp() })
-                            .coerceIn(8.dp, (maxWidth - winW - 8.dp).coerceAtLeast(8.dp))
-                        offY = (offY + with(density) { drag.y.toDp() })
-                            .coerceIn(8.dp, maxOffY)
-                    }
-                }
+            Modifier.size(36.dp).clip(RoundedCornerShape(999.dp)).background(pal.ac)
                 .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {
-                    // expand back to the Watch tab at full size
-                    WatchHolder.miniActive = false
                     AppState.homeTab = HomeTab.WATCH
                     AppState.go(Screen.Home)
                 },
-        ) {
-            // Keyed on the instance, like the pane: a renderer-gone swap
-            // re-forms the mini around the fresh WebView.
-            key(wv) {
-                AndroidView(
-                    factory = { WatchHolder.obtain(AppState.appCtx) },
-                    modifier = Modifier.fillMaxSize(),
-                )
-            }
-            Row(
-                Modifier.align(Alignment.TopEnd).padding(6.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                // pause / play (drawn glyphs, same convention as the voice bubble)
-                Box(
-                    Modifier.size(26.dp).clip(CircleShape).background(Color(0x66000000))
-                        .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {
-                            paused = !paused
-                            WatchHolder.setPlaying(!paused)
-                        },
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Text(if (paused) "▶" else "❚❚", fontSize = 10.sp, color = Color.White)
-                }
-                Spacer(Modifier.width(6.dp))
-                // close: pause via JS, load about:blank, detach, clear holder
-                Box(
-                    Modifier.size(26.dp).clip(CircleShape).background(settings.accent)
-                        .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {
-                            WatchHolder.destroy()
-                        },
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Icon(Icons.Filled.Close, null, Modifier.size(14.dp), tint = Color.White)
-                }
-            }
-        }
+            contentAlignment = Alignment.Center,
+        ) { TikIcon("playFill", Modifier.size(17.dp), tint = Color.White) }
+        Box(
+            Modifier.size(36.dp)
+                .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {
+                    WatchSession.clear()
+                },
+            contentAlignment = Alignment.Center,
+        ) { TikIcon("x", Modifier.size(17.dp), tint = pal.sub) }
     }
 }

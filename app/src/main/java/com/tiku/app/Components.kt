@@ -115,13 +115,13 @@ fun PrimaryButton(text: String, enabled: Boolean = true, modifier: Modifier = Mo
     }
 }
 
-/** .tg toggle (Tik design): 44x26dp, knob 22, on = accent, off = #34343A.
- *  Only Tik surfaces call this (Chat Details + Me settings) — the facade
- *  has no toggles — so it carries the design metrics directly. */
+/** Toggle switch — ROUND 13: the owner design's switch (52x31, thumb 27,
+ *  spring glide, on = theme accent, off = s2 with hairline). Only Tik
+ *  surfaces call this (Chat Details + Me settings) — the facade has no
+ *  toggles. */
 @Composable
 fun ToggleSwitch(on: Boolean, onChange: (Boolean) -> Unit) {
-    val settings = SettingsStore.state.collectAsState().value
-    TikToggle(checked = on, accent = settings.accent, onCheckedChange = onChange)
+    TikuuToggleSwitch(checked = on, onCheckedChange = onChange)
 }
 
 /** Serif italic display title (covers .top h2, .form h2, .hero h1, .logo, .sht, .gh, .sq, .cph, #kn). */
@@ -132,29 +132,31 @@ fun SerifTitle(text: String, fontSize: androidx.compose.ui.unit.TextUnit, color:
         letterSpacing = (-0.5).sp, modifier = modifier, textAlign = textAlign)
 }
 
-/** Design toast. ROUND 12: inside the Tik section the toast is the design's
- *  (.toast — bottom, 92dp up, s2 pill r14 with ln border, rises 12px in
- *  .28s); everywhere else (facade / gate) the original top pill stays. */
+/** Design toast. ROUND 13: inside the Tik section the toast is the owner
+ *  design's (.toast — floating sheet-coloured pill r999 with glass border,
+ *  bottom, above the glass nav); everywhere else (facade / gate) the
+ *  original top pill stays. */
 @Composable
 fun BoxScope.DesignToast() {
     val text = AppState.toastText
     if (AppState.isChatRoot(AppState.screen)) {
+        val pal = LocalPalette.current
         AnimatedVisibility(
             visible = text != null,
             enter = slideInVertically(tween(280, easing = TikEase)) { 48 } + fadeIn(tween(280, easing = TikEase)),
             exit = slideOutVertically(tween(280, easing = TikEase)) { 48 } + fadeOut(tween(280, easing = TikEase)),
-            modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 92.dp),
+            modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 104.dp),
         ) {
             Box(
                 modifier = Modifier
-                    .clip(RoundedCornerShape(14.dp))
-                    .background(Tik.S2)
-                    .border(1.dp, Tik.Ln, RoundedCornerShape(14.dp)),
+                    .clip(RoundedCornerShape(999.dp))
+                    .background(sheetColor())
+                    .border(1.dp, pal.gb, RoundedCornerShape(999.dp)),
                 contentAlignment = Alignment.Center,
             ) {
-                Text(text ?: "", color = Tik.Tx, fontSize = 13.5.sp, fontWeight = FontWeight.Medium,
-                    fontFamily = Manrope,
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp))
+                Text(text ?: "", color = pal.tx, fontSize = 13.5.sp, fontWeight = FontWeight.Medium,
+                    fontFamily = InterTight,
+                    modifier = Modifier.padding(horizontal = 20.dp, vertical = 11.dp))
             }
         }
         return
@@ -177,16 +179,20 @@ fun BoxScope.DesignToast() {
     }
 }
 
-/** Bottom sheet host. ROUND 12: sheets only ever open inside the Tik
- *  section, where the host takes the design's .shw/.sheet skin — scrim
- *  #000a fading .28s, sheet s2 with 20dp top radii sliding up .38s on the
- *  design easing, grabber 36x4 #48484E; sheet contents carry their own
- *  design margins (host horizontal padding is 0). The peach host below is
- *  kept verbatim for any non-Tik surface. */
+/** Bottom sheet host. ROUND 13: sheets only ever open inside the Tik
+ *  section, where the host takes the owner design's sheet skin — a FLOATING
+ *  sheet (8dp margin all round, r34) in sheetColor() over a deep-violet
+ *  scrim (#0C0818 @ .42), sliding up .38s on the design easing, grabber
+ *  40x5; when a HazeState exists the sheet also blurs the content behind
+ *  it. Sheet contents carry their own design margins (host horizontal
+ *  padding is 0). The peach host below is kept verbatim for any non-Tik
+ *  surface. */
 @Composable
 fun BoxScope.BottomSheetHost() {
     val content = AppState.sheetContent
     if (AppState.isChatRoot(AppState.screen)) {
+        val pal = LocalPalette.current
+        val sheetShape = RoundedCornerShape(34.dp)
         AnimatedVisibility(
             visible = content != null,
             enter = fadeIn(tween(280, easing = TikEase)),
@@ -195,7 +201,7 @@ fun BoxScope.BottomSheetHost() {
         ) {
             Box(
                 modifier = Modifier.fillMaxSize()
-                    .background(Tik.Scrim)
+                    .background(Color(0xFF0C0818).copy(alpha = 0.42f))
                     .clickable(interactionSource = remember { MutableInteractionSource() },
                         indication = null) { AppState.closeSheet() },
                 contentAlignment = Alignment.BottomCenter,
@@ -207,8 +213,12 @@ fun BoxScope.BottomSheetHost() {
                 ) {
                     Box(
                         modifier = Modifier
-                            .clip(RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp))
-                            .background(Tik.S2)
+                            .fillMaxWidth()
+                            .padding(8.dp)
+                            .clip(sheetShape)
+                            .glassBlur(24.dp)
+                            .background(sheetColor(), sheetShape)
+                            .border(1.dp, pal.gb, sheetShape)
                             .clickable(interactionSource = remember { MutableInteractionSource() },
                                 indication = null) { },
                     ) {
@@ -216,12 +226,12 @@ fun BoxScope.BottomSheetHost() {
                             modifier = Modifier.padding(top = 8.dp, bottom = 14.dp)
                         ) {
                             Box(
-                                modifier = Modifier.width(36.dp).height(4.dp)
-                                    .clip(RoundedCornerShape(2.dp))
-                                    .background(Tik.Grabber)
+                                modifier = Modifier.width(40.dp).height(5.dp)
+                                    .clip(RoundedCornerShape(3.dp))
+                                    .background(pal.grabber)
                                     .align(Alignment.CenterHorizontally)
                             )
-                            Spacer(Modifier.height(4.dp))
+                            Spacer(Modifier.height(6.dp))
                             content?.invoke()
                         }
                     }
@@ -299,10 +309,11 @@ object PresetAvatars {
 @Composable
 fun PresetAvatarPicker(dark: Boolean = false, onPick: (Bitmap) -> Unit) {
     val ctx = androidx.compose.ui.platform.LocalContext.current
+    val pal = LocalPalette.current
     Column(Modifier.fillMaxWidth()) {
         Text(
             "Pick a picture", fontSize = 13.sp, fontWeight = FontWeight.SemiBold,
-            fontFamily = Manrope, color = if (dark) Tik.Sub else TikuTokens.Muted,
+            fontFamily = if (dark) InterTight else Manrope, color = if (dark) pal.sub else TikuTokens.Muted,
         )
         Spacer(Modifier.height(10.dp))
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
@@ -310,7 +321,7 @@ fun PresetAvatarPicker(dark: Boolean = false, onPick: (Bitmap) -> Unit) {
                 val bmp = remember(ctx, i) { PresetAvatars.load(ctx, i) }
                 Box(
                     Modifier.size(42.dp).clip(CircleShape)
-                        .background(if (dark) Tik.S1 else TikuTokens.Mint)
+                        .background(if (dark) pal.s1 else TikuTokens.Mint)
                         .clickable(
                             interactionSource = remember { MutableInteractionSource() },
                             indication = null,

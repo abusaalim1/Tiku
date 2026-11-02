@@ -52,14 +52,23 @@ object TikuTokens {
 enum class WallpaperMode { DEFAULT, PLAIN, PEACH, DOTS, COUPLE }
 
 data class TikuUiSettings(
+    /** ROUND 13: this is now the COUPLE-THEME index (0..4 into
+     *  [COUPLE_THEMES]) — the owner-supplied design replaced the six legacy
+     *  accent swatches with five couple themes. Legacy stored values are
+     *  migrated once in [SettingsStore.init]; per-chat stored theme ints go
+     *  through [ThemeCodec] (Models.kt). */
     val accentIdx: Int = 0,
     val wallpaper: WallpaperMode = WallpaperMode.DEFAULT,
     val textSizeSp: Float = 15f,
+    /** ROUND 13: Tik appearance mode. Default DARK (the design's default);
+     *  persisted by [SettingsStore.setDarkMode]. */
+    val darkMode: Boolean = true,
     val toggles: Map<String, Boolean> = SettingsStore.defaultToggles(),
 ) {
-    val accent: Color get() = TikuTokens.Accents[accentIdx.coerceIn(0, TikuTokens.Accents.lastIndex)].second
-    val gradTop: Color get() = TikuTokens.Accents[accentIdx.coerceIn(0, TikuTokens.Accents.lastIndex)].first
-    val gradBottom: Color get() = TikuTokens.Accents[accentIdx.coerceIn(0, TikuTokens.Accents.lastIndex)].second
+    val coupleTheme: CoupleTheme get() = COUPLE_THEMES[accentIdx.coerceIn(0, COUPLE_THEMES.lastIndex)]
+    val accent: Color get() = coupleTheme.ac
+    val gradTop: Color get() = coupleTheme.ac
+    val gradBottom: Color get() = coupleTheme.ac2
     val gradBrush: Brush get() = Brush.linearGradient(listOf(gradTop, gradBottom))
     val readReceipts get() = toggles["rr"] == true
     val lastSeen get() = toggles["ls"] == true
@@ -109,31 +118,56 @@ object SettingsStore {
     fun init(ctx: Context) {
         prefs = ctx.getSharedPreferences(PREF, Context.MODE_PRIVATE)
         val keys = defaultToggles().keys
+        // ROUND 13 one-time migration: the legacy "accent" pref held a
+        // build-44 swatch index (0..5); the new "theme" pref holds a couple
+        // theme index (0..4). The remap is NOT idempotent (legacy 4 -> 1),
+        // so it runs only while "theme" is absent, then writes "theme".
+        val themeIdx = if (prefs.contains("theme")) {
+            prefs.getInt("theme", 0)
+        } else {
+            val legacy = prefs.getInt("accent", 0)
+            val mapped = when (legacy) {
+                in 0..3 -> legacy
+                4 -> 1
+                5 -> 0
+                else -> 0
+            }
+            prefs.edit().putInt("theme", mapped).apply()
+            mapped
+        }
         _state.value = TikuUiSettings(
-            accentIdx = prefs.getInt("accent", 0),
+            accentIdx = themeIdx.coerceIn(0, COUPLE_THEMES.lastIndex),
             wallpaper = WallpaperMode.entries[prefs.getInt("wallpaper", 0).coerceIn(0, WallpaperMode.entries.lastIndex)],
             textSizeSp = prefs.getFloat("textSize", 15f),
+            darkMode = prefs.getBoolean("darkMode", true),
             toggles = keys.associateWith { prefs.getBoolean("tg_$it", defaultToggles()[it] == true) },
         )
     }
 
-    fun setAccent(i: Int) { _state.value = _state.value.copy(accentIdx = i); prefs.edit().putInt("accent", i).apply() }
+    /** ROUND 13: [i] is a COUPLE-THEME index (0..4), persisted as "theme". */
+    fun setAccent(i: Int) {
+        val v = i.coerceIn(0, COUPLE_THEMES.lastIndex)
+        _state.value = _state.value.copy(accentIdx = v)
+        prefs.edit().putInt("theme", v).apply()
+    }
     fun setWallpaper(i: Int) { _state.value = _state.value.copy(wallpaper = WallpaperMode.entries[i]); prefs.edit().putInt("wallpaper", i).apply() }
 
-    /** ROUND 7: the labelled "Couple theme" preset (Me ▸ Appearance). ON
-     *  applies the full couple look at once — rose accent (the last swatch)
-     *  + COUPLE wallpaper; OFF restores the defaults (default accent +
-     *  default wallpaper). Both go through the normal setters, so the choice
-     *  persists like any other appearance setting. The toggle's on/off state
-     *  in the UI is DERIVED from the current settings (accent == rose &&
-     *  wallpaper == COUPLE), so the individual swatch rows stay consistent
-     *  with it automatically, whichever control the user touched last. */
+    /** ROUND 13: Tik appearance mode (design Appearance ▸ Mode). */
+    fun setDarkMode(on: Boolean) {
+        _state.value = _state.value.copy(darkMode = on)
+        prefs.edit().putBoolean("darkMode", on).apply()
+    }
+
+    /** The labelled "Couple theme" preset (Me ▸ Appearance). ROUND 13: ON
+     *  applies Rose Petal (theme 0 — the successor of the old rose couple
+     *  pair) + COUPLE wallpaper; OFF restores the default wallpaper. The
+     *  toggle's on/off state in the UI is DERIVED (theme == 0 && wallpaper ==
+     *  COUPLE), so the individual controls stay consistent with it. */
     fun setCoupleTheme(on: Boolean) {
         if (on) {
-            setAccent(TikuTokens.Accents.lastIndex)
+            setAccent(0)
             setWallpaper(WallpaperMode.COUPLE.ordinal)
         } else {
-            setAccent(0)
             setWallpaper(WallpaperMode.DEFAULT.ordinal)
         }
     }

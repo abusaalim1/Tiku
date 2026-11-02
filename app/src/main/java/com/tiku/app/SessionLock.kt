@@ -11,11 +11,12 @@ import kotlinx.coroutines.launch
 /**
  * SINGLE SECRET-ENTRY POINT.
  *
- * The discreet book row on the Chemistry subject page calls [openGate] — and
- * only this function may route into the password gate. (Round 3.2: the entry
- * moved off the facade home tools grid into the Chemistry page. Round 8: the
- * row itself no longer says "Tik" at all — it is a plain study "Reference
- * books" row with a book icon, indistinguishable from its neighbours.)
+ * The "For You, Always" row on the K-drama facade's For You page calls
+ * [openGate] — and only this function may route into the password gate.
+ * (Round 3.2: the entry moved off the old study facade's home tools grid
+ * into its Chemistry page as a plain "Reference books" row. ROUND 13: the
+ * study facade is gone; the row is now a romance app's personal-corner
+ * feature on the For You page — no lock, key or chat wording near it.)
  * If the owner ever swaps the trigger, change this one call site; nothing
  * else in the facade knows the gate exists.
  */
@@ -149,7 +150,7 @@ object OwnerGate {
  * never password material). After the 2nd failure an escalating lockout
  * applies: 10s, 20s, 40s, 80s, 160s, then 5 min. The counters SURVIVE the
  * screen being closed/reopened (they live in prefs, not composition state),
- * and a successful open resets them. UX copy stays study-framed.
+ * and a successful open resets them. UX copy stays journal-framed.
  */
 object GateGuard {
     private fun prefs(ctx: Context) =
@@ -189,7 +190,7 @@ object GateGuard {
  *
  * Lock rules (owner, hard): the session exists ONLY while the user is inside the
  * Tik section. Any exit — Back at ChatRoot home, the discreet quick-exit control,
- * or the app going to background — returns instantly to the study facade, drops
+ * or the app going to background — returns instantly to the drama facade, drops
  * decrypted material and key material from RAM, and requires the password again.
  * Keys are ephemeral in-memory only: derived on unlock, zeroed on exit.
  */
@@ -204,15 +205,17 @@ object ChatSession {
      *  re-lock mid-pick; consumed by the very next onStop. */
     @Volatile var expectExternalActivity: Boolean = false
 
-    /** Drop keys + decrypted state from RAM and snap back to the study facade. */
+    /** Drop keys + decrypted state from RAM and snap back to the drama facade. */
     fun lock(ctx: Context) {
         val c = ctx.applicationContext
         // ROUND 10 (Watch lock safety): this lock() is the single choke point
         // every lock path funnels through (quick exit, Back-out, backgrounding
-        // via MainActivity.onStop, the owner's explicit "Lock now"). The
-        // in-vault YouTube WebView dies HERE — JS pause, about:blank, destroy —
-        // so no video frame and no audio can survive any lock.
-        WatchHolder.destroy()
+        // via MainActivity.onStop, the owner's explicit "Lock now").
+        // ROUND 13: the Watch WebView is owned by its pane — clearing the
+        // session here (epoch bump) makes the pane's dispose-time save a
+        // no-op, and leaving the vault uncomposes the pane, which destroys
+        // the WebView — so no video frame and no audio can survive any lock.
+        WatchSession.clear()
         if (!Config.PREVIEW_UI_ONLY && unlocked && FirebaseEngine.signedIn) {
             FirebaseEngine.setPresence(false)
         }
@@ -234,19 +237,20 @@ object ChatSession {
     fun quickExit(ctx: Context) {
         if (OwnerGate.lockOffActive()) {
             // ROUND 10: the relaxed exit keeps the chat SESSION alive, but a
-            // playing Watch video must never leak audio into the study
-            // facade — the WebView is destroyed here too (only the keys and
-            // threads survive this path, never media).
-            WatchHolder.destroy()
+            // playing Watch video must never leak audio into the facade —
+            // the session is cleared here too, and the pane (uncomposed by
+            // the navigation below) destroys its WebView on dispose (only
+            // the keys and threads survive this path, never media).
+            WatchSession.clear()
             if (!Config.PREVIEW_UI_ONLY && unlocked && FirebaseEngine.signedIn) {
                 FirebaseEngine.setPresence(false)
             }
             if (!AppState.isFacade(AppState.screen)) AppState.instantGo(Screen.Facade)
-            AppState.toast("Back to study mode")
+            AppState.toast("Back to Tikuu")
             return
         }
         lock(ctx)
-        AppState.toast("Back to study mode")
+        AppState.toast("Back to Tikuu")
     }
 
     /**

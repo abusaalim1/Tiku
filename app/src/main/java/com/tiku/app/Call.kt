@@ -65,9 +65,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
@@ -210,26 +213,41 @@ private fun RtcVideoView(local: Boolean, modifier: Modifier) {
     )
 }
 
+/** Design call-dock button: 58dp glass disc (white .14 + white .2 edge);
+ *  the ACTIVE state flips to near-white with a dark glyph. Icons are the
+ *  owner design's drawn set (TikuuIcon names). */
 @Composable
-private fun CallToggle(icon: androidx.compose.ui.graphics.vector.ImageVector, active: Boolean, onClick: () -> Unit) {
+private fun CallToggle(icon: String, active: Boolean, onClick: () -> Unit) {
     Box(
-        Modifier.size(62.dp).clip(CircleShape)
-            .background(if (active) Color.White else Color(0x22FFFFFF))
+        Modifier.size(58.dp).clip(CircleShape)
+            .background(if (active) Color.White.copy(alpha = 0.94f) else Color.White.copy(alpha = 0.14f))
+            .then(
+                if (active) Modifier
+                else Modifier.border(1.dp, Color.White.copy(alpha = 0.2f), CircleShape),
+            )
             .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null, onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {
-        Icon(icon, null, Modifier.size(22.dp), tint = if (active) Color(0xFF1F0E0D) else Color.White)
+        TikuuIcon(icon, size = 24.dp, tint = if (active) Color(0xFF16141C) else Color.White)
     }
 }
 
+/** End call: the design's red-gradient disc with the phone glyph rotated
+ *  135° (the classic hang-up pose). */
 @Composable
 private fun CallEndButton(onClick: () -> Unit) {
     Box(
-        Modifier.size(62.dp).clip(CircleShape).background(Tik.Danger)
+        Modifier.size(58.dp).clip(CircleShape)
+            .background(
+                Brush.verticalGradient(listOf(Color(0xFFFF6A77), Color(0xEE3148))),
+            )
             .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null, onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {
-        Icon(Icons.Filled.CallEnd, null, Modifier.size(26.dp), tint = Color.White)
+        TikuuIcon(
+            "call", size = 24.dp, tint = Color.White,
+            modifier = Modifier.graphicsLayer { rotationZ = 135f },
+        )
     }
 }
 
@@ -329,12 +347,31 @@ fun CallScreen(threadId: String, video: Boolean) {
     val pScale2 by inf.animateFloat(1f, 1.72f, infiniteRepeatable(tween(1800, delayMillis = 450, easing = FastOutSlowInEasing), RepeatMode.Restart), label = "ps2")
     val pAlpha2 by inf.animateFloat(0.4f, 0f, infiniteRepeatable(tween(1800, delayMillis = 450, easing = FastOutSlowInEasing), RepeatMode.Restart), label = "pa2")
 
+    // ROUND 13 skin: the design's call stage — near-black #0B0B0F with the
+    // theme pattern and accent glows pooled top/bottom (audio stage; the
+    // remote video, when live, covers it as before).
+    val pal = LocalPalette.current
+    val density = LocalDensity.current
     Box(
         Modifier.fillMaxSize()
-            .background(Brush.linearGradient(listOf(Color(0xFF1C1C1F), Color(0xFF000000))))
-            .then(if (isVideo) Modifier.background(
-                Brush.radialGradient(listOf(Color(0x40E5677F), Color.Transparent)),
-            ) else Modifier),
+            .background(Color(0xFF0B0B0F))
+            .drawBehind {
+                drawRect(
+                    brush = Brush.radialGradient(
+                        listOf(pal.ac.copy(alpha = 0.50f), Color.Transparent),
+                        center = androidx.compose.ui.geometry.Offset(size.width / 2f, 0f),
+                        radius = size.width * 0.95f,
+                    ),
+                )
+                drawRect(
+                    brush = Brush.radialGradient(
+                        listOf(pal.ac2.copy(alpha = 0.34f), Color.Transparent),
+                        center = androidx.compose.ui.geometry.Offset(size.width / 2f, size.height),
+                        radius = size.width * 0.9f,
+                    ),
+                )
+                with(density) { drawThemePattern(pal.pat, pal.ac, true, 160.dp.toPx()) }
+            },
         contentAlignment = Alignment.Center,
     ) {
         // remote video (real mode, video call, once media exists)
@@ -343,22 +380,24 @@ fun CallScreen(threadId: String, video: Boolean) {
                 RtcVideoView(local = false, modifier = Modifier.fillMaxSize())
             }
         }
-        // self-view PiP (top-end, as designed)
+        // self-view PiP (top-end, as designed: 98x138, r24, white .4 edge)
         if (isVideo) {
             Box(Modifier.fillMaxSize().padding(top = 24.dp, end = 20.dp)) {
                 if (!Config.PREVIEW_UI_ONLY && rtcSession != null && (connected != null || callState is CallUiState.Outgoing)) {
                     RtcVideoView(
                         local = true,
-                        modifier = Modifier.size(92.dp, 130.dp).align(Alignment.TopEnd)
-                            .clip(RoundedCornerShape(22.dp)),
+                        modifier = Modifier.size(98.dp, 138.dp).align(Alignment.TopEnd)
+                            .clip(RoundedCornerShape(24.dp))
+                            .border(1.5.dp, Color.White.copy(alpha = 0.4f), RoundedCornerShape(24.dp)),
                     )
                 } else {
                     Box(
-                        Modifier.size(92.dp, 130.dp).align(Alignment.TopEnd)
-                            .clip(RoundedCornerShape(22.dp))
-                            .background(Color(0x1FFFFFFF)),
+                        Modifier.size(98.dp, 138.dp).align(Alignment.TopEnd)
+                            .clip(RoundedCornerShape(24.dp))
+                            .background(Color(0x1FFFFFFF))
+                            .border(1.5.dp, Color.White.copy(alpha = 0.4f), RoundedCornerShape(24.dp)),
                         contentAlignment = Alignment.Center,
-                    ) { Text("You", fontSize = 12.sp, color = Color.White) }
+                    ) { Text("You", fontSize = 12.sp, color = Color.White, fontFamily = InterTight) }
                 }
             }
         }
@@ -367,7 +406,8 @@ fun CallScreen(threadId: String, video: Boolean) {
         if (connected != null || callState is CallUiState.Outgoing) {
             Box(
                 Modifier.align(Alignment.TopStart).padding(16.dp).size(40.dp)
-                    .clip(CircleShape).background(Color(0x22FFFFFF))
+                    .clip(CircleShape).background(Color.White.copy(alpha = 0.14f))
+                    .border(1.dp, Color.White.copy(alpha = 0.2f), CircleShape)
                     .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {
                         CallController.minimizeCall()
                     },
@@ -386,28 +426,46 @@ fun CallScreen(threadId: String, video: Boolean) {
                         contentAlignment = Alignment.Center,
                     ) {
                         if (connected == null && callState !is CallUiState.Failed) {
+                            // the design's pulse: expanding RINGS stroked in
+                            // white lerped toward the accent (was: filled
+                            // orange/pink discs)
+                            val ring = lerp(Color.White, pal.ac, 0.65f)
                             Box(
                                 Modifier.size((120 * pScale2).dp).alpha(pAlpha2)
-                                    .clip(CircleShape).background(Color(0x44F0885B))
+                                    .border(1.5.dp, ring, CircleShape)
                             )
                             Box(
                                 Modifier.size((120 * pScale1).dp).alpha(pAlpha1)
-                                    .clip(CircleShape).background(Color(0x66CE4E79))
+                                    .border(1.5.dp, ring, CircleShape)
                             )
                         }
                         AvatarBox(person, 120.dp, 44.dp, 48f)
                     }
                     Spacer(Modifier.height(18.dp))
                 }
-                SerifTitle(person.name, 30.sp, Color.White)
-                Spacer(Modifier.height(6.dp))
-                Text(statusText, fontSize = 15.sp, color = Color.White.copy(alpha = 0.7f), fontFamily = Manrope)
+                // .cltop — the design's glass identity pill (name + status)
+                Column(
+                    Modifier
+                        .clip(RoundedCornerShape(26.dp))
+                        .background(
+                            Brush.linearGradient(
+                                listOf(Color.White.copy(alpha = 0.24f), Color.White.copy(alpha = 0.07f)),
+                            ),
+                        )
+                        .border(1.dp, Color.White.copy(alpha = 0.35f), RoundedCornerShape(26.dp))
+                        .padding(horizontal = 26.dp, vertical = 10.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    Text(person.name, fontFamily = InterTight, fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
+                        fontSize = 19.sp, color = Color.White)
+                    Text(statusText, fontSize = 13.sp, color = Color.White.copy(alpha = 0.8f), fontFamily = InterTight)
+                }
             }
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     TikuLockIcon(Modifier.size(12.dp), tint = Color.White.copy(alpha = 0.6f))
                     Spacer(Modifier.width(5.dp))
-                    Text("End-to-end encrypted", fontSize = 13.sp, color = Color.White.copy(alpha = 0.6f), fontFamily = Manrope)
+                    Text("End-to-end encrypted", fontSize = 13.sp, color = Color.White.copy(alpha = 0.6f), fontFamily = InterTight)
                 }
                 Spacer(Modifier.height(18.dp))
                 if (incoming != null) {
@@ -415,21 +473,21 @@ fun CallScreen(threadId: String, video: Boolean) {
                     Row(horizontalArrangement = Arrangement.spacedBy(28.dp)) {
                         CallEndButton { CallController.reject() }
                         Box(
-                            Modifier.size(62.dp).clip(CircleShape).background(Color(0xFF2E9E5B))
+                            Modifier.size(58.dp).clip(CircleShape).background(Color(0xFF2E9E5B))
                                 .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) { acceptWithPerms() },
                             contentAlignment = Alignment.Center,
                         ) {
-                            Icon(Icons.Filled.Call, null, Modifier.size(26.dp), tint = Color.White)
+                            TikuuIcon("call", size = 24.dp, tint = Color.White)
                         }
                     }
                 } else {
-                    Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                         if (connected != null) {
-                            CallToggle(if (connected.muted) Icons.Filled.MicOff else Icons.Filled.Mic, connected.muted) { CallController.toggleMute() }
-                            CallToggle(Icons.Filled.VolumeUp, connected.speakerOn) { CallController.toggleSpeaker() }
+                            CallToggle(if (connected.muted) "micOff" else "mic", connected.muted) { CallController.toggleMute() }
+                            CallToggle("spk", connected.speakerOn) { CallController.toggleSpeaker() }
                             if (connected.video) {
-                                CallToggle(if (connected.cameraOn) Icons.Filled.Videocam else Icons.Filled.VideocamOff, !connected.cameraOn) { CallController.toggleCamera() }
-                                CallToggle(Icons.Filled.Cameraswitch, false) { CallController.switchCamera() }
+                                CallToggle(if (connected.cameraOn) "vid" else "vidOff", !connected.cameraOn) { CallController.toggleCamera() }
+                                CallToggle("flip", false) { CallController.switchCamera() }
                             }
                         }
                         CallEndButton { CallController.hangup() }
@@ -513,10 +571,10 @@ fun FloatingCallWindow() {
                     Modifier.align(Alignment.BottomStart).padding(8.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Text(person.name, fontSize = 11.sp, color = Color.White, fontFamily = Manrope,
+                    Text(person.name, fontSize = 11.sp, color = Color.White, fontFamily = InterTight,
                         fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold)
                     Spacer(Modifier.width(6.dp))
-                    Text(statusText, fontSize = 11.sp, color = Color.White.copy(alpha = 0.75f), fontFamily = Manrope)
+                    Text(statusText, fontSize = 11.sp, color = Color.White.copy(alpha = 0.75f), fontFamily = InterTight)
                 }
             } else {
                 Row(
@@ -526,10 +584,10 @@ fun FloatingCallWindow() {
                     AvatarBox(person, 40.dp, 14.dp, 16f)
                     Spacer(Modifier.width(9.dp))
                     Column(Modifier.weight(1f)) {
-                        Text(person.name, fontSize = 13.sp, color = Color.White, fontFamily = Manrope,
+                        Text(person.name, fontSize = 13.sp, color = Color.White, fontFamily = InterTight,
                             fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
                             maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
-                        Text(statusText, fontSize = 11.5.sp, color = Color.White.copy(alpha = 0.75f), fontFamily = Manrope)
+                        Text(statusText, fontSize = 11.5.sp, color = Color.White.copy(alpha = 0.75f), fontFamily = InterTight)
                     }
                 }
             }
@@ -537,13 +595,17 @@ fun FloatingCallWindow() {
             // never a mere dismiss of the window.
             Box(
                 Modifier.align(Alignment.BottomEnd).padding(8.dp).size(30.dp)
-                    .clip(CircleShape).background(Tik.Danger)
+                    .clip(CircleShape)
+                    .background(Brush.verticalGradient(listOf(Color(0xFFFF6A77), Color(0xEE3148))))
                     .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {
                         CallController.hangup()
                     },
                 contentAlignment = Alignment.Center,
             ) {
-                Icon(Icons.Filled.CallEnd, null, Modifier.size(15.dp), tint = Color.White)
+                TikuuIcon(
+                    "call", size = 15.dp, tint = Color.White,
+                    modifier = Modifier.graphicsLayer { rotationZ = 135f },
+                )
             }
         }
     }
