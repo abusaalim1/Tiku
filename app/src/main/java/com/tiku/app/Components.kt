@@ -13,9 +13,14 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -206,3 +211,56 @@ fun BoxScope.BottomSheetHost() {
     }
 }
 
+// ================= Profile picture presets (Round 11) =================
+
+/**
+ * Ready-made profile pictures bundled in assets/avatars (512px WebP,
+ * ~36 KB each). A preset is NOT a special reference: picking one decodes
+ * its bitmap and hands it to the caller's normal photo path
+ * (AppState.myAvatar at signup, FirebaseEngine.updateProfilePhoto in
+ * Edit profile), so it flows through MediaStore.compressAvatar →
+ * photoData exactly like an uploaded photo and renders on EVERY surface
+ * avatars render (chat list, chat header, Chat Details, Me). No render
+ * site knows presets exist — that is deliberate (a preset-as-reference
+ * once shipped as an empty circle on one screen in another app).
+ */
+object PresetAvatars {
+    val files: List<String> = (1..7).map { "avatars/avatar_$it.webp" }
+
+    fun load(ctx: android.content.Context, index: Int): Bitmap? = runCatching {
+        ctx.assets.open(files[index]).use { android.graphics.BitmapFactory.decodeStream(it) }
+    }.getOrNull()
+}
+
+/** "Pick a picture" — the bundled presets as a row of circular crops. */
+@Composable
+fun PresetAvatarPicker(onPick: (Bitmap) -> Unit) {
+    val ctx = androidx.compose.ui.platform.LocalContext.current
+    Column(Modifier.fillMaxWidth()) {
+        Text(
+            "Pick a picture", fontSize = 13.sp, fontWeight = FontWeight.SemiBold,
+            fontFamily = Manrope, color = TikuTokens.Muted,
+        )
+        Spacer(Modifier.height(10.dp))
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            PresetAvatars.files.indices.forEach { i ->
+                val bmp = remember(ctx, i) { PresetAvatars.load(ctx, i) }
+                Box(
+                    Modifier.size(42.dp).clip(CircleShape).background(TikuTokens.Mint)
+                        .clickable(
+                            interactionSource = remember { MutableInteractionSource() },
+                            indication = null,
+                        ) { if (bmp != null) onPick(bmp) },
+                    contentAlignment = Alignment.Center,
+                ) {
+                    if (bmp != null) {
+                        Image(
+                            bmp.asImageBitmap(), null, Modifier.fillMaxSize(),
+                            contentScale = androidx.compose.ui.layout.ContentScale.Crop,
+                        )
+                    }
+                }
+            }
+        }
+    }
+}

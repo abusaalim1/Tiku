@@ -16,6 +16,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Row
@@ -49,6 +50,8 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -120,6 +123,45 @@ fun WatchGlyph(color: Color, modifier: Modifier = Modifier) {
             close()
         }
         drawPath(tri, Color.White)
+    }
+}
+
+/**
+ * The owner design's `.btn` + `I('plus',22)`, measured from Tikuu_11 —
+ * not eyeballed: a bare 34dp box (6dp padding around a 22dp glyph), no
+ * background, no border. The glyph is the design's own SVG path
+ * (M12 5v14M5 12h14 on a 24 grid) stroked at 1.6 with round caps, in the
+ * title ink. The pressed state mirrors the CSS `.btn:active`
+ * (scale .88, opacity .7).
+ */
+@Composable
+fun DesignPlusButton(onClick: () -> Unit) {
+    val interaction = remember { MutableInteractionSource() }
+    val pressed by interaction.collectIsPressedAsState()
+    Box(
+        Modifier.size(34.dp)
+            .graphicsLayer {
+                scaleX = if (pressed) 0.88f else 1f
+                scaleY = if (pressed) 0.88f else 1f
+                alpha = if (pressed) 0.7f else 1f
+            }
+            .clickable(interactionSource = interaction, indication = null, onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        Canvas(Modifier.size(22.dp)) {
+            val u = size.width / 24f
+            val sw = 1.6f * u
+            drawLine(
+                TikuTokens.Ink,
+                Offset(12 * u, 5 * u), Offset(12 * u, 19 * u),
+                strokeWidth = sw, cap = StrokeCap.Round,
+            )
+            drawLine(
+                TikuTokens.Ink,
+                Offset(5 * u, 12 * u), Offset(19 * u, 12 * u),
+                strokeWidth = sw, cap = StrokeCap.Round,
+            )
+        }
     }
 }
 

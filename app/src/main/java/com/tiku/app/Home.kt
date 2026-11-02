@@ -28,6 +28,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -98,9 +99,17 @@ fun HomeScreen() {
     }
     Box(Modifier.fillMaxSize()) {
         Column(Modifier.fillMaxSize()) {
-            // .top header
+            // .top header — ROUND 11: for the Watch tab this is a measured
+            // replica of the owner design's `.top` (Tikuu_11): padding
+            // 12/18/6, min-height 52, title in the design's sans at 22px /
+            // weight 600 / letter-spacing -.03em, and the bare `.btn`
+            // plus (see DesignPlusButton). Other tabs keep the app header.
             Row(
-                Modifier.fillMaxWidth().padding(start = 20.dp, end = 20.dp, top = 18.dp, bottom = 6.dp),
+                if (tab == HomeTab.WATCH)
+                    Modifier.fillMaxWidth().heightIn(min = 52.dp)
+                        .padding(start = 18.dp, end = 18.dp, top = 12.dp, bottom = 6.dp)
+                else
+                    Modifier.fillMaxWidth().padding(start = 20.dp, end = 20.dp, top = 18.dp, bottom = 6.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween,
             ) {
@@ -109,16 +118,22 @@ fun HomeScreen() {
                     Modifier.pointerInput(Unit) {
                         detectTapGestures(onLongPress = { ChatSession.quickExit(ctx) })
                     },
-                ) { SerifTitle(title, 30.sp) }
+                ) {
+                    if (tab == HomeTab.WATCH) {
+                        Text(
+                            title, fontSize = 22.sp, fontFamily = Manrope,
+                            fontWeight = FontWeight.SemiBold,
+                            letterSpacing = (-0.66).sp, color = TikuTokens.Ink,
+                        )
+                    } else {
+                        SerifTitle(title, 30.sp)
+                    }
+                }
                 Row {
                     if (tab == HomeTab.WATCH) {
-                        // ROUND 11 (owner's Tikuu_11 design): the Watch
-                        // header is the serif title + ONE round plus button
-                        // — no moon/theme dummy chrome (the theme is
-                        // light-locked). The plus is real: YouTube home.
-                        GlassIconButton(Icons.Filled.Add, label = "YouTube home") {
-                            WatchHolder.goHome(ctx)
-                        }
+                        // The one design button — real action: YouTube home.
+                        // No moon/theme dummy chrome (theme is light-locked).
+                        DesignPlusButton { WatchHolder.goHome(ctx) }
                     } else {
                         GlassIconButton(Icons.Filled.DarkMode, label = "Theme") {
                             AppState.toast("Light mode is Tikuu’s home")
@@ -894,6 +909,20 @@ object EditProfileSheet {
                 Column {
                     Text("Change photo", fontWeight = FontWeight.SemiBold, fontSize = 16.sp, fontFamily = Manrope, color = TikuTokens.Ink)
                     Text("Shown on your profile", fontSize = 13.sp, color = TikuTokens.Muted, fontFamily = Manrope)
+                }
+            }
+            Spacer(Modifier.height(16.dp))
+            // ROUND 11: bundled presets — same updateProfilePhoto path
+            // (and same preview behaviour) as an uploaded photo.
+            PresetAvatarPicker { bmp ->
+                if (Config.PREVIEW_UI_ONLY) {
+                    AppState.myAvatar = bmp
+                    AppState.toast("Profile photo updated")
+                } else {
+                    scope.launch {
+                        val r = FirebaseEngine.updateProfilePhoto(bmp)
+                        AppState.toast(if (r.isSuccess) "Profile photo updated" else "Couldn't update the photo")
+                    }
                 }
             }
             Spacer(Modifier.height(16.dp))

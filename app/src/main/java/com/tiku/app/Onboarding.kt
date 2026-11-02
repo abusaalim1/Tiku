@@ -510,6 +510,11 @@ fun ProfileSetupScreen() {
             }
         }
         Spacer(Modifier.height(22.dp))
+        // ROUND 11: bundled presets — picking one sets the SAME
+        // AppState.myAvatar the upload path sets, so Continue sends it
+        // through finishNewUser → compressAvatar → photoData unchanged.
+        PresetAvatarPicker { bmp -> AppState.myAvatar = bmp }
+        Spacer(Modifier.height(18.dp))
         // @ field
         Box(
             Modifier.fillMaxWidth().height(56.dp)
