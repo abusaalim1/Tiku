@@ -62,6 +62,7 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Audiotrack
+import androidx.compose.material.icons.filled.Block
 import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
@@ -115,6 +116,7 @@ import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
@@ -141,7 +143,11 @@ import kotlin.math.roundToInt
  * bubble, real voice recording + playback. Everything the file forbids is
  * gone: no timestamps, no seen ticks, no E2EE banner, no quick chips.
  * Engine behaviour is unchanged (E2EE, reply/star/pin/react/save,
- * delete-for-me = local only, explicit Save only for media).
+ * explicit Save only for media). ROUND 18: delete is two-option —
+ * "Delete for me" (local hide) and, for my own messages, "Delete for
+ * everyone" (server tombstone both sides render); the chat also gains
+ * the IG unread divider, the "Seen"/"Sent" caption under my last
+ * message, and a glide-only follow (no scroll yank from history).
  */
 
 // ================= redesign tokens (verbatim from TikuRedesign) =================
@@ -255,7 +261,7 @@ private fun RdAv(person: Person, size: Int) {
  *  for media. Shared by swipe-to-reply and the long-press menu so both
  *  paths attach exactly the same quote (and note replies arrive with
  *  their "Note: …" snapshot in the same field). */
-fun replyQuoteLabel(m: TikuMessage): String = when (m.kind) {
+fun replyQuoteLabel(m: TikuMessage): String = if (m.delAll) "This message was deleted" else when (m.kind) {
     MsgKind.IMAGE -> "Photo"
     MsgKind.VOICE -> "Voice message"
     MsgKind.VIDEO -> "Video"
@@ -311,6 +317,66 @@ fun CallEventPill(m: TikuMessage) {
             Text(
                 "${callEventLabel(m, iAmCaller)} · ${m.time}",
                 fontSize = 12.sp, color = RdSub,
+            )
+        }
+    }
+}
+
+/** ROUND 18 — the delete-for-everyone TOMBSTONE bubble: renders in place
+ *  of a message whose sender deleted it for both sides (delAll). Muted
+ *  card + blocked-circle vector icon + italic label — no content, no
+ *  reactions, no media. Side follows the original sender (mine right,
+ *  theirs left with avatar), exactly like IG. Long-press still opens the
+ *  message menu (which offers Delete-for-me for the tombstone itself). */
+@Composable
+private fun RdTombstoneRow(m: TikuMessage, person: Person, onMenu: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth(),
+        horizontalArrangement = if (m.me) Arrangement.End else Arrangement.Start,
+        verticalAlignment = Alignment.Bottom,
+    ) {
+        if (!m.me) { RdAv(person, 28); Spacer(Modifier.width(8.dp)) }
+        Row(
+            Modifier.clip(RoundedCornerShape(22.dp)).background(RdCard)
+                .border(1.dp, Color.White.copy(0.08f), RoundedCornerShape(22.dp))
+                .pointerInput(m.id) {
+                    detectTapGestures(onLongPress = { onMenu() })
+                }
+                .padding(horizontal = 14.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(Icons.Filled.Block, null, Modifier.size(15.dp), tint = RdSub)
+            Spacer(Modifier.width(7.dp))
+            Text(
+                "This message was deleted",
+                color = RdSub, fontSize = 13.5.sp, fontStyle = FontStyle.Italic,
+            )
+        }
+    }
+}
+
+/** ROUND 18 — the IG unread divider: a centred pill rendered directly
+ *  above the first unread incoming message, labelled with the unread
+ *  count captured when the chat was opened. Owner's exact rule: counts
+ *  above 5 collapse to "4+ new messages". */
+@Composable
+private fun RdUnreadDivider(count: Int) {
+    Row(
+        Modifier.fillMaxWidth().padding(vertical = 2.dp),
+        horizontalArrangement = Arrangement.Center,
+    ) {
+        Box(
+            Modifier.clip(RoundedCornerShape(999.dp)).background(RdCard)
+                .border(1.dp, Color.White.copy(0.08f), RoundedCornerShape(999.dp))
+                .padding(horizontal = 12.dp, vertical = 5.dp),
+        ) {
+            Text(
+                when {
+                    count > 5 -> "4+ new messages"
+                    count == 1 -> "1 new message"
+                    else -> "$count new messages"
+                },
+                fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = RdRose,
             )
         }
     }
@@ -1087,6 +1153,39 @@ private fun RdChatContent(thread: ChatThread) {
 
     val visible = thread.messages.filter { !it.deletedForMe }
 
+    // ROUND 18 — UNREAD DIVIDER anchor, captured ONCE from the thread as
+    // it stood when this chat was opened (the engine zeroes `unread` and
+    // advances the read watermark as the open snapshot lands, so anything
+    // computed later would see "all read"). The unread set is, by the
+    // engine's own definition, the newest [unreadAtOpen] incoming
+    // non-call messages — the divider pins above the earliest of them.
+    // remembered by message ID: pagination prepends and new arrivals can
+    // shift indices freely, the divider never moves or duplicates.
+    val unreadAtOpen = remember(threadId) { thread.unread }
+    val dividerBeforeId = remember(threadId) {
+        if (unreadAtOpen <= 0) null
+        else {
+            val incoming = thread.messages.filter {
+                !it.deletedForMe && !it.me && it.kind != MsgKind.CALL
+            }
+            when {
+                incoming.size >= unreadAtOpen -> incoming[incoming.size - unreadAtOpen].id
+                incoming.isNotEmpty() -> incoming.first().id
+                else -> null
+            }
+        }
+    }
+
+    // ROUND 18 — SEEN caption target: my LAST own non-call, non-tombstone
+    // message. The data is the shared per-message seenBy marker the
+    // partner's client writes when they read (decryptDoc -> seenByPeer);
+    // the caption hides entirely while read receipts are off — globally
+    // (Settings ▸ Read receipts) or for this chat (receiptsOffMine).
+    val showReceipts = globalSettings.readReceipts && !thread.receiptsOffMine
+    val lastOwnId = visible.lastOrNull {
+        it.me && it.kind != MsgKind.CALL && !it.deletedForEveryone
+    }?.id
+
     fun sendCurrent() {
         val v = input.trim()
         if (v.isEmpty()) return
@@ -1126,8 +1225,14 @@ private fun RdChatContent(thread: ChatThread) {
     }
 
     // ---- list following (build 47's anti-jitter rule on the file's
-    // forward list): settle at the latest message on open; afterwards
-    // follow ONLY when already at the bottom or the arrival is mine.
+    // forward list): settle at the latest message on open (instant —
+    // opening a chat lands at the bottom). ROUND 18 (owner: messages
+    // must GLIDE like IG, never jump): afterwards the follow is purely
+    // positional — a new tail (mine after send, or incoming) glides the
+    // list ONLY while the user is already at/near the bottom; scrolled
+    // up reading history, nothing ever yanks them (the jump-to-latest
+    // pill is the way back, like IG). The old `|| tail.me` exception
+    // yanked even from history on my own sends — gone.
     val nearBottom by remember {
         derivedStateOf {
             val info = listState.layoutInfo
@@ -1154,7 +1259,9 @@ private fun RdChatContent(thread: ChatThread) {
     LaunchedEffect(visible.lastOrNull()?.id, peerTyping) {
         val tail = visible.lastOrNull()
         if (settled && tail != null && tail.id != prevTailId) {
-            if (nearBottom || tail.me) {
+            // ROUND 18: animateScrollToItem ONLY, and only from the
+            // bottom — no instant snaps anywhere on the arrival path.
+            if (nearBottom) {
                 runCatching { listState.animateScrollToItem(visible.lastIndex + if (peerTyping) 1 else 0) }
             }
         } else if (settled && peerTyping && nearBottom && tail != null) {
@@ -1188,11 +1295,22 @@ private fun RdChatContent(thread: ChatThread) {
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 itemsIndexed(visible, key = { _, m -> m.id }) { idx, m ->
-                    Box(Modifier.animateItem()) {
-                        if (m.kind == MsgKind.CALL) {
-                            CallEventPill(m)
-                        } else {
-                            RdBubbleRow(
+                    // ROUND 18: no animateItem() wrapper — its placement
+                    // animation fought the follow glide on every arrival
+                    // (a visible pop riding on top of the scroll). The
+                    // bubbles keep their own rdBubbleIn entrance, and the
+                    // stable keys keep prepend/echo positions exact.
+                    Column {
+                        if (m.id == dividerBeforeId) {
+                            RdUnreadDivider(unreadAtOpen)
+                            Spacer(Modifier.height(4.dp))
+                        }
+                        when {
+                            m.deletedForEveryone -> RdTombstoneRow(m, person) {
+                                menuMsg = m; moreEmoji = false
+                            }
+                            m.kind == MsgKind.CALL -> CallEventPill(m)
+                            else -> RdBubbleRow(
                                 i = idx,
                                 m = m,
                                 person = person,
@@ -1238,6 +1356,27 @@ private fun RdChatContent(thread: ChatThread) {
                                 },
                                 onRetry = { AppState.repo.retrySend(threadId, m.id) },
                             )
+                        }
+                        // ROUND 18 — "Seen" / "Sent" caption (IG-style)
+                        // under my LAST own message only. Seen = the
+                        // partner's client has marked it read (seenBy);
+                        // Sent = delivered to the server, not yet read.
+                        // Sending/failed states render nothing here (the
+                        // bubble already shows "Sending…"/"Tap to retry").
+                        if (showReceipts && m.id == lastOwnId) {
+                            val caption = when {
+                                m.seenByPeer -> "Seen"
+                                m.status == SendStatus.SENT -> "Sent"
+                                else -> null
+                            }
+                            if (caption != null) {
+                                Row(
+                                    Modifier.fillMaxWidth().padding(top = 2.dp, end = 4.dp),
+                                    horizontalArrangement = Arrangement.End,
+                                ) {
+                                    Text(caption, fontSize = 11.5.sp, color = RdSub)
+                                }
+                            }
                         }
                     }
                 }
@@ -1395,7 +1534,10 @@ private fun RdChatContent(thread: ChatThread) {
                         horizontalAlignment = if (mm.me) Alignment.End else Alignment.Start,
                         verticalArrangement = Arrangement.spacedBy(14.dp),
                     ) {
-                        Row(
+                        // ROUND 18: a tombstone has nothing to react to —
+                        // the emoji bar hides for deleted-for-everyone
+                        // messages (their menu is Delete-for-me only).
+                        if (!mm.deletedForEveryone) Row(
                             Modifier.clip(RoundedCornerShape(999.dp)).background(RdSheet)
                                 .border(1.dp, Color.White.copy(0.12f), RoundedCornerShape(999.dp))
                                 .padding(horizontal = 8.dp, vertical = 6.dp),
@@ -1417,7 +1559,23 @@ private fun RdChatContent(thread: ChatThread) {
                                 Text(if (moreEmoji) "−" else "+", color = Color.White, fontSize = 24.sp)
                             }
                         }
-                        if (mm.kind == MsgKind.IMAGE && mm.photo != null) {
+                        if (mm.deletedForEveryone) {
+                            // Preview = the tombstone itself, exactly as
+                            // it renders in the list.
+                            Row(
+                                Modifier.clip(RoundedCornerShape(22.dp)).background(RdCard)
+                                    .border(1.dp, Color.White.copy(0.08f), RoundedCornerShape(22.dp))
+                                    .padding(horizontal = 14.dp, vertical = 10.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Icon(Icons.Filled.Block, null, Modifier.size(15.dp), tint = RdSub)
+                                Spacer(Modifier.width(7.dp))
+                                Text(
+                                    "This message was deleted",
+                                    color = RdSub, fontSize = 13.5.sp, fontStyle = FontStyle.Italic,
+                                )
+                            }
+                        } else if (mm.kind == MsgKind.IMAGE && mm.photo != null) {
                             Image(
                                 mm.photo.asImageBitmap(), null,
                                 Modifier.width(160.dp).height(190.dp).clip(RoundedCornerShape(22.dp)),
@@ -1436,6 +1594,15 @@ private fun RdChatContent(thread: ChatThread) {
                             Modifier.width(250.dp).clip(RoundedCornerShape(26.dp)).background(RdSheet)
                                 .border(1.dp, Color.White.copy(0.12f), RoundedCornerShape(26.dp)),
                         ) {
+                          if (mm.deletedForEveryone) {
+                            // ROUND 18: a tombstone's only action —
+                            // hiding it for me as well.
+                            RdMenuItem("Delete for me", danger = true, onClick = {
+                                AppState.repo.deleteForMe(threadId, mm.id); menuMsg = null
+                            }) {
+                                Icon(Icons.Filled.Delete, null, tint = RdDanger, modifier = Modifier.size(22.dp))
+                            }
+                          } else {
                             RdMenuItem("Reply", onClick = { replyTarget = mm; menuMsg = null }) {
                                 Text("↩", color = Color.White, fontSize = 20.sp)
                             }
@@ -1483,14 +1650,26 @@ private fun RdChatContent(thread: ChatThread) {
                                     Icon(Icons.Filled.SaveAlt, null, tint = Color.White, modifier = Modifier.size(20.dp))
                                 }
                             }
+                            // ROUND 18 — delete is two-option, IG-style:
+                            // "Delete for me" (local hide; offered for
+                            // EVERY message, mine or theirs) and, for my
+                            // own messages only, "Delete for everyone"
+                            // (server tombstone — both sides see it).
+                            RdDivider1()
+                            RdMenuItem("Delete for me", onClick = {
+                                AppState.repo.deleteForMe(threadId, mm.id); menuMsg = null
+                            }) {
+                                Icon(Icons.Filled.Delete, null, tint = Color.White, modifier = Modifier.size(22.dp))
+                            }
                             if (mm.me) {
                                 RdDivider1()
-                                RdMenuItem("Delete", danger = true, onClick = {
-                                    AppState.repo.deleteForMe(threadId, mm.id); menuMsg = null
+                                RdMenuItem("Delete for everyone", danger = true, onClick = {
+                                    AppState.repo.deleteForEveryone(threadId, mm.id); menuMsg = null
                                 }) {
                                     Icon(Icons.Filled.Delete, null, tint = RdDanger, modifier = Modifier.size(22.dp))
                                 }
                             }
+                          }
                         }
                     }
                 }

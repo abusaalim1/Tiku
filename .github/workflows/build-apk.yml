@@ -69,6 +69,12 @@ jobs:
             echo "This fingerprint is registered in the Firebase Console (tiku-chat project) for Google sign-in."
           } >> "$GITHUB_STEP_SUMMARY"
 
+      - name: Stamp CI build number into assets
+        # Round 18: the in-app update system compares build numbers, and
+        # versionCode is always 1 — so the run number is baked into an
+        # asset the app reads at runtime (Update.kt: installedBuild).
+        run: echo "${{ github.run_number }}" > app/src/main/assets/build_number.txt
+
       - name: Build release APK
         env:
           GRADLE_OPTS: "-Dorg.gradle.jvmargs=-Xmx3584m -Dorg.gradle.workers.max=2 -Dorg.gradle.parallel=false"

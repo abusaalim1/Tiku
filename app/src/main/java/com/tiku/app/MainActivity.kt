@@ -69,6 +69,10 @@ class MainActivity : ComponentActivity() {
         // ROUND 15: app start is one of the notify service's choke points
         // (OwnerPrefs was initialized in TikuApp.onCreate, before this).
         NotifyGate.sync(this)
+        // ROUND 18: in-app update check (throttled to one fetch per 6h,
+        // silent on failure; sets UpdateState + a one-per-build
+        // notification when a newer build is published).
+        UpdateCheck.maybeCheck(this)
         setContent { TikuRoot(onGoogleClick = ::onGoogleClick) }
     }
 
@@ -322,6 +326,9 @@ fun TikuRoot(onGoogleClick: () -> Unit) {
         }
         DesignToast()
         BottomSheetHost()
+        // ROUND 18: the update prompt — self-gating (renders only on the
+        // Tik home / facade, only for an un-dismissed newer build).
+        UpdatePromptDialog()
       }
      }
     }

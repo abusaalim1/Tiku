@@ -419,7 +419,7 @@ fun ChatDetailsScreen(threadId: String) = InfoScreen(threadId)
 @Composable
 private fun RdIInfoMain(thread: ChatThread, muted: Boolean, onSub: (String) -> Unit) {
     val person = thread.person
-    val starred = thread.messages.filter { it.starredByMe && !it.deletedForMe }
+    val starred = thread.messages.filter { it.starredByMe && !it.deletedForMe && !it.delAll }
     val images = thread.messages.filter { it.kind == MsgKind.IMAGE && !it.deletedForMe }
     val days = if (thread.createdAtMs > 0) {
         ((System.currentTimeMillis() - thread.createdAtMs) / 86_400_000L).toInt()
@@ -673,7 +673,7 @@ private fun RdICustomizePage(thread: ChatThread, onBack: () -> Unit) {
 
 @Composable
 private fun RdIStarredPage(thread: ChatThread, onBack: () -> Unit) {
-    val starred = thread.messages.filter { it.starredByMe && !it.deletedForMe }
+    val starred = thread.messages.filter { it.starredByMe && !it.deletedForMe && !it.delAll }
     RdISubPage(bottom = 40.dp) {
         item { RdISubHeader("Starred messages", onBack) }
         if (starred.isEmpty()) {

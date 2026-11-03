@@ -133,6 +133,22 @@ object AppState {
         }
     }
 
+    /** ROUND 18: optimistic tombstone for delete-for-everyone — replace the
+     *  message IN PLACE (its position must not move); content fields are
+     *  blanked so nothing of it can render while the snapshot echo is in
+     *  flight. The echo rebuilds the identical shape from the doc. */
+    fun markDeletedForEveryone(threadId: String, msgId: String) {
+        threads.value = threads.value.map { t ->
+            if (t.id != threadId) t
+            else t.copy(messages = t.messages.map { m ->
+                if (m.id == msgId) m.copy(
+                    deletedForEveryone = true, text = "", photo = null,
+                    localPath = null, replyQuote = null, reactions = emptyMap(),
+                ) else m
+            }.toMutableList())
+        }
+    }
+
     /** Flip the delivery state of one message (round 3 send-state surfacing). */
     fun setMessageStatus(threadId: String, msgId: String, status: SendStatus) {
         threads.value = threads.value.map { t ->
@@ -241,6 +257,11 @@ interface ChatRepo {
     fun react(id: String, msgId: String, emoji: String?)
     fun toggleStar(id: String, msgId: String)
     fun deleteForMe(id: String, msgId: String)
+    /** ROUND 18: delete one of MY OWN messages for BOTH sides — the doc is
+     *  tombstoned (never removed; chats never disappear) and both clients
+     *  render "This message was deleted". Default no-op keeps test doubles
+     *  compiling. */
+    fun deleteForEveryone(id: String, msgId: String) {}
     fun clearChat(id: String)
     fun setTyping(id: String, on: Boolean)
     fun startThreadWith(person: Person): String

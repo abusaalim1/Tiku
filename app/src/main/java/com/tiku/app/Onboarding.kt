@@ -461,10 +461,14 @@ fun ProfileSetupScreen() {
     var busy by remember { mutableStateOf(false) }
 
     val pick = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+        // ROUND 18: a photo that can't be read used to fail silently (the
+        // tap looked like it did nothing). Say so.
         if (uri != null) {
-            ctx.contentResolver.openInputStream(uri)?.use { stream ->
-                BitmapFactory.decodeStream(stream)?.let { AppState.myAvatar = it }
-            }
+            val bmp = runCatching {
+                ctx.contentResolver.openInputStream(uri)?.use { stream -> BitmapFactory.decodeStream(stream) }
+            }.getOrNull()
+            if (bmp != null) AppState.myAvatar = bmp
+            else AppState.toast("Couldn't load that photo")
         }
     }
 
@@ -475,8 +479,19 @@ fun ProfileSetupScreen() {
         when {
             username.length < 3 -> hint = "At least 3 characters."
             else -> {
-                val taken = if (Config.PREVIEW_UI_ONLY) username in listOf("admin", "tikuu")
+                // ROUND 18: this check used to run bare — a failed read
+                // (offline, a hiccup) threw out of the effect and the
+                // screen just sat there: stale hint, Continue never
+                // enabled, no error anywhere (part of the Atika setup
+                // trap). A failure now SAYS so; the next keystroke
+                // retries.
+                val taken = runCatching {
+                    if (Config.PREVIEW_UI_ONLY) username in listOf("admin", "tikuu")
                     else FirebaseEngine.usernameTaken(username)
+                }.getOrElse {
+                    hint = "Couldn't check that ID — check your connection, then type again"
+                    return@LaunchedEffect
+                }
                 if (taken) hint = "@$username is taken. Try another."
                 else { hint = "✓ @$username is available"; available = true }
             }

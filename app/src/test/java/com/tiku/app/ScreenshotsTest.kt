@@ -304,11 +304,15 @@ class ScreenshotsTest {
         // LazyColumn and may start below the composed window — scroll the
         // list to its item first if it isn't composed yet (lazy items:
         // 0 Title, 1 profile, 2 Appearance, 3 Mode, 4 Text size,
-        // 5 Privacy, 6–10 toggles, 11 Blocked accounts).
+        // 5 Privacy, 6 App lock, 7 Notifications, 8 Read receipts,
+        // 9 Last seen, 10 Block screenshots, 11 Hide typing,
+        // 12 Blocked accounts). ROUND 18: the Notifications row is now
+        // present for every user (it used to be owner-only), shifting
+        // Blocked accounts from 11 to 12.
         if (composeRule.onAllNodesWithText("Blocked accounts")
                 .fetchSemanticsNodes().isEmpty()
         ) {
-            composeRule.onNode(hasScrollAction()).performScrollToIndex(11)
+            composeRule.onNode(hasScrollAction()).performScrollToIndex(12)
             composeRule.waitForIdle()
         }
         composeRule.onAllNodesWithText("Blocked accounts")[0]
@@ -346,7 +350,9 @@ class ScreenshotsTest {
     @Test fun shot17_chatMenu() {
         // The redesign's long-press menu is IN-CHAT now (centred glass
         // menu + emoji bar) — no bottom sheet. Own text message → Reply /
-        // Copy / Star / Pin / Delete all offered.
+        // Copy / Star / Pin / Delete for me / Delete for everyone all
+        // offered (ROUND 18: delete split into the two IG options; the
+        // old single "Delete" label is gone).
         val p = PreviewStore.people[1]
         val id = PreviewRepo.startThreadWith(p)
         AppState.upsertMessage(id, TikuMessage(
@@ -367,8 +373,12 @@ class ScreenshotsTest {
             composeRule.onAllNodesWithText("Copy").fetchSemanticsNodes().isNotEmpty(),
         )
         org.junit.Assert.assertTrue(
-            "long-press menu must offer Delete for an own message",
-            composeRule.onAllNodesWithText("Delete").fetchSemanticsNodes().isNotEmpty(),
+            "long-press menu must offer Delete for me",
+            composeRule.onAllNodesWithText("Delete for me").fetchSemanticsNodes().isNotEmpty(),
+        )
+        org.junit.Assert.assertTrue(
+            "long-press menu must offer Delete for everyone for an own message",
+            composeRule.onAllNodesWithText("Delete for everyone").fetchSemanticsNodes().isNotEmpty(),
         )
         shot("17-chat-menu.png")
     }
@@ -659,6 +669,10 @@ class ScreenshotsTest {
     @Test fun shot31_settingsNoOwner() {
         // OWNER PAIR (2 of 2): seam OFF — the Owner section must not exist
         // AT ALL (every non-owner account's Settings, unchanged).
+        // ROUND 18: App lock + Notifications are now universal Privacy
+        // rows for every user — this shot's assertions still hold because
+        // they only pin the OWNER SECTION and "Lock now", which stay
+        // owner-only.
         OwnerState.previewOverride = false
         AppState.homeTab = HomeTab.ME
         AppState.goTik(3) // the Round-14 shell routes on tikDestination, not homeTab

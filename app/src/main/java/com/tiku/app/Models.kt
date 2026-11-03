@@ -86,6 +86,13 @@ data class TikuMessage(
      *  not-yet-loaded bubble; the send caps are enforced against it).
      *  Firestore field `mediaBytes`. */
     val mediaBytes: Long = 0L,
+    // ---- round 18 (appended last, same discipline as round 15) ----
+    /** Tombstone: the SENDER deleted this message for everyone (Firestore
+     *  `delAll=true`). The doc stays — chats never disappear — but its
+     *  ciphertext was wiped by the delete, and every surface renders the
+     *  "This message was deleted" tombstone instead of any content.
+     *  Distinct from [deletedForMe] (a local hide that only affects me). */
+    val deletedForEveryone: Boolean = false,
 )
 
 /** One 1:1 conversation. */
@@ -269,6 +276,8 @@ object Schema {
             val reaction: Map<String, String> = emptyMap(),
             val starredBy: List<String> = emptyList(),
             val deletedFor: List<String> = emptyList(),
+            /** ROUND 18: sender's delete-for-everyone tombstone flag. */
+            val delAll: Boolean = false,
             val seenBy: List<String> = emptyList(),
             val durationMs: Int = 0, val amps: List<Int> = emptyList(),
             /** Media kinds (image/voice/video/audio): ciphertext lives in the chunks

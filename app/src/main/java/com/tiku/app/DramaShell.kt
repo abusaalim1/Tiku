@@ -241,6 +241,25 @@ private fun FacadeAssetImage(
 
 // ---------- PLAYER (facade-owned WebView; created on open, destroyed on close) ----------
 
+/** ROUND 18 — the facade player's navigation policy: identical to the
+ *  Watch pane's watchNavAllowed (Watch.kt — private to that file, so
+ *  the policy is stated locally here): YouTube hosts and the Google
+ *  sign-in flow (accounts.google.com) pass; everything else — external
+ *  http(s) hosts and app-intent schemes (intent://, market://, tel: …)
+ *  alike — is refused. `about:` passes so the player's own teardown
+ *  load is never refused. */
+private fun facadeNavAllowed(url: android.net.Uri?): Boolean {
+    if (url == null) return false
+    val scheme = url.scheme?.lowercase() ?: return false
+    if (scheme == "about") return true
+    if (scheme != "http" && scheme != "https") return false
+    val host = url.host?.lowercase() ?: return false
+    return host == "youtu.be" ||
+        host == "youtube.com" || host.endsWith(".youtube.com") ||
+        host == "youtube-nocookie.com" || host.endsWith(".youtube-nocookie.com") ||
+        host == "accounts.google.com"
+}
+
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
 private fun FacadePlayer(drama: DramaContent.Drama, onClose: () -> Unit) {
@@ -323,29 +342,36 @@ private fun FacadePlayer(drama: DramaContent.Drama, onClose: () -> Unit) {
                     runCatching { cb?.onCustomViewHidden() }
                 }
             }
-            // ROUND 14 — LOCKED EMBED: playback is the youtube-nocookie
-            // embed page itself (no watch page, no "Open App" pill, no
-            // comments, no related-video rail), and every main-frame
-            // navigation away from it is refused — watch pages, channel
-            // pages, intent:// and market:// alike.
-            // ROUND 15: the embed now loads DIRECTLY (loadUrl — see
-            // loadYoutubeEmbed in Watch.kt; the old loadData iframe
-            // wrapper rendered black on device). The one main-frame
-            // target allowed through is this drama's embed document
-            // itself, so a redirect back to it can never cancel the
-            // load; subframe traffic is the player's own business.
+            // ROUND 18 — REAL WATCH PAGE: playback is the actual
+            // m.youtube.com/watch page (big full-width player,
+            // scrollable title / actions / comments / related) — the
+            // same cure that fixed the Tik Watch pane in Round 17. The
+            // Round-14 locked nocookie embed is RETIRED here too: on
+            // the owner's phone YouTube rejects the embed document
+            // outright with "Video player configuration error"
+            // (Error 153), even loaded directly (the Round-15 route),
+            // while the real watch page plays. The watch page's own
+            // fullscreen button drives the ChromeClient custom view
+            // above — hosted inside this player surface, Back exits
+            // fullscreen first.
+            // Navigation policy mirrors the Watch pane's
+            // watchNavAllowed (Watch.kt — private to that file, so the
+            // identical policy is stated locally as facadeNavAllowed):
+            // only MAIN-FRAME requests are judged; YouTube hosts and
+            // the Google sign-in flow pass, external hosts and
+            // app-intent schemes are refused. The page's own
+            // subframe/subresource traffic is its business.
             webViewClient = object : WebViewClient() {
                 override fun shouldOverrideUrlLoading(
                     view: WebView?,
                     request: WebResourceRequest?,
                 ): Boolean {
-                    val req = request ?: return true
+                    val req = request ?: return false
                     if (!req.isForMainFrame) return false
-                    return !req.url.toString()
-                        .startsWith(YOUTUBE_EMBED_PREFIX + drama.id)
+                    return !facadeNavAllowed(req.url)
                 }
             }
-            loadYoutubeEmbed(this, drama.id)
+            loadUrl("https://m.youtube.com/watch?v=${drama.id}")
         }
     }
 

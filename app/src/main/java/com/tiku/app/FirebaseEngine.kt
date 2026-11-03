@@ -121,7 +121,20 @@ object FirebaseEngine : ChatRepo {
 
     suspend fun isReturningUser(): Boolean {
         if (uid.isEmpty()) return false
-        return db.collection(Schema.Users.COLL).document(uid).get().await().exists()
+        val snap = db.collection(Schema.Users.COLL).document(uid).get().await()
+        if (!snap.exists()) return false
+        // ROUND 18: a BARE doc is not a restorable journal. A doc can exist
+        // with no key material — setup died after the doc landed but before
+        // the backup did, or a start-fresh retired the material and the
+        // re-setup never finished. Routing such an account to Restore
+        // dead-ends on "no backup was found for this account" with no way
+        // forward (the Atika re-register trap). Only a doc carrying key
+        // material counts as returning — the exact same test
+        // finishNewUser's hard guard applies, so router and setup can
+        // never disagree: no key material -> fresh onboarding, where the
+        // set() simply completes the half-written doc.
+        return snap.get("keyBackup") != null ||
+            !snap.getString("publicKey").isNullOrEmpty()
     }
 
     /**
@@ -835,6 +848,31 @@ object FirebaseEngine : ChatRepo {
         }
     }
 
+    /** ROUND 18 — metadata stub for a message doc whose ciphertext can't
+     *  be opened on this device (see applyPreviewSnapshot). Kind, sender
+     *  and ts are plaintext doc fields, so the stub is honest: the chat
+     *  list shows the kind label ("Photo", "Video", …; "Message" for a
+     *  text) instead of nothing. Preview path ONLY — the open chat keeps
+     *  its decrypt-or-absent behaviour. A delAll doc never reaches here
+     *  (decryptDoc returns its tombstone without touching ciphertext). */
+    private fun previewStub(doc: com.google.firebase.firestore.DocumentSnapshot): TikuMessage? {
+        val sender = doc.getString("senderId") ?: return null
+        val kind = when (doc.getString("kind") ?: "text") {
+            "image" -> MsgKind.IMAGE; "voice" -> MsgKind.VOICE; "call" -> MsgKind.CALL
+            "video" -> MsgKind.VIDEO; "audio" -> MsgKind.AUDIO
+            else -> MsgKind.TEXT
+        }
+        val my = myUid()
+        @Suppress("UNCHECKED_CAST")
+        val deletedFor = (doc.get("deletedFor") as? List<String>) ?: emptyList<String>()
+        val tsMs = doc.getTimestamp("ts")?.toDate()?.time ?: 0L
+        return TikuMessage(
+            id = doc.id, senderUid = sender, kind = kind, text = "",
+            time = fmtTime(tsMs), me = sender == my,
+            deletedForMe = deletedFor.contains(my), tsMs = tsMs,
+        )
+    }
+
     /** My clearedBefore watermark for a chat: served from the threads-
      *  listener-fed cache; a one-time get() only on a cold cache. */
     private suspend fun clearedBeforeFor(id: String): Long {
@@ -866,7 +904,15 @@ object FirebaseEngine : ChatRepo {
         val dmCutoff = if (SettingsStore.state.value.toggles["dm"] == true)
             System.currentTimeMillis() - 24L * 3600 * 1000 else 0L
         val msgs = docs.mapNotNull { d ->
+            // ROUND 18: a doc whose ciphertext this device cannot open
+            // (written under a retired key — e.g. the pre-reset journal's
+            // chats) must still EXIST in the list. Dropping it silently
+            // left threads with real messages rendering a BLANK preview
+            // (the owner's abu2 row: name + "now", no text). The stub
+            // carries only the doc's plaintext metadata (kind / sender /
+            // ts), so the list can always show the kind label.
             runCatching { decryptDoc(id, d, key, peerUid, light = true) }.getOrNull()
+                ?: previewStub(d)
         }.filter { m ->
             !m.deletedForMe && m.tsMs >= clearedBefore && (dmCutoff == 0L || m.tsMs >= dmCutoff)
         }.sortedBy { it.tsMs }
@@ -1322,11 +1368,21 @@ object FirebaseEngine : ChatRepo {
         val cacheIds = cache.keys
         val localsById = (AppState.thread(id)?.messages ?: emptyList()).associateBy { it.id }
         val mergedServer = serverMsgs.map { sm ->
-            // A sender's own VIDEO/AUDIO echo arrives as a metadata stub
-            // (those kinds never auto-download) — inherit the local copy's
-            // playable file + poster so the sender keeps instant playback.
             val lm = localsById[sm.id]
-            if (lm != null && sm.localPath == null && lm.localPath != null) {
+            // ROUND 18: a delete-for-everyone I just made is tombstoned in
+            // the local list optimistically, but the cache still holds the
+            // pre-delete decrypt until the MODIFIED echo lands — without
+            // this, any rebuild in between would flip the bubble back to
+            // its content for a beat. The local tombstone wins.
+            if (lm != null && lm.deletedForEveryone && !sm.deletedForEveryone) {
+                sm.copy(
+                    deletedForEveryone = true, text = "", photo = null,
+                    localPath = null, replyQuote = null, reactions = emptyMap(),
+                )
+            } else if (lm != null && sm.localPath == null && lm.localPath != null) {
+                // A sender's own VIDEO/AUDIO echo arrives as a metadata stub
+                // (those kinds never auto-download) — inherit the local copy's
+                // playable file + poster so the sender keeps instant playback.
                 sm.copy(localPath = lm.localPath, photo = sm.photo ?: lm.photo)
             } else sm
         }
@@ -1419,6 +1475,28 @@ object FirebaseEngine : ChatRepo {
         @Suppress("UNCHECKED_CAST")
         val seenBy = (doc.get("seenBy") as? List<String>) ?: emptyList<String>()
         val tsMs = doc.getTimestamp("ts")?.toDate()?.time ?: 0L
+        val kind = when (kindRaw) {
+            "image" -> MsgKind.IMAGE; "voice" -> MsgKind.VOICE; "call" -> MsgKind.CALL
+            "video" -> MsgKind.VIDEO; "audio" -> MsgKind.AUDIO
+            else -> MsgKind.TEXT
+        }
+        // ROUND 18 — TOMBSTONE: the sender deleted this message for
+        // everyone (delAll). The doc stays (chats never disappear) but its
+        // ciphertext was wiped by the delete, so there is nothing TO
+        // decrypt: return the tombstone shape directly — kind + sender +
+        // timestamps only — and every surface renders "This message was
+        // deleted" from it. deletedForMe still applies on top (a
+        // tombstone I also deleted for me stays hidden for me).
+        if (doc.getBoolean("delAll") == true) {
+            return TikuMessage(
+                id = doc.id, senderUid = sender, kind = kind, text = "",
+                time = fmtTime(tsMs), me = me,
+                starredByMe = starredBy.contains(my),
+                deletedForMe = deletedFor.contains(my),
+                tsMs = tsMs, seenByPeer = seenBy.contains(peerUid),
+                deletedForEveryone = true,
+            )
+        }
         val replyQuote = doc.getString("rqCt")?.takeIf { it.isNotEmpty() }?.let {
             runCatching { Crypto.decryptText(key, doc.getString("rqIv") ?: "", it) }.getOrNull()
         }
@@ -1499,11 +1577,6 @@ object FirebaseEngine : ChatRepo {
                     }
                 }
             }
-        }
-        val kind = when (kindRaw) {
-            "image" -> MsgKind.IMAGE; "voice" -> MsgKind.VOICE; "call" -> MsgKind.CALL
-            "video" -> MsgKind.VIDEO; "audio" -> MsgKind.AUDIO
-            else -> MsgKind.TEXT
         }
         return TikuMessage(doc.id, sender, kind, text, fmtTime(tsMs), me, durSec, amps,
             photo, replyQuote, doc.getString("replyToId"), reactions, starredBy.contains(my), deletedFor.contains(my), tsMs, localPath,
@@ -1850,6 +1923,71 @@ object FirebaseEngine : ChatRepo {
     /** Delete = delete-for-me ONLY (append uid to deletedFor). Never a hard delete. */
     override fun deleteForMe(id: String, msgId: String) {
         scope.launch { msgRef(id, msgId).update("deletedFor", FieldValue.arrayUnion(uid)).await() }
+    }
+
+    /**
+     * ROUND 18 — DELETE FOR EVERYONE (own messages only). The doc is
+     * TOMBSTONED, never removed (chats never disappear): delAll=true and
+     * the ciphertext fields are wiped in the same update, so the content
+     * is gone for both sides — including any future restore — while the
+     * message's slot, sender and timestamp remain for the tombstone
+     * bubble. Media chunks are deleted best-effort right after (the
+     * tombstone already makes them unreachable in every UI). The local
+     * list tombstones optimistically; the MODIFIED echo rebuilds the
+     * identical shape from the doc on both devices.
+     * A still-SENDING message has no stable server doc to tombstone (its
+     * own set() could land after the update and resurrect it), and a
+     * FAILED one never reliably landed — both are refused / local-only.
+     */
+    override fun deleteForEveryone(id: String, msgId: String) {
+        val m = AppState.thread(id)?.messages?.firstOrNull { it.id == msgId } ?: return
+        if (!m.me || m.deletedForEveryone) return
+        when (m.status) {
+            SendStatus.SENDING -> {
+                AppState.toast("Still sending — try again in a moment")
+                return
+            }
+            SendStatus.FAILED -> {
+                // never landed on the server — there is nothing to
+                // tombstone; hide the local copy (same as delete-for-me).
+                AppState.updateThread(id) { t ->
+                    t.messages.replaceAll { mm ->
+                        if (mm.id == msgId) mm.copy(deletedForMe = true) else mm
+                    }
+                }
+                return
+            }
+            SendStatus.SENT -> Unit
+        }
+        AppState.markDeletedForEveryone(id, msgId)
+        scope.launch {
+            runCatching {
+                val ref = msgRef(id, msgId)
+                val chunkCount = m.mediaChunks
+                ref.update(mapOf(
+                    "delAll" to true,
+                    "ct" to "", "iv" to "",
+                    "rqCt" to "", "rqIv" to "", "replyToId" to FieldValue.delete(),
+                    "reaction" to emptyMap<String, String>(),
+                    "amps" to emptyList<Int>(), "durationMs" to 0,
+                    "mediaChunks" to 0, "mime" to "", "mediaBytes" to 0L,
+                )).await()
+                if (chunkCount > 0) {
+                    val chunks = ref.collection("chunks").get().await()
+                    var batch = db.batch()
+                    var n = 0
+                    for (d in chunks.documents) {
+                        batch.delete(d.reference)
+                        if (++n >= 400) { batch.commit().await(); batch = db.batch(); n = 0 }
+                    }
+                    if (n > 0) batch.commit().await()
+                }
+                Log.d("TikuChat", "message $msgId deleted for everyone in chat $id")
+            }.onFailure {
+                Log.e("TikuChat", "deleteForEveryone failed for $msgId in chat $id", it)
+                AppState.toast("Couldn't delete for everyone — try again")
+            }
+        }
     }
 
     /** Clear chat = per-user clearedBefore timestamp; older messages hide locally only. */

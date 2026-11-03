@@ -97,16 +97,20 @@ import kotlinx.coroutines.withContext
 fun myUidKey(): String = if (Config.PREVIEW_UI_ONLY) "me" else FirebaseEngine.myUid()
 
 /** Last-message preview, build-47 rules: media kinds by label, call events
- *  by their pill label, never raw call text. */
+ *  by their pill label, never raw call text. ROUND 18: a delete-for-everyone
+ *  tombstone previews as itself, and the preview is NEVER blank while a
+ *  message exists — an unopenable text (metadata stub from the preview
+ *  path) falls back to the generic "Message" label. */
 fun threadPreview(th: ChatThread): String {
     val last = th.messages.lastOrNull { !it.deletedForMe } ?: return ""
+    if (last.deletedForEveryone) return "This message was deleted"
     return when (last.kind) {
         MsgKind.VOICE -> "Voice message"
         MsgKind.IMAGE -> "Photo"
         MsgKind.VIDEO -> "Video"
-        MsgKind.AUDIO -> "Audio"
+        MsgKind.AUDIO -> "Audio file"
         MsgKind.CALL -> callEventLabel(last, last.callMine)
-        else -> last.text
+        else -> last.text.ifBlank { "Message" }
     }
 }
 
@@ -711,8 +715,9 @@ private fun SettingsMain(
     onLogout: () -> Unit,
 ) {
     val ctx = LocalContext.current
-    // ROUND 15: only ever launched from the owner-only Notifications row's
-    // enable path (same pattern as the Owner section's toggle).
+    // Launched from the Notifications row's enable path (ROUND 18: that
+    // row is for every user now — same pattern as the Owner section's
+    // toggle, which keeps its own launcher).
     val permLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission(),
     ) { }
@@ -778,57 +783,56 @@ private fun SettingsMain(
         }
         item { Section("Privacy") }
         item {
-            if (OwnerState.isOwner) {
-                // ROUND 15: this row now reads/writes OwnerPrefs — the
-                // SINGLE source of truth the password gate itself reads
-                // (OwnerGate). It previously wrote only SettingsStore's
-                // "al" key, which the gate never consults, so flipping
-                // this switch changed nothing at the gate. "al" is still
-                // mirrored so the settings state flow can't drift.
-                ToggleRow(
-                    "App lock", "Ask for password on open", OwnerPrefs.appLockOn,
-                ) {
-                    val on = !OwnerPrefs.appLockOn
-                    OwnerPrefs.setAppLock(on)
-                    SettingsStore.setToggle("al", on)
-                    NotifyGate.sync(ctx)
-                    AppState.toast(if (on) "App lock on" else "App lock off — the password won't be asked on open")
-                }
-            } else {
-                ToggleRow("App lock", "Ask for password on open", true) {
-                    AppState.toast("Always on for safety")
-                }
+            // ROUND 15: this row reads/writes OwnerPrefs — the SINGLE
+            // source of truth the password gate itself reads (OwnerGate).
+            // It previously wrote only SettingsStore's "al" key, which the
+            // gate never consults, so flipping this switch changed
+            // nothing at the gate. "al" is still mirrored so the settings
+            // state flow can't drift.
+            // ROUND 18 (owner order): the row is functional for EVERY
+            // signed-in user, not just the owner — OwnerPrefs is a
+            // device-local prefs store despite the name, the defaults are
+            // unchanged (lock ON), and the gate honours it per device.
+            // (Non-owners used to get a dummy row stuck on with an
+            // "Always on for safety" toast.)
+            ToggleRow(
+                "App lock", "Ask for password on open", OwnerPrefs.appLockOn,
+            ) {
+                val on = !OwnerPrefs.appLockOn
+                OwnerPrefs.setAppLock(on)
+                SettingsStore.setToggle("al", on)
+                NotifyGate.sync(ctx)
+                AppState.toast(if (on) "App lock on" else "App lock off — the password won't be asked on open")
             }
         }
-        if (OwnerState.isOwner) {
-            item {
-                // ROUND 15 (owner order): the Notifications toggle lives
-                // HERE, directly under App lock — the Owner section's copy
-                // at the bottom of Settings keeps working off the same
-                // OwnerPrefs.notifyOn (one state, two surfaces). Owner
-                // only: non-owners never see this row (zero-notification
-                // law intact for everyone else).
-                ToggleRow(
-                    "Notifications",
-                    "A quiet “New message” alert on this phone, even when the app isn't open — works while App lock is off, only for your account",
-                    OwnerPrefs.notifyOn,
-                ) {
-                    val on = !OwnerPrefs.notifyOn
-                    OwnerPrefs.setNotify(on)
-                    if (on) {
-                        if (Build.VERSION.SDK_INT >= 33 &&
-                            ContextCompat.checkSelfPermission(ctx, Manifest.permission.POST_NOTIFICATIONS) !=
-                            PackageManager.PERMISSION_GRANTED
-                        ) {
-                            permLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
-                        }
-                        NotifyGate.sync(ctx)
-                        AppState.toast("Notifications on — only on this phone, only for you")
-                    } else {
-                        NotifyGate.sync(ctx)
-                        OwnerNotify.cancelAll(ctx)
-                        AppState.toast("Notifications off")
+        item {
+            // ROUND 15 (owner order): the Notifications toggle lives
+            // HERE, directly under App lock — the Owner section's copy at
+            // the bottom of Settings keeps working off the same
+            // OwnerPrefs.notifyOn (one state, two surfaces).
+            // ROUND 18 (owner order): visible and functional for EVERY
+            // signed-in user — same OwnerPrefs binding, same default
+            // (OFF), same POST_NOTIFICATIONS request on enable.
+            ToggleRow(
+                "Notifications",
+                "A quiet “New message” alert on this phone, even when the app isn't open — works while App lock is off",
+                OwnerPrefs.notifyOn,
+            ) {
+                val on = !OwnerPrefs.notifyOn
+                OwnerPrefs.setNotify(on)
+                if (on) {
+                    if (Build.VERSION.SDK_INT >= 33 &&
+                        ContextCompat.checkSelfPermission(ctx, Manifest.permission.POST_NOTIFICATIONS) !=
+                        PackageManager.PERMISSION_GRANTED
+                    ) {
+                        permLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
                     }
+                    NotifyGate.sync(ctx)
+                    AppState.toast("Notifications on — only on this phone, only for you")
+                } else {
+                    NotifyGate.sync(ctx)
+                    OwnerNotify.cancelAll(ctx)
+                    AppState.toast("Notifications off")
                 }
             }
         }
@@ -868,6 +872,31 @@ private fun SettingsMain(
         item {
             ToggleRow("Speaker on video calls", "Audio through the speaker on video calls", settings.speakerDefaultOn) {
                 SettingsStore.setToggle("vsp", !settings.speakerDefaultOn)
+            }
+        }
+        item {
+            // ROUND 18 (owner order): in-app updates — an "App update" row
+            // for EVERY user, in Additional settings. The sub shows this
+            // install's CI build number (stamped into assets at build
+            // time); 0 = a pre-system install, which shows the check
+            // prompt instead. Tap = a manual check that ignores the 6h
+            // throttle: newer → the download page opens in the browser;
+            // up to date / offline → a toast says which.
+            val installed = remember { UpdateCheck.installedBuild(ctx) }
+            NavRow(
+                "App update",
+                if (installed > 0) "Version $installed" else "Check for the latest version",
+            ) {
+                UpdateCheck.checkNow(ctx) { result ->
+                    when (result) {
+                        is UpdateCheck.ManualResult.Newer ->
+                            UpdateCheck.openDownloadPage(ctx, result.url)
+                        UpdateCheck.ManualResult.UpToDate ->
+                            AppState.toast("You're on the latest version")
+                        UpdateCheck.ManualResult.Failed ->
+                            AppState.toast("Couldn't check — check your connection")
+                    }
+                }
             }
         }
         if (OwnerState.isOwner) {

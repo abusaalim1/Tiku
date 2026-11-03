@@ -22,10 +22,11 @@ import kotlinx.coroutines.launch
  */
 object SecretEntry {
     fun openGate(ctx: Context, scope: CoroutineScope) {
-        // ROUND 9: the owner's own phone may skip the password prompt (his
-        // App-lock toggle OFF — see OwnerGate.skipGate for the full rule set).
-        // Every other account, and the owner whenever any condition is unmet,
-        // lands on the gate exactly as before.
+        // ROUND 9 → ROUND 18: any user's own phone may skip the password
+        // prompt when THEY turned App lock OFF on this device (see
+        // OwnerGate.skipGate for the full rule set — Round 18 made the
+        // choice universal). Whenever any condition is unmet, the gate
+        // shows exactly as before.
         if (OwnerGate.skipGate(ctx)) {
             scope.launch { ChatSession.unlockFlow(ctx) }
             return
@@ -38,9 +39,11 @@ object SecretEntry {
  * ROUND 9 — OWNER IDENTITY, in exactly ONE place. The owner account is the
  * signed-in Firebase Auth account whose EMAIL is [Config.OWNER_EMAIL] —
  * never a uid (uids change whenever an account is recreated; the email is
- * the stable identity the owner named). Every owner-only surface (the Me ▸
- * Owner section, the gate skip, the notification hook) consults [isOwner]
- * here, so no surface can drift from the rule.
+ * the stable identity the owner named). Since ROUND 18 the only surface
+ * still keyed to it is the Me ▸ Owner settings section: the password gate
+ * and the notification service became universal (every user's own
+ * device-local toggles decide — see [OwnerGate] / NotifyGate), so they no
+ * longer consult [isOwner].
  */
 object OwnerState {
     /** Screenshot-harness seam ONLY: when non-null it decides owner-ness
@@ -56,28 +59,30 @@ object OwnerState {
 }
 
 /**
- * ROUND 9 — the owner's device-local choices (his phone's prefs file; never
- * synced, never on the server). FAIL-SAFE defaults: until [init] has run —
- * and for every non-owner account, whose UI never touches these — the
- * values read as notifications OFF and App lock ON (= build-35 law), so an
- * uninitialized read can only ever mean MORE lock, never less.
+ * ROUND 9 → ROUND 18 — the DEVICE-LOCAL choices (this phone's prefs file;
+ * never synced, never on the server). Round 9 kept them for the owner
+ * account; Round 18 made them every signed-in user's ("har koi unlock ya
+ * lock kr sakta hai") — the Settings rows simply surface them to all.
+ * FAIL-SAFE defaults: until [init] has run the values read as
+ * notifications OFF and App lock ON (= build-35 law), so an uninitialized
+ * read can only ever mean MORE lock, never less.
  */
 object OwnerPrefs {
     private const val PREF = "tiku_owner"
     private var prefs: SharedPreferences? = null
 
-    /** Opt-in message alerts on the owner's phone. Default OFF — even for him. */
+    /** Opt-in message alerts on this phone. Default OFF for everyone. */
     var notifyOn by mutableStateOf(false)
         private set
 
-    /** ON (default) = the password gate guards every entry, exactly as for
-     *  everyone. OFF = this device opens his journal with no prompt. */
+    /** ON (default) = the password gate guards every entry. OFF = this
+     *  device opens the signed-in user's journal with no prompt. */
     var appLockOn by mutableStateOf(true)
         private set
 
-    /** One-shot gate: set by the Owner section's explicit "Lock now"; the
-     *  NEXT entry must pass the password gate even with App lock OFF. Any
-     *  successful unlock consumes it. */
+    /** One-shot gate: set by the explicit "Lock now" action; the NEXT
+     *  entry must pass the password gate even with App lock OFF. Any
+     *  successful unlock consumes it. Applies to every user (Round 18). */
     var gateOnce by mutableStateOf(false)
         private set
 
@@ -113,19 +118,26 @@ object OwnerPrefs {
     }
 }
 
-/** ROUND 9 — the gate-relaxation rules for the owner account, in one place. */
+/** ROUND 9 → ROUND 18 — the gate-relaxation rules, in one place. Round 9
+ *  scoped them to the owner account; ROUND 18 (owner's order: "har koi
+ *  unlock ya lock kr sakta hai... default me bas option enable rahega and
+ *  users usko disable bhi kr sakta hai") makes them UNIVERSAL — the
+ *  device-local [OwnerPrefs] choices of whoever is signed in on THIS
+ *  phone decide. [OwnerState] is deliberately NOT consulted here any
+ *  more. Defaults are untouched: App lock ON, so out of the box every
+ *  user still gets the password gate on every entry. */
 object OwnerGate {
     /**
-     * True when entering Tik may skip the password prompt entirely: owner
-     * account AND his App lock OFF AND no pending one-shot gate (explicit
-     * "Lock now") AND this device finished setup and still holds his local
-     * journal identity. Any doubt → the gate shows. NOTE what this does NOT
-     * touch: the server-side key backup stays wrapped under his password —
-     * a NEW device still restores only with the password; gate-off is a
-     * convenience of THIS device, never a weakening of the backup.
+     * True when entering Tik may skip the password prompt entirely: the
+     * signed-in user turned App lock OFF on this device AND no pending
+     * one-shot gate (explicit "Lock now") AND this device finished setup
+     * and still holds that user's local journal identity. Any doubt → the
+     * gate shows. NOTE what this does NOT touch: the server-side key
+     * backup stays wrapped under the user's password — a NEW device still
+     * restores only with the password; gate-off is a convenience of THIS
+     * device, never a weakening of the backup.
      */
     fun skipGate(ctx: Context): Boolean {
-        if (!OwnerState.isOwner) return false
         if (OwnerPrefs.appLockOn) return false
         if (OwnerPrefs.gateOnce) return false
         if (Config.PREVIEW_UI_ONLY) return false
@@ -136,11 +148,12 @@ object OwnerGate {
         return FirebaseEngine.hasLocalIdentity(ctx)
     }
 
-    /** True when a live session may SURVIVE leaving Tik (backgrounding or the
-     *  quick exit) instead of re-locking instantly: owner + App lock OFF.
-     *  Everyone else — and the owner with the toggle ON — re-locks exactly
-     *  as the standing law says. */
-    fun lockOffActive(): Boolean = OwnerState.isOwner && !OwnerPrefs.appLockOn
+    /** True when a live session may SURVIVE leaving Tik (backgrounding or
+     *  the quick exit) instead of re-locking instantly: this device's
+     *  App lock is OFF (any user, Round 18). With the toggle ON —
+     *  including every fresh install — the session re-locks exactly as
+     *  the standing law says. */
+    fun lockOffActive(): Boolean = !OwnerPrefs.appLockOn
 }
 
 /**
@@ -210,7 +223,7 @@ object ChatSession {
         val c = ctx.applicationContext
         // ROUND 10 (Watch lock safety): this lock() is the single choke point
         // every lock path funnels through (quick exit, Back-out, backgrounding
-        // via MainActivity.onStop, the owner's explicit "Lock now").
+        // via MainActivity.onStop, the explicit "Lock now").
         // ROUND 13: the Watch WebView is owned by its pane — clearing the
         // session here (epoch bump) makes the pane's dispose-time save a
         // no-op, and leaving the vault uncomposes the pane, which destroys
@@ -228,11 +241,12 @@ object ChatSession {
     }
 
     /** Discreet quick exit from inside ChatRoot.
-     *  ROUND 9: for the owner with App lock OFF, leaving to the facade is NOT
-     *  a lock — the session (keys, threads, listeners) stays alive on this
-     *  device and re-entry needs no password; only the Owner section's
-     *  explicit "Lock now" or clearing the app data ends it. Presence still
-     *  drops (he is no longer looking at the app). Everyone else gets the
+     *  ROUND 9 → ROUND 18: for ANY user with App lock OFF on this device,
+     *  leaving to the facade is NOT a lock — the session (keys, threads,
+     *  listeners) stays alive on this device and re-entry needs no
+     *  password; only the explicit "Lock now" or clearing the app data
+     *  ends it. Presence still drops (the user is no longer looking at
+     *  the app). With App lock ON (the default) this is the
      *  identical-to-lock() behaviour, as always. */
     fun quickExit(ctx: Context) {
         if (OwnerGate.lockOffActive()) {
@@ -261,8 +275,8 @@ object ChatSession {
     suspend fun unlockFlow(ctx: Context) {
         val c = ctx.applicationContext
         // ROUND 9: reaching here means an unlock succeeded (gate password,
-        // restore password, or the owner's gate-skip) — consume any pending
-        // one-shot gate left by an explicit "Lock now".
+        // restore password, or the App-lock-OFF gate-skip) — consume any
+        // pending one-shot gate left by an explicit "Lock now".
         OwnerPrefs.consumeGateOnce()
         val onboarded = c.getSharedPreferences("tiku_prefs", Context.MODE_PRIVATE)
             .getBoolean("onboarded", false)
