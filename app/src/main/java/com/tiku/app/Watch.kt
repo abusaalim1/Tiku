@@ -72,10 +72,18 @@ import kotlinx.coroutines.launch
 // compositions overlapped during every tab change and fought over the same
 // view; closing Watch and reopening it crashed. That pattern is DELETED.
 //
-// ROUND 14 — browsing/search stay on m.youtube, but a /watch page itself is
-// never rendered — the pane swaps in the locked youtube-nocookie embed
-// (see loadYoutubeEmbed) and locks navigation to it until the user leaves
-// via the header "+" (WatchControl.goHome) or the pane is destroyed.
+// ROUND 14 — browsing/search stayed on m.youtube, but a /watch page itself
+// was never rendered — the pane swapped in the locked youtube-nocookie
+// embed (see loadYoutubeEmbed) and locked navigation to it until the user
+// left via the header "+" (WatchControl.goHome) or the pane was destroyed.
+// ROUND 17 SUPERSEDES that for THIS pane (owner order, 2026-11-03, with a
+// Brave screenshot of the real watch page as the reference): a tapped
+// video now plays on the REAL m.youtube watch page, exactly like a
+// browser — full-width player, true fullscreen, scrollable title /
+// actions / comments / related. No embed swap, no embed lockdown; the
+// browse-phase navigation policy (YouTube hosts + the Google sign-in
+// flow; everything else refused) now applies on every page. The locked
+// embed survives ONLY in the facade drama player (DramaShell.kt).
 //
 // ROUND 14 ADDENDUM 2 §5 — the FLOATING MINI PLAYER, crash-safe by
 // construction: the pane's WebView now lives in ONE root-level host
@@ -108,6 +116,17 @@ import kotlinx.coroutines.launch
 // (MainActivity), above the Chat/Details/Moments overlays and below
 // the call UI + sheets — the mini now floats over chats too and only
 // disappears on lock / full stop / an active call.
+//
+// ROUND 17 (owner order, 2026-11-03) — THE REAL WATCH PAGE. The locked
+// nocookie embed played "chota hoke" (shrunk, no page around it); the
+// owner wants YouTube kept exactly as his Brave screenshot shows it.
+// The /watch → embed swap and the embed-phase lockdown are REMOVED
+// from this pane: /watch loads the real m.youtube watch page inside
+// the browse navigation policy, the session records the /watch URL,
+// Back walks the WebView's own YouTube history before the shell's
+// exit behaviour, and HTML5 fullscreen runs through the existing
+// WatchFullscreen layer. The embed helpers below remain ONLY because
+// the facade drama player (DramaShell.kt) still builds on them.
 // ============================================================================
 
 /** Plain session state for Watch — NO View references, ever. */
@@ -230,16 +249,17 @@ private fun watchPageVideoId(url: String?): String? {
     return v.takeIf { it.length >= 6 && it.all { c -> c.isLetterOrDigit() || c == '-' || c == '_' } }
 }
 
-/** The locked embed's URL prefix — the one main-frame target both
- *  players' WebViewClients allow while an embed is up. */
+/** The locked embed's URL prefix — the one main-frame target the
+ *  FACADE player's WebViewClient allows while its embed is up
+ *  (DramaShell.kt). The Tik Watch pane has no embed phase any more. */
 internal const val YOUTUBE_EMBED_PREFIX = "https://www.youtube-nocookie.com/embed/"
 
 /**
- * ROUND 14 — the LOCKED YouTube embed shared by both players (this pane
- * and the facade drama player in DramaShell.kt): the nocookie embed
- * page itself — no watch page, no "Open App" pill, no comments, no
- * related-video rail. Combined with each player's WebViewClient
- * lockdown, playback stays on this page.
+ * The LOCKED YouTube embed — ROUND 17: used ONLY by the facade drama
+ * player (DramaShell.kt), which keeps its own locked-embed order. The
+ * Tik Watch pane no longer touches these helpers: it plays the real
+ * m.youtube watch page (see the file header). Kept byte-identical —
+ * DramaShell.kt builds on them.
  *
  * ROUND 15: loaded DIRECTLY with loadUrl. The Round-14 route wrapped
  * the embed in a local loadDataWithBaseURL document as an iframe; on
@@ -254,10 +274,6 @@ internal fun youtubeEmbedUrl(videoId: String): String =
 internal fun loadYoutubeEmbed(wv: WebView, videoId: String) {
     wv.loadUrl(youtubeEmbedUrl(videoId))
 }
-
-/** Mutable holder so the pane's WebView-building lambdas can reach the
- *  CURRENT WebView instance (rebuilt on a renderer-gone heal). */
-private class WebViewRef { var wv: WebView? = null }
 
 /** Bottom inset the Watch pane keeps so YouTube's own bottom nav stays
  *  clear of Tik's floating glass nav (nav pill 60dp + 14dp page margin +
@@ -298,17 +314,37 @@ val NowWatchingBarBottomInset = 94.dp
  *  the mini and the bar coexist on chat tabs and never overlap. */
 val WatchMiniBottomClearance = 154.dp
 
+/** ROUND 17 — the pane's ONE navigation policy, on browse and watch
+ *  pages alike: a main-frame load may go to YouTube itself or into the
+ *  Google sign-in flow (accounts.google.com — where youtube.com/signin
+ *  lands); every other main-frame target is refused — external http(s)
+ *  hosts, and app-intent schemes (intent://, market://, tel:, …)
+ *  alike. This is the Round-13/14 browse policy carried through
+ *  unchanged; Round 17 only retired the SECOND policy (the embed-phase
+ *  lockdown) that used to override it while a video played. */
+private fun watchNavAllowed(url: android.net.Uri?): Boolean {
+    if (url == null) return false
+    val scheme = url.scheme?.lowercase() ?: return false
+    if (scheme == "about") return true
+    if (scheme != "http" && scheme != "https") return false
+    val host = url.host?.lowercase() ?: return false
+    return host == "youtu.be" ||
+        host == "youtube.com" || host.endsWith(".youtube.com") ||
+        host == "youtube-nocookie.com" || host.endsWith(".youtube-nocookie.com") ||
+        host == "accounts.google.com"
+}
+
 @SuppressLint("SetJavaScriptEnabled")
 private fun buildWatchWebView(
     ctx: Context,
     startUrl: String,
     onPage: (String) -> Unit,
+    onWatchPage: (String) -> Unit,
     onTitle: (String) -> Unit,
     onShowCustom: (View, WebChromeClient.CustomViewCallback) -> Unit,
     onHideCustom: () -> Unit,
     onRendererGone: () -> Unit,
-    onWatchVideo: (String) -> Unit,
-    embedLocked: () -> Boolean,
+    onHistory: (Boolean) -> Unit,
 ): WebView {
     val wv = WebView(ctx)
     wv.settings.apply {
@@ -331,53 +367,47 @@ private fun buildWatchWebView(
     }
     wv.setBackgroundColor(android.graphics.Color.BLACK)
     wv.webViewClient = object : WebViewClient() {
-        // ROUND 14 — clean playback: browsing/search stay on m.youtube,
-        // but a /watch page is never rendered — the pane swaps in the
-        // locked nocookie embed for that video (see onWatchVideo), and
-        // while the embed is up, no main-frame navigation leaves it.
-        // ROUND 15: only MAIN-FRAME requests are ever intercepted — the
-        // player's own subframe/subresource traffic is its business,
-        // never ours to block; and while locked, the embed document
-        // itself (incl. a redirect back to it) always passes, so the
-        // direct loadUrl can never be cancelled by the lockdown.
+        // ROUND 17 — the real watch page: a /watch navigation is NOT
+        // intercepted any more; the WebView loads the actual
+        // m.youtube.com/watch page (big full-width player, scrollable
+        // title / actions / comments / related), exactly like the
+        // owner's Brave reference. The only interception left is the
+        // standing browse policy (watchNavAllowed): YouTube hosts +
+        // the Google sign-in flow pass; external hosts and app-intent
+        // schemes are refused. Only MAIN-FRAME requests are ever
+        // judged — the page's own subframe/subresource traffic is its
+        // business, never ours to block.
         override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
             val req = request ?: return false
             if (!req.isForMainFrame) return false
-            if (embedLocked()) {
-                return !req.url.toString().startsWith(YOUTUBE_EMBED_PREFIX)
-            }
-            val id = watchPageVideoId(req.url?.toString())
-            if (id != null) {
-                onWatchVideo(id)
-                return true
-            }
-            return false
+            return !watchNavAllowed(req.url)
         }
 
         override fun doUpdateVisitedHistory(view: WebView?, url: String?, isReload: Boolean) {
             super.doUpdateVisitedHistory(view, url, isReload)
-            // m.youtube is an SPA: tapping a video changes the URL via the
-            // History API without shouldOverrideUrlLoading ever firing —
-            // the embed swap has to happen here for in-page taps.
-            if (!embedLocked()) {
-                watchPageVideoId(url)?.let { onWatchVideo(it) }
+            // m.youtube is an SPA: tapping a video changes the URL via
+            // the History API without a full load — session tracking
+            // for in-page taps happens here. Reaching a /watch page
+            // (however it was reached) raises the live session and
+            // records the /watch URL itself for the bar / resume.
+            if (!url.isNullOrBlank()) {
+                if (watchPageVideoId(url) != null) onWatchPage(url) else onPage(url)
             }
+            onHistory(view?.canGoBack() == true)
         }
 
         override fun onPageStarted(view: WebView?, url: String?, favicon: android.graphics.Bitmap?) {
             if (url.isNullOrBlank()) return
-            // The embed document itself is not a session page: it must
-            // never overwrite the canonical watch URL recorded for the
-            // "Now watching" bar / resume.
-            if (embedLocked()) return
-            val id = watchPageVideoId(url)
-            if (id != null) {
-                // Fresh load / resume straight onto a watch page: swap
-                // before it can render.
-                onWatchVideo(id)
-                return
-            }
-            onPage(url)
+            // Fresh load / resume straight onto a page: same dispatch
+            // as the SPA path — a /watch URL records as the session's
+            // watch page, everything else as a plain page.
+            if (watchPageVideoId(url) != null) onWatchPage(url) else onPage(url)
+        }
+
+        override fun onPageFinished(view: WebView?, url: String?) {
+            // Keep the pane's Back enablement honest after real loads
+            // (SPA transitions report through doUpdateVisitedHistory).
+            onHistory(view?.canGoBack() == true)
         }
 
         override fun onRenderProcessGone(view: WebView?, detail: RenderProcessGoneDetail?): Boolean {
@@ -390,16 +420,12 @@ private fun buildWatchWebView(
     }
     wv.webChromeClient = object : WebChromeClient() {
         override fun onReceivedTitle(view: WebView?, title: String?) {
-            if (embedLocked()) {
-                // ROUND 15: the embed is now the TOP document, and its
-                // page title IS the video's title ("<title> - YouTube")
-                // — take it, so the "Now watching" bar stops showing
-                // the generic "YouTube" while a video plays.
-                val t = title?.removeSuffix(" - YouTube")?.trim().orEmpty()
-                if (t.isNotBlank() && t != "YouTube") onTitle(t)
-                return
-            }
-            if (!title.isNullOrBlank()) onTitle(title)
+            // The watch page's document title IS the video's title
+            // ("<title> - YouTube") — strip the suffix, so the "Now
+            // watching" bar shows the video's name, not the site
+            // chrome. The bare "YouTube" of the browse home is ignored.
+            val t = title?.removeSuffix(" - YouTube")?.trim().orEmpty()
+            if (t.isNotBlank() && t != "YouTube") onTitle(t)
         }
 
         override fun onShowCustomView(view: View?, callback: CustomViewCallback?) {
@@ -498,14 +524,11 @@ fun WatchPane(chromeInsets: Boolean = true, boundedAboveNav: Boolean = false) {
     var currentUrl by remember { mutableStateOf(WatchSession.lastUrl) }
     var pageTitle by remember { mutableStateOf(WatchSession.lastTitle) }
     var healGen by remember { mutableIntStateOf(0) }
-    // ROUND 14 — locked-embed state: [embedId] is the video currently
-    // shown as a clean embed (null = free browsing on m.youtube);
-    // [liveRef]/[embedRef] track which WebView instance is alive / hosts
-    // the embed, so a renderer-gone heal re-loads the embed on the
-    // fresh view instead of resurrecting the raw watch page.
-    var embedId by remember { mutableStateOf<String?>(null) }
-    val liveRef = remember { WebViewRef() }
-    val embedRef = remember { WebViewRef() }
+    // ROUND 17 — no embed state at all: the pane renders whatever
+    // YouTube page it is on. [webCanGoBack] mirrors the live WebView's
+    // history (reported via the builder's onHistory) and arms the
+    // pane's browser-like Back handler below.
+    var webCanGoBack by remember { mutableStateOf(false) }
 
     val webView = remember(healGen) {
         buildWatchWebView(
@@ -518,6 +541,19 @@ fun WatchPane(chromeInsets: Boolean = true, boundedAboveNav: Boolean = false) {
                 currentUrl = url
                 WatchSession.record(url, pageTitle, paneEpoch)
             },
+            onWatchPage = { url ->
+                currentUrl = url
+                WatchSession.record(url, pageTitle, paneEpoch)
+                // A video page is actually up: the session is live
+                // right now, not only when the pane leaves. This is
+                // what keeps WatchHost composing this pane across a
+                // tab switch, so the mini window takes over with the
+                // SAME WebView — playback never restarts. (This is the
+                // Round-14 embed swap's old job, kept for the real
+                // watch page.)
+                if (paneEpoch == WatchSession.epoch) WatchSession.hasSession = true
+            },
+            onHistory = { webCanGoBack = it },
             onTitle = { title ->
                 pageTitle = title
                 WatchSession.record(currentUrl, title, paneEpoch)
@@ -533,30 +569,8 @@ fun WatchPane(chromeInsets: Boolean = true, boundedAboveNav: Boolean = false) {
                 runCatching { cb?.onCustomViewHidden() }
             },
             onRendererGone = { healGen++ },
-            onWatchVideo = { id ->
-                val target = liveRef.wv
-                if (target != null && (embedId != id || embedRef.wv !== target)) {
-                    embedId = id
-                    // The session keeps the canonical watch URL: the bar
-                    // thumbnail parses it, and a fresh pane resuming here
-                    // lands in onPageStarted and swaps to the embed again.
-                    val canonical = "https://www.youtube.com/watch?v=$id"
-                    currentUrl = canonical
-                    WatchSession.record(canonical, pageTitle, paneEpoch)
-                    // A video is actually PLAYING: the session is live
-                    // right now, not only when the pane leaves. This is
-                    // what keeps WatchHost composing this pane across a
-                    // tab switch, so the mini window takes over with the
-                    // SAME WebView — playback never restarts.
-                    if (paneEpoch == WatchSession.epoch) WatchSession.hasSession = true
-                    embedRef.wv = target
-                    runCatching { loadYoutubeEmbed(target, id) }
-                }
-            },
-            embedLocked = { embedId != null },
         )
     }
-    liveRef.wv = webView
 
     fun exitFullscreen() {
         // Completing the CustomViewCallback makes the chrome client run its
@@ -569,6 +583,17 @@ fun WatchPane(chromeInsets: Boolean = true, boundedAboveNav: Boolean = false) {
             runCatching { cb?.onCustomViewHidden() }
         }
     }
+    // ROUND 17 — browser-like Back on the Watch tab: while the WebView
+    // itself can go back (watch → browse → …), Back walks YouTube's own
+    // history; only when it can't does the press fall through to the
+    // shell's standing behaviour (HomeScreen's quick-exit lock).
+    // Declared BEFORE the fullscreen handler so fullscreen keeps
+    // priority, and gated to EXPANDED mode (chromeInsets) + no
+    // fullscreen, so the floating mini never steals Back from the
+    // tab / chat underneath it.
+    BackHandler(enabled = chromeInsets && webCanGoBack && WatchFullscreen.view == null) {
+        runCatching { webView.goBack() }
+    }
     BackHandler(enabled = WatchFullscreen.view != null) { exitFullscreen() }
 
     // ROUND 15: expanding the pane (Watch tab, or a tap on the mini /
@@ -579,13 +604,15 @@ fun WatchPane(chromeInsets: Boolean = true, boundedAboveNav: Boolean = false) {
         if (chromeInsets) resumeWatchWebView(webView, autoplay = true)
     }
 
+    // A healed WebView starts with an empty history; its first page
+    // commit re-reports the real value through onHistory.
+    LaunchedEffect(webView) { webCanGoBack = false }
+
     DisposableEffect(webView) {
         WatchControl.navigate = { url ->
-            // The way back from the embed to browsing: the header "+"
-            // (WatchControl.goHome) routes here — drop the lock first,
-            // then load the requested page (YouTube home) normally.
-            embedId = null
-            embedRef.wv = null
+            // The header home button (WatchControl.goHome) routes here:
+            // load the requested page (YouTube browse home) in the
+            // live pane — an ordinary in-place navigation now.
             runCatching { webView.loadUrl(url) }
         }
         WatchControl.pausePlayback = { pauseWatchWebView(webView) }
@@ -595,8 +622,6 @@ fun WatchPane(chromeInsets: Boolean = true, boundedAboveNav: Boolean = false) {
             // page + playback NOW; WatchSession.clear() right after makes
             // the host uncompose this pane, whose dispose destroys the
             // WebView — recordOnLeave there is epoch-guarded and ignored.
-            embedId = null
-            embedRef.wv = null
             runCatching { webView.stopLoading() }
             runCatching { webView.loadUrl("about:blank") }
             runCatching { webView.onPause() }
