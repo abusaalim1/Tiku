@@ -11,6 +11,11 @@ import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
 import androidx.core.content.ContextCompat
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
 
 /**
  * ROUND 15 — BACKGROUND MESSAGE ALERTS FOR THE OWNER (his order after the
@@ -78,6 +83,7 @@ class NotifyService : Service() {
      *  engine's listeners up in a cold process — [onDestroy] then owns
      *  tearing them down again, unless a session has since taken over. */
     private var engineBootstrapped = false
+    private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -110,6 +116,7 @@ class NotifyService : Service() {
             runCatching { FirebaseEngine.stop() }
         }
         engineBootstrapped = false
+        serviceScope.cancel()
         super.onDestroy()
     }
 
@@ -124,7 +131,7 @@ class NotifyService : Service() {
         if (!FirebaseEngine.signedIn) return
         if (!FirebaseEngine.loadLocalIdentity(c)) return
         FirebaseEngine.start(c)
-        FirebaseEngine.loadMyProfile()
+        serviceScope.launch { runCatching { FirebaseEngine.loadMyProfile() } }
         engineBootstrapped = true
     }
 
