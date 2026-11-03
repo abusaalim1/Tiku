@@ -261,7 +261,7 @@ private fun RdAv(person: Person, size: Int) {
  *  for media. Shared by swipe-to-reply and the long-press menu so both
  *  paths attach exactly the same quote (and note replies arrive with
  *  their "Note: …" snapshot in the same field). */
-fun replyQuoteLabel(m: TikuMessage): String = if (m.delAll) "This message was deleted" else when (m.kind) {
+fun replyQuoteLabel(m: TikuMessage): String = if (m.deletedForEveryone) "This message was deleted" else when (m.kind) {
     MsgKind.IMAGE -> "Photo"
     MsgKind.VOICE -> "Voice message"
     MsgKind.VIDEO -> "Video"
