@@ -554,6 +554,16 @@ class ScreenshotsTest {
         AppState.goTik(3) // the Round-14 shell routes on tikDestination, not homeTab
         frame { HomeScreen() }
         composeRule.waitForIdle()
+        // The Owner section is the LAST Settings LazyColumn item (index 21:
+        // 0 Title, 1 profile, 2–4 Appearance, 5–11 Privacy, 12–13 Data,
+        // 14–17 Account, 18–20 Additional, 21 Owner) — scroll it into the
+        // composed window before asserting (same framing fix as shot15).
+        if (composeRule.onAllNodesWithText("Owner")
+                .fetchSemanticsNodes().isEmpty()
+        ) {
+            composeRule.onNode(hasScrollAction()).performScrollToIndex(21)
+            composeRule.waitForIdle()
+        }
         org.junit.Assert.assertTrue(
             "owner Settings must carry the Owner section",
             composeRule.onAllNodesWithText("Owner").fetchSemanticsNodes().isNotEmpty(),
