@@ -17,17 +17,33 @@ class VoiceRecorder(private val ctx: Context) {
     var startedAt = 0L
     private set
 
+    /** Starts recording. Throws on ANY failure — the caller surfaces the
+     *  reason (ROUND 20: a silently-dead mic button shipped because every
+     *  failure on this path used to be swallowed). */
     fun start(): File {
-        stopQuietly()
+        stopRecorder()
         val f = File(ctx.cacheDir, "vn_${System.currentTimeMillis()}.m4a")
         @Suppress("DEPRECATION")
         val r = if (Build.VERSION.SDK_INT >= 31) MediaRecorder(ctx) else MediaRecorder()
-        r.setAudioSource(MediaRecorder.AudioSource.MIC)
-        r.setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
-        r.setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
-        r.setAudioSamplingRate(44100)
-        r.setOutputFile(f.absolutePath)
-        r.prepare(); r.start()
+        try {
+            r.setAudioSource(MediaRecorder.AudioSource.MIC)
+            r.setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
+            r.setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
+            // ROUND 20: explicit channel count + bit rate. The bare
+            // defaults left prepare() at the mercy of OEM AAC encoders —
+            // several refuse a channel/bitrate-less 44.1 kHz profile and
+            // prepare() throws, which the old call site then swallowed
+            // into a dead button. Fully specified = deterministic.
+            r.setAudioChannels(1)
+            r.setAudioSamplingRate(44100)
+            r.setAudioEncodingBitRate(64_000)
+            r.setOutputFile(f.absolutePath)
+            r.prepare(); r.start()
+        } catch (e: Exception) {
+            runCatching { r.release() }
+            runCatching { f.delete() }
+            throw e
+        }
         recorder = r; outFile = f; amps.clear(); startedAt = System.currentTimeMillis()
         return f
     }
@@ -38,17 +54,31 @@ class VoiceRecorder(private val ctx: Context) {
         amps += (a / 1200).coerceIn(2, 24)
     }
 
+    /** Stops recording. With [send] true, returns the captured file ONLY
+     *  when the recorder stopped cleanly AND the file actually holds
+     *  audio — a failed stop (too-short clip, encoder error state) used
+     *  to return the husk anyway, so a corrupt/empty note was "sent".
+     *  Now the husk is deleted and null comes back, and the UI says so. */
     fun stop(send: Boolean): File? {
         val f = outFile
-        stopQuietly()
+        val stoppedCleanly = stopRecorder()
+        outFile = null
         if (!send) { f?.delete(); return null }
+        if (!stoppedCleanly || f == null || !f.exists() || f.length() == 0L) {
+            f?.delete(); return null
+        }
         return f
     }
 
-    private fun stopQuietly() {
-        try { recorder?.stop() } catch (e: Exception) { /* too-short clip */ }
-        try { recorder?.release() } catch (e: Exception) { /* noop */ }
-        recorder = null; outFile = null
+    /** Stops + releases the current recorder (if any). Returns true when
+     *  stop() did not throw — a throw means the capture is unusable. */
+    private fun stopRecorder(): Boolean {
+        val r = recorder ?: return true
+        recorder = null
+        var ok = true
+        try { r.stop() } catch (e: Exception) { ok = false /* too-short clip / error state */ }
+        try { r.release() } catch (e: Exception) { /* noop */ }
+        return ok
     }
 
     fun normalizedAmps(): List<Int> {

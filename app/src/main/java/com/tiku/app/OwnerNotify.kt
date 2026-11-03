@@ -74,8 +74,13 @@ import androidx.core.content.ContextCompat
  * FOREGROUND: snapshots absorbed while he is looking at the app never
  * alert, and any standing message alerts are CANCELLED — opening the
  * app means he has seen them (see also [clearStandingAlerts], which
- * [NotifyService] calls on the resume sync). The service's ongoing
- * banner is NOT posted from here and lives on its own silent channel.
+ * [NotifyGate.sync] calls from MainActivity's onResume).
+ *
+ * ROUND 20: there is no foreground service and no standing banner
+ * anymore — the owner's rule is that a notification exists only while
+ * a real event (a message, a missed call) stands on the shade. This
+ * judge runs purely in-process off the engine's preview hook; the
+ * gate/toggle wiring lives in [NotifyGate] (NotifyService.kt).
  *
  * There is no FCM and no server push: the server holds ciphertext only.
  * Every entry point is runCatching-wrapped — the notification path can
@@ -126,19 +131,21 @@ object OwnerNotify {
     /** True once this run has (re)armed the global watermark. */
     @Volatile private var runArmed = false
 
-    /** True while a live alert pipeline (session or service) has armed
-     *  the watermark in THIS process. [NotifyService] consults it so a
-     *  re-delivered start on an already-running pipeline never re-arms
-     *  mid-run; a dead pipeline — process death, or [reset] on lock —
-     *  reads false here, and the next start arms again. */
+    /** True while this process's alert pipeline has armed the
+     *  watermark. Kept source-compatible from the service era; the
+     *  in-process judge arms itself on the first judged snapshot (see
+     *  [onPreviewLocked]), and a dead pipeline — process death, or
+     *  [reset] on lock — reads false here, so the next run arms again
+     *  instead of mid-run. */
     val pipelineArmed: Boolean get() = synchronized(lock) { runArmed }
 
     /**
-     * Called by the service when its pipeline starts (and cheap to call
-     * again): raises the persisted global watermark so only messages
-     * timestamped from ~now on can alert. Backlog — anything that landed
-     * while the service/session was off — stays behind the watermark
-     * forever (and is baselined per thread besides).
+     * (Re)arm the pipeline: raises the persisted global watermark so
+     * only messages timestamped from ~now on can alert. Backlog —
+     * anything that landed while the pipeline was off — stays behind
+     * the watermark forever (and is baselined per thread besides).
+     * Cheap to call again; [onPreviewLocked] calls it implicitly when
+     * a run has not armed yet.
      */
     fun arm(ctx: Context) {
         runCatching {
@@ -159,8 +166,7 @@ object OwnerNotify {
 
     private fun onPreviewLocked(ctx: Context, threadId: String, msgs: List<TikuMessage>) {
         if (!runArmed) {
-            // First snapshot of this pipeline run (in-app session path —
-            // the service arms explicitly at start): arm BEFORE judging
+            // First snapshot of this pipeline run: arm BEFORE judging
             // anything, so this run's contents are measured against it.
             AlertStore.arm(ctx)
             runArmed = true
@@ -265,9 +271,10 @@ object OwnerNotify {
     // ================= FOREGROUND CLEARING =================
 
     /** Opening the app means he has seen the standing message alerts:
-     *  cancel them (the service's ongoing banner is a different id on a
-     *  different channel and is never touched here). Called by
-     *  [NotifyService] on the resume sync and by the judge's own
+     *  cancel them. Only per-thread message/call alert ids are ever
+     *  cancelled here — since Round 20 there is no standing banner or
+     *  any other notification from the alert path to protect. Called
+     *  by [NotifyGate.sync] on the resume sync and by the judge's own
      *  foreground path. */
     fun clearStandingAlerts(ctx: Context) {
         runCatching { synchronized(lock) { clearStandingLocked(ctx) } }
@@ -379,8 +386,8 @@ object OwnerNotify {
     /** The channel is created LAZILY, here, at the first actual alert — the
      *  app creates no notification channel at startup (see TikuApp). The
      *  name stays in the study spirit: it reads as a generic reminders
-     *  channel. (The foreground service's banner uses its OWN low-importance
-     *  channel — see NotifyService — so it can never peek like an alert.) */
+     *  channel. (Update.kt posts its one-per-build update notice on this
+     *  same channel — also a real event, never a standing entry.) */
     private fun ensureChannel(nm: NotificationManager) {
         if (nm.getNotificationChannel(CHANNEL_ID) != null) return
         nm.createNotificationChannel(

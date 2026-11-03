@@ -603,6 +603,12 @@ object FirebaseEngine : ChatRepo {
     private val previewRegs = mutableMapOf<String, ListenerRegistration>()
     private var readPrefs: android.content.SharedPreferences? = null
     private val openChatIds = mutableSetOf<String>()
+    /** ROUND 20: per-chat unread count captured at open time (see
+     *  ChatThread.unreadAtOpen). openThread writes it BEFORE markRead can
+     *  zero the badge; the threads listener's from-scratch rebuild reads
+     *  it back from here so a snapshot landing mid-open can never wipe
+     *  the value the chat screen is about to pin its divider from. */
+    private val unreadAtOpenCache = mutableMapOf<String, Int>()
 
     // ================= ROUND 8 — INCREMENTAL MESSAGES + PAGINATION =========
     // The old attachMessages loaded the chat's ENTIRE history (no limit) and
@@ -786,7 +792,11 @@ object FirebaseEngine : ChatRepo {
                                 pinnedMsgIds = pinnedMsgsList,
                                 isRequest = deriveIsRequest(knownMsgs, accMs > 0L),
                                 createdAtMs = createdMs,
-                                hiddenForMe = deriveHidden(doc.id, knownMsgs))
+                                hiddenForMe = deriveHidden(doc.id, knownMsgs),
+                                // ROUND 20: this from-scratch rebuild must
+                                // not wipe the open-time unread capture.
+                                unreadAtOpen = existing?.unreadAtOpen
+                                    ?: (unreadAtOpenCache[doc.id] ?: 0))
                         } ?: emptyList()
                         // client-side updatedAt DESC (the query no longer orders)
                         // ROUND 14: a blocked person's threads never surface.
@@ -1285,6 +1295,20 @@ object FirebaseEngine : ChatRepo {
     }
 
     override fun openThread(id: String) {
+        // ROUND 20 — DIVIDER RACE, killed at the source. The list-row tap
+        // calls openThread BEFORE navigating; markRead (below) advances
+        // the read watermark and attachMessages' first snapshot then
+        // republishes the thread with unread = 0 — both routinely beat
+        // the chat screen's first composition, so the round-18/19 divider
+        // captured 0 and never rendered on device. Record the badge the
+        // row was showing RIGHT HERE, synchronously, before anything can
+        // zero it, and write it onto the live thread object in the same
+        // instant so the very first chat composition already carries it.
+        val badgeAtOpen = AppState.thread(id)?.unread ?: 0
+        unreadAtOpenCache[id] = badgeAtOpen
+        AppState.threads.value = AppState.threads.value.map { t ->
+            if (t.id == id) t.copy(unreadAtOpen = badgeAtOpen) else t
+        }
         markRead(id)
         // opening a chat also tops up the parent doc guarantee (async, logged)
         AppState.thread(id)?.person?.uid?.takeIf { it.isNotEmpty() }?.let { peerUid ->

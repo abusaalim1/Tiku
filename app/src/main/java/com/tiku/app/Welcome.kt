@@ -56,7 +56,7 @@ import kotlinx.coroutines.delay
 import kotlin.random.Random
 
 private val Scenes = listOf(
-    Triple("Queen of Tears, now in Hindi", "Korean love stories dubbed in Hindi & Bangla — every episode in one quiet place.", 0),
+    Triple("Queen of Tears, now in Hindi", "Korean love stories dubbed in Hindi — every episode in one quiet place.", 0),
     Triple("Love stories to read", "Short romantic stories from Seoul — perfect between episodes.", 1),
     Triple("Photos • Moments • Butterflies", "Cute, romantic stills and scenes from the dramas you love.", 2),
 )

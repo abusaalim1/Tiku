@@ -7,7 +7,7 @@ import org.json.JSONObject
 /**
  * ROUND 13 — K-DRAMA FACADE CONTENT. The app's outer face is a Korean
  * love-story app ("Tiku — Korean love stories, in your language"): Hindi /
- * Bangla dubbed drama episodes that stream from YouTube, a shelf of short
+ * Hindi dubbed drama episodes that stream from YouTube, a shelf of short
  * love stories to read, and a gallery of romantic stills. Everything except
  * the video streams themselves is bundled in `assets/facade/` and works
  * offline; playback is a facade-owned WebView (see DramaShell.kt).

@@ -303,10 +303,6 @@ fun TikuRoot(onGoogleClick: () -> Unit) {
                             (screen as? Screen.Call ?: lastCall)?.let { CallScreen(it.threadId, it.video) }
                         }
                         if (screen is Screen.Story) StoryScreen()
-                        // ROUND 14: the floating call window is REPLACED by
-                        // the redesign CallPill inside HomeScreen (shown when
-                        // a call is minimized) — FloatingCallWindow (Call.kt)
-                        // is no longer composed anywhere.
                         // ROUND 13: the "Now watching" glass bar floats
                         // above the glass nav. It self-hides unless a Watch
                         // session exists on a non-Watch Home tab.
@@ -320,6 +316,25 @@ fun TikuRoot(onGoogleClick: () -> Unit) {
                             Modifier.align(Alignment.BottomCenter)
                                 .padding(start = 16.dp, end = 16.dp, bottom = NowWatchingBarBottomInset),
                         )
+                        // ROUND 20: the floating call window (Call.kt) is
+                        // composed HERE again, as this Box's last child —
+                        // above HomeScreen, the Chat / Details / Moments
+                        // overlays and WatchHost, so a minimized VIDEO
+                        // call keeps the peer's live video floating while
+                        // the owner messages (Round 14's CallPill lives
+                        // inside HomeScreen and can never appear over a
+                        // chat). The window self-gates: it renders only
+                        // for a minimized live call, and yields the Home
+                        // pane tabs to the CallPill, so exactly one
+                        // minimized-call affordance is ever visible.
+                        // The Watch mini never coexists with it —
+                        // WatchHost hides + pauses its mini for the whole
+                        // call (Round 15). Within this Box the window is
+                        // the topmost layer (it floats over the story
+                        // viewer too, IG-style); only the sheets and the
+                        // toast, composed after this whole subtree, sit
+                        // above it.
+                        FloatingCallWindow()
                     }
                 }
             }

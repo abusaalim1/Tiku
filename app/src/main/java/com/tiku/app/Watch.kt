@@ -45,6 +45,7 @@ import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -65,6 +66,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import coil.compose.AsyncImage
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 // ============================================================================
@@ -160,6 +162,32 @@ import kotlinx.coroutines.launch
 //     raised hasSession, so a tab switch uncomposed the host and
 //     destroyed the WebView mid-playback. playablePageId() now covers
 //     /watch, /shorts and /live.
+//
+// ROUND 20 (owner device test, build 63) — THE MINI STILL PAUSED.
+// Round 19's re-assert was ONE play() call issued from the pane's
+// mode effect in the same composition pass that snapped the host
+// layout; the WebView's new video surface settles ASYNCHRONOUSLY
+// after that relayout, and the pause the resize provokes inside
+// Chromium lands after the single play() — nothing in the file ever
+// pressed play again, so the mini sat paused forever (and its
+// full-size gesture layer eats taps, so the owner could not unpause
+// it in place either). Two more code-level holes fed the same
+// symptom: (a) every JS pause + renderer freeze (MainActivity
+// .onPause, WatchHost on call start) is answered only by
+// resumePlayback, which deliberately resumes with autoplay = FALSE
+// — and on call END nothing resumed the pane at all; (b) entering
+// MINI scrolled only the WINDOW (window.scrollTo(0,0)) and never
+// brought the video ELEMENT into view, so on the real watch page
+// the player could sit outside the mini's 117dp viewport. The fix
+// is structural, not another one-shot: a JS MINI-MODE WATCHDOG
+// (setWatchMiniGuard) that makes pause effectively impossible while
+// the pane is minimized — a 'pause' listener that immediately
+// replays, backed by a 700 ms interval that re-arms itself on the
+// live video element across SPA element swaps and nudges any paused
+// element — plus timed Kotlin re-asserts across the surface-settle
+// window, an element-based scroll-into-view, watchdog re-arming on
+// every page (re)load, and a revive hook for the call-end path.
+// EXPANDED mode disarms the watchdog: the owner's own pause rules.
 // ============================================================================
 
 /** Plain session state for Watch — NO View references, ever. */
@@ -219,6 +247,15 @@ object WatchControl {
     var resumePlayback: (() -> Unit)? = null
     var stopPlayback: (() -> Unit)? = null
 
+    /** ROUND 20: registered by the pane; invoked by WatchHost when a
+     *  call ENDS. The host froze + JS-paused the pane when the call
+     *  started and nothing ever revived it afterwards (the only
+     *  resume hook answers with autoplay = false) — a mini left over
+     *  a call came back visible but paused for good. The pane's
+     *  implementation acts only while it is in MINI mode: re-arm the
+     *  watchdog, unfreeze, play, re-frame the player. */
+    var miniRevive: (() -> Unit)? = null
+
     /** FULL stop — the mini window's ✕ and the "Now watching" bar's ✕:
      *  halt the live pane first (about:blank + pause), then clear the
      *  session, which uncomposes WatchHost and destroys the WebView.
@@ -258,9 +295,18 @@ object WatchControl {
      *  unfreeze the WebView's renderer. Deliberately does NOT force the
      *  video to play: if the JS pause landed, the player shows its own
      *  play button; EXPANDING the pane (tap on the mini / the bar) is
-     *  the user's "watch now" gesture and plays via the pane itself. */
+     *  the user's "watch now" gesture and plays via the pane itself.
+     *  ROUND 20: in MINI mode the watchdog (armed on the page) does
+     *  force play once the renderer unfreezes — a minimized video is
+     *  never the user's deliberate pause. */
     fun requestResume() {
         resumePlayback?.invoke()
+    }
+
+    /** ROUND 20: a call just ended — bring a MINI pane back to life
+     *  (see [miniRevive]). No-op in EXPANDED mode and after a stop. */
+    fun requestMiniRevive() {
+        miniRevive?.invoke()
     }
 }
 
@@ -410,6 +456,11 @@ private fun buildWatchWebView(
     onHideCustom: () -> Unit,
     onRendererGone: () -> Unit,
     onHistory: (Boolean) -> Unit,
+    /** ROUND 20: fired with the live view whenever a document has
+     *  (re)loaded or history updated — the pane re-arms the mini
+     *  watchdog there, because a fresh document wipes the JS state
+     *  (flag + installer) the watchdog lives in. */
+    onPageReady: (WebView) -> Unit = {},
 ): WebView {
     val wv = WebView(ctx)
     wv.settings.apply {
@@ -459,6 +510,10 @@ private fun buildWatchWebView(
                 if (playablePageId(url) != null) onWatchPage(url) else onPage(url)
             }
             onHistory(view?.canGoBack() == true)
+            // SPA transitions land here without a fresh document —
+            // re-arming is idempotent and keeps the watchdog bound
+            // to whatever video element the SPA swapped in.
+            view?.let { onPageReady(it) }
         }
 
         override fun onPageStarted(view: WebView?, url: String?, favicon: android.graphics.Bitmap?) {
@@ -473,6 +528,9 @@ private fun buildWatchWebView(
             // Keep the pane's Back enablement honest after real loads
             // (SPA transitions report through doUpdateVisitedHistory).
             onHistory(view?.canGoBack() == true)
+            // A fresh document wiped the watchdog's JS state — the
+            // pane re-arms it for the mode it is currently in.
+            view?.let { onPageReady(it) }
         }
 
         override fun onRenderProcessGone(view: WebView?, detail: RenderProcessGoneDetail?): Boolean {
@@ -543,6 +601,99 @@ private fun resumeWatchWebView(wv: WebView, autoplay: Boolean) {
     }
 }
 
+// ================= ROUND 20 — the MINI-mode watchdog =================
+// Round 19 re-asserted play exactly ONCE on entering the mini, from
+// the same composition pass that snapped the host layout. The
+// WebView's video surface settles asynchronously AFTER that
+// relayout, and the pause the resize provokes inside Chromium (the
+// classic interrupted play() promise) therefore landed after our
+// only play() — grep the file: there was no retry, no observer, no
+// second call site. The mini then sat paused forever, and because
+// the host's gesture layer covers the mini, the owner could not
+// even tap the video to unpause it in place.
+//
+// The watchdog makes pause structurally impossible while the pane
+// is in MINI mode and its session is alive:
+// - a 'pause' listener on the video element replays ~60 ms later
+//   (the delay lets a deliberate EXPANDED pause settle — impossible
+//   in mini anyway — and lets an ended video stay ended: the nudge
+//   checks `ended` and the mode flag at fire time);
+// - a 700 ms interval re-queries the CURRENT video element every
+//   tick (m.youtube's SPA swaps elements without a document reload),
+//   arms the listener on any fresh element, and nudges any paused
+//   one — so element swaps, missed events and rejected play()
+//   promises all self-heal within a tick;
+// - the mode flag lives on `window.__tikuMiniWanted`: Kotlin sets
+//   it on every mode change and on every page (re)load (a fresh
+//   document wipes it together with the installer). EXPANDED sets
+//   it false — the owner's own pause is respected there.
+// While the WebView is renderer-paused (a live call, backgrounding)
+// JS timers freeze, so the watchdog is inert exactly when it must
+// be; it resumes nudging the moment the renderer unfreezes.
+private const val WATCH_MINI_GUARD_JS = """
+(function(){
+  if (window.__tikuGuardInstalled) return;
+  window.__tikuGuardInstalled = true;
+  function cur(){ try { return document.querySelector('video'); } catch(e) { return null; } }
+  function nudge(){
+    if (!window.__tikuMiniWanted) return;
+    var v = cur();
+    if (v && v.paused && !v.ended) {
+      try { var p = v.play(); if (p && p.catch) p.catch(function(){}); } catch(e) {}
+    }
+  }
+  function arm(v){
+    if (!v || v.__tikuArmed) return;
+    v.__tikuArmed = true;
+    v.addEventListener('pause', function(){ setTimeout(nudge, 60); });
+    v.addEventListener('loadeddata', function(){ setTimeout(nudge, 60); });
+  }
+  setInterval(function(){ var v = cur(); if (v) arm(v); nudge(); }, 700);
+  var v0 = cur(); if (v0) arm(v0);
+})();
+"""
+
+/** Arm (or disarm) the MINI watchdog on the pane's current page.
+ *  Setting the flag and (re)installing are separate evals on
+ *  purpose: a fresh document has neither, a live one keeps its
+ *  installer and only needs the flag flipped. Fully idempotent. */
+private fun setWatchMiniGuard(wv: WebView, on: Boolean) {
+    runCatching { wv.evaluateJavascript("window.__tikuMiniWanted = $on;", null) }
+    runCatching { wv.evaluateJavascript(WATCH_MINI_GUARD_JS, null) }
+}
+
+/** ROUND 20 — frame the PLAYER inside the mini. Round 19 scrolled
+ *  only the window (`window.scrollTo(0,0)`); on the real watch page
+ *  the scroll offset does not always live on the window (the SPA's
+ *  own scroll containers, YouTube's docked-player state), so the
+ *  player could sit below the mini's 117dp viewport — "video waha
+ *  pe dikhe" failed even with the right page loaded. Scroll the
+ *  video ELEMENT into view instead (scrollIntoView walks every
+ *  scrollable ancestor), then correct any residual offset from the
+ *  element's own bounding rect. */
+private fun scrollWatchPlayerIntoView(wv: WebView) {
+    runCatching {
+        wv.evaluateJavascript(
+            """
+            (function(){
+              try { window.scrollTo(0, 0); } catch(e) {}
+              var v = null;
+              try { v = document.querySelector('video'); } catch(e) {}
+              if (v) {
+                try { v.scrollIntoView({ block: 'start', inline: 'nearest' }); }
+                catch(e) { try { v.scrollIntoView(); } catch(e2) {} }
+                try {
+                  var r = v.getBoundingClientRect();
+                  if (r.top > 1 || r.top < -1) window.scrollBy(0, r.top);
+                } catch(e) {}
+              }
+            })();
+            """.trimIndent(),
+            null,
+        )
+    }
+}
+
 /**
  * The Watch pane. Owns its WebView end to end: created here, destroyed here.
  * Placement is NOT decided here — [WatchHost] composes this pane in its
@@ -585,6 +736,11 @@ fun WatchPane(chromeInsets: Boolean = true, boundedAboveNav: Boolean = false) {
     }
 
     val ctx = LocalContext.current
+    // ROUND 20: the WebView callbacks below are captured by
+    // remember(healGen) and must still read the pane's CURRENT mode
+    // long after that composition — rememberUpdatedState is the
+    // bridge (a healed WebView must not inherit a stale mode).
+    val chromeInsetsState = rememberUpdatedState(chromeInsets)
     val paneEpoch = remember { WatchSession.epoch }
     var currentUrl by remember { mutableStateOf(WatchSession.lastUrl) }
     var pageTitle by remember { mutableStateOf(WatchSession.lastTitle) }
@@ -627,6 +783,21 @@ fun WatchPane(chromeInsets: Boolean = true, boundedAboveNav: Boolean = false) {
                 if (paneEpoch == WatchSession.epoch) WatchSession.hasSession = true
             },
             onHistory = { webCanGoBack = it },
+            onPageReady = { wv ->
+                // ROUND 20: a (re)loaded document wiped the mini
+                // watchdog's JS state — re-arm it for the mode the
+                // pane is in NOW (read through chromeInsetsState:
+                // this lambda was captured when the WebView was
+                // built and must not freeze an old mode). In MINI,
+                // a navigation inside the session also re-asserts
+                // playback and re-frames the player.
+                val mini = !chromeInsetsState.value
+                setWatchMiniGuard(wv, on = mini)
+                if (mini) {
+                    resumeWatchWebView(wv, autoplay = true)
+                    scrollWatchPlayerIntoView(wv)
+                }
+            },
             onTitle = { title ->
                 pageTitle = title
                 WatchSession.record(currentUrl, title, paneEpoch)
@@ -699,12 +870,33 @@ fun WatchPane(chromeInsets: Boolean = true, boundedAboveNav: Boolean = false) {
     // mini's own size, so the top of the watch page is the 16:9
     // player itself — the mini shows the VIDEO, not whatever section
     // (comments, related) the user had scrolled to.
+    // ROUND 20: that single re-assert was not enough on device (see
+    // the watchdog block above): the pause provoked by the relayout
+    // lands AFTER any one play() issued here. Entering MINI now
+    // (a) arms the JS watchdog, which keeps the video playing for
+    //     the whole minimized session on its own;
+    // (b) re-asserts across the surface-settle window (~2 s of
+    //     timed retries), covering the watchdog's own install race;
+    // (c) frames the player by scrolling the video ELEMENT into
+    //     view, not just the window.
+    // Entering EXPANDED disarms the watchdog first — the owner's
+    // own pause is law there — then plays as before. The effect is
+    // keyed on the mode, so flipping to EXPANDED cancels any
+    // in-flight mini re-assert loop.
     LaunchedEffect(chromeInsets, webView) {
         if (chromeInsets) {
+            setWatchMiniGuard(webView, on = false)
             resumeWatchWebView(webView, autoplay = true)
         } else {
+            setWatchMiniGuard(webView, on = true)
             resumeWatchWebView(webView, autoplay = true)
-            runCatching { webView.evaluateJavascript("window.scrollTo(0,0);", null) }
+            scrollWatchPlayerIntoView(webView)
+            for (stepMs in listOf(300L, 600L, 1000L)) {
+                delay(stepMs)
+                setWatchMiniGuard(webView, on = true)
+                resumeWatchWebView(webView, autoplay = true)
+                scrollWatchPlayerIntoView(webView)
+            }
         }
     }
 
@@ -721,6 +913,19 @@ fun WatchPane(chromeInsets: Boolean = true, boundedAboveNav: Boolean = false) {
         }
         WatchControl.pausePlayback = { pauseWatchWebView(webView) }
         WatchControl.resumePlayback = { resumeWatchWebView(webView, autoplay = false) }
+        WatchControl.miniRevive = {
+            // ROUND 20: WatchHost froze + JS-paused this pane when a
+            // call started; the call has now ended. In MINI mode the
+            // video must come back PLAYING (watchdog re-armed,
+            // renderer unfrozen, play pressed, player re-framed) —
+            // before this hook the mini returned visible but paused
+            // for good. In EXPANDED mode the owner's pause rules.
+            if (!chromeInsetsState.value) {
+                setWatchMiniGuard(webView, on = true)
+                resumeWatchWebView(webView, autoplay = true)
+                scrollWatchPlayerIntoView(webView)
+            }
+        }
         WatchControl.stopPlayback = {
             // FULL stop (mini ✕ / bar ✕ via WatchControl.stop): kill the
             // page + playback NOW; WatchSession.clear() right after makes
@@ -735,6 +940,7 @@ fun WatchPane(chromeInsets: Boolean = true, boundedAboveNav: Boolean = false) {
             if (WatchControl.pausePlayback != null) WatchControl.pausePlayback = null
             if (WatchControl.resumePlayback != null) WatchControl.resumePlayback = null
             if (WatchControl.stopPlayback != null) WatchControl.stopPlayback = null
+            if (WatchControl.miniRevive != null) WatchControl.miniRevive = null
             // Save BEFORE destroy; epoch-guarded so a lock-time clear wins.
             WatchSession.recordOnLeave(currentUrl, pageTitle, paneEpoch)
             if (WatchFullscreen.view != null) {
@@ -843,7 +1049,15 @@ fun WatchHost() {
     val callState by CallController.state.collectAsState()
     val callActive = callState !is CallUiState.Idle
     LaunchedEffect(callActive) {
-        if (callActive) WatchControl.requestPause()
+        if (callActive) {
+            WatchControl.requestPause()
+        } else {
+            // ROUND 20: the call ended — revive a MINI pane the call
+            // froze (the pane hook no-ops in EXPANDED mode). Before
+            // this, nothing ever resumed the pane after a call: the
+            // mini came back visible but paused for good.
+            WatchControl.requestMiniRevive()
+        }
     }
     val hideMini = !expanded && callActive
     // The host floats ABOVE the chat/details/moments overlays now, so

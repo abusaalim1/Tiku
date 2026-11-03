@@ -158,6 +158,15 @@ data class ChatThread(
      *  listeners must keep running so a new partner message can un-hide
      *  them); every list surface filters them out. */
     val hiddenForMe: Boolean = false,
+    // ---- ROUND 20 (appended last, same discipline) ----
+    /** The unread count as it stood the moment this chat was OPENED —
+     *  recorded by the engine inside openThread BEFORE markRead advances
+     *  the read watermark and the live listener zeroes [unread]. The chat
+     *  screen pins its "N new messages" divider from THIS value: reading
+     *  `unread` at first composition raced the engine's zeroing and lost
+     *  on device (rounds 18/19 — the divider never appeared). UI-only
+     *  bookkeeping, rewritten on every open. */
+    val unreadAtOpen: Int = 0,
 ) {
     /** What every surface renders as this chat's title: nickname first,
      *  profile name otherwise. Real name + @username stay visible in the

@@ -6,16 +6,13 @@
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
     <uses-permission android:name="android.permission.VIBRATE" />
-    <!-- ROUND 9: notification permission, used ONLY by the owner account's
-         opt-in alerts on his own phone (OwnerNotify). No other account ever
-         posts a notification; nothing is requested at runtime for them. -->
+    <!-- Notification permission, used ONLY by the opt-in, per-user
+         message alerts (OwnerNotify — any account that turns its own
+         Notifications toggle on; default OFF). Nothing posts at toggle
+         time and nothing stands persistently: since ROUND 20 there is
+         no foreground service, so a notification exists only while a
+         real event (message / missed call / app update) stands. -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
-    <!-- ROUND 15: foreground-service permissions for NotifyService — the
-         owner-only background alert keeper (dataSync type). Same law as
-         above: the service is inert unless the owner account AND his
-         Notifications toggle AND App lock OFF all hold. -->
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <uses-feature android:name="android.hardware.microphone" android:required="false" />
     <uses-feature android:name="android.hardware.camera" android:required="false" />
     <application android:name=".TikuApp" android:label="Tiku" android:theme="@style/Theme.Tiku" android:allowBackup="false"
@@ -45,13 +42,6 @@
                 android:name="android.support.FILE_PROVIDER_PATHS"
                 android:resource="@xml/file_paths" />
         </provider>
-        <!-- ROUND 15: the owner's background message-alert service. Not
-             exported; its persistent notification carries no chat content
-             (see NotifyService). -->
-        <service
-            android:name=".NotifyService"
-            android:exported="false"
-            android:foregroundServiceType="dataSync" />
         <activity android:name=".MainActivity" android:exported="true"
             android:windowSoftInputMode="adjustResize">
             <intent-filter>

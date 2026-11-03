@@ -2,6 +2,7 @@ package com.tiku.app
 
 import android.Manifest
 import android.content.pm.PackageManager
+import android.util.Log
 import android.graphics.BitmapFactory
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -91,6 +92,7 @@ import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
@@ -109,9 +111,11 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.testTag
@@ -185,16 +189,13 @@ private val RdAvatarHues = listOf(
 )
 
 // ================= the file's animation modifiers (verbatim) =================
-/** Chat bubble entrance: springs up from its own corner. */
-private fun Modifier.rdBubbleIn(mine: Boolean, i: Int): Modifier = composed {
-    val a = remember { Animatable(0f) }
-    LaunchedEffect(Unit) { delay(if (i < 8) i * 30L else 0L); a.animateTo(1f, spring(0.62f, 380f)) }
-    this.graphicsLayer {
-        alpha = a.value.coerceIn(0f, 1f); val s = 0.82f + 0.18f * a.value; scaleX = s; scaleY = s
-        translationY = (1f - a.value) * 40f
-        transformOrigin = TransformOrigin(if (mine) 1f else 0f, 1f)
-    }
-}
+/** ROUND 20 — the per-bubble spring entrance (rdBubbleIn: scale + rise +
+ *  fade, replayed every time a row composed) is GONE. It ran on top of
+ *  the list's own follow glide, so a sent/arriving bubble visibly
+ *  bounced twice, and history rows re-animated on every scroll back.
+ *  Instagram has no such thing: the bubble is simply THERE and the list
+ *  shifts once. Message motion now lives in exactly one place — the
+ *  coalesced tail glide (glideToTail) plus the IME glue below. */
 
 /** Springy pop (emoji bar, reaction chip). */
 private fun Modifier.rdPop(i: Int): Modifier = composed {
@@ -594,7 +595,7 @@ private fun RdBubbleRow(
     val media = m.kind == MsgKind.IMAGE || m.kind == MsgKind.VIDEO
     Column(Modifier.fillMaxWidth()) {
         Row(
-            Modifier.fillMaxWidth().rdBubbleIn(m.me, i),
+            Modifier.fillMaxWidth(),
             horizontalArrangement = if (m.me) Arrangement.End else Arrangement.Start,
             verticalAlignment = Alignment.Bottom,
         ) {
@@ -811,7 +812,7 @@ private fun RdVoiceBubble(m: TikuMessage, playing: Boolean, onToggle: () -> Unit
 /** The file's TypingBubble (3 bouncing dots + avatar) on real peer typing. */
 @Composable
 private fun RdTypingBubble(person: Person) {
-    Row(Modifier.fillMaxWidth().rdBubbleIn(false, 99), verticalAlignment = Alignment.Bottom) {
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Bottom) {
         RdAv(person, 28); Spacer(Modifier.width(8.dp))
         Row(
             Modifier.clip(RoundedCornerShape(22.dp)).background(RdCard).padding(horizontal = 16.dp, vertical = 15.dp),
@@ -989,7 +990,13 @@ private fun RdDivider1() = Box(Modifier.fillMaxWidth().height(1.dp).background(C
 
 private fun startRdRecording(recorder: VoiceRecorder, onStarted: () -> Unit) {
     runCatching { recorder.start(); onStarted() }
-        .onFailure { AppState.toast("Couldn't start recording") }
+        .onFailure {
+            // ROUND 20: the failure REASON is part of the toast + the log —
+            // a bare "couldn't start" hid prepare()/mic-busy failures
+            // behind a permanently dead-feeling button.
+            Log.e("TikuVoice", "voice record start failed", it)
+            AppState.toast("Couldn't start recording — ${it.message ?: "microphone unavailable"}")
+        }
 }
 
 /** ROUND 15: copy a picked content Uri into an app-cache file — the
@@ -1074,6 +1081,15 @@ private fun RdChatContent(thread: ChatThread) {
     val listState = rememberLazyListState(
         initialFirstVisibleItemIndex = thread.messages.filter { !it.deletedForMe }.lastIndex.coerceAtLeast(0),
     )
+    // ROUND 20 — the composer's height is MEASURED (onSizeChanged on the
+    // bottom overlay below) and the message list is bounded by exactly
+    // that height: the tail can never slide under the composer card —
+    // reply strip up, recording row up, keyboard open or closed. The old
+    // layout ran the list full-height underneath the floating composer
+    // with a GUESSED 130dp bottom content padding; any composer state
+    // taller than the guess (or the IME resize mid-glide) ate the tail.
+    var composerHeightPx by remember { mutableIntStateOf(0) }
+    val composerHeight = with(LocalDensity.current) { composerHeightPx.toDp() }
     val startCall = rememberCallStarter()
     val clipboard = LocalClipboardManager.current
     val keyboardController = LocalSoftwareKeyboardController.current
@@ -1092,7 +1108,16 @@ private fun RdChatContent(thread: ChatThread) {
         }
     }
 
-    DisposableEffect(threadId) { onDispose { player.stop(); AppState.repo.closeThread(threadId) } }
+    DisposableEffect(threadId) {
+        onDispose {
+            player.stop()
+            // ROUND 20: never leave a live recorder behind — an orphaned
+            // MediaRecorder keeps the mic busy and makes the NEXT record
+            // attempt fail on several devices.
+            recorder.stop(false)
+            AppState.repo.closeThread(threadId)
+        }
+    }
 
     // Photo picker: decode -> the real encrypted image send. (Video and
     // audio-file pickers live with the round-15 launchers below.)
@@ -1176,8 +1201,10 @@ private fun RdChatContent(thread: ChatThread) {
             if (recSecs >= 180) {
                 val f = recorder.stop(true)
                 recording = false
-                if (f != null) AppState.repo.sendVoice(threadId, f, 180, recorder.normalizedAmps())
-                AppState.toast("Voice notes are capped at 3 minutes")
+                if (f != null) {
+                    AppState.repo.sendVoice(threadId, f, 180, recorder.normalizedAmps())
+                    AppState.toast("Voice notes are capped at 3 minutes")
+                } else AppState.toast("Recording failed — nothing was captured")
             }
         }
     }
@@ -1227,14 +1254,23 @@ private fun RdChatContent(thread: ChatThread) {
     }
 
     // ROUND 18 — UNREAD DIVIDER anchor, captured ONCE from the thread as
-    // it stood when this chat was opened (the engine zeroes `unread` and
-    // advances the read watermark as the open snapshot lands, so anything
-    // computed later would see "all read"). The unread set is, by the
+    // it stood when this chat was opened. The unread set is, by the
     // engine's own definition, the newest [unreadAtOpen] incoming
     // non-call messages — the divider pins above the earliest of them.
     // remembered by message ID: pagination prepends and new arrivals can
     // shift indices freely, the divider never moves or duplicates.
-    val unreadAtOpen = remember(threadId) { thread.unread }
+    // ROUND 20: the VALUE no longer comes from `thread.unread` — the row
+    // tap runs openThread (markRead + first snapshot zero the badge)
+    // before this screen composes, so the old capture read 0 on device
+    // and the divider never appeared. The engine now records the badge
+    // in ChatThread.unreadAtOpen inside openThread itself, synchronously,
+    // before anything can zero it; that is what we read here. Preview has
+    // no engine race (the harness navigates without openThread, and the
+    // preview repo zeroes `unread` on ITS openThread), so the fixture's
+    // live `unread` remains the preview source.
+    val unreadAtOpen = remember(threadId) {
+        if (Config.PREVIEW_UI_ONLY) thread.unread else thread.unreadAtOpen
+    }
     val dividerBeforeId = remember(threadId) {
         if (unreadAtOpen <= 0) null
         else {
@@ -1370,6 +1406,36 @@ private fun RdChatContent(thread: ChatThread) {
         }
         if (tail != null) prevTailId = tail.id
     }
+    // ROUND 20 — IME GLUE. The root applies imePadding, so opening or
+    // closing the keyboard RESIZES this screen and the list's viewport
+    // height changes step by step along the IME animation. LazyColumn
+    // anchors at the top, so a shrink left the tail cut off behind the
+    // composer until some later event scrolled — the owner's "newest
+    // message hides under the keyboard". Now: whenever the viewport
+    // height changes and the PREVIOUS layout had the user glued to the
+    // tail, re-anchor to the tail instantly; repeated emissions during
+    // the IME animation simply re-pin the same tail (no bounce, no
+    // animation fighting the IME's own). A scrolled-up reader's previous
+    // layout is never at the tail, so they are never yanked. Non-IME
+    // height changes (pinned strip appearing) behave the same way.
+    val latestVisible by rememberUpdatedState(visible)
+    val latestPeerTyping by rememberUpdatedState(peerTyping)
+    LaunchedEffect(threadId) {
+        var prevHeight = -1
+        var wasAtTail = false
+        snapshotFlow { listState.layoutInfo.viewportSize.height to nearBottom }.collect { (h, atTail) ->
+            if (prevHeight >= 0 && h != prevHeight && wasAtTail) {
+                val msgs = latestVisible
+                if (msgs.isNotEmpty()) {
+                    runCatching {
+                        listState.scrollToItem(msgs.lastIndex + if (latestPeerTyping) 1 else 0)
+                    }
+                }
+            }
+            prevHeight = h
+            wasAtTail = atTail
+        }
+    }
     // pagination: approaching the oldest loaded message fetches the next
     // older page (the engine no-ops when there is none / one is in flight)
     LaunchedEffect(threadId, thread.hasOlder) {
@@ -1380,8 +1446,12 @@ private fun RdChatContent(thread: ChatThread) {
 
     Box(Modifier.fillMaxSize().background(Color.Black)) {
         // ---- message list (the haze source the overlays blur) ----
+        // ROUND 20: bounded above the composer by its MEASURED height
+        // (see composerHeightPx) — the list's visible bottom IS the
+        // composer's top edge, so the newest message is always fully
+        // visible above the floating card, exactly like IG.
         Box(
-            Modifier.fillMaxSize()
+            Modifier.fillMaxSize().padding(bottom = composerHeight)
                 .then(if (haze != null) Modifier.hazeSource(haze) else Modifier),
         ) {
             LazyColumn(
@@ -1389,17 +1459,23 @@ private fun RdChatContent(thread: ChatThread) {
                 state = listState,
                 contentPadding = PaddingValues(
                     start = 16.dp, end = 16.dp,
+                    // top stays generous: the glass header still floats
+                    // over the list's first screenful (designed look).
                     top = if (thread.pinnedMsgIds.isNotEmpty()) 148.dp else 96.dp,
-                    bottom = if (partnerBlocked) 96.dp else 130.dp,
+                    // bottom is now just breathing room — the composer's
+                    // bound is the Box padding above, not a guess here.
+                    bottom = 14.dp,
                 ),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 itemsIndexed(visible, key = { _, m -> m.id }) { idx, m ->
                     // ROUND 18: no animateItem() wrapper — its placement
                     // animation fought the follow glide on every arrival
-                    // (a visible pop riding on top of the scroll). The
-                    // bubbles keep their own rdBubbleIn entrance, and the
-                    // stable keys keep prepend/echo positions exact.
+                    // (a visible pop riding on top of the scroll).
+                    // ROUND 20: the bubbles' own spring entrance is gone
+                    // too — a message simply appears, the ONE coalesced
+                    // glide shifts the list, and the stable keys keep
+                    // prepend/echo positions exact.
                     Column {
                         if (m.id == dividerBeforeId) {
                             RdUnreadDivider(unreadAtOpen)
@@ -1498,7 +1574,7 @@ private fun RdChatContent(thread: ChatThread) {
             visible = !nearBottom,
             enter = fadeIn(tween(200, easing = RdEase)) + scaleIn(initialScale = 0.85f, animationSpec = tween(200, easing = RdEase)),
             exit = fadeOut(tween(150)) + scaleOut(targetScale = 0.85f, animationSpec = tween(150)),
-            modifier = Modifier.align(Alignment.BottomEnd).padding(end = 16.dp, bottom = 120.dp),
+            modifier = Modifier.align(Alignment.BottomEnd).padding(end = 16.dp, bottom = composerHeight + 14.dp),
         ) {
             Box(
                 Modifier.testTag("jump_to_latest").size(40.dp).clip(CircleShape).background(RdCard)
@@ -1571,7 +1647,13 @@ private fun RdChatContent(thread: ChatThread) {
         }
 
         // ---- bottom overlay: input, or the blocked bar ----
-        Box(Modifier.align(Alignment.BottomCenter).fillMaxWidth()) {
+        // ROUND 20: measured on every size change (reply strip, recording
+        // row, blocked bar all change its height) — the list bound above
+        // tracks it exactly.
+        Box(
+            Modifier.align(Alignment.BottomCenter).fillMaxWidth()
+                .onSizeChanged { composerHeightPx = it.height },
+        ) {
             if (partnerBlocked) {
                 Row(
                     Modifier.padding(horizontal = 14.dp, vertical = 12.dp).fillMaxWidth()
@@ -1607,6 +1689,16 @@ private fun RdChatContent(thread: ChatThread) {
                         if (ContextCompat.checkSelfPermission(ctx, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
                             startRdRecording(recorder) { recording = true }
                         } else {
+                            // ROUND 20: the system permission sheet is an
+                            // external activity — exactly like every picker
+                            // and camera launch in this file, it must set
+                            // expectExternalActivity first. Without it, the
+                            // instant re-lock read the request as "app
+                            // exit", locked the session mid-dialog and
+                            // tore this composition (and the launcher's
+                            // grant callback) down: the mic looked granted
+                            // yet recording never started.
+                            ChatSession.expectExternalActivity = true
                             askMic.launch(Manifest.permission.RECORD_AUDIO)
                         }
                     },
@@ -1616,6 +1708,10 @@ private fun RdChatContent(thread: ChatThread) {
                         recording = false
                         if (f != null) {
                             AppState.repo.sendVoice(threadId, f, recSecs.coerceAtLeast(1), recorder.normalizedAmps())
+                        } else {
+                            // ROUND 20: a failed capture says so — never
+                            // a silent no-op "send".
+                            AppState.toast("Recording failed — nothing was captured")
                         }
                     },
                     onCamera = { camChooserOpen = true },

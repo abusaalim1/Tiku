@@ -509,6 +509,25 @@ fun CallScreen(threadId: String, video: Boolean) {
  * from the full screen. If the peer ends, or the session locks, the
  * controller leaves Connected/Outgoing (or pipMinimized clears) and the
  * window disappears on its own.
+ *
+ * ROUND 20 (owner device test, build 63): the window is composed by
+ * TikuRoot again. Round 14 had replaced it with the redesign CallPill
+ * inside HomeScreen — a name/duration pill with NO video, rendered only
+ * on the Home pane tabs and structurally unable to appear over an open
+ * chat (Chat is a TikuRoot overlay ABOVE HomeScreen), so a minimized
+ * video call vanished exactly where the owner wants it: over the chat
+ * he is typing in. Surface seam (exactly one minimized-call affordance
+ * per surface): on the Home pane tabs (Messages / Calls / Watch /
+ * Settings, dest 0..3) the CallPill remains the affordance and this
+ * window stays out; on every other surface — an open chat above all —
+ * this window renders. Renderer handover is safe by construction:
+ * the full screen and this window each own a private
+ * SurfaceViewRenderer and bind/unbind ONLY their own view as a sink
+ * on the shared VideoTrack (WebRTC tracks fan out to many sinks; a
+ * release touches nothing shared — the EglBase context is
+ * factory-owned), so the brief overlap while the call screen's exit
+ * animation runs can neither crash nor steal the peer's frames, and
+ * the RTC session itself is never paused or renegotiated.
  */
 @Composable
 fun FloatingCallWindow() {
@@ -524,6 +543,13 @@ fun FloatingCallWindow() {
     }
     val active = callState is CallUiState.Connected || callState is CallUiState.Outgoing
     if (!pip || !active) return
+    // ROUND 20 — surface seam with the shell's CallPill (Home.kt): on
+    // the Home pane tabs the pill above the NavPill is the minimized
+    // affordance; everywhere else (an open chat, chat details, the
+    // Requests pane, Moments) this window is. Reading AppState here
+    // subscribes the window to navigation, so the hand-over between
+    // the two is a recomposition, never a double render.
+    if (AppState.screen is Screen.Home && AppState.tikDestination in 0..3) return
     val (person, video) = when (val s = callState) {
         is CallUiState.Connected -> s.person to s.video
         is CallUiState.Outgoing -> s.person to s.video
@@ -566,6 +592,20 @@ fun FloatingCallWindow() {
             if (showVideo) {
                 key(connected?.tick) {
                     RtcVideoView(local = false, modifier = Modifier.fillMaxSize())
+                }
+                // ROUND 20: his own tiny self-preview rides the tile's
+                // top-end corner — the same local renderer binding the
+                // full call screen uses (a second sink on the local
+                // track, bound and released with this window only).
+                // Hidden while his camera is off: a black inset would
+                // lie about a camera that is not sending anything.
+                if (connected?.cameraOn == true) {
+                    RtcVideoView(
+                        local = true,
+                        modifier = Modifier.align(Alignment.TopEnd).padding(6.dp)
+                            .size(27.dp, 38.dp).clip(RoundedCornerShape(8.dp))
+                            .border(1.dp, Color.White.copy(alpha = 0.35f), RoundedCornerShape(8.dp)),
+                    )
                 }
                 Row(
                     Modifier.align(Alignment.BottomStart).padding(8.dp),
