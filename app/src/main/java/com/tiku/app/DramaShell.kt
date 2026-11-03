@@ -10,36 +10,23 @@ import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.activity.compose.BackHandler
-import androidx.compose.animation.core.animateDpAsState
-import androidx.compose.animation.core.spring
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.LazyRow
-import androidx.compose.foundation.lazy.grid.GridCells
-import androidx.compose.foundation.lazy.grid.GridItemSpan
-import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.itemsIndexed
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
@@ -59,11 +46,9 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
-import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -88,8 +73,13 @@ import kotlinx.coroutines.withContext
  * itself lives at the bottom of this file, moved here unchanged from
  * the old facade).
  *
- * The facade runs on the design's LIGHT palette (Rose Petal brand accent)
- * regardless of the vault's own mode — provided locally in [FacadeHome].
+ * ROUND 16 — the tab surface (home / stories / photos + bottom nav) is
+ * the owner's new DARK facade design, ported in Facade.kt and composed
+ * by [FacadeShell] below. This file keeps the shell: the overlay
+ * routing (player / reader / photo viewer), the store state, the
+ * facade player itself, and the gate. The LIGHT palette provided in
+ * [FacadeHome] now serves only the reader / viewer overlays, which
+ * keep their existing design.
  *
  * Zero-trace rule: no chat data, no usernames, no messaging vocabulary,
  * and the word "Tik" appears nowhere on this surface. The facade is never
@@ -107,8 +97,9 @@ fun FacadeHome(
     initialPhoto: Int? = null,
     playerDramaId: String? = null,
 ) {
-    // The facade's brand palette: the design's LIGHT mode, Rose Petal —
-    // independent of the vault's dark/light setting (spec Part C).
+    // The reader / viewer overlays keep the design's LIGHT palette
+    // (Rose Petal), provided locally here; the Round-16 tab surface
+    // (Facade.kt) carries its own black system and ignores it.
     val lightPal = remember { buildPalette("light", 0) }
     CompositionLocalProvider(LocalPalette provides lightPal) {
         FacadeShell(initialTab, initialStoryId, initialPhoto, playerDramaId)
@@ -154,113 +145,39 @@ private fun FacadeShell(
             playerDrama != null -> FacadePlayer(playerDrama) { playerId = null }
             openStory != null -> StoryReader(openStory) { storyId = null }
             photoIdx != null -> PhotoViewer(photoIdx!!) { photoIdx = null }
-            else -> {
-                Box(Modifier.fillMaxSize().padding(bottom = 102.dp)) {
-                    when (tab) {
-                        FacadeTab.HOME -> DramaHomeTab(
-                            history = history,
-                            favs = favs,
-                            onPlay = { playerId = it.id },
-                            onToggleFav = { d ->
-                                FacadeStore.toggleFavourite(ctx, d.id)
-                                favs = FacadeStore.favourites(ctx)
-                            },
-                        )
-                        FacadeTab.STORIES -> StoriesTab(
-                            onOpen = { storyId = it.id },
-                            // The last story's double-tap door (see StoryCard).
-                            onSecretGate = { SecretEntry.openGate(ctx, scope) },
-                        )
-                        FacadeTab.PHOTOS -> PhotosTab { photoIdx = it }
+            else -> FacadeRoot(
+                // ROUND 16: the tab surface is the owner's new dark
+                // facade (Facade.kt) — its NavPill, motion and layout
+                // are his file's; this shell keeps the overlay routing
+                // (player / reader / viewer), the tab state (so the
+                // back rule above and the harness entry points keep
+                // working) and the store state.
+                haze = hazeState,
+                tab = tab.ordinal,
+                onTab = {
+                    tab = when (it) {
+                        0 -> FacadeTab.HOME
+                        1 -> FacadeTab.STORIES
+                        else -> FacadeTab.PHOTOS
                     }
-                }
-                FacadeBottomNav(
-                    tab,
-                    Modifier.align(Alignment.BottomCenter)
-                        .padding(start = 16.dp, end = 16.dp, bottom = 14.dp),
-                ) { tab = it }
-            }
-        }
-    }
-}
-
-/** The facade's own glass bottom nav — same construction as the vault's
- *  BottomGlassNavBar (floating glass pill + sliding lens), drama tabs. */
-@Composable
-private fun FacadeBottomNav(tab: FacadeTab, modifier: Modifier = Modifier, onTab: (FacadeTab) -> Unit) {
-    val pal = LocalPalette.current
-    val tabs = listOf(
-        Triple(FacadeTab.HOME, "Home", "play"),
-        Triple(FacadeTab.STORIES, "Stories", "book"),
-        Triple(FacadeTab.PHOTOS, "Photos", "img"),
-    )
-    val selIdx = tabs.indexOfFirst { it.first == tab }.coerceAtLeast(0)
-    BoxWithConstraints(modifier.fillMaxWidth()) {
-        val segW = (maxWidth - 10.dp) / 3
-        val lensX by animateDpAsState(
-            segW * selIdx,
-            spring(dampingRatio = 0.68f, stiffness = 380f), label = "facadeLensX",
-        )
-        Box(
-            Modifier.glassSurface(RoundedCornerShape(999.dp), useLargeGlass = true, blur = true)
-                .padding(5.dp),
-        ) {
-            Box(
-                Modifier.offset(x = lensX).width(segW).height(50.dp)
-                    .clip(RoundedCornerShape(999.dp)).background(pal.lens)
-                    .border(1.dp, pal.gb, RoundedCornerShape(999.dp)),
+                },
+                history = history,
+                favs = favs,
+                onPlay = { playerId = it.id },
+                onToggleFav = { d ->
+                    FacadeStore.toggleFavourite(ctx, d.id)
+                    favs = FacadeStore.favourites(ctx)
+                },
+                onOpenStory = { storyId = it.id },
+                onOpenPhoto = { photoIdx = it },
+                // The last story's double-tap door (see Facade.kt).
+                onSecretGate = { SecretEntry.openGate(ctx, scope) },
             )
-            Row(Modifier.fillMaxWidth()) {
-                tabs.forEach { (t, label, icon) ->
-                    val on = t == tab
-                    Box(Modifier.weight(1f).height(50.dp)) {
-                        Column(
-                            Modifier.fillMaxSize()
-                                .clickable(
-                                    interactionSource = remember { MutableInteractionSource() },
-                                    indication = null,
-                                ) { onTab(t) },
-                            horizontalAlignment = Alignment.CenterHorizontally,
-                            verticalArrangement = Arrangement.Center,
-                        ) {
-                            TikIcon(
-                                icon, Modifier.size(23.dp),
-                                tint = if (on) pal.ac else pal.sub,
-                                strokeWidth = 1.9f,
-                            )
-                            Text(
-                                label, fontSize = 10.5.sp, fontFamily = InterTight,
-                                fontWeight = FontWeight.Medium,
-                                color = if (on) pal.ac else pal.sub,
-                            )
-                        }
-                    }
-                }
-            }
         }
     }
 }
 
 // ---------- shared facade bits ----------
-
-@Composable
-private fun FacadeSectionTitle(title: String) {
-    val pal = LocalPalette.current
-    Text(
-        title, fontSize = 19.sp, fontFamily = InterTight,
-        fontWeight = FontWeight.Bold, color = pal.tx,
-    )
-}
-
-@Composable
-private fun LangChip(lang: String, modifier: Modifier = Modifier) {
-    Box(
-        modifier.clip(RoundedCornerShape(8.dp)).background(Color.Black.copy(alpha = 0.45f))
-            .padding(horizontal = 7.dp, vertical = 3.dp),
-    ) {
-        Text(lang, fontSize = 10.sp, fontFamily = InterTight, fontWeight = FontWeight.SemiBold, color = Color.White)
-    }
-}
 
 @Composable
 private fun TagChip(tag: String) {
@@ -319,207 +236,6 @@ private fun FacadeAssetImage(
                 Brush.linearGradient(listOf(pal.ac.copy(alpha = 0.55f), pal.lens)),
             ),
         )
-    }
-}
-
-// ---------- HOME TAB ----------
-
-@Composable
-private fun DramaHomeTab(
-    history: List<FacadeStore.HistoryEntry>,
-    favs: Set<String>,
-    onPlay: (DramaContent.Drama) -> Unit,
-    onToggleFav: (DramaContent.Drama) -> Unit,
-) {
-    val pal = LocalPalette.current
-    LazyColumn(
-        Modifier.fillMaxSize().padding(horizontal = 20.dp),
-        verticalArrangement = Arrangement.spacedBy(22.dp),
-    ) {
-        item {
-            Column(Modifier.padding(top = 26.dp)) {
-                Text(
-                    DramaContent.appName, fontSize = 32.sp, fontFamily = InterTight,
-                    fontWeight = FontWeight.Bold, color = pal.tx,
-                )
-                Spacer(Modifier.height(3.dp))
-                Text(
-                    DramaContent.tagline, fontSize = 13.5.sp, fontFamily = InterTight,
-                    color = pal.sub,
-                )
-            }
-        }
-        DramaContent.hero?.let { hero ->
-            item { HeroCard(hero, onPlay) }
-        }
-        if (history.isNotEmpty()) {
-            item {
-                Column {
-                    FacadeSectionTitle("Continue Watching")
-                    Spacer(Modifier.height(12.dp))
-                    LazyRow(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-                        items(history, key = { it.id }) { e ->
-                            val d = DramaContent.drama(e.id)
-                                ?: DramaContent.Drama(e.id, e.title, "Continue watching", "", "")
-                            DramaCard(d, favs.contains(d.id), onPlay, onToggleFav)
-                        }
-                    }
-                }
-            }
-        }
-        DramaContent.rows.forEach { row ->
-            item {
-                Column {
-                    FacadeSectionTitle(row.title)
-                    Spacer(Modifier.height(12.dp))
-                    LazyRow(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-                        items(row.items, key = { it.id }) { d ->
-                            DramaCard(d, favs.contains(d.id), onPlay, onToggleFav)
-                        }
-                    }
-                }
-            }
-        }
-        item { Spacer(Modifier.height(4.dp)) }
-    }
-}
-
-@Composable
-private fun HeroCard(hero: DramaContent.Drama, onPlay: (DramaContent.Drama) -> Unit) {
-    val pal = LocalPalette.current
-    Box(
-        Modifier.fillMaxWidth().aspectRatio(16f / 10.5f)
-            .clip(RoundedCornerShape(28.dp))
-            .clickable(
-                interactionSource = remember { MutableInteractionSource() }, indication = null,
-            ) { onPlay(hero) },
-    ) {
-        // Bundled hero still, decoded locally (FacadeAssetImage) — the
-        // title treatment lives in the glass panel below, so even a
-        // decode failure leaves a designed card, never a dark box.
-        FacadeAssetImage(
-            file = DramaContent.HERO_PHOTO,
-            modifier = Modifier.fillMaxSize(),
-        )
-        Box(
-            Modifier.fillMaxSize().background(
-                Brush.verticalGradient(
-                    listOf(Color.Black.copy(alpha = 0.04f), Color.Black.copy(alpha = 0.38f)),
-                ),
-            ),
-        )
-        // glass info panel over the still
-        Row(
-            Modifier.align(Alignment.BottomStart).fillMaxWidth().padding(12.dp)
-                .glassSurface(RoundedCornerShape(22.dp), useLargeGlass = true, blur = true)
-                .padding(horizontal = 14.dp, vertical = 12.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Column(Modifier.weight(1f)) {
-                Box(
-                    Modifier.clip(RoundedCornerShape(8.dp)).background(pal.ac)
-                        .padding(horizontal = 8.dp, vertical = 3.dp),
-                ) {
-                    Text(
-                        "${hero.lang} Dubbed", fontSize = 10.sp, fontFamily = InterTight,
-                        fontWeight = FontWeight.Bold, color = Color.White,
-                    )
-                }
-                Spacer(Modifier.height(6.dp))
-                Text(
-                    hero.title, fontSize = 20.sp, fontFamily = InterTight,
-                    fontWeight = FontWeight.Bold, color = pal.tx,
-                )
-                Text(
-                    "${hero.sub} · ${hero.genre}", fontSize = 12.sp, fontFamily = InterTight,
-                    color = pal.sub, maxLines = 1, overflow = TextOverflow.Ellipsis,
-                )
-            }
-            Spacer(Modifier.width(10.dp))
-            Box(
-                Modifier.size(46.dp).clip(CircleShape).background(pal.buttonGradient),
-                contentAlignment = Alignment.Center,
-            ) { TikIcon("playFill", Modifier.size(20.dp), tint = Color.White) }
-        }
-    }
-}
-
-@Composable
-private fun DramaCard(
-    drama: DramaContent.Drama,
-    fav: Boolean,
-    onPlay: (DramaContent.Drama) -> Unit,
-    onToggleFav: (DramaContent.Drama) -> Unit,
-) {
-    val pal = LocalPalette.current
-    Column(Modifier.width(168.dp)) {
-        Box {
-            // ROUND 15: a designed underlay (brand gradient + play
-            // glyph) sits UNDER the poster, so the card never reads as
-            // a dark void while the poster loads — or if it fails. The
-            // poster itself is the video's YouTube poster derived from
-            // its id (hqdefault, with an mqdefault fallback on error).
-            Box(
-                Modifier.fillMaxWidth().aspectRatio(16f / 9f)
-                    .clip(RoundedCornerShape(18.dp))
-                    .background(
-                        Brush.linearGradient(
-                            listOf(pal.ac.copy(alpha = 0.5f), pal.lens),
-                        ),
-                    ),
-                contentAlignment = Alignment.Center,
-            ) {
-                Box(
-                    Modifier.size(34.dp).clip(CircleShape)
-                        .background(Color.Black.copy(alpha = 0.28f)),
-                    contentAlignment = Alignment.Center,
-                ) { TikIcon("playFill", Modifier.size(15.dp), tint = Color.White) }
-            }
-            var thumbFailed by remember(drama.id) { mutableStateOf(false) }
-            AsyncImage(
-                model = if (thumbFailed) {
-                    "https://i.ytimg.com/vi/${drama.id}/mqdefault.jpg"
-                } else {
-                    DramaContent.thumbUrl(drama.id)
-                },
-                onError = { thumbFailed = true },
-                contentDescription = null,
-                contentScale = ContentScale.Crop,
-                modifier = Modifier.fillMaxWidth().aspectRatio(16f / 9f)
-                    .clip(RoundedCornerShape(18.dp))
-                    .clickable(
-                        interactionSource = remember { MutableInteractionSource() }, indication = null,
-                    ) { onPlay(drama) },
-            )
-            if (drama.lang.isNotEmpty()) {
-                LangChip(drama.lang, Modifier.align(Alignment.BottomStart).padding(8.dp))
-            }
-            Box(
-                Modifier.align(Alignment.TopEnd).padding(8.dp).size(30.dp)
-                    .glassSurface(CircleShape, blur = true)
-                    .clickable(
-                        interactionSource = remember { MutableInteractionSource() }, indication = null,
-                    ) { onToggleFav(drama) },
-                contentAlignment = Alignment.Center,
-            ) {
-                TikIcon(
-                    if (fav) "heartFill" else "heart", Modifier.size(16.dp),
-                    tint = if (fav) pal.ac else pal.tx,
-                )
-            }
-        }
-        Spacer(Modifier.height(7.dp))
-        Text(
-            drama.title, fontSize = 13.5.sp, fontFamily = InterTight,
-            fontWeight = FontWeight.Medium, color = pal.tx,
-            maxLines = 2, overflow = TextOverflow.Ellipsis,
-        )
-        if (drama.sub.isNotEmpty()) {
-            Text(
-                drama.sub, fontSize = 11.5.sp, fontFamily = InterTight, color = pal.sub,
-                maxLines = 1, overflow = TextOverflow.Ellipsis,
-            )
-        }
     }
 }
 
@@ -687,100 +403,7 @@ private fun PlayerCloseButton(modifier: Modifier = Modifier, onClose: () -> Unit
     ) { TikIcon("x", Modifier.size(18.dp), tint = Color.White) }
 }
 
-// ---------- STORIES TAB + READER ----------
-
-/** The bundled id of the LAST story on the shelf — the secret door.
- *  Its card renders exactly like every other card; only its tap
- *  handling differs (see [StoryCard]). */
-private const val SECRET_STORY_ID = "story-2023-05"
-
-@Composable
-private fun StoriesTab(
-    onOpen: (DramaContent.Story) -> Unit,
-    onSecretGate: () -> Unit,
-) {
-    val pal = LocalPalette.current
-    LazyColumn(
-        Modifier.fillMaxSize().padding(horizontal = 20.dp),
-        verticalArrangement = Arrangement.spacedBy(14.dp),
-    ) {
-        item {
-            Column(Modifier.padding(top = 26.dp, bottom = 6.dp)) {
-                Text(
-                    DramaContent.storiesTitle, fontSize = 28.sp, fontFamily = InterTight,
-                    fontWeight = FontWeight.Bold, color = pal.tx,
-                )
-                Spacer(Modifier.height(3.dp))
-                Text(
-                    "Tiny love stories from Seoul", fontSize = 13.5.sp,
-                    fontFamily = InterTight, color = pal.sub,
-                )
-            }
-        }
-        items(DramaContent.stories, key = { it.id }) { story ->
-            StoryCard(
-                story = story,
-                onClick = { onOpen(story) },
-                // Only the last story carries the hidden door; its card
-                // is visually identical to all the others.
-                onDoubleTap = if (story.id == SECRET_STORY_ID) onSecretGate else null,
-            )
-        }
-        item { Spacer(Modifier.height(4.dp)) }
-    }
-}
-
-@Composable
-private fun StoryCard(
-    story: DramaContent.Story,
-    onClick: () -> Unit,
-    onDoubleTap: (() -> Unit)? = null,
-) {
-    val pal = LocalPalette.current
-    val preview = story.body.split("\n\n").firstOrNull()?.replace('\n', ' ') ?: ""
-    val interaction = remember { MutableInteractionSource() }
-    // Cards without a double-tap action keep the plain clickable; the
-    // one secret card uses detectTapGestures so a double tap fires the
-    // gate WITHOUT the single-tap reader opening first.
-    val tapModifier = if (onDoubleTap == null) {
-        Modifier.clickable(
-            interactionSource = interaction, indication = null,
-        ) { onClick() }
-    } else {
-        Modifier.pointerInput(story.id) {
-            detectTapGestures(
-                onTap = { onClick() },
-                onDoubleTap = { onDoubleTap() },
-            )
-        }
-    }
-    Box(
-        Modifier.fillMaxWidth().glassSurface(RoundedCornerShape(24.dp))
-            .then(tapModifier)
-            .padding(18.dp),
-    ) {
-        Column {
-            Text(
-                story.title, fontSize = 16.5.sp, fontFamily = InterTight,
-                fontWeight = FontWeight.SemiBold, color = pal.tx,
-            )
-            Spacer(Modifier.height(6.dp))
-            Text(
-                preview, fontSize = 13.sp, fontFamily = InterTight, color = pal.sub,
-                maxLines = 2, overflow = TextOverflow.Ellipsis, lineHeight = 19.sp,
-            )
-            Spacer(Modifier.height(10.dp))
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                TagChip(story.tag)
-                Spacer(Modifier.width(8.dp))
-                Text(
-                    "${story.minutes} min read", fontSize = 11.5.sp,
-                    fontFamily = InterTight, color = pal.sub,
-                )
-            }
-        }
-    }
-}
+// ---------- STORY READER (the shelf itself lives in Facade.kt) ----------
 
 @Composable
 private fun StoryReader(story: DramaContent.Story, onBack: () -> Unit) {
@@ -830,51 +453,7 @@ private fun StoryReader(story: DramaContent.Story, onBack: () -> Unit) {
     }
 }
 
-// ---------- PHOTOS TAB + VIEWER ----------
-
-@Composable
-private fun PhotosTab(onOpen: (Int) -> Unit) {
-    val pal = LocalPalette.current
-    LazyVerticalGrid(
-        columns = GridCells.Fixed(2),
-        modifier = Modifier.fillMaxSize().padding(horizontal = 20.dp),
-        horizontalArrangement = Arrangement.spacedBy(14.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp),
-    ) {
-        item(span = { GridItemSpan(maxLineSpan) }) {
-            Column(Modifier.padding(top = 26.dp, bottom = 2.dp)) {
-                Text(
-                    "Moments", fontSize = 28.sp, fontFamily = InterTight,
-                    fontWeight = FontWeight.Bold, color = pal.tx,
-                )
-                Spacer(Modifier.height(3.dp))
-                Text(
-                    "Cute, romantic stills to keep", fontSize = 13.5.sp,
-                    fontFamily = InterTight, color = pal.sub,
-                )
-            }
-        }
-        itemsIndexed(DramaContent.PHOTOS, key = { _, p -> p.first }) { idx, (file, caption) ->
-            Column {
-                FacadeAssetImage(
-                    file = file,
-                    modifier = Modifier.fillMaxWidth().aspectRatio(3f / 4f)
-                        .clip(RoundedCornerShape(20.dp))
-                        .clickable(
-                            interactionSource = remember { MutableInteractionSource() }, indication = null,
-                        ) { onOpen(idx) },
-                )
-                Spacer(Modifier.height(6.dp))
-                Text(
-                    caption, fontSize = 12.5.sp, fontFamily = InterTight,
-                    fontWeight = FontWeight.Medium, color = pal.tx,
-                    maxLines = 1, overflow = TextOverflow.Ellipsis,
-                )
-            }
-        }
-        item(span = { GridItemSpan(maxLineSpan) }) { Spacer(Modifier.height(2.dp)) }
-    }
-}
+// ---------- PHOTO VIEWER (the shelf itself lives in Facade.kt) ----------
 
 @Composable
 private fun PhotoViewer(index: Int, onBack: () -> Unit) {

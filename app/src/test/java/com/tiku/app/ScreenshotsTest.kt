@@ -13,6 +13,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.test.click
 import androidx.compose.ui.test.hasScrollAction
+import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.longClick
 import androidx.compose.ui.test.onAllNodesWithTag
@@ -21,6 +22,7 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performScrollToIndex
+import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.swipeLeft
 import androidx.compose.ui.unit.dp
@@ -177,7 +179,8 @@ class ScreenshotsTest {
         frame { FacadeHome(initialTab = FacadeTab.STORIES) }
         // The entry story sits at the very end of the shelf — scroll the
         // list's OWN semantics node straight to it (lazy items: header =
-        // 0, stories = 1..size, footer = size + 1). Swiping the ROOT node
+        // 0, stories = 1..size, so index size IS the last story — the
+        // Round-16 shelf has no footer item). Swiping the ROOT node
         // did not drive the facade's LazyColumn under Robolectric in
         // build 51 (the last item was never composed, so the text query
         // below found nothing). The query is substring because a composed
@@ -554,14 +557,14 @@ class ScreenshotsTest {
         AppState.goTik(3) // the Round-14 shell routes on tikDestination, not homeTab
         frame { HomeScreen() }
         composeRule.waitForIdle()
-        // The Owner section is the LAST Settings LazyColumn item (index 21:
-        // 0 Title, 1 profile, 2–4 Appearance, 5–11 Privacy, 12–13 Data,
-        // 14–17 Account, 18–20 Additional, 21 Owner) — scroll it into the
-        // composed window before asserting (same framing fix as shot15).
-        if (composeRule.onAllNodesWithText("Owner")
+        // The Owner section is the LAST Settings LazyColumn item — scroll
+        // until its deepest row ("Lock now") is composed, which brings the
+        // whole section into the window (index-counting proved brittle:
+        // the Round-15 Notifications row shifted the item indices).
+        if (composeRule.onAllNodesWithText("Lock now")
                 .fetchSemanticsNodes().isEmpty()
         ) {
-            composeRule.onNode(hasScrollAction()).performScrollToIndex(22)
+            composeRule.onNode(hasScrollAction()).performScrollToNode(hasText("Lock now"))
             composeRule.waitForIdle()
         }
         org.junit.Assert.assertTrue(
