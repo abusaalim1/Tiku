@@ -87,7 +87,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlin.math.roundToInt
 
 /**
- * INFO — ROUND 14: the owner's TikuuRedesign InfoScreen, ported onto the
+ * INFO — ROUND 14: the owner's TikuRedesign InfoScreen, ported onto the
  * real thread (this file replaces the build-47 ChatDetailsScreen — the
  * old glass details UI is gone). Glowing avatar header, Day-N-together
  * pill from the thread's real creation time, RoundActions
@@ -141,7 +141,7 @@ object ThreadMuteStore {
     }
 }
 
-// ================= redesign tokens (verbatim from TikuuRedesign) =================
+// ================= redesign tokens (verbatim from TikuRedesign) =================
 private val RdICard = Color(0xFF1B1B1F)
 private val RdIRose = Color(0xFFFF5C8A)
 private val RdIRoseDeep = Color(0xFFE23D74)

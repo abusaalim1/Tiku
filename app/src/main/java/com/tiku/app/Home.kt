@@ -81,7 +81,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /**
- * ROUND 14 — the Tik shell in the owner's TikuuRedesign model: pure-black
+ * ROUND 14 — the Tik shell in the owner's TikuRedesign model: pure-black
  * root, the panes as the Haze source, AnimatedContent with the file's
  * screenSpec depth transitions over destinations (0 Messages · 1 Calls ·
  * 2 Watch · 3 Setting · 7 Requests), the sliding-lens NavPill (pane tabs
@@ -723,7 +723,7 @@ private fun SettingsMain(
         item {
             CardRow({
                 AppState.toast(
-                    if (!settings.darkMode) "Light mode coming soon" else "Dark mode is K-Tiku's only look",
+                    if (!settings.darkMode) "Light mode coming soon" else "Dark mode is Tiku's only look",
                 )
             }, idx = 1) {
                 listOf(false to "Light", true to "Dark").forEach { (dark, label) ->
@@ -757,7 +757,7 @@ private fun SettingsMain(
                     "App lock", "Ask for password on open", settings.appLock,
                 ) {
                     SettingsStore.setToggle("al", !settings.appLock)
-                    AppState.toast(if (!settings.appLock) "App lock on" else "App lock off for now — it returns when you reopen K-Tiku")
+                    AppState.toast(if (!settings.appLock) "App lock on" else "App lock off for now — it returns when you reopen Tiku")
                 }
             } else {
                 ToggleRow("App lock", "Ask for password on open", true) {
@@ -789,7 +789,7 @@ private fun SettingsMain(
         item { Section("Data and storage") }
         item { NavRow("Clear cache", cacheLabel, onClick = onClearCache) }
         item { Section("Account") }
-        item { NavRow("Linked devices", "Manage where K-Tiku is open", onClick = onDevices) }
+        item { NavRow("Linked devices", "Manage where Tiku is open", onClick = onDevices) }
         item { NavRow("Change password", "Update your lock password", onClick = onChangePassword) }
         item { NavRow("Log out", danger = true, chevron = false, onClick = onLogout) }
         item { Section("Additional settings") }

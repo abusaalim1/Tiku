@@ -6,7 +6,7 @@ import org.json.JSONObject
 
 /**
  * ROUND 13 — K-DRAMA FACADE CONTENT. The app's outer face is a Korean
- * love-story app ("Tikuu — Korean love stories, in your language"): Hindi /
+ * love-story app ("Tiku — Korean love stories, in your language"): Hindi /
  * Bangla dubbed drama episodes that stream from YouTube, a shelf of short
  * love stories to read, and a gallery of romantic stills. Everything except
  * the video streams themselves is bundled in `assets/facade/` and works
@@ -24,7 +24,7 @@ import org.json.JSONObject
  * its calm empty states instead of crashing.
  *
  * Zero-trace rule: this surface carries NO chat data, NO usernames, and the
- * word "Tik" never appears on it — "Tikuu" is the drama brand.
+ * word "Tik" never appears on it — "Tiku" is the drama brand.
  */
 object DramaContent {
     data class Drama(val id: String, val title: String, val sub: String, val genre: String, val lang: String)
@@ -46,7 +46,7 @@ object DramaContent {
     /** The hero card's backdrop still (cherry-blossom walk). */
     const val HERO_PHOTO = "photo_3.webp"
 
-    var appName: String = "K-Tiku"
+    var appName: String = "Tiku"
     var tagline: String = "Korean love stories, in your language"
     var hero: Drama? = null
     var rows: List<Row> = emptyList()

@@ -121,7 +121,7 @@ fun PrimaryButton(text: String, enabled: Boolean = true, modifier: Modifier = Mo
  *  toggles. */
 @Composable
 fun ToggleSwitch(on: Boolean, onChange: (Boolean) -> Unit) {
-    TikuuToggleSwitch(checked = on, onCheckedChange = onChange)
+    TikuToggleSwitch(checked = on, onCheckedChange = onChange)
 }
 
 /** Serif italic display title (covers .top h2, .form h2, .hero h1, .logo, .sht, .gh, .sq, .cph, #kn). */

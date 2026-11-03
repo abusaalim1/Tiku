@@ -121,7 +121,7 @@ import kotlin.math.abs
 import kotlin.math.roundToInt
 
 /**
- * CHAT — ROUND 14: the owner's TikuuRedesign ChatList + overlays, ported
+ * CHAT — ROUND 14: the owner's TikuRedesign ChatList + overlays, ported
  * onto the real thread. Black background, theme-gradient own bubbles,
  * CardC peer bubbles with a 28dp avatar, the file's gestures (swipe-reply
  * spring, double-tap heart burst, long-press centred glass menu), the
@@ -132,7 +132,7 @@ import kotlin.math.roundToInt
  * delete-for-me = local only, explicit Save only for media).
  */
 
-// ================= redesign tokens (verbatim from TikuuRedesign) =================
+// ================= redesign tokens (verbatim from TikuRedesign) =================
 private val RdCard = Color(0xFF1B1B1F)
 private val RdSheet = Color(0xFF16161B)
 private val RdRose = Color(0xFFFF5C8A)

@@ -246,11 +246,11 @@ object ChatSession {
                 FirebaseEngine.setPresence(false)
             }
             if (!AppState.isFacade(AppState.screen)) AppState.instantGo(Screen.Facade)
-            AppState.toast("Back to K-Tiku")
+            AppState.toast("Back to Tiku")
             return
         }
         lock(ctx)
-        AppState.toast("Back to K-Tiku")
+        AppState.toast("Back to Tiku")
     }
 
     /**

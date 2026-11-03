@@ -215,7 +215,7 @@ private fun RtcVideoView(local: Boolean, modifier: Modifier) {
 
 /** Design call-dock button: 58dp glass disc (white .14 + white .2 edge);
  *  the ACTIVE state flips to near-white with a dark glyph. Icons are the
- *  owner design's drawn set (TikuuIcon names). */
+ *  owner design's drawn set (TikuIcon names). */
 @Composable
 private fun CallToggle(icon: String, active: Boolean, onClick: () -> Unit) {
     Box(
@@ -228,7 +228,7 @@ private fun CallToggle(icon: String, active: Boolean, onClick: () -> Unit) {
             .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null, onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {
-        TikuuIcon(icon, size = 24.dp, tint = if (active) Color(0xFF16141C) else Color.White)
+        TikuIcon(icon, size = 24.dp, tint = if (active) Color(0xFF16141C) else Color.White)
     }
 }
 
@@ -244,7 +244,7 @@ private fun CallEndButton(onClick: () -> Unit) {
             .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null, onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {
-        TikuuIcon(
+        TikuIcon(
             "call", size = 24.dp, tint = Color.White,
             modifier = Modifier.graphicsLayer { rotationZ = 135f },
         )
@@ -477,7 +477,7 @@ fun CallScreen(threadId: String, video: Boolean) {
                                 .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) { acceptWithPerms() },
                             contentAlignment = Alignment.Center,
                         ) {
-                            TikuuIcon("call", size = 24.dp, tint = Color.White)
+                            TikuIcon("call", size = 24.dp, tint = Color.White)
                         }
                     }
                 } else {
@@ -602,7 +602,7 @@ fun FloatingCallWindow() {
                     },
                 contentAlignment = Alignment.Center,
             ) {
-                TikuuIcon(
+                TikuIcon(
                     "call", size = 15.dp, tint = Color.White,
                     modifier = Modifier.graphicsLayer { rotationZ = 135f },
                 )

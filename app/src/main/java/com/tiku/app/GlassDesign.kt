@@ -1,11 +1,11 @@
 package com.tiku.app
 
 // ============================================================================
-// ROUND 13 — the owner-supplied liquid-glass design system (TikuuGlass.kt +
-// Tikuuapp.kt), ported onto the real app. Palette / themes / icons / pattern /
+// ROUND 13 — the owner-supplied liquid-glass design system (TikuGlass.kt +
+// Tikuapp.kt), ported onto the real app. Palette / themes / icons / pattern /
 // glass components are the owner's code, adapted only where the real app
 // differs: Inter Tight comes from the bundled fonts, persistence lives in
-// SettingsStore (TikuTheme.kt) instead of the demo's TikuuPrefs, and a few
+// SettingsStore (TikuTheme.kt) instead of the demo's TikuPrefs, and a few
 // mode-aware extension colours (s1 / rowActive / outlineBtn / grabber /
 // trackOff / danger / recDot) were added to the palette because the real
 // screens need solid-surface tokens the demo never used.
@@ -116,7 +116,7 @@ val TikEase = androidx.compose.animation.core.CubicBezierEasing(0.22f, 0.8f, 0.2
 /** Staggered-pop easing (reaction bar), carried over from build 44. */
 val TikPopEase = androidx.compose.animation.core.CubicBezierEasing(0.3f, 1.6f, 0.5f, 1f)
 
-// ---- glass core (owner TikuuGlass.kt) ----
+// ---- glass core (owner TikuGlass.kt) ----
 val LocalHazeState = compositionLocalOf<HazeState?> { null }
 
 /** Real backdrop blur (falls back to no-blur if no HazeState is provided). */
@@ -190,7 +190,7 @@ val InterTight = FontFamily(
     Font(R.font.inter_tight_semibold, FontWeight.SemiBold),
     Font(R.font.inter_tight_bold, FontWeight.Bold))
 
-// ---- couple themes + palette (owner Tikuuapp.kt) ----
+// ---- couple themes + palette (owner Tikuapp.kt) ----
 data class CoupleTheme(
     val name: String,
     val subtitle: String,
@@ -217,7 +217,7 @@ val AVATAR_COLORS = listOf(
 
 val DEFAULT_REACTIONS = listOf("❤️", "😂", "😮", "😢", "😡", "👍")
 
-data class TikuuPalette(
+data class TikuPalette(
     val isDark: Boolean,
     val bg: Color,
     val tx: Color,
@@ -279,10 +279,10 @@ data class TikuuPalette(
     val recDot: Color get() = Color(0xFFFF5A6A)
 }
 
-fun buildPalette(mode: String, themeIdx: Int): TikuuPalette {
+fun buildPalette(mode: String, themeIdx: Int): TikuPalette {
     val th = COUPLE_THEMES.getOrElse(themeIdx) { COUPLE_THEMES[0] }
     return if (mode == "dark") {
-        TikuuPalette(
+        TikuPalette(
             isDark = true,
             bg = Color(0xFF0A0A0D),
             tx = Color(0xFFF6F5FA),
@@ -303,7 +303,7 @@ fun buildPalette(mode: String, themeIdx: Int): TikuuPalette {
             pat = th.pat
         )
     } else {
-        TikuuPalette(
+        TikuPalette(
             isDark = false,
             bg = Color(0xFFEEEDF3),
             tx = Color(0xFF17161D),
@@ -328,7 +328,7 @@ fun buildPalette(mode: String, themeIdx: Int): TikuuPalette {
 
 val LocalPalette = staticCompositionLocalOf { buildPalette("dark", 0) }
 
-// ---- emoji catalogue (owner Tikuuapp.kt) ----
+// ---- emoji catalogue (owner Tikuapp.kt) ----
 data class EmojiCategory(
     val name: String,
     val icon: String,
@@ -386,9 +386,9 @@ val EMOJI_CATEGORIES: List<EmojiCategory> by lazy {
     )
 }
 
-// ---- icon set (owner Tikuuapp.kt) ----
+// ---- icon set (owner Tikuapp.kt) ----
 @Composable
-fun TikuuIcon(
+fun TikuIcon(
     name: String,
     modifier: Modifier = Modifier,
     size: Dp = 24.dp,
@@ -547,7 +547,7 @@ fun TikuuIcon(
     }
 }
 
-// ---- chat wallpaper pattern (owner Tikuuapp.kt) ----
+// ---- chat wallpaper pattern (owner Tikuapp.kt) ----
 private val PATTERN_SPOTS = listOf(
     floatArrayOf(22f, 26f, -14f, 1f),
     floatArrayOf(108f, 16f, 14f, 0.62f),
@@ -630,9 +630,9 @@ fun DrawScope.drawThemePattern(
 // 5. REUSABLE GLASSMORPHISM SURFACES, AVATARS & BUTTONS
 // ============================================================================
 
-// ---- avatar, glass buttons, switch (owner Tikuuapp.kt) ----
+// ---- avatar, glass buttons, switch (owner Tikuapp.kt) ----
 @Composable
-fun TikuuAvatar(
+fun TikuAvatar(
     text: String,
     sizeDp: Dp,
     colorIdx: Int = 0,
@@ -700,12 +700,12 @@ fun GlassCircleIconButton(
             .clickable(interactionSource = interactionSource, indication = null, onClick = onClick),
         contentAlignment = Alignment.Center
     ) {
-        TikuuIcon(name = iconName, size = iconSize, tint = tint)
+        TikuIcon(name = iconName, size = iconSize, tint = tint)
     }
 }
 
 @Composable
-fun TikuuToggleSwitch(
+fun TikuToggleSwitch(
     checked: Boolean,
     onCheckedChange: (Boolean) -> Unit
 ) {
@@ -744,7 +744,7 @@ fun TikuuToggleSwitch(
     }
 }
 
-// Deterministic waveform bar heights matching `bars(id, n)` in Tikuu.html
+// Deterministic waveform bar heights matching `bars(id, n)` in Tiku.html
 fun generateWaveformBars(seedId: Int, count: Int = 26): List<Float> {
     val out = ArrayList<Float>(count)
     var x = seedId * 7L + 3L
@@ -761,7 +761,7 @@ fun formatSeconds(sec: Int): String {
     return "$m:${s.toString().padStart(2, '0')}"
 }
 
-// ---- typing indicator (owner Tikuuapp.kt) ----
+// ---- typing indicator (owner Tikuapp.kt) ----
 @Composable
 fun TypingHeartsBubble() {
     val infiniteTransition = rememberInfiniteTransition(label = "typingHearts")
@@ -783,7 +783,7 @@ fun TypingHeartsBubble() {
                 ),
                 label = "th_$i"
             )
-            TikuuIcon(
+            TikuIcon(
                 name = "heartFill",
                 size = 11.dp,
                 tint = p.ac,
@@ -795,7 +795,7 @@ fun TypingHeartsBubble() {
     }
 }
 
-// ---- fields + pill buttons (owner Tikuuapp.kt) ----
+// ---- fields + pill buttons (owner Tikuapp.kt) ----
 @Composable
 fun CheckCircleIndicator(selected: Boolean) {
     val p = LocalPalette.current
@@ -808,13 +808,13 @@ fun CheckCircleIndicator(selected: Boolean) {
         contentAlignment = Alignment.Center
     ) {
         if (selected) {
-            TikuuIcon("check", size = 14.dp, tint = Color.White, strokeWidthDp = 2.4f)
+            TikuIcon("check", size = 14.dp, tint = Color.White, strokeWidthDp = 2.4f)
         }
     }
 }
 
 @Composable
-fun TikuuTextField(
+fun TikuTextField(
     value: String,
     onValueChange: (String) -> Unit,
     placeholder: String,
@@ -878,7 +878,7 @@ fun PillActionButton(
 // 12. SCREEN 5: CALLS SCREEN (`#call`) & ACTIVE CALL OVERLAY (`#cl`)
 // ============================================================================
 
-// ---- appearance controls (owner Tikuuapp.kt) ----
+// ---- appearance controls (owner Tikuapp.kt) ----
 @Composable
 fun ModeSegmentedToggle(
     mode: String,
@@ -905,7 +905,7 @@ fun ModeSegmentedToggle(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(5.dp)
             ) {
-                TikuuIcon(icon, size = 16.dp, tint = if (isSelected) p.tx else p.sub)
+                TikuIcon(icon, size = 16.dp, tint = if (isSelected) p.tx else p.sub)
                 Text(
                     text = label,
                     color = if (isSelected) p.tx else p.sub,
@@ -953,7 +953,7 @@ fun FontSizeSliderRow(
 // 15. MESSAGE CONTEXT MENU OVERLAY (`#cx`) & BOTTOM SHEETS (`#shw`)
 // ============================================================================
 
-// ---- emoji picker sheet (owner Tikuuapp.kt) ----
+// ---- emoji picker sheet (owner Tikuapp.kt) ----
 @Composable
 fun EmojiPickerSheetContent(
     initialTab: Int,
@@ -988,12 +988,12 @@ fun EmojiPickerSheetContent(
                     .clickable(onClick = onClose),
                 contentAlignment = Alignment.Center
             ) {
-                TikuuIcon("x", size = 17.dp, tint = p.tx)
+                TikuIcon("x", size = 17.dp, tint = p.tx)
             }
         }
 
         // Search Input (`#eq`)
-        TikuuTextField(
+        TikuTextField(
             value = searchQuery,
             onValueChange = { searchQuery = it },
             placeholder = "Search emoji"
@@ -1153,7 +1153,7 @@ fun EmojiPickerCell(emoji: String, onClick: () -> Unit) {
 }
 
 /** Build-44 call-site adapter: the old TikIcon(name, modifier, tint) shape,
- *  rendered by the owner's TikuuIcon. The two extra build-44 names map onto
+ *  rendered by the owner's TikuIcon. The two extra build-44 names map onto
  *  the design's filled glyphs (playFill -> PL, pauseFill -> PA). */
 @Composable
 fun TikIcon(name: String, modifier: Modifier = Modifier, tint: Color = Color.Unspecified, strokeWidth: Float = 1.6f) {
@@ -1163,7 +1163,7 @@ fun TikIcon(name: String, modifier: Modifier = Modifier, tint: Color = Color.Uns
         "pauseFill" -> "PA"
         else -> name
     }
-    TikuuIcon(
+    TikuIcon(
         name = mapped,
         modifier = modifier,
         size = 24.dp,

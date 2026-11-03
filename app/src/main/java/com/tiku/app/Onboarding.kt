@@ -483,7 +483,7 @@ fun ProfileSetupScreen() {
         }
     }
 
-    FormScaffold("Set up your profile", "Add a photo and pick your K-Tiku ID.") {
+    FormScaffold("Set up your profile", "Add a photo and pick your Tiku ID.") {
         // avatar picker: mint tile, + badge
         Box(Modifier.align(Alignment.CenterHorizontally)) {
             Box(
@@ -550,7 +550,7 @@ fun ProfileSetupScreen() {
         Spacer(Modifier.height(6.dp))
         Text(hint, fontSize = 13.sp, color = if (available) settings.accent else TikuTokens.Muted, fontFamily = Manrope)
         Spacer(Modifier.height(4.dp))
-        Text("Friends use your K-Tiku ID to find you.", fontSize = 13.sp, color = TikuTokens.Muted, fontFamily = Manrope)
+        Text("Friends use your Tiku ID to find you.", fontSize = 13.sp, color = TikuTokens.Muted, fontFamily = Manrope)
         Spacer(Modifier.weight(1f))
         PrimaryButton(if (busy) "Setting up…" else "Continue",
             enabled = available && !busy, modifier = Modifier.fillMaxWidth()) {
@@ -559,7 +559,7 @@ fun ProfileSetupScreen() {
                 ctx.getSharedPreferences("tiku_prefs", android.content.Context.MODE_PRIVATE)
                     .edit().putBoolean("onboarded", true).apply()
                 AppState.go(Screen.Home)
-                AppState.toast("Welcome to K-Tiku")
+                AppState.toast("Welcome to Tiku")
             } else {
                 busy = true
                 scope.launch {
@@ -575,7 +575,7 @@ fun ProfileSetupScreen() {
                             .edit().putBoolean("onboarded", true).apply()
                         FirebaseEngine.start(ctx)
                         AppState.go(Screen.Home)
-                        AppState.toast("Welcome to K-Tiku")
+                        AppState.toast("Welcome to Tiku")
                     } else if (res.exceptionOrNull() is FirebaseEngine.ExistingJournalException) {
                         // ROUND 5: this account already has a journal in the
                         // cloud — setup was refused BEFORE anything could be

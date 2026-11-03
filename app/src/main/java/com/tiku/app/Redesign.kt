@@ -91,7 +91,7 @@ import dev.chrisbanes.haze.hazeEffect
 import kotlinx.coroutines.delay
 
 /**
- * ROUND 14 — the owner's TikuuRedesign design system, ported VERBATIM from
+ * ROUND 14 — the owner's TikuRedesign design system, ported VERBATIM from
  * the supplied file (tokens, animation modifiers, transition specs and
  * component shapes are the file's own), adapted only where real data
  * replaces the demo model:
