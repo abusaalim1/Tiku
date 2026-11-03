@@ -280,6 +280,14 @@ val WatchMiniHeight = 117.dp
 val WatchMiniCorner = 12.dp
 val WatchMiniEdgeMargin = 12.dp
 
+/** The Tik NavPill's total bottom block (72.dp pill + 14.dp column
+ *  padding). ROUND 15 device fix: the EXPANDED host is BOUNDED above
+ *  this band instead of filling to the screen edge — on the owner's
+ *  device the WebView's surface paints over sibling Compose UI
+ *  regardless of z-order, so a full-height WebView hides the NavPill
+ *  completely on the Watch tab. A bounded WebView can never cover it. */
+val WatchNavBlock = 86.dp
+
 /** NowWatchingBar's bottom inset in TikuRoot: the NavPill's top edge
  *  sits 86.dp from the bottom (72.dp pill + 14.dp column padding), so
  *  the bar floats 8.dp above it. Bar height = 36.dp thumbnail + 8+8
@@ -458,14 +466,19 @@ private fun resumeWatchWebView(wv: WebView, autoplay: Boolean) {
  * calls `WatchPane()` with the default, unchanged.
  */
 @Composable
-fun WatchPane(chromeInsets: Boolean = true) {
+fun WatchPane(chromeInsets: Boolean = true, boundedAboveNav: Boolean = false) {
+    // When the host bounds the pane above the NavPill band, YouTube's own
+    // bottom nav already sits WatchNavBlock above the screen edge — only
+    // a breath of internal inset remains. Unbounded (the harness's direct
+    // call) keeps the build-47 100.dp inset.
+    val bottomInset = if (!chromeInsets) 0.dp else if (boundedAboveNav) 12.dp else WatchBottomInset
     val pal = LocalPalette.current
     if (Config.PREVIEW_UI_ONLY) {
         // Screenshot/preview branch: no WebView (Robolectric has no real
         // renderer). Round-12 copy kept so the suite's text checks hold.
         Box(
             Modifier.fillMaxSize().background(pal.bg)
-                .then(if (chromeInsets) Modifier.padding(bottom = WatchBottomInset) else Modifier),
+                .then(if (chromeInsets) Modifier.padding(bottom = bottomInset) else Modifier),
             contentAlignment = Alignment.Center,
         ) {
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
@@ -607,7 +620,7 @@ fun WatchPane(chromeInsets: Boolean = true) {
 
     Box(
         Modifier.fillMaxSize().background(Color.Black)
-            .then(if (chromeInsets) Modifier.padding(bottom = WatchBottomInset) else Modifier),
+            .then(if (chromeInsets) Modifier.padding(bottom = bottomInset) else Modifier),
     ) {
         AndroidView(
             factory = { webView },
@@ -704,7 +717,8 @@ fun WatchHost() {
             if (expanded) maxW else if (hideMini) 0.dp else WatchMiniWidth, spec, label = "watchW",
         )
         val hAnim by animateDpAsState(
-            if (expanded) maxH - WatchChromeHeaderHeight else if (hideMini) 0.dp else WatchMiniHeight,
+            if (expanded) maxH - WatchChromeHeaderHeight - WatchNavBlock
+            else if (hideMini) 0.dp else WatchMiniHeight,
             spec, label = "watchH",
         )
         val rAnim by animateDpAsState(if (expanded) 0.dp else WatchMiniCorner, spec, label = "watchR")
@@ -757,7 +771,7 @@ fun WatchHost() {
             // change is a pure recomposition (new chromeInsets flag) —
             // the pane's remember/DisposableEffect state, and with it
             // the WebView, survive untouched.
-            WatchPane(chromeInsets = expanded)
+            WatchPane(chromeInsets = expanded, boundedAboveNav = expanded)
             if (!expanded && !covered && !hideMini) {
                 // Drag / tap layer ABOVE the WebView (which would
                 // otherwise eat every touch as page interaction).
