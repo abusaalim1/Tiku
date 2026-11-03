@@ -57,8 +57,13 @@ object FirebaseEngine : ChatRepo {
 
     private val auth get() = FirebaseAuth.getInstance()
     private val db get() = FirebaseFirestore.getInstance()
-    val uid: String get() = auth.currentUser?.uid ?: ""
-    val signedIn: Boolean get() = auth.currentUser != null
+    // runCatching for the same reason as signedInEmail below: UI code reads
+    // these during composition, and the screenshot harness composes in a
+    // process where no FirebaseApp is initialized — there they must read as
+    // signed-out defaults instead of throwing. On a real device FirebaseApp
+    // is always initialized before any UI composes, so behaviour is identical.
+    val uid: String get() = runCatching { auth.currentUser?.uid ?: "" }.getOrDefault("")
+    val signedIn: Boolean get() = runCatching { auth.currentUser != null }.getOrDefault(false)
 
     /** The signed-in account's email ("" when signed out). ROUND 9: owner
      *  identity keys off THIS — never the uid. runCatching because the

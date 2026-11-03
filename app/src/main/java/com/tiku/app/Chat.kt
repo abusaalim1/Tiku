@@ -62,7 +62,9 @@ import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.filled.SaveAlt
 import androidx.compose.material.icons.filled.Send
@@ -689,7 +691,7 @@ fun RdChatInput(
                     contentAlignment = Alignment.Center,
                 ) {
                     if (has) Icon(Icons.Filled.Send, null, tint = Color.White, modifier = Modifier.size(20.dp))
-                    else Text("🎤", fontSize = 18.sp)
+                    else Icon(Icons.Filled.Mic, null, tint = Color.White, modifier = Modifier.size(20.dp))
                 }
             }
         }
@@ -1206,14 +1208,18 @@ private fun RdChatContent(thread: ChatThread) {
                         exit = slideOutVertically(tween(220, easing = RdEase)) { it } + fadeOut(),
                     ).chatGlass(haze, RoundedCornerShape(28.dp), 0.1f).padding(8.dp),
                 ) {
-                    Text(
-                        "🖼  Photo", color = Color.White, fontSize = 16.sp,
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
                         modifier = Modifier.fillMaxWidth().rdPress {
                             attachOpen = false
                             ChatSession.expectExternalActivity = true
                             pickMedia.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
                         }.padding(16.dp),
-                    )
+                    ) {
+                        Icon(Icons.Filled.Image, null, tint = Color.White, modifier = Modifier.size(21.dp))
+                        Spacer(Modifier.width(12.dp))
+                        Text("Photo", color = Color.White, fontSize = 16.sp)
+                    }
                 }
             }
         }

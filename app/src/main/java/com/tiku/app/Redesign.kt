@@ -53,6 +53,8 @@ import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Email
+import androidx.compose.material.icons.filled.Favorite
+import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Send
@@ -334,7 +336,7 @@ fun NoteItem(label: String, note: String, placeholder: Boolean, heart: Boolean, 
             if (heart) Box(
                 Modifier.align(Alignment.BottomEnd).offset(x = 2.dp, y = 10.dp).graphicsLayer { scaleX = hp; scaleY = hp }.size(24.dp).clip(CircleShape).background(CardC).border(1.dp, Color.White.copy(0.15f), CircleShape),
                 contentAlignment = Alignment.Center
-            ) { Text("❤️", fontSize = 12.sp) }
+            ) { Icon(Icons.Filled.Favorite, null, tint = Rose, modifier = Modifier.size(13.dp)) }
         }
         Box(
             Modifier.padding(top = 4.dp).size(66.dp).border(2.dp, Brush.linearGradient(listOf(Rose, Color(0xFFFFB347))), CircleShape).padding(4.dp),
@@ -374,7 +376,10 @@ fun NoteSheet(
             Text(note, color = Color.White, fontSize = 17.sp, modifier = Modifier.clip(RoundedCornerShape(20.dp)).background(CardC).padding(horizontal = 16.dp, vertical = 12.dp))
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Box(Modifier.size(46.dp).clip(CircleShape).background(Color.White.copy(0.12f)).press(onHeart), contentAlignment = Alignment.Center) {
-                    Text(if (hearted) "❤️" else "🤍", fontSize = 20.sp)
+                    Icon(
+                        if (hearted) Icons.Filled.Favorite else Icons.Filled.FavoriteBorder, null,
+                        tint = if (hearted) Rose else Color.White, modifier = Modifier.size(21.dp),
+                    )
                 }
                 Box(Modifier.weight(1f).padding(horizontal = 10.dp).clip(RoundedCornerShape(999.dp)).background(CardC).padding(horizontal = 16.dp, vertical = 13.dp)) {
                     if (text.isEmpty()) Text("Reply to note…", color = Sub, fontSize = 15.sp)

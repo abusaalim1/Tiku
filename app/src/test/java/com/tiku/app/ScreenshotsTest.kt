@@ -12,16 +12,18 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.test.click
+import androidx.compose.ui.test.hasScrollAction
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.longClick
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onAllNodesWithText
+import androidx.compose.ui.test.onNode
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performScrollToIndex
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.swipeLeft
-import androidx.compose.ui.test.swipeUp
 import androidx.compose.ui.unit.dp
 import androidx.test.core.app.ApplicationProvider
 import com.github.takahirom.roborazzi.captureRoboImage
@@ -78,6 +80,18 @@ class ScreenshotsTest {
         // Messages header row).
         PreviewStore.people.forEach { AppState.repo.unblockUser(it.uid) }
         AppState.repo.deleteMyNote()
+        // The harness never runs SessionLock.unlockFlow, whose preview
+        // branch is what normally seeds the notes flow — seed it here with
+        // the exact same call, AFTER the resets above (deleteMyNote only
+        // strips the "me" key; the seeded partner notes are what shot25
+        // and the Messages notes row consume).
+        AppState.notes.value = PreviewStore.seedNotes()
+        // The Round-14 shell routes on AppState.tikDestination; homeTab is
+        // only its legacy mirror. Reset the real destination too, or a
+        // shot inherits whatever pane the previous shot left behind (the
+        // Robolectric classloader — and AppState with it — is shared
+        // across this whole class).
+        AppState.goTik(0)
         // the gate opens with the password field once a journal password exists
         SettingsStore.savePasswordHash(ctx, Crypto.passwordHash("journal123"))
     }
@@ -156,19 +170,31 @@ class ScreenshotsTest {
         // titled exactly "2023,05" (single tap = decoy story, double tap =
         // the gate). This shot proves the entry story is listed — and that
         // the facade still carries the word "Tik" NOWHERE.
+        // Data-level guard: the entry story is genuinely the LAST story.
+        org.junit.Assert.assertEquals(
+            "the hidden entry story must be the last story in the data",
+            "2023,05", DramaContent.stories.last().title,
+        )
         frame { FacadeHome(initialTab = FacadeTab.STORIES) }
-        // the entry story sits at the very end of the list — scroll to it
-        repeat(4) {
-            composeRule.onRoot().performTouchInput { swipeUp() }
-            composeRule.waitForIdle()
-        }
+        // The entry story sits at the very end of the shelf — scroll the
+        // list's OWN semantics node straight to it (lazy items: header =
+        // 0, stories = 1..size, footer = size + 1). Swiping the ROOT node
+        // did not drive the facade's LazyColumn under Robolectric in
+        // build 51 (the last item was never composed, so the text query
+        // below found nothing). The query is substring because a composed
+        // card may merge its texts into one semantics node; the title is
+        // unique on the facade, so the proof is unchanged.
+        composeRule.onNode(hasScrollAction())
+            .performScrollToIndex(DramaContent.stories.size)
+        composeRule.waitForIdle()
         org.junit.Assert.assertTrue(
             "stories list must not contain any Tik wording",
             composeRule.onAllNodesWithText("Tik").fetchSemanticsNodes().isEmpty(),
         )
         org.junit.Assert.assertTrue(
             "stories list must end with the hidden entry story",
-            composeRule.onAllNodesWithText("2023,05").fetchSemanticsNodes().isNotEmpty(),
+            composeRule.onAllNodesWithText("2023,05", substring = true)
+                .fetchSemanticsNodes().isNotEmpty(),
         )
         shot("05-hidden-entry-story.png")
     }
@@ -252,12 +278,14 @@ class ScreenshotsTest {
         // encrypted call-event messages (seeded: ended / missed /
         // declined / video) — rows, not an empty state.
         AppState.homeTab = HomeTab.CALLS
+        AppState.goTik(1) // the Round-14 shell routes on tikDestination, not homeTab
         frame { HomeScreen() }
         shot("13-calls-pane.png")
     }
 
     @Test fun shot14_settingsMain() {
         AppState.homeTab = HomeTab.ME
+        AppState.goTik(3) // the Round-14 shell routes on tikDestination, not homeTab
         frame { HomeScreen() }
         shot("14-settings-main.png")
     }
@@ -267,8 +295,20 @@ class ScreenshotsTest {
         // Settings ▸ Blocked accounts subpage.
         AppState.repo.blockUser(PreviewStore.people[5].uid)
         AppState.homeTab = HomeTab.ME
+        AppState.goTik(3) // the Round-14 shell routes on tikDestination, not homeTab
         AppState.go(Screen.Home)
         frame { HomeScreen() }
+        // The Blocked accounts row sits near the bottom of the Settings
+        // LazyColumn and may start below the composed window — scroll the
+        // list to its item first if it isn't composed yet (lazy items:
+        // 0 Title, 1 profile, 2 Appearance, 3 Mode, 4 Text size,
+        // 5 Privacy, 6–10 toggles, 11 Blocked accounts).
+        if (composeRule.onAllNodesWithText("Blocked accounts")
+                .fetchSemanticsNodes().isEmpty()
+        ) {
+            composeRule.onNode(hasScrollAction()).performScrollToIndex(11)
+            composeRule.waitForIdle()
+        }
         composeRule.onAllNodesWithText("Blocked accounts")[0]
             .performScrollTo()
             .performTouchInput { click() }
@@ -512,6 +552,7 @@ class ScreenshotsTest {
         OwnerState.previewOverride = true
         OwnerPrefs.setNotify(true)
         AppState.homeTab = HomeTab.ME
+        AppState.goTik(3) // the Round-14 shell routes on tikDestination, not homeTab
         frame { HomeScreen() }
         composeRule.waitForIdle()
         org.junit.Assert.assertTrue(
@@ -578,6 +619,15 @@ class ScreenshotsTest {
         // is replaced by the redesign's blocked bar.
         val th = AppState.threads.value.first()
         AppState.repo.blockUser(th.person.uid)
+        // PreviewRepo.blockUser (like the real engine's list filtering)
+        // also removes the blocked thread from AppState.threads — and
+        // ChatScreen renders "Chat unavailable" for a thread that is no
+        // longer in the list, so the blocked bar could never compose.
+        // The bar's condition reads ONLY AppState.blockedUids (flipped by
+        // the blockUser call above, through the real repo seam); restore
+        // the thread so the shot frames the state the bar guards: an open
+        // chat whose partner is blocked.
+        AppState.threads.value = AppState.threads.value + th
         AppState.go(Screen.Chat(th.id))
         frame { ChatScreen(th.id) }
         composeRule.waitForIdle()
@@ -599,6 +649,7 @@ class ScreenshotsTest {
         // AT ALL (every non-owner account's Settings, unchanged).
         OwnerState.previewOverride = false
         AppState.homeTab = HomeTab.ME
+        AppState.goTik(3) // the Round-14 shell routes on tikDestination, not homeTab
         frame { HomeScreen() }
         composeRule.waitForIdle()
         org.junit.Assert.assertTrue(

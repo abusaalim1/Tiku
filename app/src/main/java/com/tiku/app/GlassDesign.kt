@@ -463,8 +463,8 @@ fun TikuIcon(
                 drawSvgPath("m16 11 6-3v8l-6-3")
             }
             "play" -> {
-                drawSvgRect(3f, 3f, 18f, 18f, 5f)
-                drawSvgPath("m10 8 6 4-6 4z")
+                drawSvgRect(2.5f, 2.5f, 19f, 19f, 5.5f)
+                drawSvgPath("m10.5 8 7 4-7 4z")
             }
             "set" -> {
                 drawSvgCircle(12f, 12f, 3f)
@@ -472,6 +472,7 @@ fun TikuIcon(
             }
             "back" -> drawSvgPath("m15 5-7 7 7 7")
             "edit" -> drawSvgPath("M4 20h4L19 9l-4-4L4 16zM14 6l4 4")
+            "book" -> drawSvgPath("M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2zM22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z")
             "chev" -> drawSvgPath("m6 9 6 6 6-6")
             "chevR" -> drawSvgPath("m9 6 6 6-6 6")
             "srch" -> {
@@ -498,9 +499,9 @@ fun TikuIcon(
                 drawSvgPath("M5 11a7 7 0 0 0 14 0M12 18v3")
             }
             "img" -> {
-                drawSvgRect(3f, 4f, 18f, 16f, 4f)
-                drawSvgCircle(9f, 10f, 1.6f)
-                drawSvgPath("m21 16-5-5-8 8")
+                drawSvgRect(3f, 3f, 18f, 18f, 4f)
+                drawSvgCircle(9f, 9f, 1.8f)
+                drawSvgPath("m4 18 5.5-5.5 3 3L16 12l4 4")
             }
             "plus" -> drawSvgPath("M12 5v14M5 12h14")
             "music" -> {

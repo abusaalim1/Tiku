@@ -188,7 +188,7 @@ private fun FacadeBottomNav(tab: FacadeTab, modifier: Modifier = Modifier, onTab
     val pal = LocalPalette.current
     val tabs = listOf(
         Triple(FacadeTab.HOME, "Home", "play"),
-        Triple(FacadeTab.STORIES, "Stories", "edit"),
+        Triple(FacadeTab.STORIES, "Stories", "book"),
         Triple(FacadeTab.PHOTOS, "Photos", "img"),
     )
     val selIdx = tabs.indexOfFirst { it.first == tab }.coerceAtLeast(0)
@@ -221,9 +221,9 @@ private fun FacadeBottomNav(tab: FacadeTab, modifier: Modifier = Modifier, onTab
                             verticalArrangement = Arrangement.Center,
                         ) {
                             TikIcon(
-                                icon, Modifier.size(24.dp),
+                                icon, Modifier.size(23.dp),
                                 tint = if (on) pal.ac else pal.sub,
-                                strokeWidth = if (on) 2f else 1.6f,
+                                strokeWidth = 1.9f,
                             )
                             Text(
                                 label, fontSize = 10.5.sp, fontFamily = InterTight,
