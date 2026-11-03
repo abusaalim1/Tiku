@@ -569,7 +569,7 @@ class ScreenshotsTest {
         }
         org.junit.Assert.assertTrue(
             "owner Settings must carry the Owner section",
-            composeRule.onAllNodesWithText("Owner").fetchSemanticsNodes().isNotEmpty(),
+            composeRule.onAllNodesWithText("OWNER").fetchSemanticsNodes().isNotEmpty(),
         )
         org.junit.Assert.assertTrue(
             "owner section must offer the Notifications toggle",
