@@ -604,6 +604,36 @@ object FirebaseEngine : ChatRepo {
     /** chatId -> my clearedBefore watermark, fed by the threads listener
      *  (the chat doc rides that snapshot — no per-snapshot get() anymore). */
     private val clearedBeforeCache = mutableMapOf<String, Long>()
+    // ---- ROUND 14: requests / hide / block / notes ----
+    /** chatId -> my acceptedFor / hiddenFor stamps (ms), fed by the threads
+     *  listener exactly like clearedBeforeCache. */
+    private val acceptedForCache = mutableMapOf<String, Long>()
+    private val hiddenForCache = mutableMapOf<String, Long>()
+    /** My blocked uids (users/{me}.blockedUids), fed by the my-doc listener. */
+    private var blockedCache: Set<String> = emptySet()
+    private var myDocReg: com.google.firebase.firestore.ListenerRegistration? = null
+    private val noteRegs = mutableMapOf<String, com.google.firebase.firestore.ListenerRegistration?>()
+
+    /** ROUND 14 derivation — a thread is a REQUEST when the partner has sent
+     *  at least one message, I have sent none, and I never accepted it
+     *  (acceptedFor[me] on the chat doc; threads I started count as accepted
+     *  because startThreadWith/ensureChatDoc is only reached by my action —
+     *  the acceptedFor stamp is written on accept; a thread with NO messages
+     *  yet is never a request). */
+    private fun deriveIsRequest(msgs: List<TikuMessage>, accepted: Boolean): Boolean {
+        if (accepted || msgs.isEmpty()) return false
+        val hasIncoming = msgs.any { !it.me }
+        val hasOutgoing = msgs.any { it.me }
+        return hasIncoming && !hasOutgoing
+    }
+
+    /** Hidden = I hid it and the partner has not sent a NEWER message since
+     *  (a new partner message resurfaces the thread — spec semantics). */
+    private fun deriveHidden(id: String, msgs: List<TikuMessage>): Boolean {
+        val h = hiddenForCache[id] ?: 0L
+        if (h <= 0L) return false
+        return msgs.none { !it.me && it.tsMs > h }
+    }
     /** Pinned chats (round 8): a per-user LOCAL view preference. */
     private var pinPrefs: android.content.SharedPreferences? = null
 
@@ -700,6 +730,19 @@ object FirebaseEngine : ChatRepo {
                             @Suppress("UNCHECKED_CAST")
                             val cbMap = doc.get("clearedBefore") as? Map<String, Any?>
                             clearedBeforeCache[doc.id] = (cbMap?.get(uid) as? Number)?.toLong() ?: 0L
+                            // ROUND 14: request/hide stamps ride this snapshot too.
+                            @Suppress("UNCHECKED_CAST")
+                            val accMap = doc.get("acceptedFor") as? Map<String, Any?>
+                            val accMs = (accMap?.get(uid) as? Number)?.toLong()
+                                ?: (accMap?.get(uid) as? com.google.firebase.Timestamp)?.toDate()?.time ?: 0L
+                            acceptedForCache[doc.id] = accMs
+                            @Suppress("UNCHECKED_CAST")
+                            val hidMap = doc.get("hiddenFor") as? Map<String, Any?>
+                            val hidMs = (hidMap?.get(uid) as? Number)?.toLong()
+                                ?: (hidMap?.get(uid) as? com.google.firebase.Timestamp)?.toDate()?.time ?: 0L
+                            hiddenForCache[doc.id] = hidMs
+                            val createdMs = doc.getTimestamp("createdAt")?.toDate()?.time
+                                ?: existing?.createdAtMs?.takeIf { it > 0L } ?: ts
                             // ROUND 10: per-chat details ride this same
                             // snapshot (theme, receipts, pinned messages, MY
                             // nickname) — zero extra reads, both members see
@@ -710,8 +753,9 @@ object FirebaseEngine : ChatRepo {
                             val themeAccentVal = doc.getLong("themeAccent")?.toInt()
                             val themeWallpaperVal = doc.getLong("themeWallpaper")?.toInt()
                             val pinnedIds = pinPrefs?.getStringSet("ids", emptySet()) ?: emptySet()
+                            val knownMsgs = existing?.messages ?: mutableListOf()
                             ts to ChatThread(id = doc.id, person = peer,
-                                messages = existing?.messages ?: mutableListOf(),
+                                messages = knownMsgs,
                                 unread = existing?.unread ?: 0,
                                 time = fmtTime(ts),
                                 pinned = doc.id in pinnedIds,
@@ -721,10 +765,15 @@ object FirebaseEngine : ChatRepo {
                                 themeAccent = themeAccentVal,
                                 themeWallpaper = themeWallpaperVal,
                                 receiptsOffMine = uid in receiptsOffList,
-                                pinnedMsgIds = pinnedMsgsList)
+                                pinnedMsgIds = pinnedMsgsList,
+                                isRequest = deriveIsRequest(knownMsgs, accMs > 0L),
+                                createdAtMs = createdMs,
+                                hiddenForMe = deriveHidden(doc.id, knownMsgs))
                         } ?: emptyList()
                         // client-side updatedAt DESC (the query no longer orders)
+                        // ROUND 14: a blocked person's threads never surface.
                         val list = built.sortedByDescending { it.first }.map { it.second }
+                            .filter { it.person.uid !in blockedCache }
                         AppState.threads.value = list
                         // ROUND 5: a chat skipped over a transient profile-fetch
                         // failure must not stay invisible until some unrelated
@@ -744,10 +793,12 @@ object FirebaseEngine : ChatRepo {
                         val ids = list.map { it.id }.toSet()
                         syncCallWatchers(ids)
                         syncPreviewListeners(ids)
+                        syncNoteListeners(list.map { it.person.uid }.toSet())
                         sweepStaleCalls(ids)
                     }
                 }
             }
+        attachMyDocListener()
     }
 
     // ================= CHAT-LIST PREVIEW LISTENERS (round 6, bug 3 layer 2) ====
@@ -818,7 +869,16 @@ object FirebaseEngine : ChatRepo {
         val unread = msgs.count { !it.me && it.kind != MsgKind.CALL && it.tsMs > lr }
         AppState.threads.value = AppState.threads.value.map { t ->
             if (t.id == id && !openChatIds.contains(id))
-                t.copy(messages = msgs.toMutableList(), unread = unread)
+                t.copy(
+                    messages = msgs.toMutableList(), unread = unread,
+                    // ROUND 14: every fresh preview window re-derives the
+                    // request flag, the hide state (a NEW partner message is
+                    // exactly what un-hides a thread) and the creation time.
+                    isRequest = deriveIsRequest(msgs, (acceptedForCache[id] ?: 0L) > 0L),
+                    hiddenForMe = deriveHidden(id, msgs),
+                    createdAtMs = if (t.createdAtMs > 0L) t.createdAtMs
+                        else msgs.firstOrNull()?.tsMs ?: 0L,
+                )
             else t
         }
         // ROUND 9: the owner's opt-in alert hook sees this same freshly
@@ -916,6 +976,71 @@ object FirebaseEngine : ChatRepo {
         threadsReg?.remove(); msgsReg?.remove()
         callsRegs.values.forEach { it.remove() }; callsRegs.clear()
         previewRegs.values.forEach { it.remove() }; previewRegs.clear()
+        myDocReg?.remove(); myDocReg = null
+        noteRegs.values.forEach { it?.remove() }; noteRegs.clear()
+    }
+
+    // ================= ROUND 14: MY DOC (block list + my note) =================
+    /** One listener on users/{me}: feeds AppState.blockedUids (+ the resolved
+     *  people for Settings) and MY note entry in AppState.notes. Attached from
+     *  start(); removed by stop()/signOut. */
+    private fun attachMyDocListener() {
+        if (uid.isEmpty()) return
+        myDocReg?.remove()
+        myDocReg = db.collection(Schema.Users.COLL).document(uid)
+            .addSnapshotListener { snap, err ->
+                if (err != null || snap == null) return@addSnapshotListener
+                @Suppress("UNCHECKED_CAST")
+                val blocked = (snap.get("blockedUids") as? List<String>)?.toSet() ?: emptySet()
+                if (blocked != blockedCache) {
+                    blockedCache = blocked
+                    AppState.blockedUids.value = blocked
+                    // a newly blocked person's threads vanish immediately;
+                    // unblocking re-runs start() from unblockUser instead.
+                    if (blocked.isNotEmpty()) {
+                        AppState.threads.value = AppState.threads.value
+                            .filter { it.person.uid !in blocked }
+                    }
+                    scope.launch {
+                        AppState.blockedPeople.value = blocked.mapNotNull { b ->
+                            runCatching { fetchPerson(b) }.getOrNull()
+                        }
+                    }
+                }
+                applyNoteSnapshot(uid, snap)
+            }
+    }
+
+    /** Fold one user doc's note fields into AppState.notes (24h window,
+     *  blank text = no note). Shared by the my-doc and per-peer listeners. */
+    private fun applyNoteSnapshot(ownerUid: String, snap: com.google.firebase.firestore.DocumentSnapshot) {
+        val text = snap.getString("noteText")?.trim().orEmpty()
+        val atMs = snap.getTimestamp("noteAt")?.toDate()?.time ?: 0L
+        @Suppress("UNCHECKED_CAST")
+        val hearts = (snap.get("noteHearts") as? List<String>)?.toSet() ?: emptySet()
+        val fresh = text.isNotEmpty() && atMs > 0L &&
+            System.currentTimeMillis() - atMs < 24L * 3600 * 1000
+        AppState.notes.value = if (fresh) {
+            AppState.notes.value + (ownerUid to NoteUi(ownerUid, text, hearts, atMs))
+        } else {
+            AppState.notes.value - ownerUid
+        }
+    }
+
+    /** Per-peer user-doc listeners feeding AppState.notes — the note set is
+     *  exactly my thread partners (spec: notes are visible to thread
+     *  partners). Synced from the threads listener like the preview regs. */
+    private fun syncNoteListeners(peerUids: Set<String>) {
+        (noteRegs.keys - peerUids).forEach { noteRegs.remove(it)?.remove() }
+        peerUids.forEach { p ->
+            if (!noteRegs.containsKey(p)) {
+                noteRegs[p] = db.collection(Schema.Users.COLL).document(p)
+                    .addSnapshotListener { snap, err ->
+                        if (err != null || snap == null) return@addSnapshotListener
+                        applyNoteSnapshot(p, snap)
+                    }
+            }
+        }
     }
 
     // ================= CHAT DOC BOOTSTRAP =================
@@ -1328,7 +1453,7 @@ object FirebaseEngine : ChatRepo {
             else -> MsgKind.TEXT
         }
         return TikuMessage(doc.id, sender, kind, text, fmtTime(tsMs), me, durSec, amps,
-            photo, replyQuote, reactions, starredBy.contains(my), deletedFor.contains(my), tsMs, localPath,
+            photo, replyQuote, doc.getString("replyToId"), reactions, starredBy.contains(my), deletedFor.contains(my), tsMs, localPath,
             seenByPeer = seenBy.contains(peerUid),
             callCallerUid = callCallerUid, callOutcome = callOutcome,
             callDurationSec = callDurSec, callVideo = callVideo,
@@ -1369,6 +1494,7 @@ object FirebaseEngine : ChatRepo {
             msgRef(id, local.id).set(mapOf(
                 "senderId" to uid, "kind" to "text", "ct" to ct, "iv" to iv,
                 "ts" to FieldValue.serverTimestamp(),
+                "replyToId" to local.replyToId,
                 "rqCt" to rqCt, "rqIv" to rqIv,
                 "reaction" to emptyMap<String, String>(), "starredBy" to emptyList<String>(),
                 "deletedFor" to emptyList<String>(), "seenBy" to listOf(uid),
@@ -1690,6 +1816,135 @@ object FirebaseEngine : ChatRepo {
         }
     }
 
+    // ================= ROUND 14: REQUESTS / HIDE / BLOCK / NOTES =================
+    override fun acceptThread(id: String) {
+        acceptedForCache[id] = System.currentTimeMillis()
+        AppState.threads.value = AppState.threads.value.map {
+            if (it.id == id) it.copy(isRequest = false) else it
+        }
+        scope.launch {
+            runCatching {
+                db.collection(Schema.Chats.COLL).document(id)
+                    .update("acceptedFor.$uid", FieldValue.serverTimestamp()).await()
+            }.onFailure { Log.e("TikuChat", "acceptThread failed for $id", it) }
+        }
+    }
+
+    override fun hideThread(id: String) {
+        hiddenForCache[id] = System.currentTimeMillis()
+        AppState.threads.value = AppState.threads.value.map {
+            if (it.id == id) it.copy(hiddenForMe = true) else it
+        }
+        scope.launch {
+            runCatching {
+                db.collection(Schema.Chats.COLL).document(id)
+                    .update("hiddenFor.$uid", FieldValue.serverTimestamp()).await()
+            }.onFailure { Log.e("TikuChat", "hideThread failed for $id", it) }
+        }
+    }
+
+    override fun blockUser(uid2: String) {
+        if (uid2.isEmpty() || uid2 == uid) return
+        blockedCache = blockedCache + uid2
+        AppState.blockedUids.value = blockedCache
+        // our thread with them hides everywhere at once
+        AppState.threads.value.firstOrNull { it.person.uid == uid2 }?.let { hideThread(it.id) }
+        AppState.threads.value = AppState.threads.value.filter { it.person.uid != uid2 }
+        scope.launch {
+            runCatching {
+                db.collection(Schema.Users.COLL).document(uid)
+                    .update("blockedUids", FieldValue.arrayUnion(uid2)).await()
+            }.onFailure { Log.e("TikuChat", "blockUser failed for $uid2", it) }
+        }
+    }
+
+    override fun unblockUser(uid2: String) {
+        if (uid2.isEmpty()) return
+        blockedCache = blockedCache - uid2
+        AppState.blockedUids.value = blockedCache
+        AppState.blockedPeople.value = AppState.blockedPeople.value.filter { it.uid != uid2 }
+        scope.launch {
+            runCatching {
+                db.collection(Schema.Users.COLL).document(uid)
+                    .update("blockedUids", FieldValue.arrayRemove(uid2)).await()
+            }.onFailure { Log.e("TikuChat", "unblockUser failed for $uid2", it) }
+            // their thread was filtered out of the list while blocked — a
+            // fresh threads snapshot brings it back.
+            if (ChatSession.unlocked) start(appCtx)
+        }
+    }
+
+    override fun setMyNote(text: String) {
+        val t = text.trim().take(60)
+        if (t.isEmpty()) { deleteMyNote(); return }
+        AppState.notes.value = AppState.notes.value +
+            (uid to NoteUi(uid, t, emptySet(), System.currentTimeMillis()))
+        scope.launch {
+            runCatching {
+                db.collection(Schema.Users.COLL).document(uid).update(mapOf(
+                    "noteText" to t,
+                    "noteAt" to FieldValue.serverTimestamp(),
+                    "noteHearts" to emptyList<String>(),
+                )).await()
+            }.onFailure { Log.e("TikuChat", "setMyNote failed", it) }
+        }
+    }
+
+    override fun deleteMyNote() {
+        AppState.notes.value = AppState.notes.value - uid
+        scope.launch {
+            runCatching {
+                db.collection(Schema.Users.COLL).document(uid).update(mapOf(
+                    "noteText" to FieldValue.delete(),
+                    "noteAt" to FieldValue.delete(),
+                    "noteHearts" to emptyList<String>(),
+                )).await()
+            }.onFailure { Log.e("TikuChat", "deleteMyNote failed", it) }
+        }
+    }
+
+    override fun toggleNoteHeart(ownerUid: String) {
+        if (ownerUid.isEmpty() || ownerUid == uid) return
+        val cur = AppState.notes.value[ownerUid] ?: return
+        val hearted = uid in cur.hearts
+        AppState.notes.value = AppState.notes.value + (ownerUid to cur.copy(
+            hearts = if (hearted) cur.hearts - uid else cur.hearts + uid,
+        ))
+        scope.launch {
+            runCatching {
+                db.collection(Schema.Users.COLL).document(ownerUid).update(
+                    "noteHearts",
+                    if (hearted) FieldValue.arrayRemove(uid) else FieldValue.arrayUnion(uid),
+                ).await()
+            }.onFailure { Log.e("TikuChat", "toggleNoteHeart failed for $ownerUid", it) }
+        }
+    }
+
+    /** Note reply: a normal text send whose quote snapshot is the note
+     *  ("Note: <text>") with the "__note__" replyToId sentinel. */
+    override fun sendNoteReply(id: String, text: String, noteText: String) {
+        val th = AppState.thread(id) ?: return
+        val local = TikuMessage(
+            id = newLocalId(), senderUid = uid, kind = MsgKind.TEXT, text = text,
+            time = fmtTime(System.currentTimeMillis()), me = true,
+            replyQuote = "Note: $noteText", replyToId = "__note__",
+            tsMs = System.currentTimeMillis(), status = SendStatus.SENDING,
+        )
+        AppState.upsertMessage(id, local)
+        scope.launch { deliverText(id, th.person.uid, local) }
+    }
+
+    /** Edit-profile Name field: displayName + search tokens on my user doc. */
+    suspend fun updateDisplayName(name: String): Result<Unit> = runCatching {
+        val n = name.trim()
+        require(n.isNotEmpty()) { "Name can't be empty." }
+        db.collection(Schema.Users.COLL).document(uid).update(mapOf(
+            "displayName" to n,
+            "nameTokens" to SearchNorm.tokens(myPerson.username, n),
+        )).await()
+        myPerson = myPerson.copy(name = n)
+    }
+
     override fun startThreadWith(person: Person): String {
         val id = chatIdFor(uid, person.uid)
         // v1 crash fix: surface the thread SYNCHRONOUSLY so the Chat screen that
@@ -1790,6 +2045,12 @@ object FirebaseEngine : ChatRepo {
         myPrivBytes = null
         convKeyCache.clear(); profileCache.clear(); publicKeyCache.clear()
         AppState.threads.value = emptyList()
+        // ROUND 14: no note/block state may leak into the next session.
+        AppState.notes.value = emptyMap()
+        AppState.blockedUids.value = emptySet()
+        AppState.blockedPeople.value = emptyList()
+        blockedCache = emptySet()
+        acceptedForCache.clear(); hiddenForCache.clear()
         ctx.getSharedPreferences("tiku_prefs", Context.MODE_PRIVATE).edit().putBoolean("onboarded", false).apply()
         AppState.go(Screen.Welcome)
     }

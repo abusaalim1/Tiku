@@ -253,17 +253,21 @@ fun TikuRoot(onGoogleClick: () -> Unit) {
                             (screen as? Screen.Call ?: lastCall)?.let { CallScreen(it.threadId, it.video) }
                         }
                         if (screen is Screen.Story) StoryScreen()
-                        // ROUND 8: the floating call window lives above the
-                        // chat surfaces (below sheets + toast, which render
-                        // after this Box).
-                        FloatingCallWindow()
+                        // ROUND 14: the floating call window is REPLACED by
+                        // the redesign CallPill inside HomeScreen (shown when
+                        // a call is minimized) — FloatingCallWindow (Call.kt)
+                        // is no longer composed anywhere.
                         // ROUND 13: the "Now watching" glass bar floats
-                        // above the glass nav (the build-44 mini player is
-                        // deleted — Watch.kt). It self-hides unless a Watch
+                        // above the glass nav. It self-hides unless a Watch
                         // session exists on a non-Watch Home tab.
+                        // ROUND 14 (Addendum 2 §5): the floating mini
+                        // player is back (WatchHost in HomeScreen) and
+                        // rests directly above this bar; the bar's bottom
+                        // inset is NowWatchingBarBottomInset (94.dp —
+                        // 8.dp above the redesign NavPill's 86.dp block).
                         NowWatchingBar(
                             Modifier.align(Alignment.BottomCenter)
-                                .padding(start = 16.dp, end = 16.dp, bottom = 102.dp),
+                                .padding(start = 16.dp, end = 16.dp, bottom = NowWatchingBarBottomInset),
                         )
                     }
                 }

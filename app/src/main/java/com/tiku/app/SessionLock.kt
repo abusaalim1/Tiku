@@ -246,11 +246,11 @@ object ChatSession {
                 FirebaseEngine.setPresence(false)
             }
             if (!AppState.isFacade(AppState.screen)) AppState.instantGo(Screen.Facade)
-            AppState.toast("Back to Tikuu")
+            AppState.toast("Back to K-Tiku")
             return
         }
         lock(ctx)
-        AppState.toast("Back to Tikuu")
+        AppState.toast("Back to K-Tiku")
     }
 
     /**
@@ -272,6 +272,8 @@ object ChatSession {
             val seeded = PreviewStore.seedThreads()
             AppState.threads.value = seeded
             AppState.typing.value = emptyMap()
+            // ROUND 14: preview notes so the Messages notes row renders.
+            AppState.notes.value = PreviewStore.seedNotes()
         } else {
             AppState.repo = FirebaseEngine
             FirebaseEngine.appCtx = c

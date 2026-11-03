@@ -185,7 +185,7 @@ fun WelcomeScreen(onGoogleClick: () -> Unit) {
                     ) {
                         Image(
                             painter = painterResource(R.drawable.tiku_logo),
-                            contentDescription = "Tikuu Logo",
+                            contentDescription = "K-Tiku Logo",
                             modifier = Modifier.fillMaxSize(),
                             contentScale = ContentScale.Crop
                         )
@@ -293,7 +293,7 @@ fun WelcomeScreen(onGoogleClick: () -> Unit) {
                     .padding(bottom = 12.dp, top = 4.dp),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                SerifTitle("Tikuu", 32.sp)
+                SerifTitle("K-Tiku", 32.sp)
                 Spacer(Modifier.height(12.dp))
 
                 // Modern Instagram-styled Google Sign-In button with elevation & click feedback

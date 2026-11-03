@@ -4,14 +4,17 @@ import android.annotation.SuppressLint
 import android.view.View
 import android.view.ViewGroup
 import android.webkit.WebChromeClient
+import android.webkit.WebResourceRequest
 import android.webkit.WebSettings
 import android.webkit.WebView
+import android.webkit.WebViewClient
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -53,6 +56,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -71,10 +75,15 @@ import kotlinx.coroutines.withContext
  * ROUND 13 — THE K-DRAMA FACADE, the app's default surface (the study
  * facade is gone). A Korean love-story app in the owner's liquid-glass
  * design language: dubbed drama episodes streaming from YouTube, short
- * love stories to read, romantic stills to keep — plus a "For You" page
- * whose personal corner is the ONE discreet door to the password gate
- * (see SecretEntry; the gate itself lives at the bottom of this file,
- * moved here unchanged from the old facade).
+ * love stories to read, romantic stills to keep.
+ *
+ * ROUND 14 ADDENDUM — the old "For You" page (with its discreet entry
+ * card) is REMOVED; the bottom nav is Home / Stories / Photos. The ONE
+ * discreet door to the password gate is now the LAST story on the
+ * Stories shelf ("2023,05"): a single tap reads it like any other
+ * story, a double tap routes through SecretEntry to the gate (the gate
+ * itself lives at the bottom of this file, moved here unchanged from
+ * the old facade).
  *
  * The facade runs on the design's LIGHT palette (Rose Petal brand accent)
  * regardless of the vault's own mode — provided locally in [FacadeHome].
@@ -86,7 +95,7 @@ import kotlinx.coroutines.withContext
 
 // ---------- facade shell ----------
 
-enum class FacadeTab { HOME, STORIES, PHOTOS, FOR_YOU }
+enum class FacadeTab { HOME, STORIES, PHOTOS }
 
 @Composable
 fun FacadeHome(
@@ -112,6 +121,7 @@ private fun FacadeShell(
 ) {
     val pal = LocalPalette.current
     val ctx = LocalContext.current
+    val scope = rememberCoroutineScope()
     val hazeState = LocalHazeState.current
     var tab by remember { mutableStateOf(initialTab) }
     var storyId by remember { mutableStateOf(initialStoryId) }
@@ -153,13 +163,12 @@ private fun FacadeShell(
                                 favs = FacadeStore.favourites(ctx)
                             },
                         )
-                        FacadeTab.STORIES -> StoriesTab { storyId = it.id }
-                        FacadeTab.PHOTOS -> PhotosTab { photoIdx = it }
-                        FacadeTab.FOR_YOU -> ForYouTab(
-                            favs = favs,
-                            onPlay = { playerId = it.id },
-                            onBrowseStories = { tab = FacadeTab.STORIES },
+                        FacadeTab.STORIES -> StoriesTab(
+                            onOpen = { storyId = it.id },
+                            // The last story's double-tap door (see StoryCard).
+                            onSecretGate = { SecretEntry.openGate(ctx, scope) },
                         )
+                        FacadeTab.PHOTOS -> PhotosTab { photoIdx = it }
                     }
                 }
                 FacadeBottomNav(
@@ -181,11 +190,10 @@ private fun FacadeBottomNav(tab: FacadeTab, modifier: Modifier = Modifier, onTab
         Triple(FacadeTab.HOME, "Home", "play"),
         Triple(FacadeTab.STORIES, "Stories", "edit"),
         Triple(FacadeTab.PHOTOS, "Photos", "img"),
-        Triple(FacadeTab.FOR_YOU, "For You", "heart"),
     )
     val selIdx = tabs.indexOfFirst { it.first == tab }.coerceAtLeast(0)
     BoxWithConstraints(modifier.fillMaxWidth()) {
-        val segW = (maxWidth - 10.dp) / 4
+        val segW = (maxWidth - 10.dp) / 3
         val lensX by animateDpAsState(
             segW * selIdx,
             spring(dampingRatio = 0.68f, stiffness = 380f), label = "facadeLensX",
@@ -526,7 +534,21 @@ private fun FacadePlayer(drama: DramaContent.Drama, onClose: () -> Unit) {
                     runCatching { cb?.onCustomViewHidden() }
                 }
             }
-            loadUrl("https://www.youtube.com/embed/${drama.id}?autoplay=1&rel=0")
+            // ROUND 14 — LOCKED EMBED: playback is a local page whose only
+            // content is a youtube-nocookie iframe (no watch page, no "Open
+            // App" pill, no comments, no related-video rail), and EVERY
+            // main-frame navigation away from that document is refused —
+            // watch pages, channel pages, intent:// and market:// alike.
+            // (The initial loadDataWithBaseURL load is programmatic and
+            // never passes through shouldOverrideUrlLoading; iframe
+            // subresource loads are unaffected.)
+            webViewClient = object : WebViewClient() {
+                override fun shouldOverrideUrlLoading(
+                    view: WebView?,
+                    request: WebResourceRequest?,
+                ): Boolean = true
+            }
+            loadYoutubeEmbed(this, drama.id)
         }
     }
 
@@ -586,8 +608,16 @@ private fun PlayerCloseButton(modifier: Modifier = Modifier, onClose: () -> Unit
 
 // ---------- STORIES TAB + READER ----------
 
+/** The bundled id of the LAST story on the shelf — the secret door.
+ *  Its card renders exactly like every other card; only its tap
+ *  handling differs (see [StoryCard]). */
+private const val SECRET_STORY_ID = "story-2023-05"
+
 @Composable
-private fun StoriesTab(onOpen: (DramaContent.Story) -> Unit) {
+private fun StoriesTab(
+    onOpen: (DramaContent.Story) -> Unit,
+    onSecretGate: () -> Unit,
+) {
     val pal = LocalPalette.current
     LazyColumn(
         Modifier.fillMaxSize().padding(horizontal = 20.dp),
@@ -607,21 +637,45 @@ private fun StoriesTab(onOpen: (DramaContent.Story) -> Unit) {
             }
         }
         items(DramaContent.stories, key = { it.id }) { story ->
-            StoryCard(story) { onOpen(story) }
+            StoryCard(
+                story = story,
+                onClick = { onOpen(story) },
+                // Only the last story carries the hidden door; its card
+                // is visually identical to all the others.
+                onDoubleTap = if (story.id == SECRET_STORY_ID) onSecretGate else null,
+            )
         }
         item { Spacer(Modifier.height(4.dp)) }
     }
 }
 
 @Composable
-private fun StoryCard(story: DramaContent.Story, onClick: () -> Unit) {
+private fun StoryCard(
+    story: DramaContent.Story,
+    onClick: () -> Unit,
+    onDoubleTap: (() -> Unit)? = null,
+) {
     val pal = LocalPalette.current
     val preview = story.body.split("\n\n").firstOrNull()?.replace('\n', ' ') ?: ""
+    val interaction = remember { MutableInteractionSource() }
+    // Cards without a double-tap action keep the plain clickable; the
+    // one secret card uses detectTapGestures so a double tap fires the
+    // gate WITHOUT the single-tap reader opening first.
+    val tapModifier = if (onDoubleTap == null) {
+        Modifier.clickable(
+            interactionSource = interaction, indication = null,
+        ) { onClick() }
+    } else {
+        Modifier.pointerInput(story.id) {
+            detectTapGestures(
+                onTap = { onClick() },
+                onDoubleTap = { onDoubleTap() },
+            )
+        }
+    }
     Box(
         Modifier.fillMaxWidth().glassSurface(RoundedCornerShape(24.dp))
-            .clickable(
-                interactionSource = remember { MutableInteractionSource() }, indication = null,
-            ) { onClick() }
+            .then(tapModifier)
             .padding(18.dp),
     ) {
         Column {
@@ -775,212 +829,8 @@ private fun PhotoViewer(index: Int, onBack: () -> Unit) {
     }
 }
 
-// ---------- FOR YOU TAB (fan profile page + the one discreet entry) ----------
-
-@Composable
-private fun ForYouTab(
-    favs: Set<String>,
-    onPlay: (DramaContent.Drama) -> Unit,
-    onBrowseStories: () -> Unit,
-) {
-    val pal = LocalPalette.current
-    val ctx = LocalContext.current
-    val scope = rememberCoroutineScope()
-    var aboutOpen by remember { mutableStateOf(false) }
-    val favDramas = DramaContent.allDramas().filter { favs.contains(it.id) }
-    LazyColumn(
-        Modifier.fillMaxSize().padding(horizontal = 20.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp),
-    ) {
-        item {
-            Row(
-                Modifier.padding(top = 26.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Box(
-                    Modifier.size(56.dp).glassSurface(CircleShape, useLargeGlass = true, blur = true),
-                    contentAlignment = Alignment.Center,
-                ) { TikIcon("heartFill", Modifier.size(26.dp), tint = pal.ac) }
-                Spacer(Modifier.width(14.dp))
-                Column {
-                    Text(
-                        DramaContent.appName, fontSize = 24.sp, fontFamily = InterTight,
-                        fontWeight = FontWeight.Bold, color = pal.tx,
-                    )
-                    Text(
-                        "Made for drama lovers", fontSize = 13.sp,
-                        fontFamily = InterTight, color = pal.sub,
-                    )
-                }
-            }
-        }
-        item {
-            // THE ENTRY — styled as this page's personal feature, exactly
-            // like a romance app's "made for you" corner. It routes through
-            // SecretEntry (the single door): the owner's gate-skip applies,
-            // everyone else lands on the password gate. No lock, key or
-            // chat wording anywhere near it.
-            Box(
-                Modifier.fillMaxWidth()
-                    .glassSurface(RoundedCornerShape(26.dp), useLargeGlass = true, blur = true)
-                    .clickable(
-                        interactionSource = remember { MutableInteractionSource() }, indication = null,
-                    ) { SecretEntry.openGate(ctx, scope) }
-                    .padding(16.dp),
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Box(
-                        Modifier.size(48.dp).glassSurface(CircleShape),
-                        contentAlignment = Alignment.Center,
-                    ) { TikIcon("heartFill", Modifier.size(22.dp), tint = pal.ac) }
-                    Spacer(Modifier.width(14.dp))
-                    Column(Modifier.weight(1f)) {
-                        Text(
-                            "For You, Always", fontSize = 16.5.sp, fontFamily = InterTight,
-                            fontWeight = FontWeight.SemiBold, color = pal.tx,
-                        )
-                        Text(
-                            "Your private corner", fontSize = 12.5.sp,
-                            fontFamily = InterTight, color = pal.sub,
-                        )
-                    }
-                    TikIcon("chevR", Modifier.size(18.dp), tint = pal.sub)
-                }
-            }
-        }
-        item {
-            Column {
-                FacadeSectionTitle("My List")
-                Spacer(Modifier.height(12.dp))
-                if (favDramas.isEmpty()) {
-                    Box(
-                        Modifier.fillMaxWidth().glassSurface(RoundedCornerShape(24.dp))
-                            .padding(18.dp),
-                    ) {
-                        Text(
-                            "Nothing here yet — tap the heart on any drama and it will wait for you here.",
-                            fontSize = 13.5.sp, fontFamily = InterTight, color = pal.sub,
-                            lineHeight = 20.sp,
-                        )
-                    }
-                } else {
-                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                        favDramas.forEach { d -> FavRow(d) { onPlay(d) } }
-                    }
-                }
-            }
-        }
-        item {
-            // Downloads — honest empty state (dramas stream; nothing is
-            // ever downloaded by this app).
-            Box(
-                Modifier.fillMaxWidth().glassSurface(RoundedCornerShape(24.dp))
-                    .padding(18.dp),
-            ) {
-                Column {
-                    Text(
-                        "Downloads", fontSize = 15.5.sp, fontFamily = InterTight,
-                        fontWeight = FontWeight.SemiBold, color = pal.tx,
-                    )
-                    Spacer(Modifier.height(3.dp))
-                    Text(
-                        "Nothing downloaded yet — every drama streams online.",
-                        fontSize = 12.5.sp, fontFamily = InterTight, color = pal.sub,
-                    )
-                }
-            }
-        }
-        item {
-            Column {
-                Box(
-                    Modifier.fillMaxWidth().glassSurface(RoundedCornerShape(24.dp))
-                        .clickable(
-                            interactionSource = remember { MutableInteractionSource() }, indication = null,
-                        ) { aboutOpen = !aboutOpen }
-                        .padding(18.dp),
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Column(Modifier.weight(1f)) {
-                            Text(
-                                "About Tikuu", fontSize = 15.5.sp, fontFamily = InterTight,
-                                fontWeight = FontWeight.SemiBold, color = pal.tx,
-                            )
-                            Text(
-                                "Version, credits & the fine print", fontSize = 12.5.sp,
-                                fontFamily = InterTight, color = pal.sub,
-                            )
-                        }
-                        TikIcon("chevR", Modifier.size(18.dp), tint = pal.sub)
-                    }
-                }
-                if (aboutOpen) {
-                    Spacer(Modifier.height(10.dp))
-                    Box(
-                        Modifier.fillMaxWidth().glassSurface(RoundedCornerShape(24.dp))
-                            .padding(18.dp),
-                    ) {
-                        Text(
-                            "Tikuu 1.0\n${DramaContent.tagline}. Hindi & Bangla dubbed " +
-                                "Korean love stories, tiny reads and romantic stills — " +
-                                "all in one quiet place, made for drama lovers.",
-                            fontSize = 13.5.sp, fontFamily = InterTight, color = pal.sub,
-                            lineHeight = 20.sp,
-                        )
-                    }
-                }
-            }
-        }
-        item {
-            Text(
-                "Looking for something to read? The Stories shelf is full of tiny love stories.",
-                fontSize = 12.5.sp, fontFamily = InterTight, color = pal.sub,
-                modifier = Modifier.clickable(
-                    interactionSource = remember { MutableInteractionSource() }, indication = null,
-                ) { onBrowseStories() },
-            )
-        }
-        item { Spacer(Modifier.height(4.dp)) }
-    }
-}
-
-@Composable
-private fun FavRow(drama: DramaContent.Drama, onClick: () -> Unit) {
-    val pal = LocalPalette.current
-    Box(
-        Modifier.fillMaxWidth().glassSurface(RoundedCornerShape(20.dp))
-            .clickable(
-                interactionSource = remember { MutableInteractionSource() }, indication = null,
-            ) { onClick() }
-            .padding(10.dp),
-    ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            AsyncImage(
-                model = DramaContent.thumbUrl(drama.id),
-                contentDescription = null,
-                contentScale = ContentScale.Crop,
-                modifier = Modifier.width(84.dp).height(48.dp).clip(RoundedCornerShape(12.dp)),
-            )
-            Spacer(Modifier.width(12.dp))
-            Column(Modifier.weight(1f)) {
-                Text(
-                    drama.title, fontSize = 14.5.sp, fontFamily = InterTight,
-                    fontWeight = FontWeight.SemiBold, color = pal.tx,
-                    maxLines = 1, overflow = TextOverflow.Ellipsis,
-                )
-                if (drama.sub.isNotEmpty()) {
-                    Text(
-                        drama.sub, fontSize = 12.sp, fontFamily = InterTight, color = pal.sub,
-                        maxLines = 1, overflow = TextOverflow.Ellipsis,
-                    )
-                }
-            }
-            TikIcon("playFill", Modifier.size(20.dp), tint = pal.ac)
-        }
-    }
-}
-
-// ---------- PASSWORD GATE (reached ONLY via SecretEntry / the
-// "For You, Always" row on the facade's For You page) ----------
+// ---------- PASSWORD GATE (reached ONLY via SecretEntry, from the
+// double tap on the last story — "2023,05" — on the Stories shelf) ----------
 
 @Composable
 fun TikGateScreen() {

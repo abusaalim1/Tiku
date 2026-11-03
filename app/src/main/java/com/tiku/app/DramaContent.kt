@@ -46,7 +46,7 @@ object DramaContent {
     /** The hero card's backdrop still (cherry-blossom walk). */
     const val HERO_PHOTO = "photo_3.webp"
 
-    var appName: String = "Tikuu"
+    var appName: String = "K-Tiku"
     var tagline: String = "Korean love stories, in your language"
     var hero: Drama? = null
     var rows: List<Row> = emptyList()
@@ -128,8 +128,10 @@ object DramaContent {
 /**
  * ROUND 13 — the facade's REAL local state (SharedPrefs `tikuu_facade`):
  * watch history written by the player (newest first, capped) and the
- * My List favourites toggled from drama cards. Local-only, drama-only —
- * nothing here touches the vault, and nothing chat-shaped is ever stored.
+ * favourites toggled from drama cards (the hearts still toggle on the
+ * Home cards; the old My List surface was removed in Round 14).
+ * Local-only, drama-only — nothing here touches the vault, and nothing
+ * chat-shaped is ever stored.
  */
 object FacadeStore {
     private const val PREF = "tikuu_facade"
@@ -168,7 +170,7 @@ object FacadeStore {
     fun favourites(ctx: Context): Set<String> =
         prefs(ctx).getStringSet("favs", emptySet())?.toSet() ?: emptySet()
 
-    /** Toggles one drama in My List; returns the NEW state (true = saved). */
+    /** Toggles one drama's favourite flag; returns the NEW state (true = saved). */
     fun toggleFavourite(ctx: Context, id: String): Boolean {
         val cur = favourites(ctx).toMutableSet()
         val now = if (cur.contains(id)) { cur.remove(id); false } else { cur.add(id); true }

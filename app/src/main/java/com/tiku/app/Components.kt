@@ -179,20 +179,21 @@ fun BoxScope.DesignToast() {
     }
 }
 
-/** Bottom sheet host. ROUND 13: sheets only ever open inside the Tik
- *  section, where the host takes the owner design's sheet skin — a FLOATING
- *  sheet (8dp margin all round, r34) in sheetColor() over a deep-violet
- *  scrim (#0C0818 @ .42), sliding up .38s on the design easing, grabber
- *  40x5; when a HazeState exists the sheet also blurs the content behind
- *  it. Sheet contents carry their own design margins (host horizontal
- *  padding is 0). The peach host below is kept verbatim for any non-Tik
- *  surface. */
+/** Bottom sheet host. ROUND 14: sheets only ever open inside the Tik
+ *  section, where the host takes the redesign's sheet skin — a FLOATING
+ *  sheet (8dp margin all round, r28) in solid SheetC (#16161B) over a black
+ *  scrim (.55), sliding up .38s on the design easing, grabber 40x5
+ *  (white .25), hairline border (white .12). Sheet contents carry their
+ *  own design margins (host horizontal padding is 0). The peach host below
+ *  is kept verbatim for any non-Tik surface. */
 @Composable
 fun BoxScope.BottomSheetHost() {
     val content = AppState.sheetContent
     if (AppState.isChatRoot(AppState.screen)) {
-        val pal = LocalPalette.current
-        val sheetShape = RoundedCornerShape(34.dp)
+        // ROUND 14: the Tik sheet host wears the redesign's sheet skin —
+        // solid #16161B, r28 corners, white-alpha hairline + grabber, black
+        // scrim. Entrance motion unchanged.
+        val sheetShape = RoundedCornerShape(28.dp)
         AnimatedVisibility(
             visible = content != null,
             enter = fadeIn(tween(280, easing = TikEase)),
@@ -201,7 +202,7 @@ fun BoxScope.BottomSheetHost() {
         ) {
             Box(
                 modifier = Modifier.fillMaxSize()
-                    .background(Color(0xFF0C0818).copy(alpha = 0.42f))
+                    .background(Color.Black.copy(alpha = 0.55f))
                     .clickable(interactionSource = remember { MutableInteractionSource() },
                         indication = null) { AppState.closeSheet() },
                 contentAlignment = Alignment.BottomCenter,
@@ -216,9 +217,8 @@ fun BoxScope.BottomSheetHost() {
                             .fillMaxWidth()
                             .padding(8.dp)
                             .clip(sheetShape)
-                            .glassBlur(24.dp)
-                            .background(sheetColor(), sheetShape)
-                            .border(1.dp, pal.gb, sheetShape)
+                            .background(SheetC, sheetShape)
+                            .border(1.dp, Color.White.copy(alpha = 0.12f), sheetShape)
                             .clickable(interactionSource = remember { MutableInteractionSource() },
                                 indication = null) { },
                     ) {
@@ -228,7 +228,7 @@ fun BoxScope.BottomSheetHost() {
                             Box(
                                 modifier = Modifier.width(40.dp).height(5.dp)
                                     .clip(RoundedCornerShape(3.dp))
-                                    .background(pal.grabber)
+                                    .background(Color.White.copy(alpha = 0.25f))
                                     .align(Alignment.CenterHorizontally)
                             )
                             Spacer(Modifier.height(6.dp))

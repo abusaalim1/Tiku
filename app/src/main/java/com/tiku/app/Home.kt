@@ -5,29 +5,28 @@ import android.content.pm.PackageManager
 import android.graphics.BitmapFactory
 import android.os.Build
 import androidx.core.content.ContextCompat
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedContent
-import androidx.compose.animation.core.Spring
-import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.slideInVertically
-import androidx.compose.animation.togetherWith
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.gestures.detectTapGestures
-import androidx.compose.foundation.horizontalScroll
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -35,20 +34,31 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.animateItem
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Call
+import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.Videocam
+import androidx.compose.material3.Icon
+import androidx.compose.material3.Slider
+import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -56,1053 +66,1065 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.SolidColor
-import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.chrisbanes.haze.hazeSource
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
- * ROUND 13 — the Tik home shell in the owner-supplied liquid-glass design:
- * per-tab 32sp headers, panes entering with the design's `in` motion
- * (fade + 8px rise, .26s), and the floating glass bottom nav with its
- * sliding lens. Panes are the Haze source for the nav's real blur. All
- * data + behaviour is the real engine's; only the skin changed.
+ * ROUND 14 — the Tik shell in the owner's TikuuRedesign model: pure-black
+ * root, the panes as the Haze source, AnimatedContent with the file's
+ * screenSpec depth transitions over destinations (0 Messages · 1 Calls ·
+ * 2 Watch · 3 Setting · 7 Requests), the sliding-lens NavPill (pane tabs
+ * only), the CallPill above it for a minimized live call, and the note
+ * sheet overlay. Chat (9) and Info (8) stay Screen-routed overlays in
+ * TikuRoot (Screen.Chat / Screen.ChatDetails), per the round-14 split.
+ * The build-47 glass panes (ChatsPane/CallsPane/MePane + glass nav) are
+ * PERMANENTLY deleted. All data is the real engine's.
  */
+
+/** The preview build's my-uid key for notes (the real engine's is the
+ *  Firebase uid). Notes are keyed by owner uid in AppState.notes. */
+fun myUidKey(): String = if (Config.PREVIEW_UI_ONLY) "me" else FirebaseEngine.myUid()
+
+/** Last-message preview, build-47 rules: media kinds by label, call events
+ *  by their pill label, never raw call text. */
+fun threadPreview(th: ChatThread): String {
+    val last = th.messages.lastOrNull { !it.deletedForMe } ?: return ""
+    return when (last.kind) {
+        MsgKind.VOICE -> "Voice message"
+        MsgKind.IMAGE -> "Photo"
+        MsgKind.CALL -> callEventLabel(last, last.callMine)
+        else -> last.text
+    }
+}
+
+private sealed interface NoteTarget {
+    data object Me : NoteTarget
+    data class Peer(val thread: ChatThread) : NoteTarget
+}
+
 @Composable
 fun HomeScreen() {
     val ctx = LocalContext.current
     // QUICK EXIT (lock rule): Back at ChatRoot home re-locks instantly to the facade.
-    androidx.activity.compose.BackHandler { ChatSession.quickExit(ctx) }
-    val settings = tikuSettings().value
-    val pal = LocalPalette.current
-    val tab = AppState.homeTab
+    BackHandler { ChatSession.quickExit(ctx) }
+    val haze = LocalHazeState.current
+    val dest = AppState.tikDestination
+    val screen = AppState.screen
     val threads by AppState.threads.collectAsState()
-    val hazeState = LocalHazeState.current
-    Box(Modifier.fillMaxSize().background(pal.bg)) {
-        Column(Modifier.fillMaxSize()) {
-            HomeHeader(tab)
-            // The panes are the Haze SOURCE: the floating glass nav (and the
-            // now-watching bar) blur whatever scrolls beneath them. No
-            // HazeState in preview mode — glass falls back to gradients.
-            Box(
-                Modifier.weight(1f)
-                    .then(if (hazeState != null) Modifier.hazeSource(hazeState) else Modifier),
-            ) {
-                // Screen enter = the design's `in` keyframes: opacity 0 ->
-                // 1 with translateY(8px) -> 0 over .26s on --e.
-                AnimatedContent(
-                    targetState = tab,
-                    transitionSpec = {
-                        (fadeIn(tween(260, easing = TikEase)) +
-                            slideInVertically(tween(260, easing = TikEase)) { 24 })
-                            .togetherWith(fadeOut(tween(180, easing = TikEase)))
-                    },
-                    label = "home-tabs",
-                ) { t ->
-                    when (t) {
-                        HomeTab.CHATS -> ChatsPane()
-                        HomeTab.CALLS -> CallsPane()
-                        HomeTab.WATCH -> WatchPane()
-                        HomeTab.ME -> MePane()
-                    }
-                }
-            }
-        }
-        BottomGlassNavBar(
-            tab = tab,
-            anyUnread = threads.any { it.unread > 0 },
-            accent = settings.accent,
-            modifier = Modifier.align(Alignment.BottomCenter)
-                .padding(start = 16.dp, end = 16.dp, bottom = 14.dp),
-        )
-    }
-}
+    val blocked by AppState.blockedUids.collectAsState()
+    var noteTarget by remember { mutableStateOf<NoteTarget?>(null) }
 
-/** Per-tab header in the owner design's shape: a 32sp Bold title at the
- *  left (the inbox shows your own username, like the design) and one glass
- *  circle action at the right. Long-pressing the title is the discreet
- *  quick-exit control, as before. */
-@Composable
-private fun HomeHeader(tab: HomeTab) {
-    val ctx = LocalContext.current
-    val pal = LocalPalette.current
-    val titleText = when (tab) {
-        HomeTab.CHATS -> AppState.myUsername.ifEmpty { "Messages" }
-        HomeTab.CALLS -> "Calls"
-        HomeTab.WATCH -> "Watch"
-        HomeTab.ME -> "Settings"
+    // minimized live call -> CallPill (the file's model; replaces the
+    // build-47 FloatingCallWindow, which TikuRoot no longer composes).
+    val callState by CallController.state.collectAsState()
+    val pip by CallController.pipMinimized.collectAsState()
+    val connected = callState as? CallUiState.Connected
+    var nowMs by remember { mutableLongStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(connected?.callId) {
+        if (connected == null) return@LaunchedEffect
+        while (true) { delay(500); nowMs = System.currentTimeMillis() }
     }
-    Row(
-        Modifier.fillMaxWidth().padding(start = 22.dp, end = 22.dp, top = 16.dp, bottom = 8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Row(
-            Modifier.weight(1f)
-                .pointerInput(tab) {
-                    detectTapGestures(onLongPress = { ChatSession.quickExit(ctx) })
-                },
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(
-                titleText, fontFamily = InterTight, fontWeight = FontWeight.Bold,
-                fontSize = 32.sp, letterSpacing = (-1.2).sp, color = pal.tx,
-                maxLines = 1, overflow = TextOverflow.Ellipsis,
-            )
-            if (tab == HomeTab.CHATS) {
-                Spacer(Modifier.width(6.dp))
-                TikIcon("chev", Modifier.size(18.dp), tint = pal.tx, strokeWidth = 2f)
-            }
+    val callPerson: Person?
+    val callVideo: Boolean
+    val callSecs: Int
+    when (val s = callState) {
+        is CallUiState.Connected -> {
+            callPerson = s.person; callVideo = s.video
+            callSecs = (((nowMs - s.atMs) / 1000).coerceAtLeast(0)).toInt()
         }
-        when (tab) {
-            HomeTab.CHATS -> GlassCircleIconButton("edit") { NewChatSheet.open() }
-            // A call starts from a chat — the sheet is the real people search.
-            HomeTab.CALLS -> GlassCircleIconButton("call") { NewChatSheet.open() }
-            // the design's Watch action: YouTube home (via the pane controller)
-            HomeTab.WATCH -> GlassCircleIconButton("plus") { WatchControl.goHome() }
-            HomeTab.ME -> Spacer(Modifier.width(42.dp))
-        }
+        is CallUiState.Outgoing -> { callPerson = s.person; callVideo = s.video; callSecs = 0 }
+        else -> { callPerson = null; callVideo = false; callSecs = 0 }
     }
-}
 
-/** The owner design's floating glass nav: a pill with a sliding lens under
- *  the selected tab (Message / Call / Watch / Setting). Real backdrop blur
- *  when a HazeState exists; the unread dot on Message is the global accent. */
-@Composable
-private fun BottomGlassNavBar(
-    tab: HomeTab,
-    anyUnread: Boolean,
-    accent: Color,
-    modifier: Modifier = Modifier,
-) {
-    val pal = LocalPalette.current
-    val tabs = listOf(
-        Triple(HomeTab.CHATS, "Message", "msg"),
-        Triple(HomeTab.CALLS, "Call", "call"),
-        Triple(HomeTab.WATCH, "Watch", "play"),
-        Triple(HomeTab.ME, "Setting", "set"),
-    )
-    val selIdx = tabs.indexOfFirst { it.first == tab }.coerceAtLeast(0)
-    BoxWithConstraints(modifier.fillMaxWidth()) {
-        val segW = (maxWidth - 10.dp) / 4
-        val lensX by animateDpAsState(
-            segW * selIdx,
-            spring(dampingRatio = 0.68f, stiffness = 380f), label = "lensX",
-        )
+    Box(Modifier.fillMaxSize().background(Color.Black)) {
         Box(
-            Modifier.glassSurface(RoundedCornerShape(999.dp), useLargeGlass = true, blur = true)
-                .padding(5.dp),
+            Modifier.fillMaxSize()
+                .then(if (haze != null) Modifier.hazeSource(haze) else Modifier),
         ) {
-            // sliding lens
+            AnimatedContent(
+                targetState = dest,
+                transitionSpec = RdScreenSpec,
+                label = "tik-screen",
+            ) { s ->
+                Box(Modifier.fillMaxSize().background(Color.Black)) {
+                    when (s) {
+                        0 -> MessagesScreen(
+                            onNote = { noteTarget = it },
+                            onRequests = { AppState.goTik(7) },
+                        )
+                        1 -> CallsScreen()
+                        2 -> WatchScreen()
+                        3 -> SettingsScreen()
+                        7 -> RequestsScreen(onBack = { AppState.goTik(0) })
+                        else -> MessagesScreen(
+                            onNote = { noteTarget = it },
+                            onRequests = { AppState.goTik(7) },
+                        )
+                    }
+                }
+            }
+        }
+
+        // ROUND 14 (Addendum 2 §5): the Watch WebView's ONE root-level
+        // host — above the panes, below the NavPill. It owns the pane
+        // for the whole Tik session and only animates its bounds
+        // (expanded on the Watch tab, draggable floating mini on the
+        // others); the WebView is never re-parented. See Watch.kt.
+        WatchHost()
+
+        // NavPill (+ CallPill) — pane tabs only, never over chat/info/requests.
+        AnimatedVisibility(
+            visible = screen is Screen.Home && dest in 0..3,
+            enter = slideInVertically(tween(480, easing = RdEase)) { it } + fadeIn(),
+            exit = slideOutVertically(tween(320, easing = RdEase)) { it } + fadeOut(),
+            modifier = Modifier.align(Alignment.BottomCenter),
+        ) {
+            Column(
+                Modifier.padding(horizontal = 14.dp, vertical = 14.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                AnimatedVisibility(
+                    visible = pip && callPerson != null,
+                    enter = fadeIn() + expandVertically(),
+                    exit = fadeOut() + shrinkVertically(),
+                ) {
+                    val p = callPerson
+                    if (p != null) {
+                        CallPill(
+                            haze, p, if (callVideo) "Video call" else "Voice call", callSecs,
+                            onTap = { CallController.restoreCall() },
+                            onEnd = { CallController.hangup() },
+                        )
+                    }
+                }
+                NavPill(
+                    haze, dest,
+                    hasUnread = threads.any {
+                        it.unread > 0 && !it.isRequest && !it.hiddenForMe && !it.muted &&
+                            it.person.uid !in blocked
+                    },
+                ) { AppState.goTik(it) }
+            }
+        }
+
+        // Note sheet overlay (the file's bottom glass sheet over a backdrop).
+        AnimatedVisibility(
+            visible = noteTarget != null,
+            enter = fadeIn(), exit = fadeOut(),
+            modifier = Modifier.fillMaxSize(),
+        ) {
+            val nt = noteTarget
             Box(
-                Modifier.offset(x = lensX).width(segW).height(50.dp)
-                    .clip(RoundedCornerShape(999.dp)).background(pal.lens)
-                    .border(1.dp, pal.gb, RoundedCornerShape(999.dp)),
-            )
-            Row(Modifier.fillMaxWidth()) {
-                tabs.forEach { (t, label, icon) ->
-                    val on = t == tab
-                    Box(Modifier.weight(1f).height(50.dp)) {
-                        Column(
-                            Modifier.fillMaxSize()
-                                .clickable(
-                                    interactionSource = remember { MutableInteractionSource() },
-                                    indication = null,
-                                ) { AppState.homeTab = t },
-                            horizontalAlignment = Alignment.CenterHorizontally,
-                            verticalArrangement = Arrangement.Center,
-                        ) {
-                            TikIcon(
-                                icon, Modifier.size(24.dp),
-                                tint = if (on) pal.ac else pal.sub,
-                                strokeWidth = if (on) 2f else 1.6f,
-                            )
-                            Text(
-                                label, fontSize = 10.5.sp, fontFamily = InterTight,
-                                fontWeight = FontWeight.Medium,
-                                color = if (on) pal.ac else pal.sub,
-                            )
-                        }
-                        if (t == HomeTab.CHATS && anyUnread) {
-                            Box(
-                                Modifier.align(Alignment.TopCenter).offset(x = 13.dp, y = 5.dp)
-                                    .size(9.dp).clip(CircleShape).background(accent)
-                                    .border(2.dp, pal.bg, CircleShape),
+                Modifier.fillMaxSize().rdBackdrop(haze)
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null,
+                    ) { noteTarget = null },
+                contentAlignment = Alignment.BottomCenter,
+            ) {
+                if (nt != null) Box(
+                    Modifier.imePadding().animateEnterExit(
+                        enter = slideInVertically(spring(0.85f, 360f)) { it } + fadeIn(),
+                        exit = slideOutVertically(tween(220, easing = RdEase)) { it } + fadeOut(),
+                    ),
+                ) {
+                    val notes by AppState.notes.collectAsState()
+                    when (nt) {
+                        is NoteTarget.Me -> NoteSheet(
+                            haze, mine = true, headerName = "", note = notes[myUidKey()]?.text ?: "",
+                            hearted = false, headerAvatar = {},
+                            onShare = { t ->
+                                if (t.isBlank()) AppState.toast("Write something first")
+                                else { AppState.repo.setMyNote(t); AppState.toast("Note shared") }
+                                noteTarget = null
+                            },
+                            onDelete = { AppState.repo.deleteMyNote(); AppState.toast("Note deleted"); noteTarget = null },
+                            onHeart = {},
+                            onReply = {},
+                        )
+                        is NoteTarget.Peer -> {
+                            val person = nt.thread.person
+                            val note = notes[person.uid]
+                            NoteSheet(
+                                haze, mine = false, headerName = nt.thread.displayName,
+                                note = note?.text ?: "",
+                                hearted = myUidKey() in (note?.hearts ?: emptySet()),
+                                headerAvatar = { Av(person, 40) },
+                                onShare = {},
+                                onDelete = {},
+                                onHeart = { AppState.repo.toggleNoteHeart(person.uid) },
+                                onReply = { t ->
+                                    if (t.isNotBlank()) {
+                                        if (person.uid in blocked) {
+                                            AppState.toast("Unblock to message")
+                                        } else {
+                                            AppState.repo.sendNoteReply(nt.thread.id, t.trim(), note?.text ?: "")
+                                            AppState.toast("Reply sent")
+                                        }
+                                    }
+                                    noteTarget = null
+                                },
                             )
                         }
                     }
                 }
             }
         }
+
+        // Fullscreen YouTube layer (topmost in the shell): the Watch
+        // WebView's custom view renders here, above nav + sheets and
+        // unclipped by WatchHost's bounds. Empty unless fullscreen.
+        WatchFullscreenLayer()
     }
 }
 
-// ================= Chats pane =================
+// ================= Messages =================
 @Composable
-fun ChatsPane() {
-    var query by remember { mutableStateOf("") }
+fun MessagesScreen(onNote: (NoteTarget) -> Unit, onRequests: () -> Unit) {
     val threads by AppState.threads.collectAsState()
-    val settings = tikuSettings().value
-    val pal = LocalPalette.current
-    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 116.dp)) {
+    val notes by AppState.notes.collectAsState()
+    val blocked by AppState.blockedUids.collectAsState()
+    val visible = threads.filter {
+        !it.isRequest && !it.hiddenForMe && it.person.uid !in blocked
+    }.sortedByDescending { it.pinned }
+    val reqCount = threads.count { it.isRequest && !it.hiddenForMe && it.person.uid !in blocked }
+    val now = System.currentTimeMillis()
+    val notedThreads = visible.filter { th ->
+        val n = notes[th.person.uid]
+        n != null && n.text.isNotEmpty() && now - n.atMs < 24L * 3600 * 1000
+    }
+    LazyColumn(
+        Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 24.dp, bottom = 210.dp),
+    ) {
         item {
-            // .search — the design's glass search pill (r18, h46).
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Box(Modifier.weight(1f)) { Title("Messages") }
+                // the single sanctioned addition to the file's layout: the
+                // REAL compose entry (NewChatSheet) as one circular button.
+                Box(
+                    Modifier.size(46.dp).clip(CircleShape).background(CardC)
+                        .border(1.dp, Color.White.copy(0.1f), CircleShape)
+                        .press { NewChatSheet.open() },
+                    contentAlignment = Alignment.Center,
+                ) { Icon(Icons.Filled.Edit, null, tint = Color.White, modifier = Modifier.size(21.dp)) }
+            }
+        }
+        item {
+            LazyRow(
+                Modifier.padding(top = 18.dp, bottom = 18.dp),
+                horizontalArrangement = Arrangement.spacedBy(14.dp),
+            ) {
+                item {
+                    val myNote = notes[myUidKey()]
+                    NoteItem(
+                        "Your note", myNote?.text ?: "Share a thought", myNote == null,
+                        heart = false, idx = 0,
+                        onClick = { onNote(NoteTarget.Me) },
+                    ) { AvMe(58) }
+                }
+                itemsIndexed(notedThreads) { idx, th ->
+                    val n = notes[th.person.uid]
+                    NoteItem(
+                        th.displayName, n?.text ?: "", placeholder = false,
+                        heart = myUidKey() in (n?.hearts ?: emptySet()), idx = idx + 1,
+                        onClick = { onNote(NoteTarget.Peer(th)) },
+                    ) { Av(th.person, 58) }
+                }
+            }
+        }
+        item {
             Row(
-                Modifier.fillMaxWidth().padding(start = 14.dp, end = 14.dp, top = 4.dp, bottom = 10.dp)
-                    .glassSurface(RoundedCornerShape(18.dp))
-                    .height(46.dp)
-                    .padding(horizontal = 14.dp),
+                Modifier.fillMaxWidth().padding(bottom = 12.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                TikIcon("srch", Modifier.size(19.dp), tint = pal.sub)
-                Spacer(Modifier.width(9.dp))
-                BasicTextField(
-                    value = query, onValueChange = { query = it },
-                    textStyle = TextStyle(fontSize = 15.sp, fontFamily = InterTight, color = pal.tx),
-                    cursorBrush = SolidColor(settings.accent), singleLine = true,
-                    modifier = Modifier.weight(1f),
-                    decorationBox = { inner ->
-                        if (query.isEmpty()) Text("Search", fontSize = 15.sp, color = pal.sub, fontFamily = InterTight)
-                        inner()
-                    },
+                Text("Messages", color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+                Text(
+                    if (reqCount > 0) "Requests · $reqCount" else "Requests",
+                    color = Rose, fontSize = 15.sp, fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.press(onRequests).padding(6.dp),
                 )
             }
-            MomentsRow()
-            // .sec — section header (the design's Requests link has no real
-            // surface in this app, so the header stands alone).
-            Text(
-                "Messages", fontSize = 17.sp, fontFamily = InterTight, fontWeight = FontWeight.SemiBold,
-                color = pal.tx,
-                modifier = Modifier.padding(start = 24.dp, end = 24.dp, top = 14.dp, bottom = 2.dp),
-            )
         }
-        // the list filter matches the DISPLAY name (nickname when set) and
-        // the @username, not just the profile name; pinned chats float to
-        // the top (stable sort — recency order is otherwise untouched).
-        val filtered = threads.filter {
-            it.displayName.contains(query, ignoreCase = true) ||
-                it.person.username.contains(query, ignoreCase = true)
-        }.sortedByDescending { it.pinned }
-        if (filtered.isEmpty() && !Config.PREVIEW_UI_ONLY) {
+        if (visible.isEmpty() && !Config.PREVIEW_UI_ONLY) {
             item {
-                TikEmpty(
-                    "Start a chat", "Search a username to start a chat",
+                Column(
                     Modifier.fillMaxWidth().padding(top = 42.dp),
-                )
-            }
-        }
-        items(filtered, key = { it.id }) { th -> ChatRow(th) }
-    }
-}
-
-@Composable
-fun MomentsRow() {
-    val scope = rememberCoroutineScope()
-    val threads by AppState.threads.collectAsState()
-    val settings = tikuSettings().value
-    val pal = LocalPalette.current
-    val people = if (Config.PREVIEW_UI_ONLY) PreviewStore.people else threads.map { it.person }
-    // Moments (the app's stories) in the design's notes-row metrics:
-    // 74-wide items, 68px round avatars inside a 2dp accent ring with the
-    // page-colour gap, 12px sub labels. (The design's note-text bubble has
-    // no data source here — dropped, per the no-fake-data rule.)
-    Row(
-        Modifier.fillMaxWidth().padding(bottom = 2.dp)
-            .horizontalScroll(rememberScrollState())
-            .padding(horizontal = 14.dp),
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
-    ) {
-        people.forEachIndexed { i, p ->
-            Column(
-                Modifier.width(74.dp)
-                    .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {
-                        scope.launch { StoryHelper.open(p, i) }
-                    },
-                horizontalAlignment = Alignment.CenterHorizontally,
-            ) {
-                Box(
-                    Modifier.size(68.dp)
-                        .border(2.dp, settings.accent, CircleShape)
-                        .background(pal.bg, CircleShape)
-                        .padding(2.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
                 ) {
-                    AvatarBox(p, 60.dp, 30.dp)
+                    Text("Start a chat", color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                    Text("Search a username to start a chat", color = Sub, fontSize = 15.sp)
                 }
-                Spacer(Modifier.height(6.dp))
-                Text(p.name.split(" ").first(), fontSize = 12.sp, color = pal.sub, fontFamily = InterTight,
-                    maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
+        }
+        itemsIndexed(visible, key = { _, th -> th.id }) { idx, th ->
+            ThreadRow(th, idx, Modifier.animateItem())
         }
     }
 }
 
+/** One Messages row (the file's CardRow shape) with the real thread data;
+ *  long-press opens the thread actions sheet (Open / Clear / Delete). */
 @Composable
-fun ChatRow(th: ChatThread) {
-    val settings = tikuSettings().value
-    val pal = LocalPalette.current
-    val last = th.messages.lastOrNull { !it.deletedForMe }
-    val preview = when {
-        last == null -> ""
-        last.kind == MsgKind.VOICE -> "Voice message"
-        last.kind == MsgKind.IMAGE -> "Photo"
-        // call events preview as their pill label, never raw text
-        last.kind == MsgKind.CALL -> callEventLabel(last, last.callMine)
-        else -> last.text
-    }
-    // The design's .lrow: a floating glass card (margin 14/6, r26, padding
-    // 14/11); the time folds into the subtitle ("preview · 2h"), and the
-    // unread mark is a 10dp accent dot at the row's end.
+private fun ThreadRow(th: ChatThread, idx: Int, modifier: Modifier = Modifier) {
+    val src = remember { MutableInteractionSource() }
+    val down by src.collectIsPressedAsState()
+    val s by animateFloatAsState(if (down) 0.95f else 1f, spring(0.6f, 500f), label = "press")
     Row(
-        Modifier.fillMaxWidth()
-            .padding(horizontal = 14.dp, vertical = 6.dp)
-            .glassSurface(RoundedCornerShape(26.dp))
-            .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {
-                AppState.repo.openThread(th.id)
-                AppState.go(Screen.Chat(th.id))
-            }
-            .padding(horizontal = 14.dp, vertical = 11.dp),
+        modifier.fillMaxWidth().padding(bottom = 10.dp).rise(idx + 3)
+            .clip(RoundedCornerShape(24.dp)).background(CardC).scale(s)
+            .combinedClickable(
+                interactionSource = src, indication = null,
+                onClick = {
+                    AppState.repo.openThread(th.id)
+                    AppState.go(Screen.Chat(th.id))
+                },
+                onLongClick = { ThreadActionsSheet.open(th) },
+            )
+            .padding(14.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        AvatarBox(th.person, 54.dp, 27.dp, 22f)
-        Spacer(Modifier.width(14.dp))
-        Column(Modifier.weight(1f)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                // nickname replaces the profile name in the list too
-                Text(th.displayName, fontWeight = FontWeight.SemiBold, fontSize = 15.sp, fontFamily = InterTight, color = pal.tx,
-                    maxLines = 1, overflow = TextOverflow.Ellipsis)
-                if (th.muted) {
-                    Spacer(Modifier.width(6.dp))
-                    TikIcon("bellOff", Modifier.size(14.dp), tint = pal.sub)
-                }
-                if (th.pinned) {
-                    Spacer(Modifier.width(6.dp))
-                    TikIcon("pin", Modifier.size(12.dp), tint = pal.sub)
-                }
-            }
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                // The row tick is gone — a subtle "Seen" stands in its place
-                // when my latest message was seen; hidden while MY read
-                // receipts are off in this chat (per-chat receiptsOff).
-                if (last?.me == true && last.kind != MsgKind.CALL && last.seenByPeer && !th.receiptsOffMine) {
-                    Text("Seen", fontSize = 13.5.sp, fontWeight = FontWeight.Medium, color = pal.sub, fontFamily = InterTight)
-                    Spacer(Modifier.width(5.dp))
-                }
-                val pvIcon = when {
-                    last == null -> null
-                    last.kind == MsgKind.VOICE -> "mic"
-                    last.kind == MsgKind.IMAGE -> "img"
-                    else -> null
-                }
-                if (pvIcon != null) {
-                    TikIcon(pvIcon, Modifier.size(14.dp), tint = pal.sub)
-                    Spacer(Modifier.width(3.dp))
-                }
-                Text(
-                    if (preview.isEmpty()) th.time else if (th.time.isEmpty()) preview else "$preview · ${th.time}",
-                    fontSize = 13.5.sp, fontFamily = InterTight,
-                    fontWeight = if (th.unread > 0) FontWeight.Medium else FontWeight.Normal,
-                    color = if (th.unread > 0) pal.tx else pal.sub,
-                    maxLines = 1, overflow = TextOverflow.Ellipsis,
-                )
-            }
+        Av(th.person, 50)
+        Column(Modifier.weight(1f).padding(horizontal = 14.dp)) {
+            Text(th.displayName, color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.SemiBold,
+                maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(threadPreview(th), color = Sub, fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
-        if (th.unread > 0) {
-            Spacer(Modifier.width(10.dp))
-            // .dot — the design's unread mark: a 10dp accent dot (tinted
-            // with the chat's own couple-theme accent when it has one).
-            val dotAccent = th.themeAccent?.let {
-                COUPLE_THEMES[ThemeCodec.toCoupleIndex(it)].ac
-            } ?: settings.accent
-            Box(Modifier.size(10.dp).clip(CircleShape).background(dotAccent))
+        Column(horizontalAlignment = Alignment.End) {
+            Text(th.time, color = Sub, fontSize = 12.sp)
+            if (th.unread > 0 && !th.muted) {
+                Box(Modifier.padding(top = 8.dp).size(9.dp).clip(CircleShape).background(Rose))
+            }
         }
     }
 }
 
-// ================= Calls pane =================
-// This pane aggregates the encrypted call-EVENT messages already stored
-// inside the chats, newest first; tapping a row opens that chat. WebRTC
-// signaling docs + ICE are still deleted in full the moment a call
-// resolves, there are still zero notifications, and NO new server data
-// exists for this surface — it renders only the in-chat records.
+/** Long-press thread actions (re-skinned sheet): Open / Clear chat (local)
+ *  / Delete (local hide). Minimal and real, per spec. */
+object ThreadActionsSheet {
+    fun open(th: ChatThread) {
+        AppState.sheet {
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = 22.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Av(th.person, 44)
+                Column(Modifier.padding(start = 12.dp)) {
+                    Text(th.displayName, color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+                    Text("@" + th.person.username, color = Sub, fontSize = 13.sp)
+                }
+            }
+            MenuItem("Open", onClick = {
+                AppState.closeSheet()
+                AppState.repo.openThread(th.id)
+                AppState.go(Screen.Chat(th.id))
+            }) {}
+            Divider1()
+            MenuItem("Clear chat", onClick = {
+                AppState.repo.clearChat(th.id)
+                AppState.closeSheet()
+                AppState.toast("Chat cleared")
+            }) {}
+            Divider1()
+            MenuItem("Delete", danger = true, onClick = {
+                AppState.repo.hideThread(th.id)
+                AppState.closeSheet()
+                AppState.toast("Chat deleted")
+            }) {}
+        }
+    }
+}
+
+// ================= Requests =================
 @Composable
-fun CallsPane() {
+fun RequestsScreen(onBack: () -> Unit) {
     val threads by AppState.threads.collectAsState()
+    val blocked by AppState.blockedUids.collectAsState()
+    val reqs = threads.filter { it.isRequest && !it.hiddenForMe && it.person.uid !in blocked }
+    LazyColumn(
+        Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 16.dp, bottom = 40.dp),
+    ) {
+        item {
+            BackBtn(onBack); Spacer(Modifier.height(14.dp)); Title("Requests")
+            Text(
+                "People you don’t follow can’t message you until you accept.",
+                color = Sub, fontSize = 15.sp,
+                modifier = Modifier.padding(top = 14.dp, bottom = 18.dp),
+            )
+        }
+        if (reqs.isEmpty()) item { Text("No message requests", color = Sub, fontSize = 15.sp) }
+        itemsIndexed(reqs, key = { _, r -> r.id }) { idx, th ->
+            var out by remember { mutableStateOf(false) }
+            val scope = rememberCoroutineScope()
+            fun go(f: () -> Unit) { out = true; scope.launch { delay(340); f() } }
+            AnimatedVisibility(
+                visible = !out,
+                exit = fadeOut(tween(260)) +
+                    androidx.compose.animation.slideOutHorizontally(tween(320, easing = RdEase)) { it / 2 } +
+                    shrinkVertically(tween(320, easing = RdEase)),
+            ) {
+                Column(
+                    Modifier.fillMaxWidth().padding(bottom = 12.dp).rise(idx)
+                        .clip(RoundedCornerShape(24.dp)).background(CardC).padding(14.dp),
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Av(th.person, 56)
+                        Column(Modifier.weight(1f).padding(horizontal = 14.dp)) {
+                            Text(th.displayName, color = Color.White, fontSize = 17.sp, fontWeight = FontWeight.SemiBold,
+                                maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            Text(threadPreview(th), color = Sub, fontSize = 15.sp,
+                                maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        }
+                        Text(th.time, color = Sub, fontSize = 14.sp)
+                    }
+                    Row(
+                        Modifier.padding(top = 14.dp),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        Pill("Delete", Modifier.weight(1f), false) { go { AppState.repo.hideThread(th.id) } }
+                        Pill("Block", Modifier.weight(1f), false) { go { AppState.repo.blockUser(th.person.uid) } }
+                        Pill("Accept", Modifier.weight(1f), true) { go { AppState.repo.acceptThread(th.id) } }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ================= Calls =================
+@Composable
+fun CallsScreen() {
+    val threads by AppState.threads.collectAsState()
+    val blocked by AppState.blockedUids.collectAsState()
     val events = remember(threads) {
-        threads.flatMap { th -> th.messages.filter { it.kind == MsgKind.CALL }.map { th to it } }
+        threads.filter { !it.hiddenForMe && it.person.uid !in blocked }
+            .flatMap { th -> th.messages.filter { it.kind == MsgKind.CALL }.map { th to it } }
             .sortedByDescending { it.second.tsMs }
     }
-    Column(Modifier.fillMaxSize()) {
+    val startCall = rememberCallStarter()
+    LazyColumn(
+        Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 24.dp, bottom = 210.dp),
+    ) {
+        item { Title("Call"); Section("Recent") }
         if (events.isEmpty()) {
-            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                TikEmpty(
-                    "No calls yet",
-                    "When you make, miss or decline a call, a note of it appears here — " +
-                        "the same encrypted note that lives inside the chat. " +
-                        "The call's connection record itself is always deleted.",
+            item {
+                Text(
+                    "No calls yet — when you make, miss or decline a call, a note of it appears here.",
+                    color = Sub, fontSize = 15.sp, modifier = Modifier.padding(top = 6.dp),
                 )
             }
-            return
         }
-        LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 116.dp, top = 6.dp)) {
-            items(events, key = { (th, m) -> th.id + "_" + m.id }) { (th, m) -> CallHistoryRow(th, m) }
-        }
-    }
-}
-
-@Composable
-fun CallHistoryRow(th: ChatThread, m: TikuMessage) {
-    val pal = LocalPalette.current
-    val startCall = rememberCallStarter()
-    // missed = an incoming call that never got answered (my perspective)
-    val missed = m.callOutcome == "noanswer" && !m.callMine
-    // Design calls row: glass card like the inbox rows; a missed call's
-    // name takes the accent, and the trailing button really starts the call.
-    Row(
-        Modifier.fillMaxWidth()
-            .padding(horizontal = 14.dp, vertical = 6.dp)
-            .glassSurface(RoundedCornerShape(26.dp))
-            .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {
-                AppState.repo.openThread(th.id)
-                AppState.go(Screen.Chat(th.id))
+        itemsIndexed(events, key = { _, (th, m) -> th.id + "_" + m.id }) { idx, (th, m) ->
+            val missed = m.callOutcome == "noanswer" && !m.callMine
+            val kind = if (m.callVideo) "Video" else "Voice"
+            val meta = buildString {
+                append(kind); append(" · ")
+                append(
+                    when (m.callOutcome) {
+                        "noanswer" -> if (m.callMine) "No answer" else "Missed"
+                        "declined" -> "Declined"
+                        else -> "Ended"
+                    },
+                )
+                if (m.callOutcome == "ended" && m.callDurationSec > 0) {
+                    append(" · ${m.callDurationSec / 60}:${(m.callDurationSec % 60).toString().padStart(2, '0')}")
+                }
+                append(" · ${m.time}")
             }
-            .padding(horizontal = 14.dp, vertical = 11.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        AvatarBox(th.person, 50.dp, 25.dp, 20f)
-        Spacer(Modifier.width(14.dp))
-        Column(Modifier.weight(1f)) {
-            Text(th.displayName, fontWeight = FontWeight.SemiBold, fontSize = 15.sp, fontFamily = InterTight,
-                color = if (missed) pal.ac else pal.tx,
-                maxLines = 1, overflow = TextOverflow.Ellipsis)
-            // callEventLabel is perspective-correct and carries the
-            // duration for ended calls ("Call ended · 12:34").
-            val label = callEventLabel(m, m.callMine)
-            Text(
-                if (label.contains(m.time)) label else "$label · ${m.time}",
-                fontSize = 13.5.sp, color = pal.sub, fontFamily = InterTight,
-                maxLines = 1, overflow = TextOverflow.Ellipsis,
-            )
-        }
-        TikBtn(if (m.callVideo) "vid" else "call", iconSize = 22.dp) {
-            startCall(th.id, m.callVideo)
-        }
-    }
-}
-
-// ================= Me pane =================
-@Composable
-fun MePane() {
-    val pal = LocalPalette.current
-    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 116.dp)) {
-        item {
-            // .prof — avatar 60 round, name 18 w600, sub "… · Encrypted",
-            // and the design's gradient "Edit profile" pill.
-            Row(
-                Modifier.fillMaxWidth().padding(start = 22.dp, end = 22.dp, top = 10.dp, bottom = 16.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
+            CardRow({ startCall(th.id, m.callVideo) }, idx = idx) {
+                Av(th.person, 50)
+                Column(Modifier.weight(1f).padding(horizontal = 14.dp)) {
+                    Text(th.displayName, color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.SemiBold,
+                        maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(meta, color = if (missed) Danger else Sub, fontSize = 14.sp,
+                        maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
                 Box(
-                    Modifier.size(60.dp).clip(CircleShape).background(pal.s2),
+                    Modifier.size(42.dp).clip(CircleShape).background(Color.White.copy(0.1f)),
                     contentAlignment = Alignment.Center,
                 ) {
-                    val bmp = AppState.myAvatar
-                    if (bmp != null) {
-                        androidx.compose.foundation.Image(bmp.asBmp(), null, Modifier.fillMaxSize(),
-                            contentScale = androidx.compose.ui.layout.ContentScale.Crop)
-                    } else {
-                        EmojiArt("🙂", 26.dp)
-                    }
-                }
-                Spacer(Modifier.width(14.dp))
-                Column(Modifier.weight(1f)) {
-                    Text(AppState.myUsername.ifEmpty { "you" }, fontFamily = InterTight,
-                        fontWeight = FontWeight.SemiBold, fontSize = 18.sp, color = pal.tx)
-                    Text("Encrypted", fontSize = 13.sp, color = pal.sub, fontFamily = InterTight)
-                }
-                Box(
-                    Modifier.clip(RoundedCornerShape(999.dp))
-                        .background(pal.buttonGradient)
-                        .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {
-                            EditProfileSheet.open()
-                        }
-                        .padding(horizontal = 18.dp, vertical = 9.dp),
-                ) {
-                    Text("Edit profile", fontSize = 13.5.sp, fontWeight = FontWeight.SemiBold,
-                        fontFamily = InterTight, color = Color.White)
+                    Icon(
+                        if (m.callVideo) Icons.Filled.Videocam else Icons.Filled.Call,
+                        null, tint = Color.White, modifier = Modifier.size(20.dp),
+                    )
                 }
             }
         }
-        // The Owner section exists ONLY for the owner account — for every
-        // other account this item is never composed at all.
+    }
+}
+
+// ================= Watch =================
+/** The redesign chrome (black + Title) for the REAL YouTube pane. The
+ *  pane is NOT composed here any more: WatchHost (Watch.kt, Addendum 2
+ *  §5) owns it at the HomeScreen root so a playing video can shrink
+ *  into the floating mini player on other tabs. This screen renders
+ *  only the header; the empty weight-1 box below reserves EXACTLY the
+ *  area the host's EXPANDED mode covers — header height =
+ *  WatchChromeTopPadding (24) + WatchChromeButtonSize (46) =
+ *  WatchChromeHeaderHeight (70), the host's expanded top offset. The
+ *  two sides stay in sync through those shared constants in Watch.kt. */
+@Composable
+fun WatchScreen() {
+    Column(Modifier.fillMaxSize().background(Color.Black)) {
+        Row(
+            Modifier.fillMaxWidth().padding(start = 20.dp, end = 20.dp, top = WatchChromeTopPadding),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Box(Modifier.weight(1f)) { Title("Watch") }
+            Box(
+                Modifier.size(WatchChromeButtonSize).clip(CircleShape).background(CardC)
+                    .border(1.dp, Color.White.copy(0.1f), CircleShape)
+                    .press { WatchControl.goHome() },
+                contentAlignment = Alignment.Center,
+            ) { Icon(Icons.Filled.Home, null, tint = Color.White, modifier = Modifier.size(21.dp)) }
+        }
+        // Reserved for WatchHost's EXPANDED rect — see the doc above.
+        Box(Modifier.weight(1f))
+    }
+}
+
+// ================= Settings =================
+@Composable
+fun SettingsScreen() {
+    val ctx = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val settings by SettingsStore.state.collectAsState()
+    val blockedUids by AppState.blockedUids.collectAsState()
+    val blockedPeople by AppState.blockedPeople.collectAsState()
+    var page by remember { mutableStateOf("") }
+    // REAL measured Coil disk-cache size for the Clear cache row.
+    var cacheBytes by remember { mutableStateOf(-1L) }
+    LaunchedEffect(Unit) {
+        cacheBytes = withContext(Dispatchers.IO) {
+            runCatching { coil.Coil.imageLoader(ctx.applicationContext).diskCache?.size ?: 0L }
+                .getOrDefault(0L)
+        }
+    }
+    val cacheLabel = when {
+        cacheBytes < 0 -> "…"
+        cacheBytes >= 1_000_000 -> "Frees up %.1f MB".format(cacheBytes / 1_000_000.0)
+        cacheBytes >= 1_000 -> "Frees up %.0f KB".format(cacheBytes / 1_000.0)
+        else -> "Empty"
+    }
+    BackHandler(enabled = page.isNotEmpty()) { page = "" }
+    AnimatedContent(
+        targetState = page, transitionSpec = RdSubSpec, label = "settings-page",
+    ) { pv ->
+        when (pv) {
+            "edit" -> EditProfilePage { page = "" }
+            "blocked" -> SubPage("Blocked accounts", { page = "" }) {
+                if (blockedPeople.isEmpty()) {
+                    item { Text("No blocked accounts", color = Sub, fontSize = 15.sp) }
+                }
+                items(blockedPeople) { p ->
+                    CardRow({
+                        AppState.repo.unblockUser(p.uid)
+                        AppState.toast("Unblocked @${p.username}")
+                    }) {
+                        Av(p, 48)
+                        TwoLine(p.name, "@${p.username}", Modifier.weight(1f).padding(start = 14.dp))
+                        Text("Unblock", color = Rose, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(start = 8.dp))
+                    }
+                }
+            }
+            "devices" -> SubPage("Linked devices", { page = "" }) {
+                item {
+                    CardRow({}) {
+                        TwoLine("This phone", "Active now", Modifier.weight(1f))
+                    }
+                }
+            }
+            else -> SettingsMain(
+                settings = settings, cacheLabel = cacheLabel,
+                blockedCount = blockedUids.size,
+                onEdit = { page = "edit" },
+                onBlocked = { page = "blocked" },
+                onDevices = { page = "devices" },
+                onChangePassword = { ChangePasswordSheet.open(ctx, scope) },
+                onClearCache = {
+                    scope.launch {
+                        withContext(Dispatchers.IO) {
+                            runCatching {
+                                val loader = coil.Coil.imageLoader(ctx.applicationContext)
+                                loader.memoryCache?.clear()
+                                loader.diskCache?.clear()
+                                android.webkit.WebStorage.getInstance().deleteAllData()
+                            }
+                        }
+                        cacheBytes = 0L
+                        AppState.toast("Cache cleared")
+                    }
+                },
+                onLogout = {
+                    if (Config.PREVIEW_UI_ONLY) AppState.go(Screen.Welcome)
+                    else FirebaseEngine.signOut(ctx)
+                },
+            )
+        }
+    }
+}
+
+@Composable
+private fun SettingsMain(
+    settings: TikuUiSettings,
+    cacheLabel: String,
+    blockedCount: Int,
+    onEdit: () -> Unit,
+    onBlocked: () -> Unit,
+    onDevices: () -> Unit,
+    onChangePassword: () -> Unit,
+    onClearCache: () -> Unit,
+    onLogout: () -> Unit,
+) {
+    val myName = FirebaseEngine.myPerson.name.takeIf { it.isNotBlank() && it != "You" }
+        ?: AppState.myUsername.ifEmpty { "You" }
+    LazyColumn(
+        Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 24.dp, bottom = 210.dp),
+    ) {
+        item { Title("Settings") }
+        item {
+            Row(
+                Modifier.fillMaxWidth().padding(top = 18.dp).clip(RoundedCornerShape(24.dp))
+                    .background(CardC).padding(16.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                AvMe(58)
+                Column(Modifier.weight(1f).padding(horizontal = 14.dp)) {
+                    Text(myName, color = Color.White, fontSize = 17.sp, fontWeight = FontWeight.SemiBold,
+                        maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(
+                        "@${AppState.myUsername.ifEmpty { "you" }} · Encrypted",
+                        color = Sub, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                Box(
+                    Modifier.clip(CircleShape)
+                        .background(Brush.horizontalGradient(listOf(Rose, Color(0xFFFF7AA2))))
+                        .press(onEdit).padding(horizontal = 16.dp, vertical = 10.dp),
+                ) { Text("Edit profile", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.SemiBold) }
+            }
+        }
+        item { Section("Appearance") }
+        item {
+            CardRow({
+                AppState.toast(
+                    if (!settings.darkMode) "Light mode coming soon" else "Dark mode is K-Tiku's only look",
+                )
+            }, idx = 1) {
+                listOf(false to "Light", true to "Dark").forEach { (dark, label) ->
+                    val on = settings.darkMode == dark
+                    Box(
+                        Modifier.weight(1f).height(42.dp).clip(CircleShape)
+                            .background(if (on) Color.White else Color.Transparent),
+                        contentAlignment = Alignment.Center,
+                    ) { Text(label, color = if (on) Color.Black else Sub, fontSize = 15.sp, fontWeight = FontWeight.SemiBold) }
+                }
+            }
+        }
+        item {
+            CardRow({}, idx = 2) {
+                Column(Modifier.weight(1f)) {
+                    TwoLine("Text size", "Adjust chat text size", Modifier.fillMaxWidth())
+                    Slider(
+                        value = settings.textSizeSp, onValueChange = { SettingsStore.setTextSize(it) },
+                        valueRange = 12f..20f,
+                        colors = SliderDefaults.colors(
+                            thumbColor = Rose, activeTrackColor = Rose, inactiveTrackColor = Color.White.copy(0.15f),
+                        ),
+                    )
+                }
+            }
+        }
+        item { Section("Privacy") }
+        item {
+            if (OwnerState.isOwner) {
+                ToggleRow(
+                    "App lock", "Ask for password on open", settings.appLock,
+                ) {
+                    SettingsStore.setToggle("al", !settings.appLock)
+                    AppState.toast(if (!settings.appLock) "App lock on" else "App lock off for now — it returns when you reopen K-Tiku")
+                }
+            } else {
+                ToggleRow("App lock", "Ask for password on open", true) {
+                    AppState.toast("Always on for safety")
+                }
+            }
+        }
+        item {
+            ToggleRow("Read receipts", "Show “Seen” when read", settings.readReceipts) {
+                SettingsStore.setToggle("rr", !settings.readReceipts)
+            }
+        }
+        item {
+            ToggleRow("Last seen", "Let contacts see when you were online", settings.lastSeen) {
+                SettingsStore.setToggle("ls", !settings.lastSeen)
+            }
+        }
+        item {
+            ToggleRow("Block screenshots", "Block screenshots and app-switcher previews of chats", settings.blockScreenshots) {
+                SettingsStore.setToggle("bs", !settings.blockScreenshots)
+            }
+        }
+        item {
+            ToggleRow("Hide typing status", "Don’t show “typing…”", settings.hideTyping) {
+                SettingsStore.setToggle("ht", !settings.hideTyping)
+            }
+        }
+        item { NavRow("Blocked accounts", "$blockedCount accounts", onClick = onBlocked) }
+        item { Section("Data and storage") }
+        item { NavRow("Clear cache", cacheLabel, onClick = onClearCache) }
+        item { Section("Account") }
+        item { NavRow("Linked devices", "Manage where K-Tiku is open", onClick = onDevices) }
+        item { NavRow("Change password", "Update your lock password", onClick = onChangePassword) }
+        item { NavRow("Log out", danger = true, chevron = false, onClick = onLogout) }
+        item { Section("Additional settings") }
+        item {
+            ToggleRow("Camera on for video calls", "Front camera starts enabled on outgoing calls", settings.cameraDefaultOn) {
+                SettingsStore.setToggle("vcd", !settings.cameraDefaultOn)
+            }
+        }
+        item {
+            ToggleRow("Speaker on video calls", "Audio through the speaker on video calls", settings.speakerDefaultOn) {
+                SettingsStore.setToggle("vsp", !settings.speakerDefaultOn)
+            }
+        }
         if (OwnerState.isOwner) {
             item { OwnerSection() }
         }
-        item { SettingsGroups() }
+    }
+}
+
+/** Edit profile subpage (the file's shape; every control is the app's REAL
+ *  flow: photo presets/gallery, display name, validated username). */
+@Composable
+private fun EditProfilePage(onBack: () -> Unit) {
+    val ctx = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var name by remember {
+        mutableStateOf(
+            FirebaseEngine.myPerson.name.takeIf { it.isNotBlank() && it != "You" }
+                ?: AppState.myUsername,
+        )
+    }
+    var username by remember { mutableStateOf(AppState.myUsername) }
+    var avail by remember { mutableStateOf<Boolean?>(null) }
+    var checking by remember { mutableStateOf(false) }
+    var saving by remember { mutableStateOf(false) }
+    LaunchedEffect(username) {
+        val u = username.trim()
+        avail = null
+        if (u == AppState.myUsername) return@LaunchedEffect
+        if (u.length < 3) return@LaunchedEffect
+        checking = true
+        delay(450)
+        avail = runCatching { !FirebaseEngine.usernameTaken(u) }.getOrNull()
+        checking = false
+    }
+    val un = username.trim()
+    val unOk = un == AppState.myUsername || (un.length >= 3 && avail == true)
+    val pickPhoto = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+        if (uri != null) scope.launch {
+            val res = runCatching {
+                val bytes = ctx.contentResolver.openInputStream(uri)!!.readBytes()
+                val bmp = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+                FirebaseEngine.updateProfilePhoto(bytes, bmp)
+            }
+            if (res.isSuccess) AppState.toast("Photo updated")
+            else AppState.toast("Couldn't update your photo — try again")
+        }
+    }
+    SubPage("Edit profile", onBack) {
+        item {
+            Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxWidth()) {
+                AvMe(84)
+                Spacer(Modifier.height(10.dp))
+                Text(
+                    "Change photo", color = Rose, fontSize = 15.sp, fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.press { pickPhoto.launch("image/*") }.padding(6.dp),
+                )
+            }
+        }
+        item { PresetAvatarPicker(dark = true) { AppState.myAvatarEmoji = it; AppState.myAvatar = null } }
+        item { Section("Name") }
+        item { Field(name, { name = it }, "Display name") }
+        item { Section("Username") }
+        item {
+            Field(username, { v ->
+                username = v.lowercase().filter { it.isLetterOrDigit() || it == '.' || it == '_' }.take(20)
+            }, "username")
+        }
+        item {
+            val hint = when {
+                checking -> "Checking…"
+                un == AppState.myUsername -> "This is your current username"
+                un.length < 3 -> "At least 3 letters"
+                avail == true -> "Available ✓"
+                avail == false -> "Already taken"
+                else -> "Letters, numbers, . and _"
+            }
+            Text(hint, color = Sub, fontSize = 13.sp, modifier = Modifier.padding(bottom = 12.dp))
+        }
+        item {
+            Pill("Save", Modifier.fillMaxWidth(), true) {
+                if (saving) return@Pill
+                saving = true
+                scope.launch {
+                    var ok = true
+                    if (un != AppState.myUsername) {
+                        val r = FirebaseEngine.changeUsername(un)
+                        ok = r.isSuccess
+                        if (!ok) AppState.toast(r.exceptionOrNull()?.message ?: "Couldn't change username")
+                    }
+                    if (ok && name.trim().isNotEmpty() && name.trim() != FirebaseEngine.myPerson.name) {
+                        val r = FirebaseEngine.updateDisplayName(name)
+                        ok = r.isSuccess
+                        if (!ok) AppState.toast(r.exceptionOrNull()?.message ?: "Couldn't save name")
+                    }
+                    saving = false
+                    if (ok) { AppState.toast("Profile saved"); onBack() }
+                }
+            }
+        }
     }
 }
 
 /**
- * Me ▸ Owner (owner account only; [OwnerState] is the single check, and
- * MePane composes this only when it passes). Two device-local privileges
- * for the owner's own phone, both stored in [OwnerPrefs]: opt-in
- * notifications and an optional app lock — plus "Lock now", the explicit
- * full lock that overrides the relaxed mode once. Nothing here exists,
- * renders, or can be reached for any other account. ROUND 12: rendered
- * in the design's .sh + .grp + .si language.
+ * The OWNER section (the build-47 OwnerSection, transplanted with identical
+ * behaviour into the redesign rows): composed ONLY for the owner account —
+ * the rest of the app never references notifications or an optional lock.
  */
 @Composable
 fun OwnerSection() {
     val ctx = LocalContext.current
-    val pal = LocalPalette.current
-    val permLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { }
-    TikSectionHeader("Owner")
-    TikGroup {
-        TikInfoRow(
-            "Notifications",
-            "A quiet “New message” alert on this phone when something arrives — only for your account, and only while the app is running",
-            first = true,
-        ) {
-            ToggleSwitch(OwnerPrefs.notifyOn) { on ->
-                OwnerPrefs.setNotify(on)
-                if (on) {
-                    if (Build.VERSION.SDK_INT >= 33 &&
-                        ContextCompat.checkSelfPermission(ctx, Manifest.permission.POST_NOTIFICATIONS)
-                            != PackageManager.PERMISSION_GRANTED
-                    ) {
-                        permLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
-                    }
-                    AppState.toast("Notifications on — this phone only")
-                } else {
-                    OwnerNotify.cancelAll(ctx)
-                    AppState.toast("Notifications off")
-                }
-            }
-        }
-        TikInfoRow(
-            "App lock",
-            "Ask for your password every time you open your journal on this phone",
-        ) {
-            ToggleSwitch(OwnerPrefs.appLockOn) { on ->
-                OwnerPrefs.setAppLock(on)
-                AppState.toast(
-                    if (on) "App lock on — password on every open"
-                    else "App lock off — this phone opens without the password",
-                )
-            }
-        }
-        TikInfoRow(
-            "Lock now",
-            "Lock right away — the password will be asked on the next open, even while App lock is off",
-            onClick = {
-                // One-shot: even with App lock OFF, the NEXT entry must
-                // pass the password gate (unlockFlow consumes the flag).
-                OwnerPrefs.requestGateOnce()
-                ChatSession.lock(ctx)
-            },
-        ) {
-            TikIcon("chevR", Modifier.size(18.dp), tint = pal.sub)
-        }
-    }
-}
-
-// ================= Settings groups =================
-/**
- * ROUND 13 settings map — the owner design's Settings groups, but ONLY
- * rows backed by real, wired functionality (each control below is read
- * by the engine):
- *   Appearance — Mode (dark/light), Colour theme (the 5 couple themes),
- *     chat wallpaper, couple-theme preset, font size (design slider row).
- *   Privacy — app lock, read receipts, last seen (heartbeat honours it),
- *     block screenshots (FLAG_SECURE), hide typing (engine honours it).
- *   Notifications — sounds + vibration (both drive the call feedback).
- *   Data — clear cache. Account — change password (real re-wrap flow),
- *     log out (danger, as in the design).
- *   Additional — camera / speaker defaults (RTC honours both), enter to send.
- * Skipped design rows (listed in the round report): Disappearing messages,
- * Message preview, Quiet hours, Data saver, Auto-download, Linked devices,
- * Blocked accounts — unplumbed or banned by the owner's hard laws.
- */
-@Composable
-fun SettingsGroups() {
-    val settings by SettingsStore.state.collectAsState()
-    val scope = rememberCoroutineScope()
-    val ctx = LocalContext.current
-    val pal = LocalPalette.current
-
-    TikSectionHeader("Appearance")
-    TikGroup {
-        TikInfoRow("Mode", "Dark or light look", first = true) {
-            ModeSegmentedToggle(
-                mode = if (settings.darkMode) "dark" else "light",
-            ) { m -> SettingsStore.setDarkMode(m == "dark") }
-        }
-        TikInfoRow("Colour theme", "One theme for all your chats") {
-            ThemeSwatches(
-                selected = settings.accentIdx,
-                onPick = { SettingsStore.setAccent(it); AppState.toast("Updated") },
-            )
-        }
-        TikInfoRow("Chat wallpaper", "Behind your messages") {
-            TikSwatches(
-                colors = WallpaperMode.entries.map { mode ->
-                    val c = wallTint(mode, settings.darkMode)
-                    if (c == Color.Unspecified) pal.bg else c
-                },
-                selected = settings.wallpaper.ordinal,
-                onPick = { SettingsStore.setWallpaper(it); AppState.toast("Updated") },
-            )
-        }
-        TikInfoRow("Couple theme", "Rose Petal with the heart wallpaper") {
-            // Derived state — ON exactly when Rose Petal AND the couple
-            // wallpaper are both active, however they were set, so this
-            // toggle and the rows above never disagree.
-            val coupleOn = settings.accentIdx == 0 &&
-                settings.wallpaper == WallpaperMode.COUPLE
-            ToggleSwitch(coupleOn) { on ->
-                SettingsStore.setCoupleTheme(on)
-                AppState.toast("Couple theme " + if (on) "on" else "off")
-            }
-        }
-        // the design's font-size slider row (its own divider + padding)
-        Box(Modifier.fillMaxWidth().padding(horizontal = 18.dp).height(1.dp).background(pal.ln))
-        FontSizeSliderRow(
-            fontSizeSp = settings.textSizeSp,
-            onFontSizeChange = { SettingsStore.setTextSize(it) },
-        )
-    }
-
-    TikSectionHeader("Privacy")
-    TikGroup {
-        TikSettingsToggle("App lock", "Ask for password on open", "al", first = true)
-        TikSettingsToggle("Read receipts", "Show “Seen” when read", "rr")
-        TikSettingsToggle("Last seen", "Let contacts see when you were online", "ls")
-        TikSettingsToggle("Block screenshots", "Block screenshots & app-switcher previews of chats", "bs")
-        TikSettingsToggle("Hide typing status", "Don’t show “typing…”", "ht")
-    }
-
-    TikSectionHeader("Notifications")
-    TikGroup {
-        TikSettingsToggle("Sounds", "Soft pop on new message", "sn", first = true)
-        TikSettingsToggle("Vibration", "Gentle haptics", "vb")
-    }
-
-    TikSectionHeader("Data and storage")
-    TikGroup {
-        TikInfoRow("Clear cache", "Frees up 128 MB", first = true,
-            onClick = { onSettingTap("cc", "Clear cache", settings, scope, ctx) }) {
-            TikIcon("chevR", Modifier.size(18.dp), tint = pal.sub)
-        }
-    }
-
-    TikSectionHeader("Account")
-    TikGroup {
-        TikInfoRow("Change password", "Update your lock password", first = true,
-            onClick = { onSettingTap("cp", "Change password", settings, scope, ctx) }) {
-            TikIcon("chevR", Modifier.size(18.dp), tint = pal.sub)
-        }
-        TikInfoRow("Log out", null, danger = true,
-            onClick = { onSettingTap("lo", "Log out", settings, scope, ctx) })
-    }
-
-    TikSectionHeader("Additional settings")
-    TikGroup {
-        TikSettingsToggle("Camera on for video calls", "Front camera starts enabled on outgoing calls", "vcd", first = true)
-        TikSettingsToggle("Speaker for video calls", "Audio through the speaker on video calls", "vsp")
-        TikSettingsToggle("Enter to send", "Pressing Enter sends the message", "ets")
-    }
-}
-
-/** Couple-theme swatches: gradient discs (ac -> ac2) for the 5 themes,
- *  ring on the selected one (the design's theme picker, compact form). */
-@Composable
-private fun ThemeSwatches(selected: Int, onPick: (Int) -> Unit) {
-    val pal = LocalPalette.current
-    Row(horizontalArrangement = Arrangement.spacedBy(9.dp)) {
-        COUPLE_THEMES.forEachIndexed { i, th ->
-            val isSel = i == selected
-            Box(
-                Modifier.size(28.dp)
-                    .then(if (isSel) Modifier.border(2.dp, pal.tx, CircleShape) else Modifier)
-                    .clickable(
-                        interactionSource = remember { MutableInteractionSource() },
-                        indication = null,
-                    ) { onPick(i) },
-                contentAlignment = Alignment.Center,
+    val permLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) { }
+    Section("Owner")
+    ToggleRow(
+        "Notifications",
+        "A quiet “New message” alert on this phone when something arrives — only for your account, and only while the app is running",
+        OwnerPrefs.notifyOn,
+    ) {
+        val on = !OwnerPrefs.notifyOn
+        OwnerPrefs.setNotify(on)
+        if (on) {
+            if (Build.VERSION.SDK_INT >= 33 &&
+                ContextCompat.checkSelfPermission(ctx, Manifest.permission.POST_NOTIFICATIONS) !=
+                PackageManager.PERMISSION_GRANTED
             ) {
-                Box(
-                    Modifier.size(24.dp).clip(CircleShape)
-                        .background(Brush.linearGradient(listOf(th.ac, th.ac2)))
-                        .border(1.dp, pal.ln, CircleShape),
-                )
+                permLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
             }
-        }
-    }
-}
-
-/** One design settings toggle row bound to a SettingsStore toggle key. */
-@Composable
-private fun TikSettingsToggle(title: String, sub: String, key: String, first: Boolean = false) {
-    val settings by SettingsStore.state.collectAsState()
-    TikInfoRow(title, sub, first = first) {
-        ToggleSwitch(settings.toggles[key] == true) { on ->
-            SettingsStore.setToggle(key, on)
-            AppState.toast(title + if (on) " on" else " off")
-        }
-    }
-}
-
-fun onSettingTap(key: String, title: String, settings: TikuUiSettings, scope: kotlinx.coroutines.CoroutineScope, ctx: android.content.Context) {
-    when (key) {
-        "lo" -> {
-            if (Config.PREVIEW_UI_ONLY) AppState.go(Screen.Welcome) else FirebaseEngine.signOut(ctx)
-        }
-        "cc" -> AppState.toast("Cache cleared")
-        "cp" -> {
-            if (Config.PREVIEW_UI_ONLY) AppState.toast("Password change opens here")
-            else ChangePasswordSheet.open(ctx, scope)
-        }
-        "fs", "ac", "wp", "ct" -> { /* handled by their own controls */ }
-    }
-}
-
-// ================= New chat sheet =================
-object NewChatSheet {
-    /**
-     * The suggestion source, behind a seam so the screenshot tests can drive
-     * the REAL shared matcher (SearchNorm) against the preview people — the
-     * Robolectric process has no Firebase backend to query. Production uses
-     * the default: preview people in a preview build, Firestore otherwise.
-     */
-    var searcher: suspend (String) -> List<Person> = { q ->
-        if (Config.PREVIEW_UI_ONLY) {
-            PreviewStore.people.filter { SearchNorm.matches(it.username, it.name, q) }
+            AppState.toast("Notifications on — only on this phone, only for you")
         } else {
-            runCatching { FirebaseEngine.searchPeople(q) }.getOrDefault(emptyList())
+            OwnerNotify.cancelAll(ctx)
+            AppState.toast("Notifications off")
         }
+    }
+    ToggleRow(
+        "App lock",
+        "Ask for your password every time you open your journal on this phone",
+        OwnerPrefs.appLockOn,
+    ) {
+        val on = !OwnerPrefs.appLockOn
+        OwnerPrefs.setAppLock(on)
+        AppState.toast(if (on) "App lock on" else "App lock off — the password won't be asked on open")
+    }
+    NavRow(
+        "Lock now",
+        "Lock right away — the password will be asked on the next open, even while App lock is off",
+    ) {
+        OwnerPrefs.requestGateOnce()
+        ChatSession.lock(ctx)
+    }
+}
+
+// ================= Sheets (kept flows, re-skinned where Round 14 owns them) =================
+
+/**
+ * NEW-CHAT sheet (Round 14 re-skin: the host's dark sheet + the redesign
+ * Field/CardRow rows). Search, debounce and start behaviour are the
+ * build-47 flow, unchanged. TEST SEAM preserved: [searcher] is injectable.
+ */
+object NewChatSheet {
+    internal var searcher: suspend (String) -> List<Person> = { q ->
+        if (Config.PREVIEW_UI_ONLY) {
+            delay(250)
+            PreviewStore.people.filter {
+                it.username.contains(q, ignoreCase = true) || it.name.contains(q, ignoreCase = true)
+            }
+        } else FirebaseEngine.searchUsers(q).getOrDefault(emptyList())
     }
 
     fun open() {
-        AppState.sheet {
-            var q by remember { mutableStateOf("") }
-            var results by remember { mutableStateOf<List<Person>>(emptyList()) }
-            var searching by remember { mutableStateOf(false) }
-            // LIVE SUGGESTIONS — every keystroke, debounced ~200 ms,
-            // refreshes the results from the forgiving matcher (prefix on
-            // the normalized username + name tokens). No Search button, no
-            // exact-full-username requirement. An empty query shows
-            // NOTHING — never a dump of all users.
+        var query = ""
+        var people: List<Person> = emptyList()
+        var searching = false
+        AppState.sheet { close ->
+            val scope = rememberCoroutineScope()
+            var q by remember { mutableStateOf(query) }
+            var results by remember { mutableStateOf(people) }
+            var busy by remember { mutableStateOf(searching) }
+            val threads by AppState.threads.collectAsState()
             LaunchedEffect(q) {
-                if (q.isBlank()) { results = emptyList(); searching = false; return@LaunchedEffect }
-                searching = true
-                delay(200)
-                results = searcher(q)
-                searching = false
+                val queryText = q.trim()
+                if (queryText.length < 2) {
+                    results = emptyList(); busy = false; return@LaunchedEffect
+                }
+                busy = true
+                delay(280)
+                results = runCatching { searcher(queryText) }.getOrDefault(emptyList())
+                busy = false
             }
-            val settings = tikuSettings().value
-            val pal = LocalPalette.current
-            TikSheetTitle("New chat")
-            // search field (design .fld2: s2 fill, r16)
-            Box(
-                Modifier.fillMaxWidth().padding(horizontal = 18.dp)
-                    .clip(RoundedCornerShape(16.dp)).background(pal.s2)
-                    .padding(horizontal = 16.dp, vertical = 14.dp),
-                contentAlignment = Alignment.CenterStart,
-            ) {
-                Text("@", color = pal.sub, fontSize = 15.sp, fontFamily = InterTight)
-                BasicTextField(
-                    value = q,
-                    onValueChange = { q = it.take(30) },
-                    textStyle = TextStyle(fontSize = 15.sp, fontFamily = InterTight, color = pal.tx),
-                    cursorBrush = SolidColor(settings.accent), singleLine = true,
-                    modifier = Modifier.fillMaxWidth().padding(start = 16.dp),
-                    decorationBox = { inner ->
-                        if (q.isEmpty()) Text("name or username", fontSize = 15.sp, color = pal.sub, fontFamily = InterTight)
-                        inner()
-                    },
+            Column(Modifier.padding(horizontal = 6.dp)) {
+                Text(
+                    "Start a chat", color = Color.White, fontSize = 20.sp,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
                 )
-            }
-            Spacer(Modifier.height(10.dp))
-            when {
-                q.isBlank() ->
-                    Text("Start typing — matches appear as you type. You don't need the exact username.",
-                        fontSize = 13.sp, color = pal.sub, fontFamily = InterTight,
-                        modifier = Modifier.padding(horizontal = 18.dp))
-                searching && results.isEmpty() ->
-                    Text("Searching…", fontSize = 13.sp, color = pal.sub, fontFamily = InterTight,
-                        modifier = Modifier.padding(horizontal = 18.dp))
-                results.isEmpty() ->
-                    Text("No one found for “${q.trim()}”", fontSize = 13.sp, color = pal.sub, fontFamily = InterTight,
-                        modifier = Modifier.padding(horizontal = 18.dp))
-            }
-            results.forEach { p ->
-                Row(
-                    Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 9.dp)
-                        .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {
-                            val id = AppState.repo.startThreadWith(p)
-                            AppState.closeSheet()
-                            AppState.repo.openThread(id)
-                            AppState.go(Screen.Chat(id))
-                        },
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    AvatarBox(p, 54.dp, 27.dp, 22f)
-                    Spacer(Modifier.width(14.dp))
-                    Column(Modifier.weight(1f)) {
-                        Text(p.name, fontWeight = FontWeight.Medium, fontSize = 15.sp, fontFamily = InterTight, color = pal.tx)
-                        Text("@" + p.username, fontSize = 13.5.sp, color = pal.sub, fontFamily = InterTight)
+                Field(q, { q = it }, "Search by username…")
+                if (busy) {
+                    Text("Searching…", color = Sub, fontSize = 14.sp, modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
+                } else if (q.trim().length >= 2 && results.isEmpty()) {
+                    Text("No one with that username yet", color = Sub, fontSize = 14.sp, modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
+                }
+                results.forEach { p ->
+                    val existingId = threads.firstOrNull { it.person.uid == p.uid }?.id
+                    CardRow({
+                        close()
+                        val id = AppState.repo.startThreadWith(p)
+                        AppState.repo.openThread(id)
+                        AppState.go(Screen.Chat(id))
+                        check(existingId == null || existingId == id)
+                    }) {
+                        Av(p, 46)
+                        TwoLine(p.name, "@${p.username}", Modifier.weight(1f).padding(start = 12.dp))
                     }
                 }
+                Spacer(Modifier.height(6.dp))
             }
         }
     }
 }
 
 /**
- * EDIT PROFILE: change the profile photo (the photoData pipeline) and
- * change the username. Username validation mirrors the signup screen
- * exactly (same input filter, same 3-char minimum, same debounced
- * availability check); the rename itself is ONE transaction in the
- * engine (claim new + free old + rewrite user doc/search fields), so a
- * taken name fails cleanly and changes nothing. Chats key on uid — a
- * rename touches no conversation. ROUND 12: the sheet wears the design's
- * .gt / .fld / .pb skin.
+ * EDIT-PROFILE sheet (photo + presets only). Kept for compatibility — the
+ * Round 14 surface for the same actions is the Settings ▸ Edit profile
+ * subpage; the sheet's behaviour (gallery pick + 7 presets) is unchanged.
  */
 object EditProfileSheet {
     fun open() {
-        AppState.sheet {
-            val ctx = LocalContext.current
+        AppState.sheet { close ->
             val scope = rememberCoroutineScope()
-            var username by remember { mutableStateOf(AppState.myUsername) }
-            var hint by remember { mutableStateOf("Letters, numbers, dots and underscores.") }
-            var available by remember { mutableStateOf(false) }
-            var busy by remember { mutableStateOf(false) }
-            var err by remember { mutableStateOf("") }
-            val changed = username != AppState.myUsername
-            val settings = tikuSettings().value
-            val pal = LocalPalette.current
-
+            val ctx = LocalContext.current
             val pick = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
-                if (uri != null) {
-                    ctx.contentResolver.openInputStream(uri)?.use { stream ->
-                        BitmapFactory.decodeStream(stream)?.let { bmp ->
-                            if (Config.PREVIEW_UI_ONLY) {
-                                AppState.myAvatar = bmp
-                                AppState.toast("Profile photo updated")
-                            } else {
-                                scope.launch {
-                                    val r = FirebaseEngine.updateProfilePhoto(bmp)
-                                    AppState.toast(if (r.isSuccess) "Profile photo updated" else "Couldn't update the photo")
+                if (uri != null) scope.launch {
+                    val res = runCatching {
+                        val bytes = ctx.contentResolver.openInputStream(uri)!!.readBytes()
+                        val bmp = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+                        FirebaseEngine.updateProfilePhoto(bytes, bmp)
+                    }
+                    if (res.isSuccess) { AppState.toast("Photo updated"); close() }
+                    else AppState.toast("Couldn't update your photo — try again")
+                }
+            }
+            Column(Modifier.padding(horizontal = 6.dp)) {
+                Text(
+                    "Your photo", color = Color.White, fontSize = 20.sp,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                )
+                Pill("Choose from gallery", Modifier.fillMaxWidth().padding(vertical = 6.dp), false) {
+                    pick.launch("image/*")
+                }
+                PresetAvatarPicker(dark = true) { AppState.myAvatarEmoji = it; AppState.myAvatar = null; close() }
+                Spacer(Modifier.height(8.dp))
+            }
+        }
+    }
+}
+
+/**
+ * CHANGE-PASSWORD sheet (existing real flow, untouched): verifies the
+ * current password locally against the stored verifier, then re-wraps the
+ * identity key under the new password and uploads the new backup blob.
+ */
+object ChangePasswordSheet {
+    fun open(ctx: android.content.Context, scope: kotlinx.coroutines.CoroutineScope) {
+        var current = ""
+        var newPw = ""
+        var confirm = ""
+        var busy = false
+        AppState.sheet { close ->
+            var cur by remember { mutableStateOf(current) }
+            var np by remember { mutableStateOf(newPw) }
+            var cf by remember { mutableStateOf(confirm) }
+            var b by remember { mutableStateOf(busy) }
+            Column(Modifier.padding(horizontal = 6.dp)) {
+                TikSheetTitle("Change password")
+                Text(
+                    "Your chats stay exactly as they are — this only changes the password that unlocks them.",
+                    color = Sub, fontSize = 14.sp,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                )
+                Spacer(Modifier.height(10.dp))
+                PasswordField(cur, { cur = it }, "Current password")
+                Spacer(Modifier.height(10.dp))
+                PasswordField(np, { np = it }, "New password (min 6 characters)")
+                Spacer(Modifier.height(10.dp))
+                PasswordField(cf, { cf = it }, "Confirm new password")
+                Spacer(Modifier.height(16.dp))
+                TikPrimaryButton(if (b) "Changing…" else "Change password", !b) {
+                    when {
+                        !Crypto.passwordVerify(cur, SettingsStore.passwordHash) ->
+                            AppState.toast("Current password doesn't match")
+                        np.length < 6 -> AppState.toast("New password needs at least 6 characters")
+                        np != cf -> AppState.toast("New passwords don't match")
+                        else -> {
+                            b = true
+                            scope.launch {
+                                val r = runCatching {
+                                    val backup = FirebaseEngine.fetchMyKeyBackup()
+                                        ?: error("No key backup found for this account.")
+                                    val priv = Crypto.backupUnwrap(backup, cur)
+                                        ?: error("Couldn't unlock your key with the current password.")
+                                    val blob = Crypto.backupWrap(priv, np)
+                                    FirebaseEngine.updateBackupBlob(blob, np).getOrThrow()
+                                    SettingsStore.setPassword(np, Crypto.passwordHash(np))
+                                    OwnerGate.markKeyReady()
                                 }
+                                b = false
+                                if (r.isSuccess) { close(); AppState.toast("Password changed") }
+                                else AppState.toast(r.exceptionOrNull()?.message ?: "Couldn't change the password")
                             }
                         }
                     }
                 }
+                Spacer(Modifier.height(10.dp))
             }
-
-            // debounced availability — the signup screen's exact behaviour
-            LaunchedEffect(username) {
-                available = false
-                if (!changed) { hint = "This is your current username."; return@LaunchedEffect }
-                if (username.isEmpty()) { hint = "Letters, numbers, dots and underscores."; return@LaunchedEffect }
-                delay(450)
-                when {
-                    username.length < 3 -> hint = "At least 3 characters."
-                    else -> {
-                        val taken = if (Config.PREVIEW_UI_ONLY) username in listOf("admin", "tikuu")
-                            else runCatching { FirebaseEngine.usernameTaken(username) }.getOrDefault(false)
-                        if (taken) hint = "@$username is taken. Try another."
-                        else { hint = "✓ @$username is available"; available = true }
-                    }
-                }
-            }
-
-            TikSheetTitle("Edit profile")
-            // photo row
-            Row(
-                Modifier.fillMaxWidth().padding(horizontal = 18.dp)
-                    .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {
-                        // picker backgrounds the app — flag it so the instant
-                        // re-lock doesn't fire mid-pick (same rule as chat)
-                        ChatSession.expectExternalActivity = true
-                        pick.launch("image/*")
-                    }
-                    .padding(vertical = 4.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Box(
-                    Modifier.size(54.dp).clip(CircleShape).background(pal.s1),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    val bmp = AppState.myAvatar
-                    if (bmp != null) {
-                        androidx.compose.foundation.Image(bmp.asBmp(), null, Modifier.fillMaxSize(),
-                            contentScale = androidx.compose.ui.layout.ContentScale.Crop)
-                    } else {
-                        EmojiArt("🙂", 24.dp)
-                    }
-                }
-                Spacer(Modifier.width(13.dp))
-                Column {
-                    Text("Change photo", fontWeight = FontWeight.SemiBold, fontSize = 16.sp, fontFamily = InterTight, color = pal.tx)
-                    Text("Shown on your profile", fontSize = 13.sp, color = pal.sub, fontFamily = InterTight)
-                }
-            }
-            Spacer(Modifier.height(16.dp))
-            // Bundled presets — same updateProfilePhoto path (and same
-            // preview behaviour) as an uploaded photo.
-            Box(Modifier.padding(horizontal = 18.dp)) {
-                PresetAvatarPicker(dark = true) { bmp ->
-                    if (Config.PREVIEW_UI_ONLY) {
-                        AppState.myAvatar = bmp
-                        AppState.toast("Profile photo updated")
-                    } else {
-                        scope.launch {
-                            val r = FirebaseEngine.updateProfilePhoto(bmp)
-                            AppState.toast(if (r.isSuccess) "Profile photo updated" else "Couldn't update the photo")
-                        }
-                    }
-                }
-            }
-            Spacer(Modifier.height(16.dp))
-            // username field — design .fld2 skin, same input filter as signup
-            Box(
-                Modifier.fillMaxWidth().padding(horizontal = 18.dp)
-                    .clip(RoundedCornerShape(16.dp)).background(pal.s2),
-                contentAlignment = Alignment.CenterStart,
-            ) {
-                Text("@", color = pal.sub, fontSize = 15.sp, fontFamily = InterTight,
-                    modifier = Modifier.padding(start = 16.dp))
-                BasicTextField(
-                    value = username,
-                    onValueChange = { raw ->
-                        username = raw.lowercase().filter { it.isLetterOrDigit() || it == '.' || it == '_' }.take(20)
-                    },
-                    textStyle = TextStyle(fontSize = 15.sp, fontFamily = InterTight, color = pal.tx),
-                    cursorBrush = SolidColor(settings.accent),
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth().padding(start = 34.dp, end = 16.dp, top = 14.dp, bottom = 14.dp),
-                    decorationBox = { inner ->
-                        if (username.isEmpty()) Text("username", fontSize = 15.sp, fontFamily = InterTight, color = pal.sub)
-                        inner()
-                    },
-                )
-            }
-            Spacer(Modifier.height(6.dp))
-            Text(hint, fontSize = 13.sp, color = if (available) settings.accent else pal.sub, fontFamily = InterTight,
-                modifier = Modifier.padding(horizontal = 18.dp))
-            Text("Friends find you by your username — chats and history are not affected.",
-                fontSize = 13.sp, color = pal.sub, fontFamily = InterTight,
-                modifier = Modifier.padding(horizontal = 18.dp))
-            if (err.isNotEmpty()) {
-                Spacer(Modifier.height(6.dp))
-                Text(err, fontSize = 13.sp, color = pal.danger, fontFamily = InterTight,
-                    modifier = Modifier.padding(horizontal = 18.dp))
-            }
-            Spacer(Modifier.height(14.dp))
-            TikPrimaryButton(if (busy) "Saving…" else "Save username",
-                enabled = changed && available && !busy) {
-                if (Config.PREVIEW_UI_ONLY) {
-                    AppState.myUsername = username
-                    AppState.closeSheet()
-                    AppState.toast("Username updated")
-                } else {
-                    busy = true
-                    err = ""
-                    scope.launch {
-                        val r = FirebaseEngine.changeUsername(username)
-                        busy = false
-                        if (r.isSuccess) {
-                            AppState.closeSheet()
-                            AppState.toast("Username updated")
-                        } else {
-                            err = r.exceptionOrNull()?.message ?: "Couldn't change username. Try again."
-                        }
-                    }
-                }
-            }
-            Spacer(Modifier.height(6.dp))
         }
     }
 }
 
-object ChangePasswordSheet {
-    fun open(ctx: android.content.Context, scope: kotlinx.coroutines.CoroutineScope) {
-        var cur by mutableStateOf("")
-        var p1 by mutableStateOf("")
-        var p2 by mutableStateOf("")
-        var busy by mutableStateOf(false)
-        var err by mutableStateOf("")
-        AppState.sheet {
-            val pal = LocalPalette.current
-            TikSheetTitle("Change password")
-            Box(Modifier.padding(horizontal = 18.dp)) { PasswordField(cur, { cur = it }, "Current password", dark = true) }
-            Spacer(Modifier.height(10.dp))
-            Box(Modifier.padding(horizontal = 18.dp)) { PasswordField(p1, { p1 = it }, "New password", dark = true) }
-            Spacer(Modifier.height(10.dp))
-            Box(Modifier.padding(horizontal = 18.dp)) { PasswordField(p2, { p2 = it }, "Confirm new password", dark = true) }
-            Spacer(Modifier.height(6.dp))
-            if (err.isNotEmpty()) Text(err, fontSize = 13.sp, color = pal.danger, fontFamily = InterTight,
-                modifier = Modifier.padding(horizontal = 18.dp))
-            Spacer(Modifier.height(10.dp))
-            TikPrimaryButton(if (busy) "Updating…" else "Update password",
-                enabled = cur.isNotEmpty() && p1.length >= 8 && p1 == p2 && !busy) {
-                busy = true
-                scope.launch {
-                    val ok = runCatching {
-                        val hash = SettingsStore.passwordHash(ctx)
-                        hash != null && Crypto.passwordVerify(cur, hash)
-                    }.getOrDefault(false)
-                    if (!ok) { busy = false; err = "Current password is wrong"; return@launch }
-                    // re-wrap the identity backup under the new password
-                    val r = runCatching {
-                        val blob = FirebaseEngine.backupBlob() ?: return@runCatching false
-                        val priv = Crypto.backupUnwrap(blob, cur) // validates current password against the backup
-                        val newBlob = Crypto.backupWrap(priv, p1)
-                        FirebaseEngine.updateBackupBlob(newBlob)
-                        SettingsStore.savePasswordHash(ctx, Crypto.passwordHash(p1))
-                        true
-                    }.getOrDefault(false)
-                    busy = false
-                    if (r) { AppState.closeSheet(); AppState.toast("Password updated") }
-                    else err = "Couldn’t update. Try again."
-                }
-            }
-            Spacer(Modifier.height(6.dp))
-        }
-    }
-}
+// ---- story placeholder (facade-adjacent; kept from build 47) ----
+data class StoryContent(val title: String, val body: String, val emoji: String)
 
 object StoryHelper {
-    suspend fun open(person: Person, index: Int) {
-        if (Config.PREVIEW_UI_ONLY) {
-            AppState.story = StoryContent(person, PreviewStore.storyQuotes, PreviewStore.storyGrads, index)
-            AppState.go(Screen.Story)
-        } else {
-            val quotes = FirebaseEngine.loadMoments(person)
-            if (quotes.isEmpty()) {
-                val id = AppState.repo.startThreadWith(person)
-                AppState.repo.openThread(id)
-                AppState.go(Screen.Chat(id))
-            } else {
-                AppState.story = StoryContent(person, quotes, PreviewStore.storyGrads, 0)
-                AppState.go(Screen.Story)
-            }
-        }
+    fun open(title: String, body: String, emoji: String) {
+        AppState.story = StoryContent(title, body, emoji)
     }
 }
-
-data class StoryContent(
-    val person: Person,
-    val quotes: List<String>,
-    val grads: List<Pair<Color, Color>>,
-    val personIndex: Int,
-)

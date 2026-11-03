@@ -7,21 +7,19 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
-import androidx.compose.ui.test.hasSetTextAction
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.test.click
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.longClick
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onAllNodesWithText
-import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
-import androidx.compose.ui.test.longClick
-import androidx.compose.ui.test.performClick
-import androidx.compose.ui.test.performScrollToIndex
-import androidx.compose.ui.test.performTextInput
+import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTouchInput
-import androidx.compose.ui.test.swipeDown
 import androidx.compose.ui.test.swipeLeft
 import androidx.compose.ui.test.swipeUp
 import androidx.compose.ui.unit.dp
@@ -37,11 +35,11 @@ import org.robolectric.annotation.GraphicsMode
 
 /**
  * UI preview screenshots — rendered headless from the app's REAL Compose code
- * (Roborazzi + Robolectric, native graphics) at 1080×2400, light theme only.
- * ChatRoot states run against the preview demo store (the same data path the
- * PREVIEW_UI_ONLY flag uses); the facade consumes the real bundled drama pack
- * (assets/facade/). PNGs land in build/outputs/roborazzi/shots/ and ship as
- * a release asset.
+ * (Roborazzi + Robolectric, native graphics) at 1080×2400. ROUND 14: the Tik
+ * shots exercise the owner's redesign surfaces (ChatScreen / InfoScreen /
+ * HomeScreen in black + CardC + Rose) against the preview demo store; the
+ * facade shots still consume the real bundled drama pack (assets/facade/).
+ * PNGs land in build/outputs/roborazzi/shots/ and ship as a release asset.
  */
 @RunWith(RobolectricTestRunner::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
@@ -58,7 +56,7 @@ class ScreenshotsTest {
         SettingsStore.init(ctx)
         OwnerPrefs.init(ctx)
         // ROUND 9: clean owner slate for every shot — non-owner by default;
-        // the owner pair (shots 37/38) flips the seam inside its own test.
+        // the owner pair (shots 28/31) flips the seam inside its own test.
         OwnerState.previewOverride = null
         OwnerPrefs.setNotify(false)
         OwnerPrefs.setAppLock(true)
@@ -74,6 +72,12 @@ class ScreenshotsTest {
         AppState.sheetContent = null
         AppState.toastText = null
         AppState.story = null
+        // ROUND 14: reset the new engine seams — PreviewRepo is a process
+        // singleton, so a block or note set by one shot must not leak into
+        // the next (blocked threads vanish from lists; notes render in the
+        // Messages header row).
+        PreviewStore.people.forEach { AppState.repo.unblockUser(it.uid) }
+        AppState.repo.deleteMyNote()
         // the gate opens with the password field once a journal password exists
         SettingsStore.savePasswordHash(ctx, Crypto.passwordHash("journal123"))
     }
@@ -96,20 +100,20 @@ class ScreenshotsTest {
         composeRule.onRoot().captureRoboImage("$outDir/$name")
     }
 
-    // ---------- facade (ROUND 13: K-drama) ----------
+    // ---------- facade (ROUND 13: K-drama; ROUND 14 addendum: entry moved) ----------
     @Test fun shot01_dramaHome() {
         AppState.go(Screen.Facade)
         frame { FacadeRouter() }
         // ZERO-TRACE PROOF (negative): the word "Tik" must not appear
-        // anywhere on the facade home — "Tikuu" is the drama brand, and
-        // the exact-match query does not match it.
+        // anywhere on the facade home — the drama brand wordmark is fine,
+        // and the exact-match query does not match it.
         org.junit.Assert.assertTrue(
             "facade home must not contain any Tik wording",
             composeRule.onAllNodesWithText("Tik").fetchSemanticsNodes().isEmpty(),
         )
         org.junit.Assert.assertTrue(
-            "facade home must carry the Tikuu wordmark",
-            composeRule.onAllNodesWithText("Tikuu").fetchSemanticsNodes().isNotEmpty(),
+            "facade home must carry the brand wordmark",
+            composeRule.onAllNodesWithText(DramaContent.appName).fetchSemanticsNodes().isNotEmpty(),
         )
         shot("01-drama-home.png")
     }
@@ -146,23 +150,27 @@ class ScreenshotsTest {
         shot("04-photos-grid.png")
     }
 
-    @Test fun shot05_forYouEntry() {
-        frame { FacadeHome(initialTab = FacadeTab.FOR_YOU) }
-        // ZERO-TRACE PROOF (negative + positive): the For You page carries
-        // the discreet entry row — and the word "Tik" NOWHERE on the page.
+    @Test fun shot05_hiddenEntryStory() {
+        // ROUND 14 ADDENDUM: the For You tab + "For You, Always" entry are
+        // REMOVED. The hidden Tik entry is now the LAST story in Stories,
+        // titled exactly "2023,05" (single tap = decoy story, double tap =
+        // the gate). This shot proves the entry story is listed — and that
+        // the facade still carries the word "Tik" NOWHERE.
+        frame { FacadeHome(initialTab = FacadeTab.STORIES) }
+        // the entry story sits at the very end of the list — scroll to it
+        repeat(4) {
+            composeRule.onRoot().performTouchInput { swipeUp() }
+            composeRule.waitForIdle()
+        }
         org.junit.Assert.assertTrue(
-            "for-you page must not contain any Tik wording",
+            "stories list must not contain any Tik wording",
             composeRule.onAllNodesWithText("Tik").fetchSemanticsNodes().isEmpty(),
         )
         org.junit.Assert.assertTrue(
-            "for-you page must carry the entry row",
-            composeRule.onAllNodesWithText("For You, Always").fetchSemanticsNodes().isNotEmpty(),
+            "stories list must end with the hidden entry story",
+            composeRule.onAllNodesWithText("2023,05").fetchSemanticsNodes().isNotEmpty(),
         )
-        org.junit.Assert.assertTrue(
-            "entry row must carry its private-corner sub",
-            composeRule.onAllNodesWithText("Your private corner").fetchSemanticsNodes().isNotEmpty(),
-        )
-        shot("05-for-you-entry.png")
+        shot("05-hidden-entry-story.png")
     }
 
     @Test fun shot06_playerPlaceholder() {
@@ -185,14 +193,6 @@ class ScreenshotsTest {
         shot("07-tik-gate.png")
     }
 
-    @Test fun shot39_watchPane() {
-        // ROUND 13: the re-architected Watch pane (pane-owned WebView,
-        // preview placeholder branch in preview builds) composes headless.
-        frame { WatchPane() }
-        composeRule.waitForIdle()
-        shot("39-watch-pane.png")
-    }
-
     // ---------- onboarding (journal-framed) ----------
     @Test fun shot08_welcome() {
         frame { WelcomeScreen {} }
@@ -209,272 +209,332 @@ class ScreenshotsTest {
         shot("10-profile-setup.png")
     }
 
-    // ---------- ChatRoot ----------
-    @Test fun shot11_chatHome() {
+    // ---------- Tik (ROUND 14: the owner's redesign) ----------
+    @Test fun shot11_messagesHome() {
         AppState.homeTab = HomeTab.CHATS
+        AppState.go(Screen.Home)
         frame { HomeScreen() }
-        shot("11-chat-home.png")
+        org.junit.Assert.assertTrue(
+            "Messages screen must carry its title",
+            composeRule.onAllNodesWithText("Messages").fetchSemanticsNodes().isNotEmpty(),
+        )
+        org.junit.Assert.assertTrue(
+            "Messages must carry the notes row (Your note)",
+            composeRule.onAllNodesWithText("Your note").fetchSemanticsNodes().isNotEmpty(),
+        )
+        shot("11-messages-home.png")
     }
 
-    @Test fun shot12_callsPane() {
-        // ROUND 6: the Calls tab now lists call HISTORY aggregated from the
-        // chats' encrypted call-event messages (seeded: ended / missed /
-        // declined / video) — this shot must show rows, not the old empty state.
+    @Test fun shot12_requests() {
+        // Requests live behind the Messages header ("Requests · N") and
+        // need a seeded request thread (Worker A preview seam) to open.
+        AppState.homeTab = HomeTab.CHATS
+        AppState.go(Screen.Home)
+        frame { HomeScreen() }
+        val header = composeRule.onAllNodesWithText("Requests", substring = true)
+            .fetchSemanticsNodes()
+        org.junit.Assert.assertTrue(
+            "Messages header must offer Requests (a request thread is seeded)",
+            header.isNotEmpty(),
+        )
+        composeRule.onAllNodesWithText("Requests", substring = true)[0]
+            .performTouchInput { click() }
+        composeRule.waitForIdle()
+        org.junit.Assert.assertTrue(
+            "Requests screen must offer Accept on the seeded request",
+            composeRule.onAllNodesWithText("Accept").fetchSemanticsNodes().isNotEmpty(),
+        )
+        shot("12-requests.png")
+    }
+
+    @Test fun shot13_callsPane() {
+        // The Calls tab lists call HISTORY aggregated from the chats'
+        // encrypted call-event messages (seeded: ended / missed /
+        // declined / video) — rows, not an empty state.
         AppState.homeTab = HomeTab.CALLS
         frame { HomeScreen() }
-        shot("12-calls-pane.png")
+        shot("13-calls-pane.png")
     }
 
-    @Test fun shot13_mePane() {
+    @Test fun shot14_settingsMain() {
         AppState.homeTab = HomeTab.ME
         frame { HomeScreen() }
-        shot("13-me-pane.png")
+        shot("14-settings-main.png")
     }
 
-    @Test fun shot18_meSettingsScrolled() {
+    @Test fun shot15_settingsBlocked() {
+        // Seed a REAL block through the engine seam, then walk the real
+        // Settings ▸ Blocked accounts subpage.
+        AppState.repo.blockUser(PreviewStore.people[5].uid)
         AppState.homeTab = HomeTab.ME
+        AppState.go(Screen.Home)
         frame { HomeScreen() }
-        composeRule.onRoot()
-            .performTouchInput { swipeUp(); swipeUp() }
+        composeRule.onAllNodesWithText("Blocked accounts")[0]
+            .performScrollTo()
+            .performTouchInput { click() }
         composeRule.waitForIdle()
-        shot("18-me-settings-scrolled.png")
+        org.junit.Assert.assertTrue(
+            "blocked subpage must list the blocked person with an Unblock action",
+            composeRule.onAllNodesWithText("Unblock").fetchSemanticsNodes().isNotEmpty(),
+        )
+        shot("15-settings-blocked.png")
+        AppState.repo.unblockUser(PreviewStore.people[5].uid)
     }
 
-    @Test fun shot14_chatScreen() {
+    @Test fun shot16_chatScreen() {
         val th = AppState.threads.value.first()
         AppState.setTyping(th.id, true)
-        frame { ChatScreen(th.id) }
-        shot("14-chat-screen.png")
-    }
-
-    @Test fun shot15_messageSheet() {
-        val th = AppState.threads.value.first()
-        // Mirror the device state: the sheet host skins itself by the live
-        // navigation state, which is Screen.Chat when this sheet opens.
         AppState.go(Screen.Chat(th.id))
         frame { ChatScreen(th.id) }
-        val msg = th.messages.firstOrNull { !it.me } ?: th.messages.first()
-        ChatSheets.context(th.id, msg) { }
-        composeRule.waitForIdle()
-        shot("15-message-sheet.png")
-    }
-
-    @Test fun shot16_callScreen() {
-        val th = AppState.threads.value.first()
-        // preview fake call: "Calling…" then connects — no WebRTC classes load here
-        CallController.startCall(ctx, th.id, false)
-        frame { CallScreen(th.id, false) }
-        composeRule.mainClock.advanceTimeBy(2000)
-        composeRule.waitForIdle()
-        shot("16-call-screen.png")
-    }
-
-    @Test fun shot17_storyViewer() {
-        val person = AppState.threads.value.first().person
-        AppState.story = StoryContent(
-            person = person,
-            quotes = PreviewStore.storyQuotes,
-            grads = PreviewStore.storyGrads,
-            personIndex = 0,
-        )
-        frame { StoryScreen() }
-        shot("17-story-viewer.png")
-    }
-
-    // ---------- round 3 additions ----------
-    @Test fun shot21_additionalSettings() {
-        AppState.homeTab = HomeTab.ME
-        frame { HomeScreen() }
-        composeRule.onRoot()
-            .performTouchInput { swipeUp(); swipeUp(); swipeUp(); swipeUp() }
-        composeRule.waitForIdle()
-        shot("21-additional-settings.png")
-    }
-
-    @Test fun shot22_inCallVideo() {
-        val th = AppState.threads.value.first()
-        CallController.startCall(ctx, th.id, true)
-        frame { CallScreen(th.id, true) }
-        composeRule.mainClock.advanceTimeBy(2000)
-        composeRule.waitForIdle()
-        shot("22-in-call-video.png")
-    }
-
-    // ---------- round 4 additions ----------
-    @Test fun shot24_chatSeenCallEvent() {
-        // ROUND 8 PROOF (items 2 + 7b): ticks are GONE — this chat carries a
-        // peer reply bubble with its soft quote block + "Replied to you"
-        // caption, a centred call-event pill, and the muted "Seen" caption
-        // under my latest (seen) message. Asserts no ✓✓ renders anywhere.
-        val p = PreviewStore.people[1]
-        val id = PreviewRepo.startThreadWith(p)
-        AppState.upsertMessage(id, TikuMessage(
-            id = "s1", senderUid = p.uid, kind = MsgKind.TEXT,
-            text = "Did you see the moodboard?", time = "9:38", me = false, tsMs = 1))
-        AppState.upsertMessage(id, TikuMessage(
-            id = "s2", senderUid = p.uid, kind = MsgKind.TEXT,
-            text = "Yes! The sage tones are perfect", time = "9:40", me = false, tsMs = 2,
-            replyQuote = "Did you see the moodboard?"))
-        AppState.upsertMessage(id, TikuMessage(
-            id = "s3", senderUid = "me", kind = MsgKind.CALL,
-            time = "9:41", me = true, tsMs = 3,
-            callCallerUid = "me", callOutcome = "ended", callDurationSec = 754, callMine = true))
-        AppState.upsertMessage(id, TikuMessage(
-            id = "s4", senderUid = "me", kind = MsgKind.TEXT,
-            text = "On my way!", time = "9:42", me = true, tsMs = 4, seenByPeer = true))
-        frame { ChatScreen(id) }
         composeRule.waitForIdle()
         org.junit.Assert.assertTrue(
-            "chat must not render tick glyphs anymore",
-            composeRule.onAllNodesWithText("✓✓", substring = true).fetchSemanticsNodes().isEmpty(),
-        )
-        org.junit.Assert.assertTrue(
-            "Seen caption must render under the latest own message",
-            composeRule.onAllNodesWithText("Seen").fetchSemanticsNodes().isNotEmpty(),
-        )
-        shot("24-chat-seen-call-event.png")
-    }
-
-    @Test fun shot25_newChatLiveSearch() {
-        // ITEM 4 PROOF: live suggestions while typing — no Search button.
-        // Typing "riy" in the sheet's field must surface the Riya row.
-        // The Robolectric process has no Firestore backend, so the sheet's
-        // searcher seam is pointed at the preview people through the REAL
-        // shared matcher (SearchNorm.matches — the same normalization the
-        // Firestore prefix+token query pair implements).
-        NewChatSheet.searcher = { q ->
-            PreviewStore.people.filter { SearchNorm.matches(it.username, it.name, q) }
-        }
-        AppState.homeTab = HomeTab.CHATS
-        AppState.go(Screen.Home) // sheet host skins by live nav state (device: Home)
-        NewChatSheet.open()
-        frame { HomeScreen() }
-        val fields = composeRule.onAllNodes(hasSetTextAction()).fetchSemanticsNodes()
-        org.junit.Assert.assertTrue("expected at least the sheet search field", fields.isNotEmpty())
-        composeRule.onAllNodes(hasSetTextAction())[fields.size - 1].performTextInput("riy")
-        composeRule.mainClock.advanceTimeBy(800) // debounce 200 ms + render
-        composeRule.waitForIdle()
-        shot("25-new-chat-search.png")
-    }
-
-    @Test fun shot26_restore() {
-        // ROUND 5 PROOF: the screen a returning user lands on after a reinstall
-        // (sign-in routing → Restore): password field + the copy that says the
-        // password brings EVERYTHING back and that nothing can start over it.
-        frame { RestorePasswordScreen() }
-        composeRule.waitForIdle()
-        org.junit.Assert.assertTrue(
-            "restore screen must promise the full journal comes back",
-            composeRule.onAllNodesWithText("everything comes back", substring = true)
+            "chat top bar must show the chat title",
+            composeRule.onAllNodesWithText(th.displayName, substring = true)
                 .fetchSemanticsNodes().isNotEmpty(),
         )
-        shot("26-restore.png")
+        org.junit.Assert.assertTrue(
+            "peer typing must show in the top bar status",
+            composeRule.onAllNodesWithText("typing", substring = true)
+                .fetchSemanticsNodes().isNotEmpty(),
+        )
+        shot("16-chat-screen.png")
+        AppState.setTyping(th.id, false)
     }
 
-    // ---------- round 6 additions ----------
-    @Test fun shot27_alignmentFlush() {
-        // BUG 1 PROOF: a dedicated thread with a SHORT own message, a LONG own
-        // message and a peer message — own bubbles must end FLUSH at the right
-        // edge, the peer bubble must start FLUSH at the left edge (Instagram
-        // alignment), not the old uniform ~22% centre column.
+    @Test fun shot17_chatMenu() {
+        // The redesign's long-press menu is IN-CHAT now (centred glass
+        // menu + emoji bar) — no bottom sheet. Own text message → Reply /
+        // Copy / Star / Pin / Delete all offered.
         val p = PreviewStore.people[1]
         val id = PreviewRepo.startThreadWith(p)
         AppState.upsertMessage(id, TikuMessage(
-            id = "al1", senderUid = "me", kind = MsgKind.TEXT, text = "Ok",
-            time = "9:41", me = true, tsMs = 1))
-        AppState.upsertMessage(id, TikuMessage(
-            id = "al2", senderUid = "me", kind = MsgKind.TEXT,
-            text = "This is a much longer message that stretches close to the width cap and still has to end flush at the right edge",
-            time = "9:41", me = true, tsMs = 2))
-        AppState.upsertMessage(id, TikuMessage(
-            id = "al3", senderUid = p.uid, kind = MsgKind.TEXT, text = "Hey!",
-            time = "9:42", me = false, tsMs = 3))
+            id = "menu1", senderUid = "me", kind = MsgKind.TEXT,
+            text = "Long press this message for the menu", time = "9:41", me = true, tsMs = 1))
+        AppState.go(Screen.Chat(id))
         frame { ChatScreen(id) }
         composeRule.waitForIdle()
-        shot("27-alignment-flush.png")
+        composeRule.onNodeWithText("Long press this message for the menu")
+            .performTouchInput { longClick() }
+        composeRule.waitForIdle()
+        org.junit.Assert.assertTrue(
+            "long-press menu must offer Reply",
+            composeRule.onAllNodesWithText("Reply").fetchSemanticsNodes().isNotEmpty(),
+        )
+        org.junit.Assert.assertTrue(
+            "long-press menu must offer Copy for a text message",
+            composeRule.onAllNodesWithText("Copy").fetchSemanticsNodes().isNotEmpty(),
+        )
+        org.junit.Assert.assertTrue(
+            "long-press menu must offer Delete for an own message",
+            composeRule.onAllNodesWithText("Delete").fetchSemanticsNodes().isNotEmpty(),
+        )
+        shot("17-chat-menu.png")
     }
 
-    @Test fun shot28_incomingRinging() {
-        // BUG 2 PROOF (harness state): drive CallController.onIncoming exactly
-        // as the callee's ringing watcher does after the round-6 fix — the
-        // incoming-call screen must render with accept / reject.
+    @Test fun shot18_chatAttachSheet() {
         val th = AppState.threads.value.first()
-        CallController.onIncoming(th.id, "shot-ring-1", "video", th.person)
-        frame { CallScreen(th.id, true) }
+        AppState.go(Screen.Chat(th.id))
+        frame { ChatScreen(th.id) }
+        composeRule.onAllNodesWithText("+")[0].performTouchInput { click() }
         composeRule.waitForIdle()
-        shot("28-incoming-ringing.png")
+        org.junit.Assert.assertTrue(
+            "attach sheet must offer Photo (the only attach kind — no video messages)",
+            composeRule.onAllNodesWithText("Photo", substring = true)
+                .fetchSemanticsNodes().isNotEmpty(),
+        )
+        shot("18-chat-attach-sheet.png")
+    }
+
+    @Test fun shot19_chatRecordingBar() {
+        // The redesign ChatInput's REAL recording state, framed directly:
+        // driving an actual microphone + MediaRecorder under Robolectric
+        // is not possible, and the bar itself is pure UI state.
+        frame {
+            Box(Modifier.fillMaxSize().background(Color.Black)) {
+                Box(Modifier.align(Alignment.BottomCenter)) {
+                    RdChatInput(
+                        h = null, value = "", onChange = {}, onSend = {},
+                        accent = Color(0xFFFF5C8A),
+                        replyText = null, onClearReply = {},
+                        recording = true, recSecs = 42,
+                        onPlus = {}, onMic = {}, onRecCancel = {}, onRecSend = {},
+                    )
+                }
+            }
+        }
+        org.junit.Assert.assertTrue(
+            "recording bar must show the elapsed timer",
+            composeRule.onAllNodesWithText("0:42").fetchSemanticsNodes().isNotEmpty(),
+        )
+        org.junit.Assert.assertTrue(
+            "recording bar must offer Cancel",
+            composeRule.onAllNodesWithText("Cancel").fetchSemanticsNodes().isNotEmpty(),
+        )
+        shot("19-chat-recording-bar.png")
+    }
+
+    @Test fun shot20_infoMain() {
+        val th = AppState.threads.value.first()
+        AppState.go(Screen.ChatDetails(th.id))
+        frame { InfoScreen(th.id) }
+        composeRule.waitForIdle()
+        org.junit.Assert.assertTrue(
+            "info header must show the chat's display name",
+            composeRule.onAllNodesWithText(th.displayName, substring = true)
+                .fetchSemanticsNodes().isNotEmpty(),
+        )
+        org.junit.Assert.assertTrue(
+            "info must offer Customize chat",
+            composeRule.onAllNodesWithText("Customize chat").fetchSemanticsNodes().isNotEmpty(),
+        )
+        shot("20-info-main.png")
+    }
+
+    @Test fun shot21_infoCustomize() {
+        val th = AppState.threads.value.first()
+        AppState.go(Screen.ChatDetails(th.id))
+        frame { InfoScreen(th.id) }
+        composeRule.onAllNodesWithText("Customize chat")[0].performTouchInput { click() }
+        composeRule.waitForIdle()
+        org.junit.Assert.assertTrue(
+            "customize page must carry the text-size control",
+            composeRule.onAllNodesWithText("Text size").fetchSemanticsNodes().isNotEmpty(),
+        )
+        shot("21-info-customize.png")
+    }
+
+    @Test fun shot22_infoStarred() {
+        val th = AppState.threads.value.first()
+        AppState.upsertMessage(th.id, TikuMessage(
+            id = "star-shot", senderUid = "me", kind = MsgKind.TEXT,
+            text = "This one is starred for the info page", time = "9:41",
+            me = true, tsMs = 999_999, starredByMe = true))
+        AppState.go(Screen.ChatDetails(th.id))
+        frame { InfoScreen(th.id) }
+        composeRule.onAllNodesWithText("Starred messages")[0].performTouchInput { click() }
+        composeRule.waitForIdle()
+        org.junit.Assert.assertTrue(
+            "starred page must list the real starred message",
+            composeRule.onAllNodesWithText("This one is starred for the info page", substring = true)
+                .fetchSemanticsNodes().isNotEmpty(),
+        )
+        shot("22-info-starred.png")
+    }
+
+    @Test fun shot23_infoNicknames() {
+        val th = AppState.threads.value.first()
+        AppState.go(Screen.ChatDetails(th.id))
+        frame { InfoScreen(th.id) }
+        composeRule.onAllNodesWithText("Nicknames")[0]
+            .performScrollTo()
+            .performTouchInput { click() }
+        composeRule.waitForIdle()
+        org.junit.Assert.assertTrue(
+            "nicknames page must carry the per-person nickname field",
+            composeRule.onAllNodesWithText("Nickname for", substring = true)
+                .fetchSemanticsNodes().isNotEmpty(),
+        )
+        shot("23-info-nicknames.png")
+    }
+
+    @Test fun shot24_watchPane() {
+        // The Watch pane (pane-owned WebView architecture; preview builds
+        // render the placeholder branch) composes headless.
+        frame { WatchPane() }
+        composeRule.waitForIdle()
+        shot("24-watch-pane.png")
+    }
+
+    @Test fun shot25_noteSheetPartner() {
+        // Data-driven: find a seeded PARTNER note (keyed by a preview
+        // person's uid) in the real notes flow, tap its bubble in the
+        // Messages notes row, and prove the partner note sheet opened.
+        val peopleUids = PreviewStore.people.map { it.uid }.toSet()
+        val partnerNote = AppState.notes.value.entries.firstOrNull { it.key in peopleUids }
+        org.junit.Assert.assertTrue(
+            "preview must seed a partner note for this shot (Worker A seam)",
+            partnerNote != null,
+        )
+        AppState.homeTab = HomeTab.CHATS
+        AppState.go(Screen.Home)
+        frame { HomeScreen() }
+        composeRule.onAllNodesWithText(partnerNote!!.value.text, substring = true)[0]
+            .performTouchInput { click() }
+        composeRule.waitForIdle()
+        org.junit.Assert.assertTrue(
+            "partner note sheet must offer the note reply field",
+            composeRule.onAllNodesWithText("Reply to note", substring = true)
+                .fetchSemanticsNodes().isNotEmpty(),
+        )
+        shot("25-note-sheet-partner.png")
+    }
+
+    @Test fun shot26_noteSheetMine() {
+        AppState.homeTab = HomeTab.CHATS
+        AppState.go(Screen.Home)
+        frame { HomeScreen() }
+        composeRule.onAllNodesWithText("Your note")[0].performTouchInput { click() }
+        composeRule.waitForIdle()
+        org.junit.Assert.assertTrue(
+            "my note sheet must offer the thought field",
+            composeRule.onAllNodesWithText("What's on your mind?", substring = true)
+                .fetchSemanticsNodes().isNotEmpty(),
+        )
+        shot("26-note-sheet-mine.png")
+    }
+
+    @Test fun shot27_callPillOverMessages() {
+        // A connected call minimized to the shell's floating CallPill over
+        // Messages — controller state driven exactly as the call screen's
+        // minimize path drives it.
+        val th = AppState.threads.value.first()
+        CallController.state.value = CallUiState.Connected(
+            th.id, "shot-pip-1", false, th.person, System.currentTimeMillis() - 65_000,
+        )
+        CallController.minimizeCall()
+        AppState.homeTab = HomeTab.CHATS
+        AppState.go(Screen.Home)
+        frame { HomeScreen() }
+        composeRule.waitForIdle()
+        org.junit.Assert.assertTrue(
+            "minimized call pill must float over Messages",
+            CallController.pipMinimized.value &&
+                composeRule.onAllNodesWithText(th.person.name, substring = true)
+                    .fetchSemanticsNodes().isNotEmpty(),
+        )
+        shot("27-call-pill-messages.png")
         CallController.endSilently()
     }
 
-    @Test fun shot29_coupleTheme() {
-        // FEATURE 5a PROOF: Couple wallpaper (blush + hearts) + rose accent
-        // applied to the chat surface — round 7 drives it through the SAME
-        // preset entry the owner taps (SettingsStore.setCoupleTheme, the
-        // labelled Me ▸ Appearance toggle). Settings are restored after.
-        // ROUND 13: setAccent now selects the couple theme (0..4) and
-        // setCoupleTheme writes theme + wallpaper together; the signatures
-        // (and this proof's path) are unchanged.
-        val prevAccent = SettingsStore.state.value.accentIdx
-        val prevWp = SettingsStore.state.value.wallpaper
-        SettingsStore.setCoupleTheme(true)
-        val th = AppState.threads.value.first()
-        frame { ChatScreen(th.id) }
-        composeRule.waitForIdle()
-        shot("29-couple-theme.png")
-        SettingsStore.setAccent(prevAccent)
-        SettingsStore.setWallpaper(prevWp.ordinal)
-    }
-
-    @Test fun shot31_coupleThemeSettings() {
-        // ROUND 7 (P1) PROOF: the LABELLED "Couple theme" row in
-        // Me ▸ Appearance, shown in its ON state — round 6 buried the preset
-        // as anonymous swatches and the owner reported it missing. Applied
-        // via the toggle's own path. No scroll: the full Appearance card
-        // fits above the tab bar (proven by 13-me-pane), so the row is
-        // captured visibly in frame — an earlier full swipeUp overshot the
-        // group entirely and the label never appeared in the shot.
-        // ROUND 13: the row is the rebuilt Appearance group's couple-theme
-        // toggle (TikInfoRow "Couple theme" in Home.kt's MePane) — the
-        // label, and therefore this proof, is unchanged.
-        val prevAccent = SettingsStore.state.value.accentIdx
-        val prevWp = SettingsStore.state.value.wallpaper
-        SettingsStore.setCoupleTheme(true)
+    @Test fun shot28_settingsOwner() {
+        // OWNER PAIR (1 of 2): harness owner seam ON — Settings gains the
+        // Owner section: Notifications toggle, App lock toggle, Lock now.
+        OwnerState.previewOverride = true
+        OwnerPrefs.setNotify(true)
         AppState.homeTab = HomeTab.ME
         frame { HomeScreen() }
         composeRule.waitForIdle()
         org.junit.Assert.assertTrue(
-            "Appearance must carry a labelled Couple theme row",
-            composeRule.onAllNodesWithText("Couple theme").fetchSemanticsNodes().isNotEmpty(),
+            "owner Settings must carry the Owner section",
+            composeRule.onAllNodesWithText("Owner").fetchSemanticsNodes().isNotEmpty(),
         )
-        shot("31-couple-theme-settings.png")
-        SettingsStore.setAccent(prevAccent)
-        SettingsStore.setWallpaper(prevWp.ordinal)
-    }
-
-    @Test fun shot30_chatDetailsNickname() {
-        // FEATURE 5b PROOF: the chat details sheet shows the REAL name +
-        // @username and the nickname action (the seeded first thread already
-        // has nickname "Aaru" — header/list shots 11/14 show it in place).
-        val th = AppState.threads.value.first()
-        AppState.go(Screen.Chat(th.id)) // sheet host skins by live nav state (device: Chat)
-        frame { ChatScreen(th.id) }
-        ChatSheets.more(th, th.person)
-        composeRule.waitForIdle()
         org.junit.Assert.assertTrue(
-            "details sheet must offer nickname editing",
-            composeRule.onAllNodesWithText("Edit nickname").fetchSemanticsNodes().isNotEmpty(),
+            "owner section must offer the Notifications toggle",
+            composeRule.onAllNodesWithText("Notifications").fetchSemanticsNodes().isNotEmpty(),
         )
-        shot("30-chat-details-nickname.png")
+        org.junit.Assert.assertTrue(
+            "owner section must offer Lock now",
+            composeRule.onAllNodesWithText("Lock now").fetchSemanticsNodes().isNotEmpty(),
+        )
+        shot("28-settings-owner.png")
+        OwnerState.previewOverride = null
     }
 
-    // ---------- round 8 additions ----------
-    @Test fun shot32_swipeReplyQuote() {
-        // ITEM 1 + 2 PROOF: reply mode armed on a chat — first try the real
-        // swipe gesture on an own bubble (long message = a long drag); if the
-        // harness can't drive it past the threshold, fall back to the
-        // long-press sheet's Reply (the same reply state). The capture shows
-        // the composer reply bar (IG header + quote at ~70%) over a thread
-        // whose peer reply bubble carries its own quote block + caption.
+    @Test fun shot29_chatSwipeReply() {
+        // Swipe-reply armed on a chat — first try the real swipe gesture
+        // on an own bubble; if the harness can't drive it past the arm
+        // threshold, fall back to the long-press menu's Reply (the same
+        // reply state). The capture shows the composer's reply bar.
         val p = PreviewStore.people[1]
         val id = PreviewRepo.startThreadWith(p)
         AppState.upsertMessage(id, TikuMessage(
@@ -488,6 +548,7 @@ class ScreenshotsTest {
             id = "r3", senderUid = "me", kind = MsgKind.TEXT,
             text = "Perfect, this is the long message I am swiping on to reply",
             time = "9:40", me = true, tsMs = 3))
+        AppState.go(Screen.Chat(id))
         frame { ChatScreen(id) }
         composeRule.waitForIdle()
         var armedBySwipe = false
@@ -495,51 +556,66 @@ class ScreenshotsTest {
             composeRule.onNodeWithText("Perfect, this is the long message I am swiping on to reply")
                 .performTouchInput { swipeLeft() }
             composeRule.waitForIdle()
-            armedBySwipe = composeRule.onAllNodesWithText("Replying to yourself")
+            armedBySwipe = composeRule.onAllNodesWithText("Replying")
                 .fetchSemanticsNodes().isNotEmpty()
         }
         if (!armedBySwipe) {
             composeRule.onNodeWithText("Perfect, this is the long message I am swiping on to reply")
                 .performTouchInput { longClick() }
             composeRule.waitForIdle()
-            composeRule.onNodeWithText("Reply").performClick()
+            composeRule.onAllNodesWithText("Reply")[0].performTouchInput { click() }
             composeRule.waitForIdle()
         }
         org.junit.Assert.assertTrue(
             "reply bar must be armed (swipe or menu path)",
-            composeRule.onAllNodesWithText("Replying to yourself").fetchSemanticsNodes().isNotEmpty(),
+            composeRule.onAllNodesWithText("Replying").fetchSemanticsNodes().isNotEmpty(),
         )
-        shot("32-swipe-reply-quote.png")
+        shot("29-chat-swipe-reply.png")
     }
 
-    @Test fun shot33_floatingCallWindow() {
-        // ITEM 3 PROOF: a connected call minimized to the floating window,
-        // floating over a live chat — controller state driven exactly as the
-        // call screen's Back/minimize path drives it.
+    @Test fun shot30_chatBlockedBar() {
+        // Block the partner through the real engine seam — the composer
+        // is replaced by the redesign's blocked bar.
         val th = AppState.threads.value.first()
-        CallController.state.value = CallUiState.Connected(
-            th.id, "shot-pip-1", false, th.person, System.currentTimeMillis() - 65_000,
-        )
-        CallController.minimizeCall()
-        frame {
-            Box(Modifier.fillMaxSize()) {
-                ChatScreen(th.id)
-                FloatingCallWindow()
-            }
-        }
+        AppState.repo.blockUser(th.person.uid)
+        AppState.go(Screen.Chat(th.id))
+        frame { ChatScreen(th.id) }
         composeRule.waitForIdle()
         org.junit.Assert.assertTrue(
-            "floating call window must be showing over the chat",
-            CallController.pipMinimized.value &&
-                composeRule.onAllNodesWithText("Aarav").fetchSemanticsNodes().isNotEmpty(),
+            "blocked partner must replace the composer with the blocked bar",
+            composeRule.onAllNodesWithText("You blocked this person")
+                .fetchSemanticsNodes().isNotEmpty(),
         )
-        shot("33-floating-call-window.png")
-        CallController.endSilently()
+        org.junit.Assert.assertTrue(
+            "blocked bar must offer Unblock",
+            composeRule.onAllNodesWithText("Unblock").fetchSemanticsNodes().isNotEmpty(),
+        )
+        shot("30-chat-blocked-bar.png")
+        AppState.repo.unblockUser(th.person.uid)
     }
 
-    @Test fun shot34_imageViewer() {
-        // ITEM 5 PROOF: the full-screen image viewer — photo fit to screen,
-        // explicit "Save to device" action + close. (Nothing auto-saves.)
+    @Test fun shot31_settingsNoOwner() {
+        // OWNER PAIR (2 of 2): seam OFF — the Owner section must not exist
+        // AT ALL (every non-owner account's Settings, unchanged).
+        OwnerState.previewOverride = false
+        AppState.homeTab = HomeTab.ME
+        frame { HomeScreen() }
+        composeRule.waitForIdle()
+        org.junit.Assert.assertTrue(
+            "non-owner Settings must not contain an Owner section",
+            composeRule.onAllNodesWithText("Owner").fetchSemanticsNodes().isEmpty(),
+        )
+        org.junit.Assert.assertTrue(
+            "non-owner Settings must not contain Lock now",
+            composeRule.onAllNodesWithText("Lock now").fetchSemanticsNodes().isEmpty(),
+        )
+        shot("31-settings-no-owner.png")
+        OwnerState.previewOverride = null
+    }
+
+    @Test fun shot32_imageViewer() {
+        // The full-screen image viewer — photo fit to screen, explicit
+        // "Save to device" action + close. (Nothing auto-saves.)
         val bmp = android.graphics.Bitmap.createBitmap(600, 400, android.graphics.Bitmap.Config.ARGB_8888)
         val canvas = android.graphics.Canvas(bmp)
         canvas.drawColor(android.graphics.Color.rgb(240, 200, 170))
@@ -556,101 +632,27 @@ class ScreenshotsTest {
             "viewer must offer the explicit Save to device action",
             composeRule.onAllNodesWithText("Save to device").fetchSemanticsNodes().isNotEmpty(),
         )
-        shot("34-image-viewer.png")
+        shot("32-image-viewer.png")
     }
 
-    @Test fun shot35_editProfile() {
-        // ITEM 6 PROOF: Me ▸ Edit profile — photo row + username field with
-        // the signup-mirroring validation + save.
-        AppState.myUsername = "abu_saalim"
-        AppState.homeTab = HomeTab.ME
-        AppState.go(Screen.Home) // sheet host skins by live nav state (device: Home)
-        frame { HomeScreen() }
-        EditProfileSheet.open()
+    @Test fun shot33_callScreen() {
+        val th = AppState.threads.value.first()
+        // preview fake call: "Calling…" then connects — no WebRTC classes load here
+        CallController.startCall(ctx, th.id, false)
+        frame { CallScreen(th.id, false) }
+        composeRule.mainClock.advanceTimeBy(2000)
         composeRule.waitForIdle()
-        org.junit.Assert.assertTrue(
-            "edit profile sheet must offer the username save",
-            composeRule.onAllNodesWithText("Save username").fetchSemanticsNodes().isNotEmpty(),
-        )
-        org.junit.Assert.assertTrue(
-            "edit profile sheet must offer photo change",
-            composeRule.onAllNodesWithText("Change photo").fetchSemanticsNodes().isNotEmpty(),
-        )
-        shot("35-edit-profile.png")
+        shot("33-call-screen.png")
     }
 
-    @Test fun shot36_jumpToBottomPill() {
-        // ITEM 4 PROOF: a long chat scrolled UP (toward older messages)
-        // surfaces the floating jump-to-latest pill.
-        val p = PreviewStore.people[1]
-        val id = PreviewRepo.startThreadWith(p)
-        for (i in 1..30) {
-            AppState.upsertMessage(id, TikuMessage(
-                id = "j$i", senderUid = if (i % 2 == 0) "me" else p.uid,
-                kind = MsgKind.TEXT, text = "Message number $i in a long chat",
-                time = "9:41", me = i % 2 == 0, tsMs = i.toLong()))
-        }
-        frame { ChatScreen(id) }
+    @Test fun shot34_incomingRinging() {
+        // Drive CallController.onIncoming exactly as the callee's ringing
+        // watcher does — the incoming-call screen must render.
+        val th = AppState.threads.value.first()
+        CallController.onIncoming(th.id, "shot-ring-1", "video", th.person)
+        frame { CallScreen(th.id, true) }
         composeRule.waitForIdle()
-        // Drive the scroll through the list's own semantics action (gestures
-        // against the reversed list proved unreliable in this harness): jump
-        // deep into history — the pill must appear once we're off the bottom.
-        composeRule.onNodeWithTag("message_list").performScrollToIndex(24)
-        composeRule.waitForIdle()
-        org.junit.Assert.assertTrue(
-            "jump-to-latest pill must appear when scrolled up",
-            composeRule.onAllNodesWithTag("jump_to_latest").fetchSemanticsNodes().isNotEmpty(),
-        )
-        shot("36-jump-to-bottom.png")
-    }
-
-    // ---------- round 9 additions ----------
-    @Test fun shot37_ownerSection() {
-        // OWNER PAIR (1 of 2): harness owner seam ON — Me gains the Owner
-        // section: Notifications toggle (shown ON, as he would opt in), App
-        // lock toggle, and the explicit Lock now row.
-        OwnerState.previewOverride = true
-        OwnerPrefs.setNotify(true)
-        AppState.homeTab = HomeTab.ME
-        frame { HomeScreen() }
-        // NO scroll: the Owner group sits directly under the profile card and
-        // fits in the first viewport — a root swipeUp flings the list to the
-        // settings groups and DISPOSES this item (the round-7 lesson, learned
-        // again: shot37 v1 swiped and the title left the semantics tree).
-        composeRule.waitForIdle()
-        org.junit.Assert.assertTrue(
-            "owner Me pane must carry the Owner section",
-            composeRule.onAllNodesWithText("Owner").fetchSemanticsNodes().isNotEmpty(),
-        )
-        org.junit.Assert.assertTrue(
-            "owner section must offer the Notifications toggle",
-            composeRule.onAllNodesWithText("Notifications").fetchSemanticsNodes().isNotEmpty(),
-        )
-        org.junit.Assert.assertTrue(
-            "owner section must offer Lock now",
-            composeRule.onAllNodesWithText("Lock now").fetchSemanticsNodes().isNotEmpty(),
-        )
-        shot("37-owner-section.png")
-        OwnerState.previewOverride = null
-    }
-
-    @Test fun shot38_mePaneNoOwner() {
-        // OWNER PAIR (2 of 2): seam OFF — the Owner section must not exist
-        // AT ALL (this is every non-owner account's Me pane, unchanged).
-        OwnerState.previewOverride = false
-        AppState.homeTab = HomeTab.ME
-        frame { HomeScreen() }
-        // Same unswiped first viewport as shot37 — the honest pair.
-        composeRule.waitForIdle()
-        org.junit.Assert.assertTrue(
-            "non-owner Me pane must not contain an Owner section",
-            composeRule.onAllNodesWithText("Owner").fetchSemanticsNodes().isEmpty(),
-        )
-        org.junit.Assert.assertTrue(
-            "non-owner Me pane must not contain Lock now",
-            composeRule.onAllNodesWithText("Lock now").fetchSemanticsNodes().isEmpty(),
-        )
-        shot("38-me-pane-no-owner.png")
-        OwnerState.previewOverride = null
+        shot("34-incoming-ringing.png")
+        CallController.endSilently()
     }
 }

@@ -1,11 +1,21 @@
 package com.tiku.app
 
+import android.content.Context
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.CubicBezierEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
-import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -19,21 +29,34 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListScope
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.Favorite
+import androidx.compose.material.icons.filled.KeyboardArrowRight
+import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Notifications
+import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material3.Icon
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -41,37 +64,309 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.composed
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.draw.scale
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.graphics.lerp
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlin.math.roundToInt
 
 /**
- * CHAT DETAILS — ROUND 12: rebuilt as the design's drawInfo screen with
- * its openSub sub-pages (Customize / Privacy & safety / Nicknames /
- * Profile), in the design's language (.ihd identity, .acts round
- * actions, .grp rows, .prev preview card, .mg media grid). Everything
- * behind it is unchanged:
- *  - Theme: PER-CHAT accent + wallpaper on the chat doc (themeAccent /
- *    themeWallpaper) so BOTH members see the same look — the chat renders
- *    via ChatThread.effectiveSettings with global fallback.
- *  - Nicknames: the round-6 system (chat doc nicknames map); the peer's
- *    nickname is editable, mine (set by the peer) is display-only.
- *  - Read receipts: per-chat switch (receiptsOff on the chat doc). Off ⇒
- *    my client writes no seenBy marks here and "Seen" captions hide.
- * The design's mock-only rows are NOT here: no "Create a group chat"
- * (the app is 1:1 by scope), no Block account (no block feature exists).
+ * INFO — ROUND 14: the owner's TikuuRedesign InfoScreen, ported onto the
+ * real thread (this file replaces the build-47 ChatDetailsScreen — the
+ * old glass details UI is gone). Glowing avatar header, Day-N-together
+ * pill from the thread's real creation time, RoundActions
+ * Profile/Search/Mute/Options with real subpages, Customize (per-chat
+ * theme swatches on the EXISTING theme storage + the real text-size
+ * store), Starred (real list), Privacy & safety (Block via the engine's
+ * block API + Clear chat), Nicknames (the existing nicknames engine),
+ * Shared media (the thread's real image messages).
+ *
+ * Hard-NO honoured: no follower stats, no bio, no follow button, no
+ * Restrict, no Report, no group creation, no fake devices.
  */
+
+// ================= per-thread local mute (Round 14 spec) =================
+/**
+ * Local per-thread mute flag. There is no server mute and (outside the
+ * owner account) no notifications at all in Tik, so muting is a purely
+ * local preference: a muted thread's rows lose their unread-dot emphasis
+ * in Messages (Worker A's shell reads [muted]). Persisted in
+ * SharedPreferences; every access is guarded because AppState.appCtx is
+ * a lateinit that is unset in the screenshot harness.
+ */
+object ThreadMuteStore {
+    private val _muted = MutableStateFlow<Set<String>>(emptySet())
+    val muted: StateFlow<Set<String>> = _muted
+
+    @Volatile
+    private var loaded = false
+
+    private fun ensureLoaded() {
+        if (loaded) return
+        loaded = true
+        runCatching {
+            val prefs = AppState.appCtx.getSharedPreferences("tiku_thread_mute", Context.MODE_PRIVATE)
+            _muted.value = prefs.getStringSet("muted", emptySet())?.toSet() ?: emptySet()
+        }
+    }
+
+    fun isMuted(threadId: String): Boolean {
+        ensureLoaded()
+        return threadId in _muted.value
+    }
+
+    fun setMuted(threadId: String, on: Boolean) {
+        ensureLoaded()
+        _muted.value = if (on) _muted.value + threadId else _muted.value - threadId
+        runCatching {
+            AppState.appCtx.getSharedPreferences("tiku_thread_mute", Context.MODE_PRIVATE)
+                .edit().putStringSet("muted", _muted.value).apply()
+        }
+    }
+}
+
+// ================= redesign tokens (verbatim from TikuuRedesign) =================
+private val RdICard = Color(0xFF1B1B1F)
+private val RdIRose = Color(0xFFFF5C8A)
+private val RdIRoseDeep = Color(0xFFE23D74)
+private val RdISub = Color(0xFF9A99A6)
+private val RdIDanger = Color(0xFFFF453A)
+private val RdIEase = CubicBezierEasing(0.22f, 1f, 0.36f, 1f)
+private val RdIThemes = listOf(
+    Color(0xFFFF5C8A) to Color(0xFFE23D74),
+    Color(0xFF6AA8FF) to Color(0xFF3D7BE0),
+    Color(0xFF8E7CFF) to Color(0xFF6A55E0),
+    Color(0xFFFFB347) to Color(0xFFE08A1E),
+    Color(0xFF4FD1C5) to Color(0xFF22A99D),
+)
+private val RdIAvatarHues = listOf(
+    Color(0xFFFF5C8A), Color(0xFF8E7CFF), Color(0xFFFFB347), Color(0xFF4FD1C5),
+    Color(0xFF6AA8FF), Color(0xFFB07A5A), Color(0xFF5A82B0), Color(0xFF4F9A7E),
+)
+
+/** The file's .rise entrance. */
+private fun Modifier.rdIRise(i: Int): Modifier = composed {
+    val a = remember { Animatable(0f) }
+    LaunchedEffect(Unit) { kotlinx.coroutines.delay(i * 70L); a.animateTo(1f, spring(0.6f, 360f)) }
+    this.graphicsLayer { alpha = a.value.coerceIn(0f, 1f); translationY = (1f - a.value) * 28f }
+}
+
+/** The file's .press feedback. */
+private fun Modifier.rdIPress(onClick: () -> Unit): Modifier = composed {
+    val src = remember { MutableInteractionSource() }
+    val down by src.collectIsPressedAsState()
+    val s by animateFloatAsState(if (down) 0.95f else 1f, spring(0.6f, 500f), label = "rdIPress")
+    this.scale(s).clickable(src, null, onClick = onClick)
+}
+
+/** Redesign avatar on real data (same chain as Chat's RdAv). */
 @Composable
-fun ChatDetailsScreen(threadId: String) {
+private fun RdInfoAv(person: Person, size: Int) {
+    val seed = person.uid.ifEmpty { person.name }
+    val hue = RdIAvatarHues[((seed.hashCode() % RdIAvatarHues.size) + RdIAvatarHues.size) % RdIAvatarHues.size]
+    Box(
+        Modifier.size(size.dp).clip(CircleShape).background(hue),
+        contentAlignment = Alignment.Center,
+    ) {
+        val bmp = person.photoBitmap
+        when {
+            bmp != null -> Image(bmp.asImageBitmap(), null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+            person.photoUrl.isNotEmpty() -> coil.compose.AsyncImage(
+                person.photoUrl, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop,
+            )
+            EmojiArt.assetName(person.emoji) != null -> EmojiArt(person.emoji, (size * 0.62f).dp)
+            else -> Text(
+                person.name.take(1).uppercase(), color = Color.White,
+                fontSize = (size * 0.38f).sp, fontWeight = FontWeight.SemiBold,
+            )
+        }
+    }
+}
+
+// ================= the file's Info atoms =================
+@Composable
+private fun RdIBackBtn(onBack: () -> Unit) {
+    Box(
+        Modifier.size(42.dp).clip(CircleShape).background(RdICard)
+            .border(1.dp, Color.White.copy(0.08f), CircleShape)
+            .rdIPress(onBack),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(Icons.Filled.ArrowBack, null, tint = Color.White, modifier = Modifier.size(20.dp))
+    }
+}
+
+@Composable
+private fun RdICardRow(content: @Composable () -> Unit) {
+    Column(
+        Modifier.fillMaxWidth().clip(RoundedCornerShape(24.dp)).background(RdICard).padding(6.dp),
+    ) { content() }
+}
+
+@Composable
+private fun RdITwoLine(
+    t: String,
+    s: String? = null,
+    chevron: Boolean = false,
+    danger: Boolean = false,
+    onClick: (() -> Unit)? = null,
+) {
+    val mod = if (onClick != null) Modifier.fillMaxWidth().rdIPress(onClick) else Modifier.fillMaxWidth()
+    Row(mod.padding(horizontal = 16.dp, vertical = 14.dp), verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f)) {
+            Text(t, color = if (danger) RdIDanger else Color.White, fontSize = 16.sp)
+            if (s != null) Text(s, color = RdISub, fontSize = 13.sp)
+        }
+        if (chevron) Icon(Icons.Filled.KeyboardArrowRight, null, tint = RdISub, modifier = Modifier.size(20.dp))
+    }
+}
+
+@Composable
+private fun RdINavRow(
+    t: String,
+    s: String? = null,
+    danger: Boolean = false,
+    chevron: Boolean = true,
+    onClick: () -> Unit,
+) = RdITwoLine(t, s, chevron, danger, onClick)
+
+@Composable
+private fun RdIToggle(on: Boolean) {
+    val x = remember { Animatable(if (on) 25f else 3f) }
+    LaunchedEffect(on) { x.animateTo(if (on) 25f else 3f, spring(0.55f, 420f)) }
+    Box(
+        Modifier.size(52.dp, 30.dp).clip(RoundedCornerShape(999.dp))
+            .background(if (on) RdIRose else Color.White.copy(0.15f)),
+    ) {
+        Box(
+            Modifier.offset { IntOffset(x.value.roundToInt(), 0) }.padding(top = 3.dp)
+                .size(24.dp).shadow(4.dp, CircleShape).clip(CircleShape).background(Color.White),
+        )
+    }
+}
+
+@Composable
+private fun RdIToggleRow(t: String, s: String?, on: Boolean, onChange: (Boolean) -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().rdIPress { onChange(!on) }.padding(horizontal = 16.dp, vertical = 14.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text(t, color = Color.White, fontSize = 16.sp)
+            if (s != null) Text(s, color = RdISub, fontSize = 13.sp)
+        }
+        RdIToggle(on)
+    }
+}
+
+@Composable
+private fun RdIField(
+    value: String,
+    onChange: (String) -> Unit,
+    label: String? = null,
+    placeholder: String = "",
+    enabled: Boolean = true,
+) {
+    Column {
+        if (label != null) {
+            Text(label, color = RdISub, fontSize = 13.sp, modifier = Modifier.padding(start = 4.dp, bottom = 6.dp))
+        }
+        Box(
+            Modifier.fillMaxWidth().clip(RoundedCornerShape(18.dp)).background(RdICard)
+                .padding(horizontal = 16.dp, vertical = 14.dp),
+        ) {
+            if (value.isEmpty() && placeholder.isNotEmpty()) {
+                Text(placeholder, color = RdISub, fontSize = 16.sp)
+            }
+            BasicTextField(
+                value, onChange,
+                enabled = enabled,
+                textStyle = TextStyle(color = if (enabled) Color.White else RdISub, fontSize = 16.sp),
+                cursorBrush = SolidColor(RdIRose),
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
+    }
+}
+
+@Composable
+private fun RdIPill(text: String, filled: Boolean, onClick: () -> Unit) {
+    Box(
+        Modifier.clip(RoundedCornerShape(999.dp))
+            .background(if (filled) Brush.linearGradient(listOf(RdIRose, RdIRoseDeep)) else SolidColor(RdICard))
+            .rdIPress(onClick)
+            .padding(horizontal = 18.dp, vertical = 10.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(text, color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+    }
+}
+
+@Composable
+private fun RdISection(t: String) {
+    Text(t, color = RdISub, fontSize = 13.sp, modifier = Modifier.padding(start = 4.dp))
+}
+
+@Composable
+private fun RdIDivider() = Box(
+    Modifier.fillMaxWidth().padding(horizontal = 16.dp).height(1.dp).background(Color.White.copy(0.08f)),
+)
+
+@Composable
+private fun RdIRoundAction(icon: ImageVector, label: String, active: Boolean = false, onClick: () -> Unit) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        Box(
+            Modifier.size(56.dp).clip(CircleShape)
+                .background(if (active) RdIRose else RdICard)
+                .border(1.dp, Color.White.copy(0.08f), CircleShape)
+                .rdIPress(onClick),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(icon, null, tint = Color.White, modifier = Modifier.size(24.dp))
+        }
+        Text(label, color = RdISub, fontSize = 12.sp, modifier = Modifier.padding(top = 6.dp))
+    }
+}
+
+/** The file's SubPage shell. */
+@Composable
+private fun RdISubPage(top: Dp = 8.dp, bottom: Dp, content: LazyListScope.() -> Unit) {
+    LazyColumn(
+        Modifier.fillMaxSize().padding(horizontal = 16.dp),
+        contentPadding = PaddingValues(top = top, bottom = bottom),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+        content = content,
+    )
+}
+
+@Composable
+private fun RdISubHeader(title: String, onBack: () -> Unit) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        RdIBackBtn(onBack)
+        Spacer(Modifier.width(14.dp))
+        Text(title, color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
+    }
+}
+
+// ================= InfoScreen =================
+@Composable
+fun InfoScreen(threadId: String) {
     val threads by AppState.threads.collectAsState()
     val thread = threads.firstOrNull { it.id == threadId }
     var sub by remember { mutableStateOf<String?>(null) }
@@ -79,533 +374,419 @@ fun ChatDetailsScreen(threadId: String) {
         if (sub != null) sub = null else AppState.go(Screen.Chat(threadId))
     }
     if (thread == null) {
-        val pal = LocalPalette.current
-        Box(Modifier.fillMaxSize().background(pal.bg), contentAlignment = Alignment.Center) {
-            Text("Chat unavailable", color = pal.sub, fontFamily = InterTight)
+        Box(Modifier.fillMaxSize().background(Color.Black), contentAlignment = Alignment.Center) {
+            Text("Chat unavailable", color = RdISub, fontSize = 14.sp)
         }
         return
     }
-    val globalSettings by SettingsStore.state.collectAsState()
-    val settings = thread.effectiveSettings(globalSettings)
-    val person = thread.person
-    // ROUND 13: the whole details surface renders in THIS chat's palette
-    // (global mode + the chat's couple theme).
-    val detailsPalette = remember(globalSettings.darkMode, settings.accentIdx) {
-        buildPalette(if (globalSettings.darkMode) "dark" else "light", settings.accentIdx)
+    val mutedSet by ThreadMuteStore.muted.collectAsState()
+    val isMuted = thread.id in mutedSet
+    Box(Modifier.fillMaxSize().background(Color.Black)) {
+        AnimatedContent(
+            targetState = sub,
+            transitionSpec = {
+                if (targetState != null) {
+                    (slideInHorizontally(tween(380, easing = RdIEase)) { it / 3 } + fadeIn(tween(300))) togetherWith
+                        (slideOutHorizontally(tween(300, easing = RdIEase)) { -it / 4 } + fadeOut(tween(220)))
+                } else {
+                    (slideInHorizontally(tween(380, easing = RdIEase)) { -it / 3 } + fadeIn(tween(300))) togetherWith
+                        (slideOutHorizontally(tween(300, easing = RdIEase)) { it / 4 } + fadeOut(tween(220)))
+                }
+            },
+            label = "infoSub",
+        ) { target ->
+            when (target) {
+                null -> RdIInfoMain(thread, isMuted, onSub = { sub = it })
+                "profile" -> RdIProfilePage(thread) { sub = null }
+                "search" -> RdISearchPage(thread) { sub = null }
+                "customize" -> RdICustomizePage(thread) { sub = null }
+                "starred" -> RdIStarredPage(thread) { sub = null }
+                "privacy" -> RdIPrivacyPage(thread) { sub = null }
+                "nicknames" -> RdINicknamesPage(thread) { sub = null }
+                "options" -> RdIOptionsPage(thread) { sub = null }
+                else -> RdIInfoMain(thread, isMuted, onSub = { sub = it })
+            }
+        }
     }
+}
 
-    CompositionLocalProvider(LocalPalette provides detailsPalette) {
-    // Sub-pages enter with the design's screen motion (`in`: fade + rise).
-    AnimatedContent(
-        targetState = sub,
-        transitionSpec = {
-            (fadeIn(tween(260, easing = TikEase)) +
-                slideInVertically(tween(260, easing = TikEase)) { 24 })
-                .togetherWith(fadeOut(tween(180, easing = TikEase)))
-        },
-        label = "chat-details-pages",
-    ) { page ->
-        when (page) {
-            "customize" -> CustomizePage(thread, settings, globalSettings) { sub = null }
-            "privacy" -> PrivacyPage(thread) { sub = null }
-            "nick" -> NicknamesPage(thread) { sub = null }
-            "profile" -> ProfilePage(thread) { sub = null }
-            else -> InfoMainPage(
-                thread = thread,
-                settings = settings,
-                onBack = { AppState.go(Screen.Chat(threadId)) },
-                onOpen = { sub = it },
+/** MainActivity routes Screen.ChatDetails here — the redesign's
+ *  InfoScreen IS the chat-details surface now; the old glass
+ *  ChatDetailsScreen implementation is deleted. */
+@Composable
+fun ChatDetailsScreen(threadId: String) = InfoScreen(threadId)
+
+@Composable
+private fun RdIInfoMain(thread: ChatThread, muted: Boolean, onSub: (String) -> Unit) {
+    val person = thread.person
+    val starred = thread.messages.filter { it.starredByMe && !it.deletedForMe }
+    val images = thread.messages.filter { it.kind == MsgKind.IMAGE && !it.deletedForMe }
+    val days = if (thread.createdAtMs > 0) {
+        ((System.currentTimeMillis() - thread.createdAtMs) / 86_400_000L).toInt()
+    } else {
+        0
+    }
+    RdISubPage(bottom = 40.dp) {
+        item {
+            Row { RdIBackBtn { AppState.go(Screen.Chat(thread.id)) } }
+        }
+        item {
+            Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
+                val glowT = rememberInfiniteTransition(label = "glow")
+                val glow by glowT.animateFloat(
+                    18f, 38f,
+                    infiniteRepeatable(tween(1600, easing = RdIEase), RepeatMode.Reverse),
+                    label = "g",
+                )
+                Box(
+                    Modifier.size(116.dp)
+                        .shadow(glow.dp, CircleShape, ambientColor = RdIRose, spotColor = RdIRose)
+                        .clip(CircleShape)
+                        .border(3.dp, RdIRose, CircleShape),
+                    contentAlignment = Alignment.Center,
+                ) { RdInfoAv(person, 104) }
+                Spacer(Modifier.height(14.dp))
+                Text(
+                    thread.displayName, color = Color.White, fontSize = 32.sp,
+                    fontWeight = FontWeight.Bold, textAlign = TextAlign.Center,
+                )
+                if (person.username.isNotEmpty()) {
+                    Text("@${person.username}", color = RdISub, fontSize = 18.sp)
+                }
+                if (days >= 1) {
+                    Spacer(Modifier.height(10.dp))
+                    Row(
+                        Modifier.clip(RoundedCornerShape(999.dp)).background(RdICard)
+                            .padding(horizontal = 14.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Icon(Icons.Filled.Favorite, null, tint = RdIRose, modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text("Day $days together", color = Color.White, fontSize = 14.sp)
+                    }
+                }
+            }
+        }
+        item {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
+                Box(Modifier.rdIRise(0)) {
+                    RdIRoundAction(Icons.Filled.Person, "Profile") { onSub("profile") }
+                }
+                Box(Modifier.rdIRise(1)) {
+                    RdIRoundAction(Icons.Filled.Search, "Search") { onSub("search") }
+                }
+                Box(Modifier.rdIRise(2)) {
+                    RdIRoundAction(
+                        Icons.Filled.Notifications,
+                        if (muted) "Unmute" else "Mute",
+                        active = muted,
+                    ) {
+                        ThreadMuteStore.setMuted(thread.id, !muted)
+                        AppState.toast(if (!muted) "Chat muted" else "Chat unmuted")
+                    }
+                }
+                Box(Modifier.rdIRise(3)) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Box(
+                            Modifier.size(56.dp).clip(CircleShape).background(RdICard)
+                                .border(1.dp, Color.White.copy(0.08f), CircleShape)
+                                .rdIPress { onSub("options") },
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Icon(
+                                Icons.Filled.MoreVert, null, tint = Color.White,
+                                modifier = Modifier.size(24.dp).graphicsLayer { rotationZ = 90f },
+                            )
+                        }
+                        Text("Options", color = RdISub, fontSize = 12.sp, modifier = Modifier.padding(top = 6.dp))
+                    }
+                }
+            }
+        }
+        item {
+            RdICardRow {
+                RdINavRow("Customize chat", "Couple themes and text size") { onSub("customize") }
+                RdIDivider()
+                RdINavRow("Starred messages", "${starred.size} saved") { onSub("starred") }
+                RdIDivider()
+                RdINavRow("Privacy & safety") { onSub("privacy") }
+                RdIDivider()
+                RdINavRow("Nicknames", "Set nicknames for each other") { onSub("nicknames") }
+            }
+        }
+        item { RdISection("Shared media") }
+        item {
+            RdICardRow {
+                if (images.isEmpty()) {
+                    Text(
+                        "Photos and videos shared in this chat will appear here.",
+                        color = RdISub, fontSize = 14.sp,
+                        modifier = Modifier.padding(16.dp),
+                    )
+                } else {
+                    LazyRow(
+                        Modifier.padding(10.dp),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        items(images, key = { it.id }) { m ->
+                            Box(
+                                Modifier.size(110.dp, 130.dp).clip(RoundedCornerShape(16.dp))
+                                    .background(Color.Black),
+                            ) {
+                                m.photo?.let {
+                                    Image(
+                                        it.asImageBitmap(), null, Modifier.fillMaxSize(),
+                                        contentScale = ContentScale.Crop,
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ================= subpages =================
+@Composable
+private fun RdIProfilePage(thread: ChatThread, onBack: () -> Unit) {
+    val startCall = rememberCallStarter()
+    RdISubPage(bottom = 40.dp) {
+        item { RdISubHeader("Profile", onBack) }
+        item {
+            Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
+                RdInfoAv(thread.person, 96)
+                Spacer(Modifier.height(12.dp))
+                Text(
+                    thread.displayName, color = Color.White, fontSize = 24.sp,
+                    fontWeight = FontWeight.SemiBold, textAlign = TextAlign.Center,
+                )
+                if (thread.person.username.isNotEmpty()) {
+                    Text("@${thread.person.username}", color = RdISub, fontSize = 15.sp)
+                }
+            }
+        }
+        item {
+            RdICardRow {
+                RdINavRow("Voice call", "Start a voice call") { startCall(thread.id, false) }
+            }
+        }
+    }
+}
+
+@Composable
+private fun RdISearchPage(thread: ChatThread, onBack: () -> Unit) {
+    var q by remember { mutableStateOf("") }
+    val results = if (q.isBlank()) {
+        emptyList()
+    } else {
+        thread.messages.filter {
+            !it.deletedForMe && it.kind == MsgKind.TEXT && it.text.contains(q, ignoreCase = true)
+        }
+    }
+    RdISubPage(bottom = 40.dp) {
+        item { RdISubHeader("Search", onBack) }
+        item { RdIField(q, { q = it }, placeholder = "Search messages") }
+        if (q.isNotBlank()) {
+            if (results.isEmpty()) {
+                item {
+                    Text(
+                        "No messages found", color = RdISub, fontSize = 14.sp,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                    )
+                }
+            } else {
+                item {
+                    RdICardRow {
+                        results.forEachIndexed { idx, m ->
+                            if (idx > 0) RdIDivider()
+                            RdITwoLine(if (m.me) "You" else thread.displayName, m.text)
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun RdICustomizePage(thread: ChatThread, onBack: () -> Unit) {
+    val globalSettings by SettingsStore.state.collectAsState()
+    val themeIdx = thread.effectiveSettings(globalSettings).accentIdx
+    RdISubPage(bottom = 40.dp) {
+        item { RdISubHeader("Customize chat", onBack) }
+        item { RdISection("Chat theme") }
+        item {
+            RdICardRow {
+                Row(
+                    Modifier.fillMaxWidth().padding(16.dp),
+                    horizontalArrangement = Arrangement.SpaceEvenly,
+                ) {
+                    RdIThemes.forEachIndexed { i, pair ->
+                        val sel = themeIdx == i
+                        val sc by animateFloatAsState(
+                            if (sel) 1.1f else 1f, spring(0.5f, 400f), label = "sw$i",
+                        )
+                        Box(
+                            Modifier.size(52.dp).scale(sc).clip(CircleShape)
+                                .background(Brush.linearGradient(listOf(pair.first, pair.second)))
+                                .then(
+                                    if (sel) Modifier.border(2.5.dp, Color.White, CircleShape)
+                                    else Modifier,
+                                )
+                                .rdIPress {
+                                    AppState.repo.setTheme(thread.id, ThemeCodec.toStored(i), null)
+                                },
+                        )
+                    }
+                }
+            }
+        }
+        item { RdISection("Text size") }
+        item {
+            RdICardRow {
+                Column(Modifier.padding(16.dp)) {
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            "Text size", color = Color.White, fontSize = 16.sp,
+                            modifier = Modifier.weight(1f),
+                        )
+                        Text("${globalSettings.textSizeSp.toInt()} sp", color = RdISub, fontSize = 13.sp)
+                    }
+                    Slider(
+                        value = globalSettings.textSizeSp,
+                        onValueChange = { SettingsStore.setTextSize(it) },
+                        valueRange = 12f..20f,
+                        colors = SliderDefaults.colors(
+                            thumbColor = RdIRose,
+                            activeTrackColor = RdIRose,
+                            inactiveTrackColor = Color.White.copy(0.15f),
+                        ),
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun RdIStarredPage(thread: ChatThread, onBack: () -> Unit) {
+    val starred = thread.messages.filter { it.starredByMe && !it.deletedForMe }
+    RdISubPage(bottom = 40.dp) {
+        item { RdISubHeader("Starred messages", onBack) }
+        if (starred.isEmpty()) {
+            item {
+                Text(
+                    "No starred messages yet. Hold a message and tap Star.",
+                    color = RdISub, fontSize = 14.sp, textAlign = TextAlign.Center,
+                    modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                )
+            }
+        } else {
+            item {
+                RdICardRow {
+                    starred.forEachIndexed { idx, m ->
+                        if (idx > 0) RdIDivider()
+                        RdITwoLine(if (m.me) "You" else thread.displayName, replyQuoteLabel(m))
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun RdIPrivacyPage(thread: ChatThread, onBack: () -> Unit) {
+    val blockedUids by AppState.blockedUids.collectAsState()
+    val blocked = thread.person.uid in blockedUids
+    RdISubPage(bottom = 40.dp) {
+        item { RdISubHeader("Privacy & safety", onBack) }
+        item {
+            RdICardRow {
+                RdINavRow(if (blocked) "Unblock" else "Block", danger = true, chevron = false) {
+                    if (blocked) {
+                        AppState.repo.unblockUser(thread.person.uid)
+                        AppState.toast("Unblocked")
+                    } else {
+                        AppState.repo.blockUser(thread.person.uid)
+                        AppState.toast("Blocked")
+                    }
+                }
+                RdIDivider()
+                RdINavRow("Clear chat", "Removes messages from this device", danger = true, chevron = false) {
+                    AppState.repo.clearChat(thread.id)
+                    AppState.toast("Chat cleared")
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun RdINicknamesPage(thread: ChatThread, onBack: () -> Unit) {
+    var peerNick by remember(thread.id) { mutableStateOf(thread.nickname ?: "") }
+    RdISubPage(bottom = 40.dp) {
+        item { RdISubHeader("Nicknames", onBack) }
+        item { RdISection("Nickname for ${thread.person.name}") }
+        item {
+            RdIField(peerNick, { peerNick = it }, placeholder = thread.person.name)
+        }
+        item {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                RdIPill("Save", filled = true) {
+                    AppState.repo.setNickname(thread.id, peerNick)
+                    AppState.toast("Nickname saved")
+                }
+            }
+        }
+        item { RdISection("Your nickname") }
+        item {
+            RdIField(thread.myNickname ?: "", {}, placeholder = "Not set", enabled = false)
+        }
+        item {
+            Text(
+                "Only ${thread.person.name} can set your nickname.",
+                color = RdISub, fontSize = 12.5.sp,
+                modifier = Modifier.padding(start = 4.dp),
             )
         }
     }
-    }
-}
-
-/** Sub-page scaffold: the design's .top2 (glass back disc + bold title). */
-@Composable
-private fun SubPage(title: String, onBack: () -> Unit, content: @Composable () -> Unit) {
-    val pal = LocalPalette.current
-    Column(Modifier.fillMaxSize().background(pal.bg)) {
-        TikTopBar(title = title, leading = { GlassCircleIconButton("back", onClick = onBack) })
-        content()
-    }
 }
 
 @Composable
-private fun InfoMainPage(
-    thread: ChatThread,
-    settings: TikuUiSettings,
-    onBack: () -> Unit,
-    onOpen: (String) -> Unit,
-) {
-    val pal = LocalPalette.current
-    val person = thread.person
-    val media = thread.messages.filter { it.kind == MsgKind.IMAGE && it.photo != null && !it.deletedForMe }
-    LazyColumn(
-        Modifier.fillMaxSize().background(pal.bg),
-        contentPadding = PaddingValues(bottom = 32.dp),
-    ) {
-        item {
-            // .top2 — just the glass back button
-            Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 12.dp)) {
-                GlassCircleIconButton("back", onClick = onBack)
-            }
-        }
-        item {
-            // .ihd — avatar 92 round inside the accent ring, name 26 Bold,
-            // @username sub. Round-6 rule stands: the REAL profile name
-            // leads here — the nickname never hides who this actually is.
-            // (The design's "days together" pill needs an anniversary date
-            // the app does not store — dropped, never faked.)
-            Column(
-                Modifier.fillMaxWidth(),
-                horizontalAlignment = Alignment.CenterHorizontally,
-            ) {
-                Spacer(Modifier.height(8.dp))
-                Box(
-                    Modifier.border(2.dp, pal.ac, CircleShape)
-                        .background(pal.bg, CircleShape)
-                        .padding(3.dp),
-                ) {
-                    AvatarBox(person, 92.dp, 46.dp, 38f)
-                }
-                Spacer(Modifier.height(12.dp))
-                Text(
-                    person.name, fontFamily = InterTight, fontWeight = FontWeight.Bold,
-                    fontSize = 26.sp, letterSpacing = (-1).sp, color = pal.tx,
-                )
-                if (person.username.isNotEmpty()) {
-                    Text(
-                        "@${person.username}", fontSize = 15.sp, color = pal.sub, fontFamily = InterTight,
-                        modifier = Modifier.padding(top = 4.dp),
-                    )
-                }
-            }
-        }
-        item {
-            // .acts — 54px glass action discs, 12px labels. Only REAL
-            // actions: the design's Search (no in-chat search exists) and
-            // Mute (no engine op) are dropped.
-            val startCall = rememberCallStarter()
-            Row(
-                Modifier.fillMaxWidth().padding(top = 20.dp, bottom = 6.dp),
-                horizontalArrangement = Arrangement.Center,
-            ) {
-                ActButton("user", "Profile") { onOpen("profile") }
-                Spacer(Modifier.width(2.dp))
-                ActButton("call", "Call") { startCall(thread.id, false) }
-                Spacer(Modifier.width(2.dp))
-                ActButton("vid", "Video") { startCall(thread.id, true) }
-                Spacer(Modifier.width(2.dp))
-                ActButton("dots", "Options") { ChatSheets.more(thread, person) }
-            }
-        }
-        item {
-            TikGroup {
-                TikInfoRow("Customize", "Couple themes and text size", first = true, onClick = { onOpen("customize") }) {
-                    TikIcon("chevR", Modifier.size(18.dp), tint = pal.sub)
-                }
-                TikInfoRow("Privacy & safety", null, onClick = { onOpen("privacy") }) {
-                    TikIcon("chevR", Modifier.size(18.dp), tint = pal.sub)
-                }
-                TikInfoRow("Nicknames", null, onClick = { onOpen("nick") }) {
-                    TikIcon("chevR", Modifier.size(18.dp), tint = pal.sub)
-                }
-                TikInfoRow(
-                    "Clear chat", "Hides this conversation's history on this phone only",
-                    onClick = {
-                        AppState.repo.clearChat(thread.id)
-                        AppState.toast("Chat cleared")
-                    },
-                )
-            }
-        }
-        item {
-            TikSectionHeader("Shared media")
-            if (media.isEmpty()) {
-                TikEmpty(
-                    "Shared media",
-                    "Photos and videos shared in this chat will appear here.",
-                    Modifier.fillMaxWidth(),
-                )
-            } else {
-                // .mg — 3 columns, gap 4, radius 16 (loaded window only)
-                Column(
-                    Modifier.fillMaxWidth().padding(horizontal = 18.dp),
-                    verticalArrangement = Arrangement.spacedBy(4.dp),
-                ) {
-                    media.chunked(3).forEach { rowMsgs ->
-                        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                            rowMsgs.forEach { m ->
-                                Image(
-                                    m.photo!!.asImageBitmap(), null,
-                                    Modifier.weight(1f).aspectRatio(1f)
-                                        .clip(RoundedCornerShape(16.dp))
-                                        .clickable(
-                                            interactionSource = remember { MutableInteractionSource() },
-                                            indication = null,
-                                        ) { AppState.go(Screen.Chat(thread.id)) },
-                                    contentScale = ContentScale.Crop,
-                                )
-                            }
-                            repeat(3 - rowMsgs.size) { Spacer(Modifier.weight(1f)) }
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-/** .acts button: 78 wide, 54px glass disc, 12px w500 label, press scale .92. */
-@Composable
-private fun ActButton(icon: String, label: String, onClick: () -> Unit) {
-    val pal = LocalPalette.current
-    val interaction = remember { MutableInteractionSource() }
-    val pressed by interaction.collectIsPressedAsState()
-    val scale by androidx.compose.animation.core.animateFloatAsState(
-        if (pressed) 0.92f else 1f, tween(160, easing = TikEase), label = "actScale")
-    Column(
-        Modifier.width(78.dp)
-            .clickable(interactionSource = interaction, indication = null) { onClick() },
-        horizontalAlignment = Alignment.CenterHorizontally,
-    ) {
-        Box(
-            Modifier.size(54.dp).graphicsLayer { scaleX = scale; scaleY = scale }
-                .glassSurface(CircleShape),
-            contentAlignment = Alignment.Center,
-        ) {
-            TikIcon(icon, Modifier.size(22.dp), tint = pal.tx)
-        }
-        Spacer(Modifier.height(8.dp))
-        Text(label, fontSize = 12.sp, fontWeight = FontWeight.Medium, fontFamily = InterTight, color = pal.tx)
-    }
-}
-
-@Composable
-private fun CustomizePage(
-    thread: ChatThread,
-    settings: TikuUiSettings,
-    globalSettings: TikuUiSettings,
-    onBack: () -> Unit,
-) {
-    val pal = LocalPalette.current
-    // The chat's resolved couple theme (effectiveSettings already ran the
-    // stored int through ThemeCodec).
-    val selectedIdx = settings.accentIdx
-    SubPage("Customize", onBack) {
-        LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 32.dp)) {
-            item {
-                // The design's couple-theme picker: one glass card, a row
-                // per theme (pattern tile + name + subtitle + check).
-                TikSectionHeader("Couple themes")
-                TikGroup {
-                    COUPLE_THEMES.forEachIndexed { i, th ->
-                        ThemePickRow(th, selected = i == selectedIdx, first = i == 0) {
-                            // ROUND 13 storage: new writes use the >=10
-                            // space so both generations read them sanely
-                            // (see ThemeCodec in Models.kt).
-                            AppState.repo.setTheme(thread.id, ThemeCodec.toStored(i), null)
-                        }
-                    }
-                }
-                Text(
-                    "One theme for this chat — both of you see it.",
-                    fontSize = 12.5.sp, color = pal.sub, fontFamily = InterTight,
-                    modifier = Modifier.padding(start = 34.dp, end = 18.dp, top = 6.dp),
-                )
-            }
-            item {
-                // The design's Preview card, rendered in the SELECTED
-                // theme's palette over this chat's wallpaper.
-                TikSectionHeader("Preview")
-                ThemePreviewCard(selectedIdx, settings.wallpaper)
-            }
-            item {
-                TikSectionHeader("Wallpaper")
-                TikGroup {
-                    TikInfoRow("Wallpaper", null, first = true) {
-                        TikSwatches(
-                            colors = WallpaperMode.entries.map { mode ->
-                                val c = wallTint(mode, globalSettings.darkMode)
-                                if (c == androidx.compose.ui.graphics.Color.Unspecified) pal.bg else c
-                            },
-                            selected = thread.themeWallpaper ?: globalSettings.wallpaper.ordinal,
-                            onPick = { AppState.repo.setTheme(thread.id, null, it) },
-                        )
-                    }
-                    TikInfoRow("Couple theme", "Rose Petal with the heart wallpaper") {
-                        val coupleOn = settings.accentIdx == 0 &&
-                            settings.wallpaper == WallpaperMode.COUPLE
-                        ToggleSwitch(coupleOn) { on ->
-                            if (on) {
-                                AppState.repo.setTheme(
-                                    thread.id, ThemeCodec.toStored(0),
-                                    WallpaperMode.COUPLE.ordinal,
-                                )
-                            } else {
-                                AppState.repo.setTheme(
-                                    thread.id, ThemeCodec.toStored(globalSettings.accentIdx),
-                                    globalSettings.wallpaper.ordinal,
-                                )
-                            }
-                            AppState.toast("Couple theme " + if (on) "on" else "off")
-                        }
-                    }
-                }
-            }
-            item {
-                TikSectionHeader("Text")
-                TikGroup {
-                    FontSizeSliderRow(
-                        fontSizeSp = globalSettings.textSizeSp,
-                        onFontSizeChange = { SettingsStore.setTextSize(it) },
-                    )
-                }
-            }
-        }
-    }
-}
-
-/** One couple-theme row (design Customize): 64dp pattern tile with two
- *  mini bubble chips, name + subtitle, check indicator when selected. */
-@Composable
-private fun ThemePickRow(
-    th: CoupleTheme,
-    selected: Boolean,
-    first: Boolean,
-    onClick: () -> Unit,
-) {
-    val pal = LocalPalette.current
-    val density = LocalDensity.current
-    Column(Modifier.fillMaxWidth()) {
-        if (!first) {
-            Box(Modifier.fillMaxWidth().padding(horizontal = 18.dp).height(1.dp).background(pal.ln))
-        }
-        Row(
-            Modifier.fillMaxWidth()
-                .clickable(
-                    interactionSource = remember { MutableInteractionSource() },
-                    indication = null, onClick = onClick,
-                )
-                .padding(horizontal = 16.dp, vertical = 13.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Box(
-                Modifier.size(64.dp)
-                    .clip(RoundedCornerShape(20.dp))
-                    .background(
-                        Brush.linearGradient(
-                            listOf(lerp(pal.bg, th.ac, 0.30f), pal.bg),
-                        ),
-                    )
-                    .border(
-                        if (selected) 2.dp else 1.dp,
-                        if (selected) th.ac else pal.gb,
-                        RoundedCornerShape(20.dp),
-                    )
-                    .drawBehind {
-                        with(density) { drawThemePattern(th.pat, th.ac, pal.isDark, 64.dp.toPx()) }
-                    },
-            ) {
-                Row(
-                    Modifier.align(Alignment.BottomStart).padding(8.dp),
-                    horizontalArrangement = Arrangement.spacedBy(4.dp),
-                ) {
-                    Box(
-                        Modifier.size(width = 18.dp, height = 10.dp)
-                            .clip(RoundedCornerShape(5.dp))
-                            .background(Brush.linearGradient(listOf(th.ac, th.ac2))),
-                    )
-                    Box(
-                        Modifier.size(width = 18.dp, height = 10.dp)
-                            .glassSurface(RoundedCornerShape(5.dp)),
-                    )
-                }
-            }
-            Column(Modifier.weight(1f).padding(start = 14.dp)) {
-                Text(th.name, fontFamily = InterTight, fontWeight = FontWeight.Medium,
-                    fontSize = 15.sp, color = pal.tx)
-                Text(th.subtitle, fontFamily = InterTight, fontSize = 12.5.sp, color = pal.sub,
-                    modifier = Modifier.padding(top = 2.dp))
-            }
-            CheckCircleIndicator(selected)
-        }
-    }
-}
-
-/** The design's Preview card: sample bubbles in the candidate theme's
- *  palette (nested provider) over the chat's current wallpaper. */
-@Composable
-private fun ThemePreviewCard(themeIdx: Int, wallpaper: WallpaperMode) {
-    val mode = tikuSettings().value.darkMode
-    val candidate = remember(mode, themeIdx) { buildPalette(if (mode) "dark" else "light", themeIdx) }
-    val density = LocalDensity.current
-    CompositionLocalProvider(LocalPalette provides candidate) {
-        Column(
-            Modifier.fillMaxWidth().padding(horizontal = 18.dp)
-                .clip(RoundedCornerShape(28.dp))
-                .background(
-                    if (wallpaper == WallpaperMode.DEFAULT) candidate.bg
-                    else wallTint(wallpaper, candidate.isDark),
-                )
-                .drawBehind {
-                    if (wallpaper != WallpaperMode.DEFAULT && wallpaper != WallpaperMode.DOTS) {
-                        drawRect(
-                            brush = Brush.radialGradient(
-                                listOf(candidate.ac.copy(alpha = 0.20f), androidx.compose.ui.graphics.Color.Transparent),
-                                center = androidx.compose.ui.geometry.Offset(size.width / 2f, 0f),
-                                radius = size.width * 0.9f,
-                            ),
-                        )
-                        with(density) {
-                            drawThemePattern(candidate.pat, candidate.ac, candidate.isDark, 160.dp.toPx())
-                        }
-                    }
-                }
-                .border(1.dp, candidate.gb, RoundedCornerShape(28.dp))
-                .padding(16.dp),
-        ) {
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Start) {
-                Box(
-                    Modifier.glassSurface(RoundedCornerShape(23.dp))
-                        .padding(horizontal = 15.dp, vertical = 10.dp),
-                ) {
-                    Text("Good morning", fontSize = 15.sp, color = candidate.tx, fontFamily = InterTight)
-                }
-            }
-            Spacer(Modifier.height(10.dp))
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                Box(
-                    Modifier.clip(RoundedCornerShape(23.dp)).background(candidate.acGradient)
-                        .padding(horizontal = 15.dp, vertical = 10.dp),
-                ) {
-                    Text("Morning, you", fontSize = 15.sp,
-                        color = androidx.compose.ui.graphics.Color.White, fontFamily = InterTight)
-                }
-            }
-            Spacer(Modifier.height(10.dp))
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Start) {
-                Box(
-                    Modifier.glassSurface(RoundedCornerShape(23.dp))
-                        .padding(horizontal = 15.dp, vertical = 10.dp),
-                ) {
-                    Text("See you tonight", fontSize = 15.sp, color = candidate.tx, fontFamily = InterTight)
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun PrivacyPage(thread: ChatThread, onBack: () -> Unit) {
-    val globalSettings by SettingsStore.state.collectAsState()
-    SubPage("Privacy & safety", onBack) {
-        LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 32.dp)) {
-            item {
-                TikGroup {
-                    TikInfoRow(
-                        "Read receipts", "When off, you don't send “Seen” in this chat",
-                        first = true,
-                    ) {
-                        ToggleSwitch(!thread.receiptsOffMine) { on ->
-                            AppState.repo.setReceipts(thread.id, on)
-                            AppState.toast("Read receipts " + if (on) "on" else "off")
-                        }
-                    }
-                    TikInfoRow("Last seen", "Let contacts see when you were online") {
-                        ToggleSwitch(globalSettings.toggles["ls"] == true) { on ->
-                            SettingsStore.setToggle("ls", on)
-                            AppState.toast("Last seen " + if (on) "on" else "off")
-                        }
-                    }
-                    TikInfoRow("Hide typing status", "Don’t show “typing…”") {
-                        ToggleSwitch(globalSettings.toggles["ht"] == true) { on ->
-                            SettingsStore.setToggle("ht", on)
-                            AppState.toast("Hide typing " + if (on) "on" else "off")
-                        }
-                    }
-                    TikInfoRow("Block screenshots", "Block screenshots & app-switcher previews of chats") {
-                        ToggleSwitch(globalSettings.toggles["bs"] == true) { on ->
-                            SettingsStore.setToggle("bs", on)
-                            AppState.toast("Block screenshots " + if (on) "on" else "off")
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun NicknamesPage(thread: ChatThread, onBack: () -> Unit) {
-    val pal = LocalPalette.current
-    var nick by remember(thread.id) { mutableStateOf(thread.nickname ?: "") }
-    SubPage("Nicknames", onBack) {
-        LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 32.dp)) {
-            item {
-                TikSectionHeader("Their nickname")
-                TikField(nick, { nick = it.take(40) }, thread.person.name)
-                Text(
-                    "Shown instead of ${thread.person.name} in this chat — for both of you.",
-                    fontSize = 12.5.sp, color = pal.sub, fontFamily = InterTight,
-                    modifier = Modifier.padding(start = 18.dp, end = 18.dp, top = 2.dp),
-                )
-                TikSectionHeader("Your nickname")
-                TikField(
-                    thread.myNickname ?: "", {}, "Not set", enabled = false,
-                )
-                Text(
-                    "Set by ${thread.person.name} — only they can change it.",
-                    fontSize = 12.5.sp, color = pal.sub, fontFamily = InterTight,
-                    modifier = Modifier.padding(start = 18.dp, end = 18.dp, top = 2.dp),
-                )
-                Spacer(Modifier.height(14.dp))
-                TikPrimaryButton("Save nickname") {
-                    AppState.repo.setNickname(thread.id, nick)
-                    AppState.toast(if (nick.isBlank()) "Nickname cleared" else "Nickname saved")
-                    onBack()
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun ProfilePage(thread: ChatThread, onBack: () -> Unit) {
-    val pal = LocalPalette.current
-    val person = thread.person
+private fun RdIOptionsPage(thread: ChatThread, onBack: () -> Unit) {
     val startCall = rememberCallStarter()
-    SubPage(person.name, onBack) {
-        Column(Modifier.fillMaxSize().padding(top = 8.dp)) {
-            Column(
-                Modifier.fillMaxWidth(),
-                horizontalAlignment = Alignment.CenterHorizontally,
-            ) {
-                Box(
-                    Modifier.border(2.dp, pal.ac, CircleShape)
-                        .background(pal.bg, CircleShape)
-                        .padding(3.dp),
-                ) {
-                    AvatarBox(person, 92.dp, 46.dp, 38f)
+    val mutedSet by ThreadMuteStore.muted.collectAsState()
+    val muted = thread.id in mutedSet
+    val blockedUids by AppState.blockedUids.collectAsState()
+    val blocked = thread.person.uid in blockedUids
+    RdISubPage(bottom = 40.dp) {
+        item { RdISubHeader("Options", onBack) }
+        item {
+            RdICardRow {
+                RdINavRow("Voice call") { startCall(thread.id, false) }
+                RdIDivider()
+                RdIToggleRow("Mute", "Silences the unread dot for this chat", muted) {
+                    ThreadMuteStore.setMuted(thread.id, it)
                 }
-                Spacer(Modifier.height(12.dp))
-                Text(
-                    person.name, fontFamily = InterTight, fontWeight = FontWeight.Bold,
-                    fontSize = 26.sp, letterSpacing = (-1).sp, color = pal.tx,
-                    textAlign = TextAlign.Center,
-                )
-                if (person.username.isNotEmpty()) {
-                    Text(
-                        "@${person.username}", fontSize = 15.sp, color = pal.sub, fontFamily = InterTight,
-                        modifier = Modifier.padding(top = 4.dp),
-                    )
+                RdIDivider()
+                RdINavRow("Clear chat", danger = true, chevron = false) {
+                    AppState.repo.clearChat(thread.id)
+                    AppState.toast("Chat cleared")
+                }
+                RdIDivider()
+                RdINavRow(if (blocked) "Unblock" else "Block", danger = true, chevron = false) {
+                    if (blocked) {
+                        AppState.repo.unblockUser(thread.person.uid)
+                        AppState.toast("Unblocked")
+                    } else {
+                        AppState.repo.blockUser(thread.person.uid)
+                        AppState.toast("Blocked")
+                    }
                 }
             }
-            Spacer(Modifier.height(20.dp))
-            TikPrimaryButton("Message") { AppState.go(Screen.Chat(thread.id)) }
-            Spacer(Modifier.height(10.dp))
-            TikPrimaryButton("Call", outline = true) { startCall(thread.id, false) }
         }
     }
 }

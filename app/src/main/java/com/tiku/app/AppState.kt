@@ -69,6 +69,23 @@ object AppState {
     var homeTab by mutableStateOf(HomeTab.CHATS)
     var authBusy by mutableStateOf(false)
 
+    /** ROUND 14 — the redesign shell's destination INSIDE Screen.Home:
+     *  0 Messages · 1 Calls · 2 Watch · 3 Setting · 7 Requests. (Chat and
+     *  Info stay Screen-routed overlays — Screen.Chat / Screen.ChatDetails.)
+     *  Kept in AppState so the screenshot harness and deep links can land
+     *  on a pane deterministically. homeTab mirrors it for legacy readers
+     *  (WatchControl / NowWatchingBar). */
+    var tikDestination by mutableStateOf(0)
+    fun goTik(dest: Int) {
+        tikDestination = dest
+        homeTab = when (dest) {
+            1 -> HomeTab.CALLS
+            2 -> HomeTab.WATCH
+            3 -> HomeTab.ME
+            else -> HomeTab.CHATS
+        }
+    }
+
     // ---- profile (mine) ----
     var myUsername by mutableStateOf("")
     var myAvatar: Bitmap? by mutableStateOf(null)
@@ -85,6 +102,20 @@ object AppState {
     val threads = MutableStateFlow<List<ChatThread>>(emptyList())
     /** threadId -> peer is typing (drives the chat header status + typing bubble). */
     val typing = MutableStateFlow<Map<String, Boolean>>(emptyMap())
+
+    /** ROUND 14 — public notes by owner uid (mine + every thread partner
+     *  with a live note). The engine keeps only notes younger than 24h in
+     *  this map; the UI re-checks age at render. */
+    val notes = MutableStateFlow<Map<String, NoteUi>>(emptyMap())
+
+    /** ROUND 14 — uids I have blocked (users/{myUid}.blockedUids). Their
+     *  threads are filtered out of [threads] by the engine listener; the
+     *  Settings ▸ Blocked list resolves these uids to people. */
+    val blockedUids = MutableStateFlow<Set<String>>(emptySet())
+
+    /** People behind [blockedUids], resolved by the engine so Settings can
+     *  render names/avatars for the Blocked accounts list. */
+    val blockedPeople = MutableStateFlow<List<Person>>(emptyList())
 
     fun thread(id: String): ChatThread? = threads.value.firstOrNull { it.id == id }
 
@@ -161,6 +192,31 @@ interface ChatRepo {
     fun openThread(id: String)
     fun closeThread(id: String) {}
     fun sendText(id: String, text: String, quote: String?)
+    /** ROUND 14: send a reply to a partner's NOTE — a real text message in
+     *  our thread whose encrypted reply-quote snapshot reads "Note: <text>"
+     *  and whose doc carries replyToId "__note__" (the note sentinel).
+     *  Default no-op keeps test doubles compiling. */
+    fun sendNoteReply(id: String, text: String, noteText: String) {}
+    // ---- ROUND 14: requests / block / notes ----
+    /** Accept a message request: the thread joins the main list
+     *  (chat doc acceptedFor[me] = now). Default no-op. */
+    fun acceptThread(id: String) {}
+    /** Locally hide a thread (chat doc hiddenFor[me] = now). It reappears
+     *  if the partner sends a NEW message after the hide. Default no-op. */
+    fun hideThread(id: String) {}
+    /** Block a user (users/{me}.blockedUids += uid) and hide our thread.
+     *  Default no-op. */
+    fun blockUser(uid: String) {}
+    /** Unblock a user. Default no-op. */
+    fun unblockUser(uid: String) {}
+    /** Publish/replace MY note (users/{me}: noteText + noteAt, hearts reset).
+     *  Default no-op. */
+    fun setMyNote(text: String) {}
+    /** Remove MY note. Default no-op. */
+    fun deleteMyNote() {}
+    /** Heart/unheart another user's note (their noteHearts array).
+     *  Default no-op. */
+    fun toggleNoteHeart(ownerUid: String) {}
     /** Re-attempt a FAILED outgoing message (tap-to-retry on the bubble). */
     fun retrySend(id: String, msgId: String) {}
     fun sendPhoto(id: String, bmp: Bitmap)

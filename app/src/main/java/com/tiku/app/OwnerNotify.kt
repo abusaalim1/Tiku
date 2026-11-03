@@ -94,7 +94,7 @@ object OwnerNotify {
         )
         val notif = Notification.Builder(ctx, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.stat_notify_chat)
-            .setContentTitle("Tiku")
+            .setContentTitle("K-Tiku")
             .setContentText(if (call) "Missed call" else "New message")
             .setAutoCancel(true)
             .setContentIntent(pi)

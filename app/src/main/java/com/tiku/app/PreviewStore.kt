@@ -24,7 +24,21 @@ object PreviewStore {
         Person("p-zoya", "Zoya", "zoya", "☁️", argb(0xFF4F8F7E)),
         Person("p-kabir", "Kabir", "kabir", "🎧", argb(0xFF5B86B8)),
         Person("p-riya", "Riya", "riya", "🍋", argb(0xFF9A6B8A)),
+        // ROUND 14 seed: a message-request sender (not in the main list).
+        Person("p-naina", "Naina", "naina.verma", "🌙", argb(0xFFB07A5A)),
     )
+
+    /** ROUND 14 preview notes (uid -> note), mirroring the redesign file's
+     *  seed notes. "me" is the preview my-uid key. Aarav's note is hearted
+     *  by me so the heart badge renders. */
+    fun seedNotes(): Map<String, NoteUi> {
+        val now = System.currentTimeMillis()
+        return mapOf(
+            "p-aarav" to NoteUi("p-aarav", "Dreaming of Goa 🌴", setOf("me"), now - 3600_000),
+            "p-meera" to NoteUi("p-meera", "Chai time ☕", emptySet(), now - 1800_000),
+            "p-zoya" to NoteUi("p-zoya", "Golden hour 🌇", emptySet(), now - 600_000),
+        )
+    }
 
     private fun msg(text: String = "", me: Boolean = false, time: String = "now", kind: MsgKind = MsgKind.TEXT,
                     voiceDurSec: Int = 0, photo: Bitmap? = null): TikuMessage =
@@ -81,6 +95,25 @@ object PreviewStore {
                 themeWallpaper = WallpaperMode.COUPLE.ordinal,
             )
         }
+        // ROUND 14 seeds: creation times (thread 0 = 263 days together,
+        // like the redesign file's Info pill) + one REQUEST thread whose
+        // only messages are incoming (partner wrote first, I never did).
+        val nowMs = System.currentTimeMillis()
+        for (i in t.indices) {
+            t[i] = t[i].copy(createdAtMs = nowMs - (i + 3) * 86_400_000L)
+        }
+        if (t.isNotEmpty()) t[0] = t[0].copy(createdAtMs = nowMs - 263L * 86_400_000L)
+        t += ChatThread(
+            id = "preview-request-naina",
+            person = people[6],
+            messages = mutableListOf(
+                msg("Hey! Loved your note ✨", time = "2h"),
+                msg("Are you around this weekend?", time = "2h"),
+            ),
+            unread = 2, time = "2h",
+            isRequest = true,
+            createdAtMs = nowMs - 7200_000,
+        )
         return t
     }
 
@@ -227,6 +260,55 @@ object PreviewRepo : ChatRepo {
         AppState.threads.value = AppState.threads.value.map {
             if (it.id == id) it.copy(receiptsOffMine = !on) else it
         }
+    }
+
+    // ---- ROUND 14 preview sinks (local-only mirrors of the engine) ----
+    override fun acceptThread(id: String) {
+        AppState.threads.value = AppState.threads.value.map {
+            if (it.id == id) it.copy(isRequest = false) else it
+        }
+    }
+
+    override fun hideThread(id: String) {
+        AppState.threads.value = AppState.threads.value.map {
+            if (it.id == id) it.copy(hiddenForMe = true) else it
+        }
+    }
+
+    override fun blockUser(uid: String) {
+        AppState.blockedUids.value = AppState.blockedUids.value + uid
+        AppState.blockedPeople.value = PreviewStore.people.filter { it.uid in AppState.blockedUids.value }
+        AppState.threads.value = AppState.threads.value.filter { it.person.uid != uid }
+    }
+
+    override fun unblockUser(uid: String) {
+        AppState.blockedUids.value = AppState.blockedUids.value - uid
+        AppState.blockedPeople.value = PreviewStore.people.filter { it.uid in AppState.blockedUids.value }
+    }
+
+    override fun setMyNote(text: String) {
+        val t = text.trim().take(60)
+        if (t.isEmpty()) { deleteMyNote(); return }
+        AppState.notes.value = AppState.notes.value +
+            ("me" to NoteUi("me", t, emptySet(), System.currentTimeMillis()))
+    }
+
+    override fun deleteMyNote() {
+        AppState.notes.value = AppState.notes.value - "me"
+    }
+
+    override fun toggleNoteHeart(ownerUid: String) {
+        val cur = AppState.notes.value[ownerUid] ?: return
+        AppState.notes.value = AppState.notes.value + (ownerUid to cur.copy(
+            hearts = if ("me" in cur.hearts) cur.hearts - "me" else cur.hearts + "me",
+        ))
+    }
+
+    override fun sendNoteReply(id: String, text: String, noteText: String) {
+        push(id, TikuMessage(UUID.randomUUID().toString(), "", MsgKind.TEXT, text, "now", me = true,
+            amps = List(22) { 8 }, replyQuote = "Note: $noteText", replyToId = "__note__",
+            tsMs = System.currentTimeMillis()))
+        simulateReply(id)
     }
 
     override fun react(id: String, msgId: String, emoji: String?) {

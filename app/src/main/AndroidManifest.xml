@@ -12,7 +12,7 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-feature android:name="android.hardware.microphone" android:required="false" />
     <uses-feature android:name="android.hardware.camera" android:required="false" />
-    <application android:name=".TikuApp" android:label="Tiku" android:theme="@style/Theme.Tiku" android:allowBackup="false"
+    <application android:name=".TikuApp" android:label="K-Tiku" android:theme="@style/Theme.Tiku" android:allowBackup="false"
         android:icon="@mipmap/ic_launcher" android:roundIcon="@mipmap/ic_launcher_round">
         <!-- Round 4 / Play Protect differential audit: strip the AndroidX
              ProfileInstaller broadcast receiver from the merged manifest.

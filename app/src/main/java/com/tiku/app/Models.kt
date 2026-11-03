@@ -28,6 +28,10 @@ data class TikuMessage(
     val amps: List<Int> = emptyList(),
     val photo: Bitmap? = null,          // decrypted image bytes, in-memory/cache only
     val replyQuote: String? = null,
+    /** ROUND 14: the Firestore `replyToId` of the quoted message. The
+     *  sentinel "__note__" marks a note reply (the quote snapshot text is
+     *  "Note: <text>", encrypted via rqCt/rqIv like every quote). */
+    val replyToId: String? = null,
     val reactions: Map<String, String> = emptyMap(), // uid -> emoji, plaintext per design
     val starredByMe: Boolean = false,
     val deletedForMe: Boolean = false,
@@ -98,6 +102,23 @@ data class ChatThread(
     /** Pinned message ids for this chat (chat doc pinnedMsgs, max 3,
      *  oldest first — the strip shows the most recent pin). */
     val pinnedMsgIds: List<String> = emptyList(),
+    // ---- ROUND 14: message requests + Info "together" pill ----
+    /** True while this thread is a message REQUEST: the partner sent the
+     *  first message(s), I have never sent one, and I have not accepted
+     *  (chat doc acceptedFor map). Requests live on the Requests screen,
+     *  never in the main Messages list. Derived by the engine on every
+     *  snapshot; preview seeds set it directly. */
+    val isRequest: Boolean = false,
+    /** Thread creation time (chat doc createdAt when present, else the
+     *  earliest known message ts, else the doc's updatedAt). Drives the
+     *  Info screen's "Day N together" pill; 0 = unknown (pill omitted). */
+    val createdAtMs: Long = 0L,
+    /** True while I have locally hidden this thread (chat doc
+     *  hiddenFor[me]) and the partner has not sent a newer message since.
+     *  The engine KEEPS hidden threads in AppState.threads (their preview
+     *  listeners must keep running so a new partner message can un-hide
+     *  them); every list surface filters them out. */
+    val hiddenForMe: Boolean = false,
 ) {
     /** What every surface renders as this chat's title: nickname first,
      *  profile name otherwise. Real name + @username stay visible in the
@@ -140,6 +161,17 @@ fun ChatThread.effectiveSettings(global: TikuUiSettings): TikuUiSettings {
     }
     return s
 }
+
+/** ROUND 14 — one user's public note (users/{uid}: noteText / noteAt /
+ *  noteHearts). Visible to thread partners for 24h after [atMs]. [hearts]
+ *  is the set of uids who hearted it. The map in AppState.notes is keyed
+ *  by owner uid; "mine" is simply uid == my uid. */
+data class NoteUi(
+    val uid: String = "",
+    val text: String = "",
+    val hearts: Set<String> = emptySet(),
+    val atMs: Long = 0L,
+)
 
 /** Contact / person. In real mode, username/uid come from Firestore. */
 data class Person(
