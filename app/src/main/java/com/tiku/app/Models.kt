@@ -93,6 +93,16 @@ data class TikuMessage(
      *  "This message was deleted" tombstone instead of any content.
      *  Distinct from [deletedForMe] (a local hide that only affects me). */
     val deletedForEveryone: Boolean = false,
+    // ---- round 19 (appended last, same discipline) ----
+    /** This device cannot open the message's ciphertext (e.g. history
+     *  written under a retired keypair from before a journal reset). The
+     *  engine builds these from the doc's plaintext metadata ONLY (kind /
+     *  sender / ts) when decryption fails, and every surface renders the
+     *  honest placeholder "This message can't be opened on this phone"
+     *  instead of a blank bubble. Local optimistic copies and anything
+     *  decryptable NEVER carry this flag, and a stub must never overwrite
+     *  a copy whose plaintext this device already holds. */
+    val undecryptable: Boolean = false,
 )
 
 /** One 1:1 conversation. */

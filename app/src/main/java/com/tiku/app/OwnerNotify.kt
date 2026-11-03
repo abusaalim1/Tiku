@@ -8,45 +8,78 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import androidx.core.content.ContextCompat
 
 /**
- * ROUND 9 → ROUND 18 — OPT-IN MESSAGE ALERTS (any user, Instagram-style).
+ * ROUND 9 → ROUND 18 → ROUND 19 — OPT-IN MESSAGE ALERTS (any user,
+ * Instagram-style).
  *
  * Round 9 created this as the owner account's single exception to the
- * zero-notifications law, with generic content ("New message", never a
- * sender, never text). ROUND 18 (owner's device-test orders on build 59)
- * changes three things:
+ * zero-notifications law. Round 18 made the toggles universal and the
+ * alert CONTENT Instagram-style (sender name + decrypted text — his
+ * explicit order), and tried to stop the false alerts with a persisted
+ * timestamp ledger. ROUND 19 (owner's build-62 device report: "bas ekbar
+ * hi notification ayega, aur jitne time wo message send krega bas wahi
+ * time pe" — exactly one alert per message, at the moment it is sent)
+ * replaces that ledger's TS-BASED judge with a DELTA judge, after the
+ * timestamp design was found structurally unsound on device:
  *
- *  1. UNIVERSAL: the alerts belong to the DEVICE-LOCAL toggles now, not to
- *     an account — any signed-in user who turned Notifications ON (and App
- *     lock OFF, the [NotifyGate] discipline) gets them. [OwnerState] is no
- *     longer consulted here.
- *  2. CONTENT: an alert shows WHO and WHAT, like Instagram — title is the
- *     sender's display name (the chat's nickname/profile name), body is the
- *     decrypted message text, or a fixed label for media ("Photo" /
- *     "Video" / "Voice message" / "Audio file"). The text comes from the
- *     engine's own preview decryption (the same plaintext the thread list
- *     shows); a message whose text is somehow blank falls back to the
- *     generic "New message" for that one alert. Ciphertext never reaches
- *     a notification.
- *  3. STRICT ALERT RULES (the false-alert fix — "koi message bheja hi nhi,
- *     bar bar notification aye ja raha tha"): see [AlertLedger]. In short,
- *     a message can alert only if it is a genuinely NEW incoming document
- *     that arrived AFTER this alert pipeline (re)armed, was never
- *     accounted before, and is not a call/metadata/preview reshuffle.
+ *  - `absorb` REPLACED the accounted id set with each applied window,
+ *    and snapshot applications for one thread genuinely run out of
+ *    order (the engine's preview path suspends on key fetches and a
+ *    1.5 s retry) — a stale window applied late dropped newer ids from
+ *    the set, and the ts tests could not tell an old message from a
+ *    new one once that happened.
+ *  - While a chat is OPEN the preview path early-returns, so the old
+ *    ledger never absorbed what he read in the chat; the first
+ *    background snapshot after closing judged those against a frozen
+ *    pre-open high-water mark and called them "fresh".
+ *  - Firestore delivers cache-then-server snapshot pairs; the old
+ *    baseline absorbed the cache window, and a backlog message that
+ *    only existed in the server window could beat the enable watermark
+ *    (a DEVICE-clock value with a grace, compared against SERVER
+ *    timestamps) and alert on a cold start — "koi message bheja hi
+ *    nhi, bar bar notification aye ja raha tha".
  *
- * How it works: the engine's per-chat preview listeners decrypt the newest
- * messages on-device and offer every snapshot here. [NotifyService] keeps
- * that pipeline alive while the app is closed; while the user is looking
- * at the app (foreground) nothing posts — the in-app unread badges do the
- * job, and the snapshot is absorbed into the ledger so it can never alert
- * later. There is no FCM and no server push: the server holds ciphertext
- * only and could not say what arrived anyway.
+ * THE DELTA JUDGE (this round). Per thread the judge keeps the PREVIOUS
+ * snapshot's message-id set in memory ([prevIds]). A message may alert
+ * only if its id is NOT in that set — it genuinely just appeared in the
+ * window — AND it is not in the persisted already-alerted set, AND it
+ * is incoming, of an alertable kind, timestamped at/after the persisted
+ * enable watermark, the gate is open, the app is not in the foreground
+ * and the thread is not muted. (The engine never offers snapshots for
+ * the currently open chat at all — its preview path early-returns while
+ * a chat is open — so an open chat can never be judged.) Metadata-only
+ * re-deliveries (read receipts, reactions, edits) change no id set and
+ * therefore can NEVER alert, however often Firestore repeats them; the
+ * judge is idempotent — judging the same snapshot twice finds zero
+ * deltas the second time, so even a duplicated delivery is harmless.
  *
- * Every entry point is runCatching-wrapped: a half-ready engine (no
- * identity yet, decrypt not ready, process being killed) must SKIP an
- * alert silently — the notification path can never crash the process.
+ * BASELINE: the first non-empty snapshot of a thread in a pipeline run
+ * is history by definition — it seeds [prevIds] and is never judged, so
+ * nothing that arrived while the pipeline was down can alert. (Accepted
+ * trade-off, unchanged: the first message of a brand-new chat may be
+ * absorbed silently if it lands in that chat's baseline snapshot.)
+ *
+ * PERSISTENCE DISCIPLINE: the alerted id is written to the persisted
+ * set (synchronous commit) BEFORE the notification is posted, inside
+ * the same synchronized block as the eligibility check — a crash or a
+ * duplicate pass can never re-post it.
+ *
+ * RATE GUARD: at most one alert post per thread per 2 seconds; a burst
+ * inside the window coalesces into the LATEST message's alert.
+ *
+ * FOREGROUND: snapshots absorbed while he is looking at the app never
+ * alert, and any standing message alerts are CANCELLED — opening the
+ * app means he has seen them (see also [clearStandingAlerts], which
+ * [NotifyService] calls on the resume sync). The service's ongoing
+ * banner is NOT posted from here and lives on its own silent channel.
+ *
+ * There is no FCM and no server push: the server holds ciphertext only.
+ * Every entry point is runCatching-wrapped — the notification path can
+ * never crash the process.
  */
 object OwnerNotify {
     private const val CHANNEL_ID = "tiku_reminders"
@@ -57,14 +90,38 @@ object OwnerNotify {
         MsgKind.TEXT, MsgKind.IMAGE, MsgKind.VIDEO, MsgKind.AUDIO, MsgKind.VOICE,
     )
 
-    private val lock = Any()
+    /** Rate guard: minimum spacing between two alert posts per thread. */
+    private const val RATE_WINDOW_MS = 2_000L
 
-    /** Threads whose first snapshot in THIS pipeline run has been absorbed
-     *  as history. In-memory on purpose: every pipeline (re)start — session
-     *  unlock or service bootstrap — re-baselines each thread's current
-     *  window before anything in it may alert, so nothing that arrived
-     *  while the pipeline was down can ever slip through as "new". */
+    private val lock = Any()
+    private val mainHandler = Handler(Looper.getMainLooper())
+
+    /** Threads whose first non-empty snapshot in THIS pipeline run has
+     *  been absorbed as history. In-memory on purpose: every pipeline
+     *  (re)start — process start, session unlock, service bootstrap —
+     *  re-baselines each thread's current window before anything in it
+     *  may alert. */
     private val baselined = mutableSetOf<String>()
+
+    /** The DELTA primitive: per thread, the message-id set of the
+     *  previous snapshot this judge absorbed. Updated on EVERY absorbed
+     *  snapshot (baseline, foreground, muted, judged) so the next diff
+     *  is always against the immediately preceding window. */
+    private val prevIds = mutableMapOf<String, Set<String>>()
+
+    /** Threads with a message/call alert currently standing on the
+     *  shade — cleared when the app comes to the foreground. */
+    private val standing = mutableSetOf<String>()
+
+    /** Rate guard state: last post time per thread, the coalesced
+     *  pending alert (latest wins), and threads with a flush posted. */
+    private val lastPostAt = mutableMapOf<String, Long>()
+    private val pending = mutableMapOf<String, PendingAlert>()
+    private val flushScheduled = mutableSetOf<String>()
+
+    private data class PendingAlert(
+        val ctx: Context, val threadId: String, val msg: TikuMessage, val call: Boolean,
+    )
 
     /** True once this run has (re)armed the global watermark. */
     @Volatile private var runArmed = false
@@ -72,21 +129,21 @@ object OwnerNotify {
     /** True while a live alert pipeline (session or service) has armed
      *  the watermark in THIS process. [NotifyService] consults it so a
      *  re-delivered start on an already-running pipeline never re-arms
-     *  mid-run (which could suppress a message whose snapshot is still in
-     *  flight); a dead pipeline — process death, or [reset] on lock —
+     *  mid-run; a dead pipeline — process death, or [reset] on lock —
      *  reads false here, and the next start arms again. */
     val pipelineArmed: Boolean get() = synchronized(lock) { runArmed }
 
     /**
      * Called by the service when its pipeline starts (and cheap to call
-     * again): raises the persisted global watermark so only messages that
-     * arrive from ~now on can alert. Backlog — anything that landed while
-     * the service/session was off — stays behind the watermark forever.
+     * again): raises the persisted global watermark so only messages
+     * timestamped from ~now on can alert. Backlog — anything that landed
+     * while the service/session was off — stays behind the watermark
+     * forever (and is baselined per thread besides).
      */
     fun arm(ctx: Context) {
         runCatching {
             synchronized(lock) {
-                AlertLedger.arm(ctx)
+                AlertStore.arm(ctx)
                 runArmed = true
             }
         }
@@ -104,77 +161,142 @@ object OwnerNotify {
         if (!runArmed) {
             // First snapshot of this pipeline run (in-app session path —
             // the service arms explicitly at start): arm BEFORE judging
-            // anything in it, so this snapshot's contents are backlog by
-            // definition if they predate the run.
-            AlertLedger.arm(ctx)
+            // anything, so this run's contents are measured against it.
+            AlertStore.arm(ctx)
             runArmed = true
         }
-        val armedAt = AlertLedger.armedAt(ctx)
-        val firstSnapshot = threadId !in baselined
+        val ids = msgs.map { it.id }.toSet()
 
-        if (firstSnapshot) {
-            // HISTORY: whatever the window currently holds arrived before
-            // this run existed (or while it was down). Absorb it all into
-            // the persisted ledger and never alert on it.
+        if (threadId !in baselined) {
+            // BASELINE: the first NON-EMPTY window of the run is history
+            // — seed the delta state and never judge it. (An empty first
+            // snapshot, e.g. an empty Firestore cache delivery ahead of
+            // the server one, must not spend the baseline: the backlog
+            // would diff against an empty set and look brand-new.)
+            if (msgs.isEmpty()) {
+                prevIds[threadId] = ids
+                return
+            }
             baselined += threadId
-            AlertLedger.absorb(ctx, threadId, msgs)
+            prevIds[threadId] = ids
             return
         }
+
+        // DELTA: only ids absent from the previous snapshot are new.
+        // Computed BEFORE absorbing this one.
+        val previous = prevIds[threadId] ?: emptySet()
+        val deltas = msgs.filter { it.id !in previous }
+        prevIds[threadId] = ids
+
         if (ChatSession.foreground) {
-            // He's looking at the app — badges do the job. Still absorb
-            // the ids so these messages don't alert later from a stale
-            // baseline.
-            AlertLedger.absorb(ctx, threadId, msgs)
+            // He's looking at the app — badges do the job and anything
+            // still standing on the shade is seen by definition: clear
+            // it. The ids above are absorbed either way, so nothing here
+            // can alert later from a stale diff.
+            clearStandingLocked(ctx)
             return
         }
         val thread = runCatching { AppState.thread(threadId) }.getOrNull()
-        if (thread?.muted == true) {
-            // Muted chats never push (Instagram semantics).
-            AlertLedger.absorb(ctx, threadId, msgs)
-            return
-        }
+        if (thread?.muted == true) return // muted chats never push
 
-        val hw = AlertLedger.highWater(ctx, threadId)
-        val lastAlerted = AlertLedger.lastAlertedId(ctx, threadId)
-        val accounted = AlertLedger.accountedIds(ctx, threadId)
+        val armedAt = AlertStore.armedAt(ctx)
+        val alerted = AlertStore.alertedIds(ctx, threadId)
 
-        fun isFresh(m: TikuMessage): Boolean =
-            !m.me &&
-                m.tsMs > hw &&
-                m.tsMs > armedAt &&
-                m.id != lastAlerted &&
-                m.id !in accounted
+        fun eligible(m: TikuMessage): Boolean =
+            !m.me && m.tsMs >= armedAt && m.id !in alerted
 
-        val freshMessages = msgs.filter { it.kind in MESSAGE_KINDS && isFresh(it) }
-        val freshMissedCalls = msgs.filter {
-            it.kind == MsgKind.CALL && isFresh(it) &&
+        val freshMessages = deltas.filter { it.kind in MESSAGE_KINDS && eligible(it) }
+        val freshMissedCalls = deltas.filter {
+            it.kind == MsgKind.CALL && eligible(it) &&
                 !it.callMine && it.callOutcome == "noanswer"
         }
 
-        // Absorb EVERYTHING the snapshot carried (alerted or not — read
-        // receipts, reactions, presence rows, his own sends) so no doc is
-        // ever judged twice.
-        AlertLedger.absorb(ctx, threadId, msgs)
-
         if (freshMessages.isNotEmpty()) {
             val newest = freshMessages.maxByOrNull { it.tsMs } ?: return
-            AlertLedger.markAlerted(ctx, threadId, newest.id)
-            postMessage(ctx, threadId, newest)
+            // Persist BEFORE posting, inside this same lock: from here
+            // the id can never alert again, whatever replays.
+            AlertStore.addAlerted(ctx, threadId, newest.id)
+            offerAlertLocked(PendingAlert(ctx.applicationContext, threadId, newest, call = false))
         }
         if (freshMissedCalls.isNotEmpty()) {
             val newest = freshMissedCalls.maxByOrNull { it.tsMs } ?: return
-            AlertLedger.markAlerted(ctx, threadId, newest.id)
-            postMissedCall(ctx, threadId, newest)
+            AlertStore.addAlerted(ctx, threadId, newest.id)
+            offerAlertLocked(PendingAlert(ctx.applicationContext, threadId, newest, call = true))
         }
     }
 
+    // ================= RATE GUARD =================
+
+    /** Post now, or — inside the 2 s window — coalesce into the pending
+     *  slot (latest wins) and flush when the window opens. */
+    private fun offerAlertLocked(p: PendingAlert) {
+        val now = System.currentTimeMillis()
+        val last = lastPostAt[p.threadId] ?: 0L
+        if (now - last >= RATE_WINDOW_MS) {
+            postPendingLocked(p)
+            return
+        }
+        pending[p.threadId] = p
+        if (flushScheduled.add(p.threadId)) {
+            mainHandler.postDelayed({
+                runCatching {
+                    synchronized(lock) {
+                        flushScheduled.remove(p.threadId)
+                        val held = pending.remove(p.threadId) ?: return@synchronized
+                        // The world may have changed while held: if he
+                        // has since opened the app, the alert is moot.
+                        if (!OwnerPrefs.notifyOn || ChatSession.foreground) {
+                            clearStandingLocked(held.ctx)
+                            return@synchronized
+                        }
+                        postPendingLocked(held)
+                    }
+                }
+            }, RATE_WINDOW_MS - (now - last))
+        }
+    }
+
+    private fun postPendingLocked(p: PendingAlert) {
+        lastPostAt[p.threadId] = System.currentTimeMillis()
+        standing += p.threadId
+        if (p.call) postMissedCall(p.ctx, p.threadId, p.msg) else postMessage(p.ctx, p.threadId, p.msg)
+    }
+
+    // ================= FOREGROUND CLEARING =================
+
+    /** Opening the app means he has seen the standing message alerts:
+     *  cancel them (the service's ongoing banner is a different id on a
+     *  different channel and is never touched here). Called by
+     *  [NotifyService] on the resume sync and by the judge's own
+     *  foreground path. */
+    fun clearStandingAlerts(ctx: Context) {
+        runCatching { synchronized(lock) { clearStandingLocked(ctx) } }
+    }
+
+    private fun clearStandingLocked(ctx: Context) {
+        if (standing.isEmpty() && pending.isEmpty()) return
+        val nm = ctx.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
+        if (nm != null) {
+            for (tid in standing) {
+                runCatching { nm.cancel(messageNotifId(tid)) }
+                runCatching { nm.cancel(callNotifId(tid)) }
+            }
+        }
+        standing.clear()
+        pending.clear()
+    }
+
     /** Pipeline died (lock / sign-out — via FirebaseEngine.lock): forget
-     *  the per-run baselines so the next run re-baselines instead of
-     *  alerting on old history. The PERSISTED ledger deliberately
-     *  survives: that is what makes restarts and replays never re-alert. */
+     *  the per-run delta state so the next run re-baselines instead of
+     *  alerting on old history. The PERSISTED alerted set and watermark
+     *  deliberately survive: that is what makes restarts and replays
+     *  never re-alert a message that already produced its one alert. */
     fun reset() {
         synchronized(lock) {
             baselined.clear()
+            prevIds.clear()
+            pending.clear()
+            lastPostAt.clear()
             runArmed = false
         }
     }
@@ -188,6 +310,10 @@ object OwnerNotify {
     }
 
     // ================= POSTING =================
+
+    private fun messageNotifId(threadId: String): Int = (threadId.hashCode() and 0x3FFF) + 0x4000
+
+    private fun callNotifId(threadId: String): Int = (threadId.hashCode() and 0x3FFF) + 0x8000
 
     private fun senderName(threadId: String): String {
         val th = runCatching { AppState.thread(threadId) }.getOrNull()
@@ -239,19 +365,22 @@ object OwnerNotify {
                 .setContentText(body)
                 .setStyle(Notification.BigTextStyle().bigText(body))
                 .setAutoCancel(true)
+                // A re-post under the same id updates content silently —
+                // it must never buzz or peek a second time.
+                .setOnlyAlertOnce(true)
                 .setContentIntent(pi)
                 .setVisibility(Notification.VISIBILITY_PRIVATE)
                 .build()
             // One live alert per chat per kind — a burst replaces, never stacks.
-            val id = (threadId.hashCode() and 0x3FFF) + if (call) 0x8000 else 0x4000
-            nm.notify(id, notif)
+            nm.notify(if (call) callNotifId(threadId) else messageNotifId(threadId), notif)
         }
     }
 
     /** The channel is created LAZILY, here, at the first actual alert — the
      *  app creates no notification channel at startup (see TikuApp). The
      *  name stays in the study spirit: it reads as a generic reminders
-     *  channel. */
+     *  channel. (The foreground service's banner uses its OWN low-importance
+     *  channel — see NotifyService — so it can never peek like an alert.) */
     private fun ensureChannel(nm: NotificationManager) {
         if (nm.getNotificationChannel(CHANNEL_ID) != null) return
         nm.createNotificationChannel(
@@ -261,39 +390,33 @@ object OwnerNotify {
 }
 
 /**
- * ROUND 18 — THE PERSISTED ALERT LEDGER (SharedPrefs file "tiku_alerts").
+ * ROUND 19 — THE PERSISTED ALERT STORE (SharedPrefs file "tiku_alerts").
  *
- * What the old in-memory baseline got wrong: it lived and died with the
- * process, and it treated "an id I have not seen in this process" as new —
- * so service restarts, cache→server snapshot replays, window reshuffles and
- * answered-call rows could all surface as alerts for messages nobody had
- * just sent. The ledger makes "already accounted" a durable fact:
+ * Two durable facts, nothing timestamp-derived:
  *
- *  - `armed_at` — the global enable-time watermark. Raised (never lowered)
- *    every time an alert pipeline (re)starts: service bootstrap, session
- *    unlock's first snapshot, and it starts at 0 (unset). A message whose
- *    server timestamp is at or before the watermark can NEVER alert — it
- *    is backlog by definition. A 10-second grace is subtracted when
- *    arming so ordinary server/device clock skew cannot eat a message
- *    that genuinely arrives in the first moments of a run; the per-thread
- *    first-snapshot baseline (in [OwnerNotify]) absorbs that window's
- *    contents anyway.
- *  - `hw:<threadId>` — the thread's high-water mark: the greatest message
- *    timestamp ever absorbed for the thread. Only a strictly newer
- *    timestamp can be a new message.
- *  - `ids:<threadId>` — the accounted message ids of the latest absorbed
- *    window (bounded by the preview window's own size). A re-delivered or
- *    edited-in-place doc is recognised and skipped.
- *  - `lastid:<threadId>` — the id of the most recent message an alert was
- *    actually posted for; belt-and-braces against any replay of it.
+ *  - `armed_at` — the global enable-time watermark. Raised (never
+ *    lowered) every time an alert pipeline (re)starts. A message whose
+ *    server timestamp predates it can never alert. A 10-second grace is
+ *    subtracted when arming so ordinary server/device clock skew cannot
+ *    eat a message that genuinely arrives in the first moments of a
+ *    run; the delta judge's baseline absorbs that window's contents
+ *    anyway, so the grace cannot manufacture a false alert.
+ *  - `alerted:<threadId>` — the ids this device has ALREADY posted an
+ *    alert for, append-only, capped at the newest [MAX_ALERTED] ids.
+ *    Written with commit() BEFORE the notification is posted (inside
+ *    the judge's lock), so the one-alert-per-message promise survives
+ *    process death, service restarts and snapshot replays.
  *
- * All writes are apply() (async) — losing the very last write to a sudden
- * process kill can at worst re-judge one snapshot against a slightly older
- * high-water mark, and the watermark + baseline rules still hold it back.
+ * The Round 18 timestamp ledger (`hw:` / `ids:` / `lastid:` keys) is
+ * gone: a high-water mark over a window that is filtered, re-ordered
+ * and partially invisible (open chats) could not distinguish old from
+ * new. Ids can; the previous snapshot's id set is the judge's memory,
+ * and this set is its conscience.
  */
-private object AlertLedger {
+private object AlertStore {
     private const val PREF = "tiku_alerts"
     private const val ARM_GRACE_MS = 10_000L
+    private const val MAX_ALERTED = 200
 
     private fun prefs(ctx: Context) =
         ctx.applicationContext.getSharedPreferences(PREF, Context.MODE_PRIVATE)
@@ -309,28 +432,17 @@ private object AlertLedger {
 
     fun armedAt(ctx: Context): Long = prefs(ctx).getLong("armed_at", 0L)
 
-    fun highWater(ctx: Context, threadId: String): Long =
-        prefs(ctx).getLong("hw:$threadId", 0L)
+    fun alertedIds(ctx: Context, threadId: String): Set<String> =
+        prefs(ctx).getStringSet("alerted:$threadId", emptySet()) ?: emptySet()
 
-    fun lastAlertedId(ctx: Context, threadId: String): String =
-        prefs(ctx).getString("lastid:$threadId", "") ?: ""
-
-    fun accountedIds(ctx: Context, threadId: String): Set<String> =
-        prefs(ctx).getStringSet("ids:$threadId", emptySet()) ?: emptySet()
-
-    /** Record a whole snapshot window as accounted: its ids become the
-     *  thread's accounted set and its newest timestamp the high-water. */
-    fun absorb(ctx: Context, threadId: String, msgs: List<TikuMessage>) {
-        if (msgs.isEmpty()) return
+    /** Record that [messageId] has had its one alert. Synchronous
+     *  commit on purpose: this write is the guarantee, and it happens
+     *  before the post, inside the judge's synchronized block. */
+    fun addAlerted(ctx: Context, threadId: String, messageId: String) {
         val p = prefs(ctx)
-        val maxTs = msgs.maxOf { it.tsMs }
-        val e = p.edit()
-        e.putStringSet("ids:$threadId", msgs.map { it.id }.toSet())
-        if (maxTs > p.getLong("hw:$threadId", 0L)) e.putLong("hw:$threadId", maxTs)
-        e.apply()
-    }
-
-    fun markAlerted(ctx: Context, threadId: String, messageId: String) {
-        prefs(ctx).edit().putString("lastid:$threadId", messageId).apply()
+        val cur = (p.getStringSet("alerted:$threadId", emptySet()) ?: emptySet()).toMutableSet()
+        if (!cur.add(messageId)) return
+        val kept = if (cur.size > MAX_ALERTED) cur.drop(cur.size - MAX_ALERTED).toSet() else cur
+        p.edit().putStringSet("alerted:$threadId", kept).commit()
     }
 }

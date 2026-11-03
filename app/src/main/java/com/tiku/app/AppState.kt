@@ -109,6 +109,24 @@ object AppState {
     /** threadId -> peer is typing (drives the chat header status + typing bubble). */
     val typing = MutableStateFlow<Map<String, Boolean>>(emptyMap())
 
+    /** ROUND 19 — an own-send's request to glide the open chat to the
+     *  tail. The engine raises this AFTER the optimistic local is already
+     *  upserted, carrying the local's id: the chat waits until THAT item
+     *  is the composed tail, then animates exactly once (sender intent is
+     *  absolute — no near-bottom condition on own sends). Consumed by the
+     *  chat when it fires or when the open-settle lands the same tail. */
+    data class TailScroll(val seq: Long, val tailId: String)
+    val tailScrollRequests = MutableStateFlow<Map<String, TailScroll>>(emptyMap())
+    private var tailScrollSeq = 0L
+    @Synchronized fun requestTailScroll(threadId: String, tailId: String) {
+        tailScrollSeq += 1
+        tailScrollRequests.value = tailScrollRequests.value + (threadId to TailScroll(tailScrollSeq, tailId))
+    }
+    fun consumeTailScroll(threadId: String, seq: Long) {
+        val cur = tailScrollRequests.value[threadId] ?: return
+        if (cur.seq == seq) tailScrollRequests.value = tailScrollRequests.value - threadId
+    }
+
     /** ROUND 14 — public notes by owner uid (mine + every thread partner
      *  with a live note). The engine keeps only notes younger than 24h in
      *  this map; the UI re-checks age at render. */

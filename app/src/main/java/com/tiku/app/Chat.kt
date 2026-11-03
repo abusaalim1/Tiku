@@ -87,6 +87,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -128,8 +129,11 @@ import dev.chrisbanes.haze.HazeStyle
 import dev.chrisbanes.haze.HazeTint
 import dev.chrisbanes.haze.hazeEffect
 import dev.chrisbanes.haze.hazeSource
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import java.io.File
 import kotlin.math.abs
 import kotlin.math.roundToInt
@@ -148,6 +152,10 @@ import kotlin.math.roundToInt
  * everyone" (server tombstone both sides render); the chat also gains
  * the IG unread divider, the "Seen"/"Sent" caption under my last
  * message, and a glide-only follow (no scroll yank from history).
+ * ROUND 19: undecryptable history (retired-key ciphertext) renders an
+ * honest placeholder instead of blank bubbles; own sends ALWAYS glide
+ * via the engine's explicit tail-scroll request; one coalesced follow
+ * job serves every glide; the list state starts at the tail.
  */
 
 // ================= redesign tokens (verbatim from TikuRedesign) =================
@@ -261,7 +269,8 @@ private fun RdAv(person: Person, size: Int) {
  *  for media. Shared by swipe-to-reply and the long-press menu so both
  *  paths attach exactly the same quote (and note replies arrive with
  *  their "Note: …" snapshot in the same field). */
-fun replyQuoteLabel(m: TikuMessage): String = if (m.deletedForEveryone) "This message was deleted" else when (m.kind) {
+fun replyQuoteLabel(m: TikuMessage): String = if (m.undecryptable) "This message can't be opened on this phone"
+    else if (m.deletedForEveryone) "This message was deleted" else when (m.kind) {
     MsgKind.IMAGE -> "Photo"
     MsgKind.VOICE -> "Voice message"
     MsgKind.VIDEO -> "Video"
@@ -349,6 +358,38 @@ private fun RdTombstoneRow(m: TikuMessage, person: Person, onMenu: () -> Unit) {
             Spacer(Modifier.width(7.dp))
             Text(
                 "This message was deleted",
+                color = RdSub, fontSize = 13.5.sp, fontStyle = FontStyle.Italic,
+            )
+        }
+    }
+}
+
+/** ROUND 19 — the undecryptable placeholder: renders in place of a
+ *  message whose ciphertext this phone cannot open (history written
+ *  under a retired keypair, e.g. from before a journal reset). ONE
+ *  muted row — faint card, small italic sub-coloured label — never a
+ *  blank bubble. Side follows the original sender (mine right, theirs
+ *  left with avatar). No reactions / reply / star / media on it: the
+ *  long-press menu offers Delete-for-me only (see the menu overlay). */
+@Composable
+private fun RdUndecryptableRow(m: TikuMessage, person: Person, onMenu: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth(),
+        horizontalArrangement = if (m.me) Arrangement.End else Arrangement.Start,
+        verticalAlignment = Alignment.Bottom,
+    ) {
+        if (!m.me) { RdAv(person, 28); Spacer(Modifier.width(8.dp)) }
+        Row(
+            Modifier.clip(RoundedCornerShape(22.dp)).background(Color.White.copy(0.04f))
+                .border(1.dp, Color.White.copy(0.05f), RoundedCornerShape(22.dp))
+                .pointerInput(m.id) {
+                    detectTapGestures(onLongPress = { onMenu() })
+                }
+                .padding(horizontal = 14.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                "This message can't be opened on this phone",
                 color = RdSub, fontSize = 13.5.sp, fontStyle = FontStyle.Italic,
             )
         }
@@ -1025,7 +1066,14 @@ private fun RdChatContent(thread: ChatThread) {
     val recorder = remember { VoiceRecorder(ctx) }
     val player = remember { VoicePlayer() }
     var playingId by remember { mutableStateOf<String?>(null) }
-    val listState = rememberLazyListState()
+    // ROUND 19: the list state STARTS at the tail (the thread's messages
+    // are already in state when this screen first composes) — opening a
+    // chat never flashes the top of the history before settling. The
+    // settle effect below remains as the backstop for lists that grow
+    // into their first page a beat later.
+    val listState = rememberLazyListState(
+        initialFirstVisibleItemIndex = thread.messages.filter { !it.deletedForMe }.lastIndex.coerceAtLeast(0),
+    )
     val startCall = rememberCallStarter()
     val clipboard = LocalClipboardManager.current
     val keyboardController = LocalSoftwareKeyboardController.current
@@ -1153,6 +1201,31 @@ private fun RdChatContent(thread: ChatThread) {
 
     val visible = thread.messages.filter { !it.deletedForMe }
 
+    // ROUND 19 — tail-glide machinery. ONE follow job at a time: every
+    // glide request cancels the previous job, so a burst of arrivals (or
+    // an own send racing its echo) coalesces into a single animation to
+    // the final tail instead of per-message stutters. The job first
+    // waits until the target row is actually composed (the layout total
+    // covers its index) — the round-18 follow decided from a layout
+    // that didn't contain the just-sent item yet, so on the owner's
+    // device the send glide simply never fired.
+    val tailRequests by AppState.tailScrollRequests.collectAsState()
+    val pendingTail = tailRequests[threadId]
+    var handledTailSeq by remember(threadId) { mutableLongStateOf(0L) }
+    var followJob by remember(threadId) { mutableStateOf<Job?>(null) }
+    fun glideToTail() {
+        followJob?.cancel()
+        followJob = scope.launch {
+            delay(60) // burst coalescing: a newer glide replaces this one
+            val target = visible.lastIndex + if (peerTyping) 1 else 0
+            if (target < 0) return@launch
+            withTimeoutOrNull(500) {
+                snapshotFlow { listState.layoutInfo.totalItemsCount }.first { it > target }
+            }
+            runCatching { listState.animateScrollToItem(target) }
+        }
+    }
+
     // ROUND 18 — UNREAD DIVIDER anchor, captured ONCE from the thread as
     // it stood when this chat was opened (the engine zeroes `unread` and
     // advances the read watermark as the open snapshot lands, so anything
@@ -1183,7 +1256,7 @@ private fun RdChatContent(thread: ChatThread) {
     // (Settings ▸ Read receipts) or for this chat (receiptsOffMine).
     val showReceipts = globalSettings.readReceipts && !thread.receiptsOffMine
     val lastOwnId = visible.lastOrNull {
-        it.me && it.kind != MsgKind.CALL && !it.deletedForEveryone
+        it.me && it.kind != MsgKind.CALL && !it.deletedForEveryone && !it.undecryptable
     }?.id
 
     fun sendCurrent() {
@@ -1226,13 +1299,17 @@ private fun RdChatContent(thread: ChatThread) {
 
     // ---- list following (build 47's anti-jitter rule on the file's
     // forward list): settle at the latest message on open (instant —
-    // opening a chat lands at the bottom). ROUND 18 (owner: messages
-    // must GLIDE like IG, never jump): afterwards the follow is purely
-    // positional — a new tail (mine after send, or incoming) glides the
-    // list ONLY while the user is already at/near the bottom; scrolled
-    // up reading history, nothing ever yanks them (the jump-to-latest
-    // pill is the way back, like IG). The old `|| tail.me` exception
-    // yanked even from history on my own sends — gone.
+    // opening a chat lands at the bottom; round 19 also initialises the
+    // list state AT the tail, so there is no top flash to settle from).
+    // ROUND 18 (owner: messages must GLIDE like IG, never jump): an
+    // INCOMING tail glides the list ONLY while the user is already
+    // at/near the bottom; scrolled up reading history, nothing ever
+    // yanks them (the jump-to-latest pill is the way back, like IG).
+    // ROUND 19: an OWN send is the one exception, and it no longer
+    // rides the tail-change effect at all — the engine raises an
+    // explicit tail-scroll request carrying the new local's id (see
+    // AppState.tailScrollRequests), and the effect below fires it
+    // unconditionally once that exact item is the composed tail.
     val nearBottom by remember {
         derivedStateOf {
             val info = listState.layoutInfo
@@ -1245,7 +1322,27 @@ private fun RdChatContent(thread: ChatThread) {
         if (!settled && visible.isNotEmpty()) {
             runCatching { listState.scrollToItem(visible.lastIndex + if (peerTyping) 1 else 0) }
             settled = true
+            // a send requested before this chat opened is satisfied by
+            // the settle itself — never replay it as a second glide.
+            pendingTail?.let {
+                handledTailSeq = it.seq
+                AppState.consumeTailScroll(threadId, it.seq)
+            }
         }
+    }
+    // ROUND 19 — own-send glide (WhatsApp behaviour): ALWAYS glide on
+    // send, wherever the user had scrolled to. Keyed on the request AND
+    // on the composed tail's identity: if the optimistic item hasn't
+    // landed in the list yet, the effect simply re-runs when it does.
+    // The echo can never retrigger it — the request fires once, for the
+    // local's id, and the echo carries that same id.
+    LaunchedEffect(pendingTail?.seq, visible.lastOrNull()?.id, settled) {
+        val req = pendingTail ?: return@LaunchedEffect
+        if (!settled || req.seq <= handledTailSeq) return@LaunchedEffect
+        if (visible.lastOrNull()?.id != req.tailId) return@LaunchedEffect
+        handledTailSeq = req.seq
+        AppState.consumeTailScroll(threadId, req.seq)
+        glideToTail()
     }
     // ROUND 15: the follow trigger is the TAIL item's identity, not
     // max(tsMs). The ts trigger misfired around sends twice over: an
@@ -1259,14 +1356,17 @@ private fun RdChatContent(thread: ChatThread) {
     LaunchedEffect(visible.lastOrNull()?.id, peerTyping) {
         val tail = visible.lastOrNull()
         if (settled && tail != null && tail.id != prevTailId) {
-            // ROUND 18: animateScrollToItem ONLY, and only from the
-            // bottom — no instant snaps anywhere on the arrival path.
-            if (nearBottom) {
-                runCatching { listState.animateScrollToItem(visible.lastIndex + if (peerTyping) 1 else 0) }
-            }
+            // ROUND 18/19: incoming tails glide ONLY from the bottom —
+            // no instant snaps, no yank from history. Own sends don't
+            // rely on this path (they carry their own request above);
+            // when one does land here, glideToTail coalesces both into
+            // the same single animation. Metadata-only snapshot changes
+            // (seen / reaction) never change the tail id, so they can
+            // never re-trigger a glide or a re-sort jump.
+            if (nearBottom) glideToTail()
         } else if (settled && peerTyping && nearBottom && tail != null) {
             // the typing bubble appended below the fold while following
-            runCatching { listState.animateScrollToItem(visible.lastIndex + 1) }
+            glideToTail()
         }
         if (tail != null) prevTailId = tail.id
     }
@@ -1306,6 +1406,13 @@ private fun RdChatContent(thread: ChatThread) {
                             Spacer(Modifier.height(4.dp))
                         }
                         when {
+                            // ROUND 19: undecryptable history renders
+                            // the honest placeholder — before every
+                            // other branch, so no kind (not even CALL)
+                            // can render it as an empty bubble/pill.
+                            m.undecryptable -> RdUndecryptableRow(m, person) {
+                                menuMsg = m; moreEmoji = false
+                            }
                             m.deletedForEveryone -> RdTombstoneRow(m, person) {
                                 menuMsg = m; moreEmoji = false
                             }
@@ -1397,9 +1504,9 @@ private fun RdChatContent(thread: ChatThread) {
                 Modifier.testTag("jump_to_latest").size(40.dp).clip(CircleShape).background(RdCard)
                     .border(1.dp, Color.White.copy(0.12f), CircleShape)
                     .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {
-                        scope.launch {
-                            runCatching { listState.animateScrollToItem(visible.lastIndex + if (peerTyping) 1 else 0) }
-                        }
+                        // ROUND 19: the pill rides the same single
+                        // coalesced glide as every other tail follow.
+                        glideToTail()
                     },
                 contentAlignment = Alignment.Center,
             ) {
@@ -1422,13 +1529,16 @@ private fun RdChatContent(thread: ChatThread) {
             if (thread.pinnedMsgIds.isNotEmpty()) {
                 val pinId = thread.pinnedMsgIds.last()
                 val pinnedMsg = thread.messages.firstOrNull { it.id == pinId }
-                val pinPreview = when (pinnedMsg?.kind) {
+                val pinPreview = when {
+                    pinnedMsg?.undecryptable == true -> "This message can't be opened on this phone"
+                    else -> when (pinnedMsg?.kind) {
                     MsgKind.IMAGE -> "Photo"
                     MsgKind.VOICE -> "Voice message"
                     MsgKind.VIDEO -> "Video"
                     MsgKind.AUDIO -> "Audio file"
                     MsgKind.CALL -> "Call"
                     else -> pinnedMsg?.text?.take(60) ?: "Pinned message"
+                    }
                 }
                 Row(
                     Modifier.fillMaxWidth().padding(horizontal = 14.dp)
@@ -1537,7 +1647,8 @@ private fun RdChatContent(thread: ChatThread) {
                         // ROUND 18: a tombstone has nothing to react to —
                         // the emoji bar hides for deleted-for-everyone
                         // messages (their menu is Delete-for-me only).
-                        if (!mm.deletedForEveryone) Row(
+                        // ROUND 19: same for undecryptable placeholders.
+                        if (!mm.deletedForEveryone && !mm.undecryptable) Row(
                             Modifier.clip(RoundedCornerShape(999.dp)).background(RdSheet)
                                 .border(1.dp, Color.White.copy(0.12f), RoundedCornerShape(999.dp))
                                 .padding(horizontal = 8.dp, vertical = 6.dp),
@@ -1559,7 +1670,21 @@ private fun RdChatContent(thread: ChatThread) {
                                 Text(if (moreEmoji) "−" else "+", color = Color.White, fontSize = 24.sp)
                             }
                         }
-                        if (mm.deletedForEveryone) {
+                        if (mm.undecryptable) {
+                            // ROUND 19: preview = the placeholder itself,
+                            // exactly as it renders in the list.
+                            Row(
+                                Modifier.clip(RoundedCornerShape(22.dp)).background(Color.White.copy(0.04f))
+                                    .border(1.dp, Color.White.copy(0.05f), RoundedCornerShape(22.dp))
+                                    .padding(horizontal = 14.dp, vertical = 10.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Text(
+                                    "This message can't be opened on this phone",
+                                    color = RdSub, fontSize = 13.5.sp, fontStyle = FontStyle.Italic,
+                                )
+                            }
+                        } else if (mm.deletedForEveryone) {
                             // Preview = the tombstone itself, exactly as
                             // it renders in the list.
                             Row(
@@ -1594,9 +1719,12 @@ private fun RdChatContent(thread: ChatThread) {
                             Modifier.width(250.dp).clip(RoundedCornerShape(26.dp)).background(RdSheet)
                                 .border(1.dp, Color.White.copy(0.12f), RoundedCornerShape(26.dp)),
                         ) {
-                          if (mm.deletedForEveryone) {
+                          if (mm.deletedForEveryone || mm.undecryptable) {
                             // ROUND 18: a tombstone's only action —
-                            // hiding it for me as well.
+                            // hiding it for me as well. ROUND 19: an
+                            // undecryptable placeholder's only action too
+                            // (no reply / copy / star / pin on content
+                            // this phone cannot open).
                             RdMenuItem("Delete for me", danger = true, onClick = {
                                 AppState.repo.deleteForMe(threadId, mm.id); menuMsg = null
                             }) {

@@ -135,6 +135,14 @@ class NotifyService : Service() {
             // re-arm — that could suppress a message still in flight.
             if (!OwnerNotify.pipelineArmed) OwnerNotify.arm(applicationContext)
             ensureEngine()
+            // ROUND 19: NotifyGate.sync fires from MainActivity.onResume
+            // (after ChatSession.foreground is set) as well as onCreate/
+            // onPause. A start delivered while he is LOOKING at the app
+            // means any standing message alerts are seen by definition —
+            // clear them instead of leaving them on the shade. (On
+            // onPause foreground is already false, so leaving the app
+            // never clears anything.)
+            if (ChatSession.foreground) OwnerNotify.clearStandingAlerts(applicationContext)
             true
         }.getOrDefault(false)
         if (!proceed) {
@@ -184,16 +192,28 @@ class NotifyService : Service() {
     /** The persistent foreground-service notification: app name and a
      *  neutral line only. This banner is NOT an alert — it never carries
      *  chat content (the per-message alerts in [OwnerNotify] are the ones
-     *  the owner ordered to carry sender + text in Round 18). */
+     *  the owner ordered to carry sender + text in Round 18).
+     *
+     *  ROUND 19 (owner's build-62 report: "app open krte hi spam
+     *  notification aata hai ki notification on hai"): NotifyGate.sync
+     *  re-starts this service from MainActivity's onCreate AND onResume
+     *  AND onPause, and every onStartCommand re-posted this banner via
+     *  startForeground — on the ALERTS channel at IMPORTANCE_DEFAULT,
+     *  so each app open made it audibly/visibly announce itself. The
+     *  banner now lives on its OWN channel at IMPORTANCE_LOW (silent,
+     *  no badge, never peeks), is marked onlyAlertOnce + CATEGORY_SERVICE
+     *  + ongoing, and is always posted under the same stable id, so
+     *  re-starts and re-syncs update it in place without a sound, a
+     *  peek, or a shade re-entry. A notification may now be SEEN to
+     *  arrive only when a message actually arrives. */
     private fun foregroundNotification(): Notification {
         val nm = getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
-        if (nm != null && nm.getNotificationChannel(CHANNEL_ID) == null) {
-            // Same channel OwnerNotify creates lazily for the alerts
-            // (identical id/name/importance — channel creation is
-            // idempotent, so there is only ever the one "Reminders").
-            nm.createNotificationChannel(
-                NotificationChannel(CHANNEL_ID, "Reminders", NotificationManager.IMPORTANCE_DEFAULT)
+        if (nm != null && nm.getNotificationChannel(FG_CHANNEL_ID) == null) {
+            val ch = NotificationChannel(
+                FG_CHANNEL_ID, "Background", NotificationManager.IMPORTANCE_LOW,
             )
+            ch.setShowBadge(false)
+            nm.createNotificationChannel(ch)
         }
         val intent = Intent(this, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
@@ -202,19 +222,28 @@ class NotifyService : Service() {
             this, 0, intent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
-        return Notification.Builder(this, CHANNEL_ID)
+        return Notification.Builder(this, FG_CHANNEL_ID)
             .setSmallIcon(android.R.drawable.stat_notify_chat)
             .setContentTitle("Tiku")
             .setContentText("Notifications on")
             .setContentIntent(pi)
+            .setOnlyAlertOnce(true)
+            .setOngoing(true)
+            .setCategory(Notification.CATEGORY_SERVICE)
             .setVisibility(Notification.VISIBILITY_PRIVATE)
             .build()
     }
 
     companion object {
-        private const val CHANNEL_ID = "tiku_reminders"
+        /** The banner's own SILENT channel — deliberately separate from
+         *  OwnerNotify's "tiku_reminders" alerts channel, whose
+         *  IMPORTANCE_DEFAULT is what made re-posts announce themselves.
+         *  (Channel importance is immutable once created, so a new id is
+         *  the only way to demote the banner on existing installs.) */
+        private const val FG_CHANNEL_ID = "tiku_fg"
 
-        /** Clear of OwnerNotify's per-thread alert ids (0x4000..0xBFFF). */
+        /** Clear of OwnerNotify's per-thread alert ids (0x4000..0xBFFF).
+         *  Stable across every (re)start — a re-post replaces in place. */
         private const val FOREGROUND_ID = 0x2A15
 
         fun start(ctx: Context) {

@@ -99,11 +99,14 @@ fun myUidKey(): String = if (Config.PREVIEW_UI_ONLY) "me" else FirebaseEngine.my
 /** Last-message preview, build-47 rules: media kinds by label, call events
  *  by their pill label, never raw call text. ROUND 18: a delete-for-everyone
  *  tombstone previews as itself, and the preview is NEVER blank while a
- *  message exists — an unopenable text (metadata stub from the preview
- *  path) falls back to the generic "Message" label. */
+ *  message exists. ROUND 19: an undecryptable last message (retired-key
+ *  ciphertext, flagged on the preview path's metadata stub) previews with
+ *  the same honest label the chat placeholder shows — never a kind label,
+ *  never blank. */
 fun threadPreview(th: ChatThread): String {
     val last = th.messages.lastOrNull { !it.deletedForMe } ?: return ""
     if (last.deletedForEveryone) return "This message was deleted"
+    if (last.undecryptable) return "This message can't be opened on this phone"
     return when (last.kind) {
         MsgKind.VOICE -> "Voice message"
         MsgKind.IMAGE -> "Photo"
@@ -531,7 +534,10 @@ fun CallsScreen() {
     val blocked by AppState.blockedUids.collectAsState()
     val events = remember(threads) {
         threads.filter { !it.hiddenForMe && it.person.uid !in blocked }
-            .flatMap { th -> th.messages.filter { it.kind == MsgKind.CALL }.map { th to it } }
+            // ROUND 19: an undecryptable call stub carries no call
+            // payload (caller/outcome never decrypted) — it must not
+            // surface in the Calls tab as an empty/unknown event.
+            .flatMap { th -> th.messages.filter { it.kind == MsgKind.CALL && !it.undecryptable }.map { th to it } }
             .sortedByDescending { it.second.tsMs }
     }
     val startCall = rememberCallStarter()

@@ -52,6 +52,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.TransformOrigin
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -88,13 +90,16 @@ import kotlinx.coroutines.launch
 // ROUND 14 ADDENDUM 2 §5 — the FLOATING MINI PLAYER, crash-safe by
 // construction: the pane's WebView now lives in ONE root-level host
 // (WatchHost) for the whole Tik session. It is NEVER re-parented,
-// attached or detached on a tab switch — the host only animates the
+// attached or detached on a tab switch — the host changes only the
 // bounds of the single slot that holds it: EXPANDED over the Watch
 // tab's content area, or a small draggable MINI window on the other
 // tabs while a session is alive, so a playing video simply keeps
-// playing. The pane itself is composed only while (Watch tab ||
-// session alive); with neither, there is nothing to preserve and the
-// host renders nothing. Fullscreen is the one exception that is NOT
+// playing (ROUND 19: the bounds snap in one step and a scale
+// transform glides over them — an animated resize storm used to
+// strand the video surface). The pane itself is composed only while
+// (Watch tab || session alive); with neither, there is nothing to
+// preserve and the host renders nothing. Fullscreen is the one
+// exception that is NOT
 // the WebView: the page-supplied custom view is rendered by
 // WatchFullscreenLayer, so it is never clipped by the host's bounds.
 // Lock / quick-exit still clear the session (SessionLock), which
@@ -127,6 +132,34 @@ import kotlinx.coroutines.launch
 // exit behaviour, and HTML5 fullscreen runs through the existing
 // WatchFullscreen layer. The embed helpers below remain ONLY because
 // the facade drama player (DramaShell.kt) still builds on them.
+//
+// ROUND 19 (owner device test, build 62) — THE FLOATING PLAYER,
+// REBUILT. His report: the video did not play inside the floating
+// mini window, and leaving YouTube (Back / tab switch) stopped
+// playback entirely with no floating window at all. Three causes,
+// all in this file:
+// (1) BACK NEVER MINIMIZED. The pane's only Back handler walked the
+//     WebView's history; with no history the press fell through to
+//     HomeScreen's quick-exit handler, which clears the session and
+//     destroys the WebView — and WITH history it navigated away from
+//     the video in place. Back on a playable page now arms MINI mode
+//     (WatchSession.forceMini) — YouTube-app behaviour — and history
+//     walking remains for browse/search pages only (below).
+// (2) THE SHRINK WAS A RESIZE STORM. The host animated the pane
+//     container's real layout size for 340 ms, re-measuring the
+//     WebView at every intermediate size; the video surface ended
+//     stranded (black/frozen in the mini), and nothing re-asserted
+//     playback or brought the player into view — the mini showed the
+//     watch page at whatever scroll offset the user had left, player
+//     off-screen. The host now snaps the layout to the target size in
+//     ONE step (a single relayout, which WebView playback survives)
+//     and runs the visible glide as a graphicsLayer scale transform
+//     over it; entering MINI re-asserts play and scrolls the page to
+//     the top, so the 16:9 player is exactly what the mini shows.
+// (3) SESSION DETECTION WAS /watch-ONLY. Shorts and live pages never
+//     raised hasSession, so a tab switch uncomposed the host and
+//     destroyed the WebView mid-playback. playablePageId() now covers
+//     /watch, /shorts and /live.
 // ============================================================================
 
 /** Plain session state for Watch — NO View references, ever. */
@@ -136,6 +169,13 @@ object WatchSession {
     var lastUrl by mutableStateOf(HOME_URL)
     var lastTitle by mutableStateOf("")
     var hasSession by mutableStateOf(false)
+
+    /** ROUND 19: Back on a playable page (or any explicit minimize)
+     *  arms this: WatchHost renders MINI even while the Watch tab is
+     *  still the selected destination, floating the playing video
+     *  over the Watch screen until the mini is tapped (expand) or
+     *  closed (full stop). Plain session state — no View references. */
+    var forceMini by mutableStateOf(false)
 
     /** Bumped by [clear]; a pane captures the epoch at creation and its
      *  dispose-time save is ignored after a clear (lock / quick-exit), so a
@@ -166,6 +206,7 @@ object WatchSession {
         lastUrl = HOME_URL
         lastTitle = ""
         hasSession = false
+        forceMini = false
     }
 }
 
@@ -191,6 +232,9 @@ object WatchControl {
     /** Header "+": if the pane is alive, navigate it; otherwise seed the
      *  session and switch to the Watch tab (the pane resumes at HOME). */
     fun goHome() {
+        // Heading home is an EXPANDED-mode intent: drop any
+        // Back-minimize so the pane shows the navigation full-size.
+        WatchSession.forceMini = false
         val nav = navigate
         if (nav != null) {
             nav(WatchSession.HOME_URL)
@@ -247,6 +291,27 @@ private fun watchPageVideoId(url: String?): String? {
     if (uri.path != "/watch") return null
     val v = uri.getQueryParameter("v") ?: return null
     return v.takeIf { it.length >= 6 && it.all { c -> c.isLetterOrDigit() || c == '-' || c == '_' } }
+}
+
+/** ROUND 19 — ANY page that plays a video: /watch?v=…, /shorts/<id>,
+ *  /live/<id>. Build 62 detected only /watch, so a Short or a live
+ *  stream never raised the session (WatchSession.hasSession) and
+ *  leaving the tab destroyed the pane mid-playback. Every playable
+ *  page must raise the session — that is what keeps WatchHost
+ *  composing the pane (and the floating mini alive) across a tab
+ *  switch. */
+private fun playablePageId(url: String?): String? {
+    watchPageVideoId(url)?.let { return it }
+    if (url.isNullOrBlank()) return null
+    val uri = runCatching { android.net.Uri.parse(url) }.getOrNull() ?: return null
+    val host = uri.host ?: return null
+    if (!host.endsWith("youtube.com")) return null
+    val seg = uri.pathSegments
+    if (seg.size >= 2 && (seg[0] == "shorts" || seg[0] == "live")) {
+        val id = seg[1]
+        if (id.length >= 6 && id.all { c -> c.isLetterOrDigit() || c == '-' || c == '_' }) return id
+    }
+    return null
 }
 
 /** The locked embed's URL prefix — the one main-frame target the
@@ -391,7 +456,7 @@ private fun buildWatchWebView(
             // (however it was reached) raises the live session and
             // records the /watch URL itself for the bar / resume.
             if (!url.isNullOrBlank()) {
-                if (watchPageVideoId(url) != null) onWatchPage(url) else onPage(url)
+                if (playablePageId(url) != null) onWatchPage(url) else onPage(url)
             }
             onHistory(view?.canGoBack() == true)
         }
@@ -401,7 +466,7 @@ private fun buildWatchWebView(
             // Fresh load / resume straight onto a page: same dispatch
             // as the SPA path — a /watch URL records as the session's
             // watch page, everything else as a plain page.
-            if (watchPageVideoId(url) != null) onWatchPage(url) else onPage(url)
+            if (playablePageId(url) != null) onWatchPage(url) else onPage(url)
         }
 
         override fun onPageFinished(view: WebView?, url: String?) {
@@ -529,6 +594,12 @@ fun WatchPane(chromeInsets: Boolean = true, boundedAboveNav: Boolean = false) {
     // history (reported via the builder's onHistory) and arms the
     // pane's browser-like Back handler below.
     var webCanGoBack by remember { mutableStateOf(false) }
+    // ROUND 19: true while the pane sits on a playable page (/watch,
+    // /shorts, /live) — a resumed pane starts on its recorded session
+    // URL, so seed from it. Drives the Back-minimizes rule below.
+    var onPlayablePage by remember {
+        mutableStateOf(playablePageId(WatchSession.lastUrl) != null)
+    }
 
     val webView = remember(healGen) {
         buildWatchWebView(
@@ -539,10 +610,12 @@ fun WatchPane(chromeInsets: Boolean = true, boundedAboveNav: Boolean = false) {
             startUrl = currentUrl,
             onPage = { url ->
                 currentUrl = url
+                onPlayablePage = false
                 WatchSession.record(url, pageTitle, paneEpoch)
             },
             onWatchPage = { url ->
                 currentUrl = url
+                onPlayablePage = true
                 WatchSession.record(url, pageTitle, paneEpoch)
                 // A video page is actually up: the session is live
                 // right now, not only when the pane leaves. This is
@@ -583,25 +656,56 @@ fun WatchPane(chromeInsets: Boolean = true, boundedAboveNav: Boolean = false) {
             runCatching { cb?.onCustomViewHidden() }
         }
     }
-    // ROUND 17 — browser-like Back on the Watch tab: while the WebView
-    // itself can go back (watch → browse → …), Back walks YouTube's own
-    // history; only when it can't does the press fall through to the
-    // shell's standing behaviour (HomeScreen's quick-exit lock).
-    // Declared BEFORE the fullscreen handler so fullscreen keeps
-    // priority, and gated to EXPANDED mode (chromeInsets) + no
-    // fullscreen, so the floating mini never steals Back from the
-    // tab / chat underneath it.
-    BackHandler(enabled = chromeInsets && webCanGoBack && WatchFullscreen.view == null) {
+    // ROUND 19 — Back, three tiers, all gated to EXPANDED mode
+    // (chromeInsets) so the floating mini never steals Back from the
+    // tab / chat underneath it:
+    // (1) MINIMIZE — on a playable page, Back shrinks the playing
+    //     video into the floating mini player (YouTube-app behaviour;
+    //     the owner's Round-14 design). Build 62 had NO such path:
+    //     Back either walked the WebView history out from under the
+    //     video (the video died in place) or, with no history left,
+    //     fell through to HomeScreen's quick-exit lock — session
+    //     cleared, WebView destroyed, no floating window. The press
+    //     now only arms WatchSession.forceMini; WatchHost renders
+    //     MINI around this same live pane.
+    // (2) HISTORY — on browse / search / channel pages the Round-17
+    //     browser-like walk is unchanged.
+    // (3) FULLSCREEN exit — declared last so it keeps priority over
+    //     both (the dispatcher's most recent enabled handler wins).
+    // With none enabled (browse home, no history), the press falls
+    // through to the shell's quick-exit lock, as before.
+    BackHandler(enabled = chromeInsets && onPlayablePage && WatchFullscreen.view == null) {
+        // A playable page IS a live session — raise it explicitly so
+        // the host can never uncompose the pane out from under the
+        // mini this press is creating.
+        WatchSession.hasSession = true
+        WatchSession.forceMini = true
+    }
+    BackHandler(
+        enabled = chromeInsets && webCanGoBack && !onPlayablePage &&
+            WatchFullscreen.view == null,
+    ) {
         runCatching { webView.goBack() }
     }
     BackHandler(enabled = WatchFullscreen.view != null) { exitFullscreen() }
 
     // ROUND 15: expanding the pane (Watch tab, or a tap on the mini /
     // the "Now watching" bar) is the user's "watch now" gesture —
-    // unfreeze the renderer AND play. Shrinking to the mini never
-    // pauses: playback simply continues in the small window.
+    // unfreeze the renderer AND play. ROUND 19: entering the MINI is
+    // the symmetric "keep watching" gesture — the floating window
+    // exists so the video KEEPS PLAYING in it. Re-assert play (a
+    // surface stalled by the bounds change revives on the play call)
+    // and scroll the page to the top: the pane is laid out at the
+    // mini's own size, so the top of the watch page is the 16:9
+    // player itself — the mini shows the VIDEO, not whatever section
+    // (comments, related) the user had scrolled to.
     LaunchedEffect(chromeInsets, webView) {
-        if (chromeInsets) resumeWatchWebView(webView, autoplay = true)
+        if (chromeInsets) {
+            resumeWatchWebView(webView, autoplay = true)
+        } else {
+            resumeWatchWebView(webView, autoplay = true)
+            runCatching { webView.evaluateJavascript("window.scrollTo(0,0);", null) }
+        }
     }
 
     // A healed WebView starts with an empty history; its first page
@@ -675,9 +779,10 @@ fun WatchFullscreenLayer() {
  * ROUND 14 Addendum 2 §5 — the floating-player host. [WatchPane] is
  * called from exactly ONE call site inside it, so the WebView is
  * created once and destroyed only when the Tik session ends (lock /
- * quick-exit / full stop). Mode changes only animate this host's
- * bounds — the WebView is never moved between parents, which is the
- * Round 11/13 crash lesson.
+ * quick-exit / full stop). Mode changes never move the WebView
+ * between parents (the Round 11/13 crash lesson); since Round 19
+ * they also never animate its layout — the host snaps the slot to
+ * the target size and glides a scale transform over it.
  *
  * ROUND 15: the host is composed by TikuRoot (MainActivity) in the
  * home branch's Box — ABOVE HomeScreen and the Chat / ChatDetails /
@@ -686,21 +791,27 @@ fun WatchFullscreenLayer() {
  * demanded. It still dies with the Tik session: locking flips
  * TikuRoot's branch, uncomposing this whole subtree.
  *
- * Modes (driven by AppState.tikDestination + WatchSession.hasSession):
- * - EXPANDED (destination == 2): fills the Watch content area — full
- *   width, top at [WatchChromeHeaderHeight] (exactly under WatchScreen's
- *   chrome), bottom at the screen edge (the pane's own 100.dp inset
- *   keeps YouTube's bottom nav clear of the NavPill, as in build 47).
- * - MINI (destination != 2, session alive): the same live pane shrunk to
- *   208x117 (16:9), radius 12, border + shadow. Resting spot: bottom-
- *   right, 12.dp from the right edge, [WatchMiniBottomClearance] from
- *   the bottom — i.e. directly above the "Now watching" bar, which
- *   stays visible underneath it. DRAGGABLE anywhere (clamped to the
- *   screen), springs to the nearest horizontal edge on release; a tap
- *   returns to the Watch tab; the ✕ chip fully stops playback.
+ * Modes (driven by AppState.tikDestination + WatchSession.hasSession
+ * + WatchSession.forceMini):
+ * - EXPANDED (destination == 2, no forceMini): fills the Watch content
+ *   area — full width, top at [WatchChromeHeaderHeight] (exactly under
+ *   WatchScreen's chrome), bottom bounded above the NavPill band by
+ *   [WatchNavBlock] (the pane's own 12.dp inset finishes the job).
+ * - MINI (destination != 2 with a session alive, OR forceMini armed by
+ *   Back on the Watch tab itself): the same live pane at 208x117
+ *   (16:9), radius 12, border + shadow. Resting spot: bottom-right,
+ *   12.dp from the right edge, [WatchMiniBottomClearance] from the
+ *   bottom — i.e. directly above the "Now watching" bar, which stays
+ *   visible underneath it. DRAGGABLE anywhere (clamped to the screen),
+ *   springs to the nearest horizontal edge on release; a tap returns
+ *   to the Watch tab EXPANDED; the ✕ chip fully stops playback.
+ *   ROUND 19: a mode change snaps the pane's layout to the target
+ *   size in one step and glides a graphicsLayer scale over it — the
+ *   WebView is never dragged through an animated resize again.
  * - CALL (a call is ringing / outgoing / connected): playback pauses
- *   and the MINI window collapses to zero bounds — a bounds change,
- *   not an uncompose, so the pane and its session survive the call.
+ *   and the MINI window fades out (alpha 0, bounds kept) — neither an
+ *   uncompose nor a relayout, so the pane and its session survive
+ *   the call untouched.
  * - Not composed at all when there is no session and the Watch tab is
  *   not selected: nothing exists to preserve, and a later visit builds
  *   the pane fresh on the recorded session URL, exactly like build 47.
@@ -709,6 +820,7 @@ fun WatchFullscreenLayer() {
 fun WatchHost() {
     val dest = AppState.tikDestination
     val hasSession = WatchSession.hasSession
+    val forceMini = WatchSession.forceMini
     if (Config.PREVIEW_UI_ONLY) {
         // Screenshot harness: Robolectric must never see a real WebView.
         // Only the EXPANDED placeholder renders (shot24 composes
@@ -718,10 +830,16 @@ fun WatchHost() {
         }
         return
     }
-    val expanded = dest == 2
-    if (!expanded && !hasSession) return
+    // ROUND 19: EXPANDED needs the Watch tab AND no Back-minimize —
+    // forceMini keeps the host in MINI on the Watch tab itself. The
+    // early return also honours forceMini so arming it can never
+    // uncompose the pane it is about to float.
+    val expanded = dest == 2 && !forceMini
+    if (!expanded && !hasSession && !forceMini) return
     // ROUND 15 — a live call owns the screen and the audio: pause the
-    // video and collapse the MINI window (zero bounds, pane composed).
+    // video and hide the MINI window (ROUND 19: alpha 0 at mini
+    // bounds, pane composed — a zero-size relayout is exactly the
+    // kind of surface shock this round removes).
     val callState by CallController.state.collectAsState()
     val callActive = callState !is CallUiState.Idle
     LaunchedEffect(callActive) {
@@ -738,18 +856,48 @@ fun WatchHost() {
         val maxW = maxWidth
         val maxH = maxHeight
         val spec = tween<Dp>(340, easing = RdEase)
-        val wAnim by animateDpAsState(
-            if (expanded) maxW else if (hideMini) 0.dp else WatchMiniWidth, spec, label = "watchW",
-        )
-        val hAnim by animateDpAsState(
-            if (expanded) maxH - WatchChromeHeaderHeight - WatchNavBlock
-            else if (hideMini) 0.dp else WatchMiniHeight,
-            spec, label = "watchH",
-        )
         val rAnim by animateDpAsState(if (expanded) 0.dp else WatchMiniCorner, spec, label = "watchR")
+        // ROUND 19 — the pane's LAYOUT size is the mode's target size,
+        // applied in ONE step on a mode change. Build 62 animated the
+        // layout size itself (wAnim/hAnim), re-measuring the WebView
+        // at dozens of intermediate sizes over 340 ms; the video
+        // surface could not track the moving target and ended up
+        // stranded — the mini rendered black/frozen while the page
+        // lived. A single relayout (a browser window being resized
+        // once) is what WebView playback reliably survives. The
+        // visible shrink/grow glide is a graphicsLayer SCALE over the
+        // already-final layout (see the pane Box below): [glide] runs
+        // 0→1 while the scale lerps from [glideFrom] — the factor that
+        // maps the NEW layout onto the OLD mode's rect — to 1. The
+        // position Animatables below glide the origin at the same
+        // time, with the same 340 ms / RdEase timing as before.
+        val layoutW = if (expanded) maxW else WatchMiniWidth
+        val layoutH = if (expanded) {
+            (maxH - WatchChromeHeaderHeight - WatchNavBlock).coerceAtLeast(0.dp)
+        } else WatchMiniHeight
+        val glide = remember { Animatable(1f) }
+        var glideFrom by remember { mutableStateOf(1f to 1f) }
+        var glideArmed by remember { mutableStateOf(false) }
+        LaunchedEffect(expanded) {
+            // Keyed on the mode ONLY: a constraints change (IME
+            // opening over the Watch tab shrinks maxH) must not
+            // replay the glide. The host's FIRST mode is its starting
+            // state, not a transition: never glide in on composition.
+            if (!glideArmed) { glideArmed = true; return@LaunchedEffect }
+            val bigW = maxW.coerceAtLeast(1.dp)
+            val bigH = (maxH - WatchChromeHeaderHeight - WatchNavBlock).coerceAtLeast(1.dp)
+            glideFrom = if (expanded) {
+                (WatchMiniWidth / bigW) to (WatchMiniHeight / bigH)
+            } else {
+                (bigW / WatchMiniWidth) to (bigH / WatchMiniHeight)
+            }
+            glide.snapTo(0f)
+            glide.animateTo(1f, tween(340, easing = RdEase))
+        }
         // Position Animatables run in PX floats (drag deltas arrive in
-        // px); the size animatables above stay Dp. Same targets and the
-        // same 340ms / RdEase glide as the design.
+        // px). Same targets and the same 340ms / RdEase glide as the
+        // design — and as the scale glide above, so origin and size
+        // arrive together.
         val density = LocalDensity.current
         val posSpec = tween<Float>(340, easing = RdEase)
         val headerPx = with(density) { WatchChromeHeaderHeight.toPx() }
@@ -778,12 +926,26 @@ fun WatchHost() {
                 launch { ay.animateTo(defMiniY, posSpec) }
             }
         }
-        val curX = with(density) { ax.value.coerceIn(0f, (maxW - wAnim).toPx().coerceAtLeast(0f)).toDp() }
-        val curY = with(density) { ay.value.coerceIn(0f, (maxH - hAnim).toPx().coerceAtLeast(0f)).toDp() }
+        val curX = with(density) { ax.value.coerceIn(0f, (maxW - layoutW).toPx().coerceAtLeast(0f)).toDp() }
+        val curY = with(density) { ay.value.coerceIn(0f, (maxH - layoutH).toPx().coerceAtLeast(0f)).toDp() }
         Box(
             Modifier
                 .offset(x = curX, y = curY)
-                .size(wAnim, hAnim)
+                .size(layoutW, layoutH)
+                .graphicsLayer {
+                    // ROUND 19: the mode glide as a pure transform of
+                    // the FINAL layout (see the glide driver above) —
+                    // top-left origin, so the layer's rect tracks the
+                    // position Animatables exactly. At rest glide = 1
+                    // and the scale is identity. hideMini (a live call
+                    // owns the screen) fades the mini out here instead
+                    // of collapsing its bounds.
+                    val p = glide.value
+                    scaleX = glideFrom.first + (1f - glideFrom.first) * p
+                    scaleY = glideFrom.second + (1f - glideFrom.second) * p
+                    transformOrigin = TransformOrigin(0f, 0f)
+                    alpha = if (hideMini) 0f else 1f
+                }
                 .shadow(if (expanded) 0.dp else 14.dp, RoundedCornerShape(rAnim))
                 .clip(RoundedCornerShape(rAnim))
                 .then(
@@ -805,7 +967,11 @@ fun WatchHost() {
                     Modifier.fillMaxSize()
                         .pointerInput(maxW, maxH) {
                             detectTapGestures {
-                                // Tap (not a drag): back to the Watch tab, expanded.
+                                // Tap (not a drag): back to the Watch tab,
+                                // expanded — and drop any Back-minimize,
+                                // so a mini armed on the Watch tab itself
+                                // expands in place.
+                                WatchSession.forceMini = false
                                 AppState.goTik(2)
                             }
                         }
@@ -821,6 +987,10 @@ fun WatchHost() {
                                 onDragStart = {
                                     gestureScope.launch { ax.stop() }
                                     gestureScope.launch { ay.stop() }
+                                    // A drag takes the window over: end
+                                    // any in-flight glide transform so
+                                    // scale and position never fight.
+                                    gestureScope.launch { glide.snapTo(1f) }
                                 },
                                 onDragEnd = {
                                     // Release: spring to the nearest horizontal edge.
@@ -913,7 +1083,9 @@ fun NowWatchingBar(modifier: Modifier = Modifier) {
             Modifier.size(36.dp).clip(RoundedCornerShape(999.dp)).background(pal.ac)
                 .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {
                     // goTik(2) flips the host to EXPANDED around the same
-                    // live pane — no fresh pane, no reload.
+                    // live pane — no fresh pane, no reload. A lingering
+                    // Back-minimize is dropped for the same reason.
+                    WatchSession.forceMini = false
                     AppState.goTik(2)
                     AppState.go(Screen.Home)
                 },

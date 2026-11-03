@@ -848,14 +848,17 @@ object FirebaseEngine : ChatRepo {
         }
     }
 
-    /** ROUND 18 — metadata stub for a message doc whose ciphertext can't
-     *  be opened on this device (see applyPreviewSnapshot). Kind, sender
-     *  and ts are plaintext doc fields, so the stub is honest: the chat
-     *  list shows the kind label ("Photo", "Video", …; "Message" for a
-     *  text) instead of nothing. Preview path ONLY — the open chat keeps
-     *  its decrypt-or-absent behaviour. A delAll doc never reaches here
-     *  (decryptDoc returns its tombstone without touching ciphertext). */
-    private fun previewStub(doc: com.google.firebase.firestore.DocumentSnapshot): TikuMessage? {
+    /** ROUND 18/19 — metadata stub for a message doc whose ciphertext
+     *  can't be opened on this device (history written under a retired
+     *  keypair — e.g. the pre-reset journal's chats). Kind, sender and
+     *  ts are plaintext doc fields, so the stub is honest, and ROUND 19
+     *  marks it [TikuMessage.undecryptable]: EVERY surface (chat list,
+     *  open chat, pagination) renders the placeholder "This message
+     *  can't be opened on this phone" from it — never a blank bubble.
+     *  Used by the preview path, the open-chat listener and loadOlder
+     *  alike. A delAll doc never reaches here (decryptDoc returns its
+     *  tombstone without touching ciphertext). */
+    private fun undecryptableStub(doc: com.google.firebase.firestore.DocumentSnapshot): TikuMessage? {
         val sender = doc.getString("senderId") ?: return null
         val kind = when (doc.getString("kind") ?: "text") {
             "image" -> MsgKind.IMAGE; "voice" -> MsgKind.VOICE; "call" -> MsgKind.CALL
@@ -870,8 +873,18 @@ object FirebaseEngine : ChatRepo {
             id = doc.id, senderUid = sender, kind = kind, text = "",
             time = fmtTime(tsMs), me = sender == my,
             deletedForMe = deletedFor.contains(my), tsMs = tsMs,
+            undecryptable = true,
         )
     }
+
+    /** ROUND 19 — does this copy hold content worth protecting from a
+     *  stub? (Decrypted text, a decrypted image/poster, or a playable
+     *  local file.) A metadata-only VIDEO/AUDIO stub does NOT qualify —
+     *  it carries no plaintext — but it never reaches the stub fallback
+     *  anyway (those kinds don't throw in decryptDoc). */
+    private fun TikuMessage.hasPlaintext(): Boolean =
+        !undecryptable && (text.isNotEmpty() || photo != null || localPath != null ||
+            kind == MsgKind.CALL && callOutcome.isNotEmpty())
 
     /** My clearedBefore watermark for a chat: served from the threads-
      *  listener-fed cache; a one-time get() only on a cold cache. */
@@ -903,6 +916,7 @@ object FirebaseEngine : ChatRepo {
         val clearedBefore = clearedBeforeFor(id)
         val dmCutoff = if (SettingsStore.state.value.toggles["dm"] == true)
             System.currentTimeMillis() - 24L * 3600 * 1000 else 0L
+        val existingById = th.messages.associateBy { it.id }
         val msgs = docs.mapNotNull { d ->
             // ROUND 18: a doc whose ciphertext this device cannot open
             // (written under a retired key — e.g. the pre-reset journal's
@@ -910,9 +924,14 @@ object FirebaseEngine : ChatRepo {
             // left threads with real messages rendering a BLANK preview
             // (the owner's abu2 row: name + "now", no text). The stub
             // carries only the doc's plaintext metadata (kind / sender /
-            // ts), so the list can always show the kind label.
+            // ts) and is flagged undecryptable (ROUND 19).
+            // ROUND 19: a stub must never overwrite a copy whose
+            // plaintext this device already holds — if an earlier
+            // snapshot decrypted this doc and this one (transiently)
+            // didn't, the held copy wins over the stub.
             runCatching { decryptDoc(id, d, key, peerUid, light = true) }.getOrNull()
-                ?: previewStub(d)
+                ?: existingById[d.id]?.takeIf { it.hasPlaintext() }
+                ?: undecryptableStub(d)
         }.filter { m ->
             !m.deletedForMe && m.tsMs >= clearedBefore && (dmCutoff == 0L || m.tsMs >= dmCutoff)
         }.sortedBy { it.tsMs }
@@ -1315,9 +1334,22 @@ object FirebaseEngine : ChatRepo {
                                 com.google.firebase.firestore.DocumentChange.Type.ADDED,
                                 com.google.firebase.firestore.DocumentChange.Type.MODIFIED -> {
                                     val doc = change.document
-                                    runCatching {
-                                        decryptDoc(id, doc, key, peerUid, cached = cache[doc.id])
-                                    }.getOrNull()?.let { cache[doc.id] = it }
+                                    val existing = cache[doc.id]
+                                    val decoded = runCatching {
+                                        decryptDoc(id, doc, key, peerUid, cached = existing)
+                                    }.getOrNull()
+                                    when {
+                                        decoded != null -> cache[doc.id] = decoded
+                                        // ROUND 19: decryption failed (a
+                                        // retired key's history). Keep an
+                                        // honest placeholder in the chat —
+                                        // but NEVER overwrite a copy whose
+                                        // plaintext we already hold with
+                                        // the stub.
+                                        existing == null || existing.undecryptable ->
+                                            undecryptableStub(doc)?.let { cache[doc.id] = it }
+                                        else -> Unit // held plaintext wins; keep it
+                                    }
                                 }
                                 com.google.firebase.firestore.DocumentChange.Type.REMOVED -> {
                                     // Messages are NEVER hard-deleted in this
@@ -1369,12 +1401,31 @@ object FirebaseEngine : ChatRepo {
         val localsById = (AppState.thread(id)?.messages ?: emptyList()).associateBy { it.id }
         val mergedServer = serverMsgs.map { sm ->
             val lm = localsById[sm.id]
+            // ROUND 19: a server-side STUB must never erase plaintext this
+            // device already holds (the sibling risk of the round-18
+            // sticky tombstone): if the cache copy failed to decrypt but
+            // the visible list still holds the real content for this id
+            // (an optimistic local whose echo landed under a key this
+            // session can't open, or an earlier good decrypt), the held
+            // content wins — riding the server copy's position/metadata,
+            // marked SENT because the doc provably exists server-side.
+            if (sm.undecryptable && lm != null && lm.hasPlaintext()) {
+                if (lm.deletedForEveryone) {
+                    sm.copy(
+                        deletedForEveryone = true, text = "", photo = null,
+                        localPath = null, replyQuote = null, reactions = emptyMap(),
+                        undecryptable = false,
+                    )
+                } else {
+                    lm.copy(status = SendStatus.SENT, tsMs = sm.tsMs, seenByPeer = sm.seenByPeer)
+                }
+            }
             // ROUND 18: a delete-for-everyone I just made is tombstoned in
             // the local list optimistically, but the cache still holds the
             // pre-delete decrypt until the MODIFIED echo lands — without
             // this, any rebuild in between would flip the bubble back to
             // its content for a beat. The local tombstone wins.
-            if (lm != null && lm.deletedForEveryone && !sm.deletedForEveryone) {
+            else if (lm != null && lm.deletedForEveryone && !sm.deletedForEveryone) {
                 sm.copy(
                     deletedForEveryone = true, text = "", photo = null,
                     localPath = null, replyQuote = null, reactions = emptyMap(),
@@ -1423,8 +1474,14 @@ object FirebaseEngine : ChatRepo {
                     var added = 0
                     for (doc in snap.documents) {
                         if (cache.containsKey(doc.id)) continue
-                        runCatching { decryptDoc(id, doc, key, peerUid) }.getOrNull()
-                            ?.let { cache[doc.id] = it; added++ }
+                        // ROUND 19: same rule as the live listener — a
+                        // doc this device can't open still EXISTS in the
+                        // history as a placeholder (and counts as added,
+                        // so a page of old-key history doesn't read as
+                        // "end of history").
+                        val decoded = runCatching { decryptDoc(id, doc, key, peerUid) }.getOrNull()
+                            ?: undecryptableStub(doc)
+                        decoded?.let { cache[doc.id] = it; added++ }
                     }
                     // a short page — or one that added nothing new — is the top
                     hasOlderCache[id] = snap.size() >= PAGE_SIZE.toInt() && added > 0
@@ -1608,6 +1665,9 @@ object FirebaseEngine : ChatRepo {
             tsMs = System.currentTimeMillis(), status = SendStatus.SENDING,
         )
         AppState.upsertMessage(id, local)
+        // ROUND 19: sender-intent glide — the open chat animates to this
+        // exact local once it composes as the tail (see AppState).
+        AppState.requestTailScroll(id, local.id)
         scope.launch { deliverText(id, th.person.uid, local) }
     }
 
@@ -1644,6 +1704,7 @@ object FirebaseEngine : ChatRepo {
             tsMs = System.currentTimeMillis(), status = SendStatus.SENDING,
         )
         AppState.upsertMessage(id, local)
+        AppState.requestTailScroll(id, local.id)
         scope.launch { deliverMedia(id, th.person.uid, local, MediaStore.compressPhoto(bmp)) }
     }
 
@@ -1660,6 +1721,7 @@ object FirebaseEngine : ChatRepo {
             tsMs = System.currentTimeMillis(), status = SendStatus.SENDING,
         )
         AppState.upsertMessage(id, local)
+        AppState.requestTailScroll(id, local.id)
         scope.launch {
             val bytes = runCatching { audioFile.readBytes() }.getOrNull()
             if (bytes == null) {
@@ -1741,6 +1803,7 @@ object FirebaseEngine : ChatRepo {
             mimeType = mime, mediaBytes = file.length(),
         )
         AppState.upsertMessage(id, local)
+        AppState.requestTailScroll(id, local.id)
         scope.launch {
             val bytes = runCatching { file.readBytes() }.getOrNull()
             if (bytes == null) {
@@ -2243,6 +2306,7 @@ object FirebaseEngine : ChatRepo {
             tsMs = System.currentTimeMillis(), status = SendStatus.SENDING,
         )
         AppState.upsertMessage(id, local)
+        AppState.requestTailScroll(id, local.id)
         scope.launch { deliverText(id, th.person.uid, local) }
     }
 
