@@ -9,7 +9,14 @@ import android.graphics.Bitmap
  *  not a call log. ROUND 6 SUPERSESSION (owner's new rule): the Calls tab now
  *  aggregates THESE in-chat call-event messages into a history list; that is
  *  the only call surface that changed — signaling deletion is untouched. */
-enum class MsgKind { TEXT, IMAGE, VOICE, CALL }
+/** ROUND 15: VIDEO (a video file, Firestore kind "video") and AUDIO (an
+ *  audio FILE, kind "audio") join the media kinds. AUDIO is deliberately
+ *  distinct from VOICE: a voice note is recorded in-app, auto-downloads
+ *  with the chat and renders the waveform player; an audio file is picked
+ *  or captured, carries a mime type, and — like VIDEO — loads its payload
+ *  ONLY on tap (no auto-download). Both ride the same encrypted chunk
+ *  pipeline as IMAGE/VOICE. */
+enum class MsgKind { TEXT, IMAGE, VOICE, CALL, VIDEO, AUDIO }
 
 /** Delivery state of an outgoing message (round 3: no silent send failures).
  *  Local optimistic copies start SENDING; the Firestore write landing flips
@@ -24,6 +31,9 @@ data class TikuMessage(
     val text: String = "",
     val time: String = "now",
     val me: Boolean = false,
+    /** Media duration in seconds: the voice note's length, and (round 15)
+     *  the VIDEO / AUDIO file's duration — the Firestore `durationMs`
+     *  field carries it for every media kind. */
     val voiceDurSec: Int = 0,
     val amps: List<Int> = emptyList(),
     val photo: Bitmap? = null,          // decrypted image bytes, in-memory/cache only
@@ -64,6 +74,18 @@ data class TikuMessage(
      *  message (0 = never edited). Drives the muted "Edited" caption; the
      *  ciphertext itself is replaced through the normal encrypt path. */
     val editedAtMs: Long = 0L,
+    // ---- round 15 (appended last on purpose: every existing positional
+    // TikuMessage construction keeps compiling unchanged) ----
+    /** Mime type of a VIDEO / AUDIO file payload ("" for the older kinds —
+     *  images are always the JPEG pipeline, voice notes always m4a).
+     *  Drives the cache-file extension and the MediaStore save mime.
+     *  Firestore field `mime`. For a loaded VIDEO, [photo] doubles as the
+     *  poster frame extracted from the decrypted file. */
+    val mimeType: String = "",
+    /** Plaintext byte size of a VIDEO / AUDIO payload (shown on the
+     *  not-yet-loaded bubble; the send caps are enforced against it).
+     *  Firestore field `mediaBytes`. */
+    val mediaBytes: Long = 0L,
 )
 
 /** One 1:1 conversation. */
@@ -249,9 +271,12 @@ object Schema {
             val deletedFor: List<String> = emptyList(),
             val seenBy: List<String> = emptyList(),
             val durationMs: Int = 0, val amps: List<Int> = emptyList(),
-            /** Media kinds (image/voice): ciphertext lives in the chunks subcollection;
-              * iv on the doc describes the whole-blob AES-GCM encryption. */
+            /** Media kinds (image/voice/video/audio): ciphertext lives in the chunks
+              * subcollection; iv on the doc describes the whole-blob AES-GCM
+              * encryption. Round 15: `mime` + `mediaBytes` ride the doc for
+              * the VIDEO / AUDIO file kinds. */
             val mediaChunks: Int = 0,
+            val mime: String = "", val mediaBytes: Long = 0L,
         )
     }
     object Moments {

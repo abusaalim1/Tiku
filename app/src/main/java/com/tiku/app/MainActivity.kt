@@ -66,12 +66,24 @@ class MainActivity : ComponentActivity() {
         AppState.repo = if (Config.PREVIEW_UI_ONLY) PreviewRepo else FirebaseEngine
         DramaContent.load(this)
         AppState.instantGo(Screen.Facade)
+        // ROUND 15: app start is one of the notify service's choke points
+        // (OwnerPrefs was initialized in TikuApp.onCreate, before this).
+        NotifyGate.sync(this)
         setContent { TikuRoot(onGoogleClick = ::onGoogleClick) }
     }
 
     override fun onResume() {
         super.onResume()
         ChatSession.foreground = true
+        // ROUND 15: the symmetric half of onPause's Watch pause — an
+        // onPause()d WebView that is never onResume()d keeps a frozen,
+        // black video surface while its page lives on. This only
+        // unfreezes the renderer; it never forces playback (expanding
+        // the pane is what plays — see WatchControl.requestResume).
+        WatchControl.requestResume()
+        // ROUND 15: returning to the app re-reconciles the notify service
+        // with its run gate (settings may have changed while we were away).
+        NotifyGate.sync(this)
         // presence reflects being INSIDE ChatRoot only — never the facade
         if (!Config.PREVIEW_UI_ONLY && ChatSession.unlocked && FirebaseEngine.signedIn && isOnboarded()) {
             FirebaseEngine.setPresence(true)
@@ -88,6 +100,12 @@ class MainActivity : ComponentActivity() {
         // ROUND 13: the pause goes through WatchControl to the ACTIVE pane's
         // WebView; no pane composed = nothing playing (view destroyed).
         WatchControl.requestPause()
+        // ROUND 15: leaving the app is the moment background alerts start
+        // to matter — sync starts the notify service now if its gate
+        // holds (e.g. an in-app unlock just consumed a Lock-now one-shot),
+        // and stops it if the gate broke. Called while still foreground,
+        // so a foreground-service start is always legal here.
+        NotifyGate.sync(this)
         if (!Config.PREVIEW_UI_ONLY && ChatSession.unlocked && FirebaseEngine.signedIn) {
             FirebaseEngine.setPresence(false)
         }
@@ -257,6 +275,20 @@ fun TikuRoot(onGoogleClick: () -> Unit) {
                         ) {
                             MomentsScreen()
                         }
+                        // ROUND 15 (owner device test): the Watch host
+                        // is hoisted HERE from HomeScreen — above the
+                        // Chat / ChatDetails / Moments overlays, so the
+                        // floating mini player stays visible and usable
+                        // over an open chat; below the call UI, the
+                        // story viewer, the sheets (BottomSheetHost,
+                        // composed after this subtree) and the toast.
+                        // It still dies with the Tik session: locking
+                        // flips this AnimatedContent branch away, which
+                        // uncomposes the host and destroys the WebView.
+                        // The host pauses + hides the mini itself while
+                        // a call is active (CallController state).
+                        WatchHost()
+                        WatchFullscreenLayer()
                         AnimatedVisibility(
                             visible = screen is Screen.Call,
                             enter = fadeIn(tween(300, easing = TikuEase)) +
@@ -275,10 +307,11 @@ fun TikuRoot(onGoogleClick: () -> Unit) {
                         // above the glass nav. It self-hides unless a Watch
                         // session exists on a non-Watch Home tab.
                         // ROUND 14 (Addendum 2 §5): the floating mini
-                        // player is back (WatchHost in HomeScreen) and
-                        // rests directly above this bar; the bar's bottom
-                        // inset is NowWatchingBarBottomInset (94.dp —
-                        // 8.dp above the redesign NavPill's 86.dp block).
+                        // player (WatchHost, hoisted to this root in
+                        // ROUND 15) rests directly above this bar; the
+                        // bar's bottom inset is NowWatchingBarBottomInset
+                        // (94.dp — 8.dp above the redesign NavPill's
+                        // 86.dp block).
                         NowWatchingBar(
                             Modifier.align(Alignment.BottomCenter)
                                 .padding(start = 16.dp, end = 16.dp, bottom = NowWatchingBarBottomInset),

@@ -227,6 +227,17 @@ interface ChatRepo {
     fun retrySend(id: String, msgId: String) {}
     fun sendPhoto(id: String, bmp: Bitmap)
     fun sendVoice(id: String, audioFile: java.io.File?, durSec: Int, amps: List<Int>)
+    // ---- ROUND 15: media files (video + audio file) ----
+    /** Send a VIDEO file (picker copy or camera capture — always an
+     *  app-cache file) through the encrypted chunk pipeline. The engine
+     *  enforces the size cap. Default no-op keeps test doubles compiling. */
+    fun sendVideo(id: String, file: java.io.File, mime: String, durSec: Int) {}
+    /** Send an AUDIO file (picked file copied to cache, or a camera-app
+     *  audio capture). Same pipeline + cap rules as [sendVideo]. */
+    fun sendAudio(id: String, file: java.io.File, mime: String, durSec: Int) {}
+    /** Load one VIDEO / AUDIO message's payload on demand (tap-to-load —
+     *  these kinds never auto-download). Default no-op. */
+    fun fetchMedia(id: String, msgId: String) {}
     fun react(id: String, msgId: String, emoji: String?)
     fun toggleStar(id: String, msgId: String)
     fun deleteForMe(id: String, msgId: String)

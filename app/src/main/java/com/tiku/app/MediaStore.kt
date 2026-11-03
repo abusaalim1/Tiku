@@ -105,7 +105,22 @@ object MediaSaver {
         MsgKind.VOICE -> {
             val path = m.localPath ?: return false
             val f = java.io.File(path)
-            if (!f.exists()) false else writeAudio(ctx, f, "tiku_voice_${m.id}.m4a")
+            if (!f.exists()) false else writeAudio(ctx, f, "tiku_voice_${m.id}.m4a", "audio/mp4")
+        }
+        // ROUND 15: the file kinds save from their decrypted cache file,
+        // under their real mime type — video to Movies/Tiku, audio files
+        // to Music/Tiku. Unloaded payloads (localPath null) can't save.
+        MsgKind.VIDEO -> {
+            val path = m.localPath ?: return false
+            val f = java.io.File(path)
+            if (!f.exists()) false else writeVideo(ctx, f, "tiku_video_${m.id}.${f.extension.ifEmpty { "mp4" }}",
+                m.mimeType.ifEmpty { "video/mp4" })
+        }
+        MsgKind.AUDIO -> {
+            val path = m.localPath ?: return false
+            val f = java.io.File(path)
+            if (!f.exists()) false else writeAudio(ctx, f, "tiku_audio_${m.id}.${f.extension.ifEmpty { "mp3" }}",
+                m.mimeType.ifEmpty { "audio/mpeg" })
         }
         else -> false
     }
@@ -131,11 +146,11 @@ object MediaSaver {
         }
     }.getOrDefault(false)
 
-    private fun writeAudio(ctx: android.content.Context, src: java.io.File, name: String): Boolean = runCatching {
+    private fun writeAudio(ctx: android.content.Context, src: java.io.File, name: String, mime: String): Boolean = runCatching {
         if (android.os.Build.VERSION.SDK_INT >= 29) {
             val values = android.content.ContentValues().apply {
                 put(android.provider.MediaStore.Audio.Media.DISPLAY_NAME, name)
-                put(android.provider.MediaStore.Audio.Media.MIME_TYPE, "audio/mp4")
+                put(android.provider.MediaStore.Audio.Media.MIME_TYPE, mime)
                 put(android.provider.MediaStore.Audio.Media.RELATIVE_PATH,
                     android.os.Environment.DIRECTORY_MUSIC + "/Tiku")
             }
@@ -145,6 +160,27 @@ object MediaSaver {
             true
         } else {
             val dir = java.io.File(ctx.getExternalFilesDir(android.os.Environment.DIRECTORY_MUSIC), "Tiku").apply { mkdirs() }
+            src.copyTo(java.io.File(dir, name), overwrite = true)
+            true
+        }
+    }.getOrDefault(false)
+
+    /** ROUND 15: video save — same MediaStore pattern as audio, into
+     *  Movies/Tiku on API 29+ (app-specific Movies/Tiku below that). */
+    private fun writeVideo(ctx: android.content.Context, src: java.io.File, name: String, mime: String): Boolean = runCatching {
+        if (android.os.Build.VERSION.SDK_INT >= 29) {
+            val values = android.content.ContentValues().apply {
+                put(android.provider.MediaStore.Video.Media.DISPLAY_NAME, name)
+                put(android.provider.MediaStore.Video.Media.MIME_TYPE, mime)
+                put(android.provider.MediaStore.Video.Media.RELATIVE_PATH,
+                    android.os.Environment.DIRECTORY_MOVIES + "/Tiku")
+            }
+            val uri = ctx.contentResolver.insert(android.provider.MediaStore.Video.Media.EXTERNAL_CONTENT_URI, values)
+                ?: return false
+            ctx.contentResolver.openOutputStream(uri)?.use { out -> src.inputStream().use { it.copyTo(out) } } ?: return false
+            true
+        } else {
+            val dir = java.io.File(ctx.getExternalFilesDir(android.os.Environment.DIRECTORY_MOVIES), "Tiku").apply { mkdirs() }
             src.copyTo(java.io.File(dir, name), overwrite = true)
             true
         }

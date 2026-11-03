@@ -561,7 +561,7 @@ class ScreenshotsTest {
         if (composeRule.onAllNodesWithText("Owner")
                 .fetchSemanticsNodes().isEmpty()
         ) {
-            composeRule.onNode(hasScrollAction()).performScrollToIndex(21)
+            composeRule.onNode(hasScrollAction()).performScrollToIndex(22)
             composeRule.waitForIdle()
         }
         org.junit.Assert.assertTrue(

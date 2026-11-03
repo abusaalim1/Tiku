@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- ROUND 15: FileProvider paths — camera captures live ONLY in the
+     app cache directory (cap_*.jpg / cap_*.mp4). Nothing else is shared. -->
+<paths>
+    <cache-path name="captures" path="." />
+</paths>

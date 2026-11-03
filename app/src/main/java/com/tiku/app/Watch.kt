@@ -39,6 +39,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
@@ -73,24 +74,40 @@ import kotlinx.coroutines.launch
 //
 // ROUND 14 — browsing/search stay on m.youtube, but a /watch page itself is
 // never rendered — the pane swaps in the locked youtube-nocookie embed
-// (see youtubeEmbedHtml) and locks navigation to it until the user leaves
+// (see loadYoutubeEmbed) and locks navigation to it until the user leaves
 // via the header "+" (WatchControl.goHome) or the pane is destroyed.
 //
 // ROUND 14 ADDENDUM 2 §5 — the FLOATING MINI PLAYER, crash-safe by
 // construction: the pane's WebView now lives in ONE root-level host
-// (WatchHost, composed by HomeScreen above the panes, below the NavPill)
-// for the whole Tik session. It is NEVER re-parented, attached or detached
-// on a tab switch — the host only animates the bounds of the single slot
-// that holds it: EXPANDED over the Watch tab's content area, or a small
-// draggable MINI window on the other tabs while a session is alive, so a
-// playing video simply keeps playing. The pane itself is composed only
-// while (Watch tab || session alive); with neither, there is nothing to
-// preserve and the host renders nothing. Fullscreen is the one exception
-// that is NOT the WebView: the page-supplied custom view is rendered by
-// WatchFullscreenLayer at the HomeScreen root (above nav + sheets), so
-// it is never clipped by the host's bounds. Lock / quick-exit still clear
-// the session (SessionLock), which uncomposes the host and destroys the
-// WebView outright, exactly as before.
+// (WatchHost) for the whole Tik session. It is NEVER re-parented,
+// attached or detached on a tab switch — the host only animates the
+// bounds of the single slot that holds it: EXPANDED over the Watch
+// tab's content area, or a small draggable MINI window on the other
+// tabs while a session is alive, so a playing video simply keeps
+// playing. The pane itself is composed only while (Watch tab ||
+// session alive); with neither, there is nothing to preserve and the
+// host renders nothing. Fullscreen is the one exception that is NOT
+// the WebView: the page-supplied custom view is rendered by
+// WatchFullscreenLayer, so it is never clipped by the host's bounds.
+// Lock / quick-exit still clear the session (SessionLock), which
+// uncomposes the host and destroys the WebView outright, exactly as
+// before.
+//
+// ROUND 15 (owner device test, build 53) — three root fixes:
+// (1) BLACK VIDEO: the pane's WebView was built with the APPLICATION
+// context and playback ran through a loadDataWithBaseURL document
+// wrapping a cross-origin iframe — on the owner's phone the audio
+// played but the video surface stayed black and the title never
+// arrived. The WebView now gets the ACTIVITY context and the embed
+// loads DIRECTLY (loadUrl of the nocookie embed URL, no wrapper).
+// (2) FROZEN SURFACE: MainActivity.onPause pauses the WebView via
+// WatchControl, but nothing ever called onResume — after any
+// backgrounding the renderer stayed paused. Resume is now paired:
+// activity resume unfreezes the view, expanding the pane also plays.
+// (3) MINI OVER CHAT: WatchHost moved from HomeScreen to TikuRoot
+// (MainActivity), above the Chat/Details/Moments overlays and below
+// the call UI + sheets — the mini now floats over chats too and only
+// disappears on lock / full stop / an active call.
 // ============================================================================
 
 /** Plain session state for Watch — NO View references, ever. */
@@ -134,11 +151,12 @@ object WatchSession {
 }
 
 /** Tiny registered controller so chrome outside the pane (the Watch header
- *  "+" button, MainActivity.onPause) can reach the ACTIVE pane's WebView.
- *  Both lambdas are non-null only while a WatchPane is composed. */
+ *  "+" button, MainActivity.onPause/onResume) can reach the ACTIVE pane's
+ *  WebView. All lambdas are non-null only while a WatchPane is composed. */
 object WatchControl {
     var navigate: ((String) -> Unit)? = null
     var pausePlayback: (() -> Unit)? = null
+    var resumePlayback: (() -> Unit)? = null
     var stopPlayback: (() -> Unit)? = null
 
     /** FULL stop — the mini window's ✕ and the "Now watching" bar's ✕:
@@ -172,14 +190,23 @@ object WatchControl {
     fun requestPause() {
         pausePlayback?.invoke()
     }
+
+    /** Activity resume: the symmetric half of [requestPause] (ROUND 15) —
+     *  unfreeze the WebView's renderer. Deliberately does NOT force the
+     *  video to play: if the JS pause landed, the player shows its own
+     *  play button; EXPANDING the pane (tap on the mini / the bar) is
+     *  the user's "watch now" gesture and plays via the pane itself. */
+    fun requestResume() {
+        resumePlayback?.invoke()
+    }
 }
 
-/** Fullscreen custom-view state, hoisted OUT of the pane: HomeScreen's
- *  root renders [WatchFullscreenLayer] above the whole shell (nav,
- *  sheets), so a fullscreen video is never clipped by WatchHost's
- *  animated bounds. The WebView itself never moves — only this ephemeral
- *  page-supplied view gets a top-level home, the same job the pane's own
- *  box did in build 47 before the host existed. */
+/** Fullscreen custom-view state, hoisted OUT of the pane: TikuRoot
+ *  renders [WatchFullscreenLayer] right beside WatchHost (above the
+ *  shell and its overlays), so a fullscreen video is never clipped by
+ *  WatchHost's animated bounds. The WebView itself never moves — only
+ *  this ephemeral page-supplied view gets a top-level home, the same
+ *  job the pane's own box did in build 47 before the host existed. */
 object WatchFullscreen {
     var view by mutableStateOf<View?>(null)
     var callback by mutableStateOf<WebChromeClient.CustomViewCallback?>(null)
@@ -203,32 +230,29 @@ private fun watchPageVideoId(url: String?): String? {
     return v.takeIf { it.length >= 6 && it.all { c -> c.isLetterOrDigit() || c == '-' || c == '_' } }
 }
 
+/** The locked embed's URL prefix — the one main-frame target both
+ *  players' WebViewClients allow while an embed is up. */
+internal const val YOUTUBE_EMBED_PREFIX = "https://www.youtube-nocookie.com/embed/"
+
 /**
  * ROUND 14 — the LOCKED YouTube embed shared by both players (this pane
- * and the facade drama player in DramaShell.kt): a local HTML document
- * whose only content is a youtube-nocookie iframe — no watch page, no
- * "Open App" pill, no comments, no related-video rail. Combined with
- * each player's WebViewClient lockdown, playback stays in this document.
+ * and the facade drama player in DramaShell.kt): the nocookie embed
+ * page itself — no watch page, no "Open App" pill, no comments, no
+ * related-video rail. Combined with each player's WebViewClient
+ * lockdown, playback stays on this page.
+ *
+ * ROUND 15: loaded DIRECTLY with loadUrl. The Round-14 route wrapped
+ * the embed in a local loadDataWithBaseURL document as an iframe; on
+ * the owner's phone that produced audio with a permanently black
+ * video surface (and no title). A top-level embed load is the route
+ * YouTube's own player is built for.
  */
-internal fun youtubeEmbedHtml(videoId: String): String =
-    "<!DOCTYPE html><html><head><meta charset=\"utf-8\">" +
-        "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1, " +
-        "maximum-scale=1, user-scalable=no\">" +
-        "<title>YouTube</title>" +
-        "<style>html,body{margin:0;padding:0;background:#000;height:100%;overflow:hidden}" +
-        "iframe{position:absolute;left:0;top:0;width:100%;height:100%;border:0}</style>" +
-        "</head><body>" +
-        "<iframe src=\"https://www.youtube-nocookie.com/embed/" + videoId +
-        "?playsinline=1&rel=0&modestbranding=1&autoplay=1\" allowfullscreen " +
-        "allow=\"autoplay; encrypted-media; picture-in-picture\"></iframe>" +
-        "</body></html>"
+internal fun youtubeEmbedUrl(videoId: String): String =
+    YOUTUBE_EMBED_PREFIX + videoId +
+        "?autoplay=1&playsinline=1&rel=0&modestbranding=1"
 
 internal fun loadYoutubeEmbed(wv: WebView, videoId: String) {
-    wv.loadDataWithBaseURL(
-        "https://www.youtube-nocookie.com",
-        youtubeEmbedHtml(videoId),
-        "text/html", "UTF-8", null,
-    )
+    wv.loadUrl(youtubeEmbedUrl(videoId))
 }
 
 /** Mutable holder so the pane's WebView-building lambdas can reach the
@@ -303,9 +327,18 @@ private fun buildWatchWebView(
         // but a /watch page is never rendered — the pane swaps in the
         // locked nocookie embed for that video (see onWatchVideo), and
         // while the embed is up, no main-frame navigation leaves it.
+        // ROUND 15: only MAIN-FRAME requests are ever intercepted — the
+        // player's own subframe/subresource traffic is its business,
+        // never ours to block; and while locked, the embed document
+        // itself (incl. a redirect back to it) always passes, so the
+        // direct loadUrl can never be cancelled by the lockdown.
         override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
-            if (embedLocked()) return true
-            val id = watchPageVideoId(request?.url?.toString())
+            val req = request ?: return false
+            if (!req.isForMainFrame) return false
+            if (embedLocked()) {
+                return !req.url.toString().startsWith(YOUTUBE_EMBED_PREFIX)
+            }
+            val id = watchPageVideoId(req.url?.toString())
             if (id != null) {
                 onWatchVideo(id)
                 return true
@@ -349,9 +382,15 @@ private fun buildWatchWebView(
     }
     wv.webChromeClient = object : WebChromeClient() {
         override fun onReceivedTitle(view: WebView?, title: String?) {
-            // While the embed is up, keep the real video's title (the
-            // local embed document has nothing better to report).
-            if (embedLocked()) return
+            if (embedLocked()) {
+                // ROUND 15: the embed is now the TOP document, and its
+                // page title IS the video's title ("<title> - YouTube")
+                // — take it, so the "Now watching" bar stops showing
+                // the generic "YouTube" while a video plays.
+                val t = title?.removeSuffix(" - YouTube")?.trim().orEmpty()
+                if (t.isNotBlank() && t != "YouTube") onTitle(t)
+                return
+            }
             if (!title.isNullOrBlank()) onTitle(title)
         }
 
@@ -363,7 +402,9 @@ private fun buildWatchWebView(
             onHideCustom()
         }
     }
-    if (startUrl.startsWith("http")) wv.loadUrl(startUrl)
+    // The session only ever records http(s) URLs, but a pane must never
+    // sit on a blank page: fall back to YouTube home rather than nothing.
+    wv.loadUrl(if (startUrl.startsWith("http")) startUrl else WatchSession.HOME_URL)
     return wv
 }
 
@@ -382,6 +423,25 @@ private fun pauseWatchWebView(wv: WebView) {
         )
     }
     runCatching { wv.onPause() }
+}
+
+/** ROUND 15 — the symmetric half of [pauseWatchWebView]. Round 14
+ *  paused the WebView (MainActivity.onPause) and never resumed it, so
+ *  after any backgrounding the video surface stayed frozen/black while
+ *  the page lived on. [autoplay] additionally presses play on the
+ *  player — used when the user EXPANDS the pane, the explicit "watch
+ *  now" gesture; a plain activity resume only unfreezes the renderer
+ *  and leaves a deliberately paused video paused. */
+private fun resumeWatchWebView(wv: WebView, autoplay: Boolean) {
+    runCatching { wv.onResume() }
+    if (autoplay) {
+        runCatching {
+            wv.evaluateJavascript(
+                "(function(){var v=document.querySelector('video');if(v&&v.paused){v.play();}})();",
+                null,
+            )
+        }
+    }
 }
 
 /**
@@ -436,7 +496,10 @@ fun WatchPane(chromeInsets: Boolean = true) {
 
     val webView = remember(healGen) {
         buildWatchWebView(
-            ctx = ctx.applicationContext,
+            // ROUND 15: the ACTIVITY context, not applicationContext —
+            // an application-context WebView is a known cause of black
+            // HTML5 video surfaces and broken fullscreen on real devices.
+            ctx = ctx,
             startUrl = currentUrl,
             onPage = { url ->
                 currentUrl = url
@@ -495,6 +558,14 @@ fun WatchPane(chromeInsets: Boolean = true) {
     }
     BackHandler(enabled = WatchFullscreen.view != null) { exitFullscreen() }
 
+    // ROUND 15: expanding the pane (Watch tab, or a tap on the mini /
+    // the "Now watching" bar) is the user's "watch now" gesture —
+    // unfreeze the renderer AND play. Shrinking to the mini never
+    // pauses: playback simply continues in the small window.
+    LaunchedEffect(chromeInsets, webView) {
+        if (chromeInsets) resumeWatchWebView(webView, autoplay = true)
+    }
+
     DisposableEffect(webView) {
         WatchControl.navigate = { url ->
             // The way back from the embed to browsing: the header "+"
@@ -505,6 +576,7 @@ fun WatchPane(chromeInsets: Boolean = true) {
             runCatching { webView.loadUrl(url) }
         }
         WatchControl.pausePlayback = { pauseWatchWebView(webView) }
+        WatchControl.resumePlayback = { resumeWatchWebView(webView, autoplay = false) }
         WatchControl.stopPlayback = {
             // FULL stop (mini ✕ / bar ✕ via WatchControl.stop): kill the
             // page + playback NOW; WatchSession.clear() right after makes
@@ -519,6 +591,7 @@ fun WatchPane(chromeInsets: Boolean = true) {
         onDispose {
             if (WatchControl.navigate != null) WatchControl.navigate = null
             if (WatchControl.pausePlayback != null) WatchControl.pausePlayback = null
+            if (WatchControl.resumePlayback != null) WatchControl.resumePlayback = null
             if (WatchControl.stopPlayback != null) WatchControl.stopPlayback = null
             // Save BEFORE destroy; epoch-guarded so a lock-time clear wins.
             WatchSession.recordOnLeave(currentUrl, pageTitle, paneEpoch)
@@ -545,9 +618,9 @@ fun WatchPane(chromeInsets: Boolean = true) {
 
 /**
  * The fullscreen surface for the Watch WebView's custom view, rendered
- * by HomeScreen's root ABOVE the NavPill and the note sheet — the video
- * gets the whole Tik area instead of WatchHost's current bounds (which
- * may be the 208x117 mini window when fullscreen is requested from it).
+ * by TikuRoot beside WatchHost — the video gets the whole Tik area
+ * instead of WatchHost's current bounds (which may be the 208x117 mini
+ * window when fullscreen is requested from it).
  */
 @Composable
 fun WatchFullscreenLayer() {
@@ -561,13 +634,19 @@ fun WatchFullscreenLayer() {
 }
 
 /**
- * ROUND 14 Addendum 2 §5 — the floating-player host. Composed by
- * HomeScreen's root Box in ONE fixed sibling slot (panes < WatchHost <
- * NavPill) for the whole Tik session; [WatchPane] is called from exactly
- * ONE call site inside it, so the WebView is created once and destroyed
- * only when the Tik session ends (lock / quick-exit / full stop). Mode
- * changes only animate this host's bounds — the WebView is never moved
- * between parents, which is the Round 11/13 crash lesson.
+ * ROUND 14 Addendum 2 §5 — the floating-player host. [WatchPane] is
+ * called from exactly ONE call site inside it, so the WebView is
+ * created once and destroyed only when the Tik session ends (lock /
+ * quick-exit / full stop). Mode changes only animate this host's
+ * bounds — the WebView is never moved between parents, which is the
+ * Round 11/13 crash lesson.
+ *
+ * ROUND 15: the host is composed by TikuRoot (MainActivity) in the
+ * home branch's Box — ABOVE HomeScreen and the Chat / ChatDetails /
+ * Moments overlays, BELOW the call UI, the story viewer, the sheets
+ * and the toast — so the mini floats over chats too, as the owner
+ * demanded. It still dies with the Tik session: locking flips
+ * TikuRoot's branch, uncomposing this whole subtree.
  *
  * Modes (driven by AppState.tikDestination + WatchSession.hasSession):
  * - EXPANDED (destination == 2): fills the Watch content area — full
@@ -581,13 +660,12 @@ fun WatchFullscreenLayer() {
  *   stays visible underneath it. DRAGGABLE anywhere (clamped to the
  *   screen), springs to the nearest horizontal edge on release; a tap
  *   returns to the Watch tab; the ✕ chip fully stops playback.
+ * - CALL (a call is ringing / outgoing / connected): playback pauses
+ *   and the MINI window collapses to zero bounds — a bounds change,
+ *   not an uncompose, so the pane and its session survive the call.
  * - Not composed at all when there is no session and the Watch tab is
  *   not selected: nothing exists to preserve, and a later visit builds
  *   the pane fresh on the recorded session URL, exactly like build 47.
- *   When HomeScreen sits under a Chat/Call/Story overlay (screen !=
- *   Home) the host keeps its last rect but drops the touch overlay —
- *   the overlay sibling above it owns the screen; the video keeps
- *   playing and the mini reappears when the user comes back.
  */
 @Composable
 fun WatchHost() {
@@ -604,15 +682,30 @@ fun WatchHost() {
     }
     val expanded = dest == 2
     if (!expanded && !hasSession) return
-    val covered = AppState.screen !is Screen.Home
+    // ROUND 15 — a live call owns the screen and the audio: pause the
+    // video and collapse the MINI window (zero bounds, pane composed).
+    val callState by CallController.state.collectAsState()
+    val callActive = callState !is CallUiState.Idle
+    LaunchedEffect(callActive) {
+        if (callActive) WatchControl.requestPause()
+    }
+    val hideMini = !expanded && callActive
+    // The host floats ABOVE the chat/details/moments overlays now, so
+    // the mini's drag/tap/✕ layer stays live over them; only the call
+    // UI and the story viewer (siblings composed above this host in
+    // TikuRoot) take the screen — and hideMini — away from it.
+    val covered = AppState.screen is Screen.Call || AppState.screen is Screen.Story
 
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val maxW = maxWidth
         val maxH = maxHeight
         val spec = tween<Dp>(340, easing = RdEase)
-        val wAnim by animateDpAsState(if (expanded) maxW else WatchMiniWidth, spec, label = "watchW")
+        val wAnim by animateDpAsState(
+            if (expanded) maxW else if (hideMini) 0.dp else WatchMiniWidth, spec, label = "watchW",
+        )
         val hAnim by animateDpAsState(
-            if (expanded) maxH - WatchChromeHeaderHeight else WatchMiniHeight, spec, label = "watchH",
+            if (expanded) maxH - WatchChromeHeaderHeight else if (hideMini) 0.dp else WatchMiniHeight,
+            spec, label = "watchH",
         )
         val rAnim by animateDpAsState(if (expanded) 0.dp else WatchMiniCorner, spec, label = "watchR")
         // Position Animatables run in PX floats (drag deltas arrive in
@@ -665,7 +758,7 @@ fun WatchHost() {
             // the pane's remember/DisposableEffect state, and with it
             // the WebView, survive untouched.
             WatchPane(chromeInsets = expanded)
-            if (!expanded && !covered) {
+            if (!expanded && !covered && !hideMini) {
                 // Drag / tap layer ABOVE the WebView (which would
                 // otherwise eat every touch as page interaction).
                 val gestureScope = rememberCoroutineScope()

@@ -103,6 +103,8 @@ fun threadPreview(th: ChatThread): String {
     return when (last.kind) {
         MsgKind.VOICE -> "Voice message"
         MsgKind.IMAGE -> "Photo"
+        MsgKind.VIDEO -> "Video"
+        MsgKind.AUDIO -> "Audio"
         MsgKind.CALL -> callEventLabel(last, last.callMine)
         else -> last.text
     }
@@ -176,12 +178,11 @@ fun HomeScreen() {
             }
         }
 
-        // ROUND 14 (Addendum 2 §5): the Watch WebView's ONE root-level
-        // host — above the panes, below the NavPill. It owns the pane
-        // for the whole Tik session and only animates its bounds
-        // (expanded on the Watch tab, draggable floating mini on the
-        // others); the WebView is never re-parented. See Watch.kt.
-        WatchHost()
+        // ROUND 15: WatchHost + WatchFullscreenLayer moved OUT of this
+        // shell to TikuRoot (MainActivity) — the floating mini player
+        // must float ABOVE the chat overlay, which is a TikuRoot
+        // sibling of HomeScreen, not a child of it. The host still owns
+        // the pane for the whole Tik session from there; see Watch.kt.
 
         // NavPill (+ CallPill) — pane tabs only, never over chat/info/requests.
         AnimatedVisibility(
@@ -282,10 +283,8 @@ fun HomeScreen() {
             }
         }
 
-        // Fullscreen YouTube layer (topmost in the shell): the Watch
-        // WebView's custom view renders here, above nav + sheets and
-        // unclipped by WatchHost's bounds. Empty unless fullscreen.
-        WatchFullscreenLayer()
+        // (The fullscreen YouTube layer renders in TikuRoot beside
+        // WatchHost — ROUND 15 hoist, see above. Empty unless fullscreen.)
     }
 }
 
@@ -586,9 +585,10 @@ fun CallsScreen() {
 
 // ================= Watch =================
 /** The redesign chrome (black + Title) for the REAL YouTube pane. The
- *  pane is NOT composed here any more: WatchHost (Watch.kt, Addendum 2
- *  §5) owns it at the HomeScreen root so a playing video can shrink
- *  into the floating mini player on other tabs. This screen renders
+ *  pane is NOT composed here: WatchHost (Watch.kt) owns it at the
+ *  TikuRoot level (ROUND 15 hoist — it must float above the chat
+ *  overlay) so a playing video can shrink into the floating mini
+ *  player on other tabs and over chats. This screen renders
  *  only the header; the empty weight-1 box below reserves EXACTLY the
  *  area the host's EXPANDED mode covers — header height =
  *  WatchChromeTopPadding (24) + WatchChromeButtonSize (46) =
@@ -687,6 +687,9 @@ fun SettingsScreen() {
                     }
                 },
                 onLogout = {
+                    // ROUND 15: the notify service dies with the session —
+                    // signed out means the owner condition is broken.
+                    NotifyService.stop(ctx)
                     if (Config.PREVIEW_UI_ONLY) AppState.go(Screen.Welcome)
                     else FirebaseEngine.signOut(ctx)
                 },
@@ -707,6 +710,12 @@ private fun SettingsMain(
     onClearCache: () -> Unit,
     onLogout: () -> Unit,
 ) {
+    val ctx = LocalContext.current
+    // ROUND 15: only ever launched from the owner-only Notifications row's
+    // enable path (same pattern as the Owner section's toggle).
+    val permLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) { }
     val myName = FirebaseEngine.myPerson.name.takeIf { it.isNotBlank() && it != "You" }
         ?: AppState.myUsername.ifEmpty { "You" }
     LazyColumn(
@@ -770,15 +779,56 @@ private fun SettingsMain(
         item { Section("Privacy") }
         item {
             if (OwnerState.isOwner) {
+                // ROUND 15: this row now reads/writes OwnerPrefs — the
+                // SINGLE source of truth the password gate itself reads
+                // (OwnerGate). It previously wrote only SettingsStore's
+                // "al" key, which the gate never consults, so flipping
+                // this switch changed nothing at the gate. "al" is still
+                // mirrored so the settings state flow can't drift.
                 ToggleRow(
-                    "App lock", "Ask for password on open", settings.appLock,
+                    "App lock", "Ask for password on open", OwnerPrefs.appLockOn,
                 ) {
-                    SettingsStore.setToggle("al", !settings.appLock)
-                    AppState.toast(if (!settings.appLock) "App lock on" else "App lock off for now — it returns when you reopen Tiku")
+                    val on = !OwnerPrefs.appLockOn
+                    OwnerPrefs.setAppLock(on)
+                    SettingsStore.setToggle("al", on)
+                    NotifyGate.sync(ctx)
+                    AppState.toast(if (on) "App lock on" else "App lock off — the password won't be asked on open")
                 }
             } else {
                 ToggleRow("App lock", "Ask for password on open", true) {
                     AppState.toast("Always on for safety")
+                }
+            }
+        }
+        if (OwnerState.isOwner) {
+            item {
+                // ROUND 15 (owner order): the Notifications toggle lives
+                // HERE, directly under App lock — the Owner section's copy
+                // at the bottom of Settings keeps working off the same
+                // OwnerPrefs.notifyOn (one state, two surfaces). Owner
+                // only: non-owners never see this row (zero-notification
+                // law intact for everyone else).
+                ToggleRow(
+                    "Notifications",
+                    "A quiet “New message” alert on this phone, even when the app isn't open — works while App lock is off, only for your account",
+                    OwnerPrefs.notifyOn,
+                ) {
+                    val on = !OwnerPrefs.notifyOn
+                    OwnerPrefs.setNotify(on)
+                    if (on) {
+                        if (Build.VERSION.SDK_INT >= 33 &&
+                            ContextCompat.checkSelfPermission(ctx, Manifest.permission.POST_NOTIFICATIONS) !=
+                            PackageManager.PERMISSION_GRANTED
+                        ) {
+                            permLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                        }
+                        NotifyGate.sync(ctx)
+                        AppState.toast("Notifications on — only on this phone, only for you")
+                    } else {
+                        NotifyGate.sync(ctx)
+                        OwnerNotify.cancelAll(ctx)
+                        AppState.toast("Notifications off")
+                    }
                 }
             }
         }
@@ -942,7 +992,7 @@ fun OwnerSection() {
     Section("Owner")
     ToggleRow(
         "Notifications",
-        "A quiet “New message” alert on this phone when something arrives — only for your account, and only while the app is running",
+        "A quiet “New message” alert on this phone when something arrives — even when the app isn't open, while App lock is off — only for your account",
         OwnerPrefs.notifyOn,
     ) {
         val on = !OwnerPrefs.notifyOn
@@ -954,8 +1004,10 @@ fun OwnerSection() {
             ) {
                 permLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
             }
+            NotifyGate.sync(ctx)
             AppState.toast("Notifications on — only on this phone, only for you")
         } else {
+            NotifyGate.sync(ctx)
             OwnerNotify.cancelAll(ctx)
             AppState.toast("Notifications off")
         }
@@ -967,6 +1019,8 @@ fun OwnerSection() {
     ) {
         val on = !OwnerPrefs.appLockOn
         OwnerPrefs.setAppLock(on)
+        SettingsStore.setToggle("al", on)
+        NotifyGate.sync(ctx)
         AppState.toast(if (on) "App lock on" else "App lock off — the password won't be asked on open")
     }
     NavRow(
@@ -975,6 +1029,9 @@ fun OwnerSection() {
     ) {
         OwnerPrefs.requestGateOnce()
         ChatSession.lock(ctx)
+        // ROUND 15: a locked vault is a silent vault — the one-shot gate
+        // breaks the notify service's run gate until the next unlock.
+        NotifyGate.sync(ctx)
     }
 }
 

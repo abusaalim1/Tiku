@@ -19,11 +19,13 @@ import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandHorizontally
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
+import androidx.compose.animation.shrinkHorizontally
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
@@ -52,23 +54,27 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.Audiotrack
 import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.PhotoCamera
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.filled.SaveAlt
 import androidx.compose.material.icons.filled.Send
 import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -101,8 +107,11 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextStyle
@@ -111,6 +120,7 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
+import androidx.core.content.FileProvider
 import dev.chrisbanes.haze.HazeState
 import dev.chrisbanes.haze.HazeStyle
 import dev.chrisbanes.haze.HazeTint
@@ -248,8 +258,20 @@ private fun RdAv(person: Person, size: Int) {
 fun replyQuoteLabel(m: TikuMessage): String = when (m.kind) {
     MsgKind.IMAGE -> "Photo"
     MsgKind.VOICE -> "Voice message"
+    MsgKind.VIDEO -> "Video"
+    MsgKind.AUDIO -> "Audio file"
     else -> m.text
 }.take(60)
+
+/** "3:24" media duration label (video / audio bubbles). */
+private fun fmtDurSec(sec: Int): String = "${sec / 60}:${(sec % 60).toString().padStart(2, '0')}"
+
+/** "12 MB" / "840 KB" payload size label for not-yet-loaded media. */
+private fun fmtMediaSize(bytes: Long): String = when {
+    bytes >= 1024 * 1024 -> "${bytes / (1024 * 1024)} MB"
+    bytes >= 1024 -> "${bytes / 1024} KB"
+    else -> "$bytes B"
+}
 
 // ================= call events (round 4, kept verbatim) =================
 /** Perspective-correct label for a call event. [iAmCaller] = the viewer is
@@ -366,6 +388,73 @@ fun ImageViewerOverlay(m: TikuMessage, onClose: () -> Unit) {
     }
 }
 
+/**
+ * Full-screen video player (round 15): the decrypted cache file plays in
+ * a system VideoView with the standard media controller (play/pause +
+ * seek), ✕ or Back closes. Same overlay pattern as the image viewer —
+ * rendered INSIDE the chat so FLAG_SECURE covers it — and the same
+ * explicit Save-to-device button; opening it writes nothing anywhere.
+ */
+@Composable
+fun VideoViewerOverlay(m: TikuMessage, onClose: () -> Unit) {
+    val path = m.localPath
+    if (path == null) {
+        LaunchedEffect(Unit) { onClose() }
+        return
+    }
+    BackHandler { onClose() }
+    var vv by remember { mutableStateOf<android.widget.VideoView?>(null) }
+    DisposableEffect(path) { onDispose { runCatching { vv?.stopPlayback() } } }
+    Box(
+        Modifier.fillMaxSize().background(Color(0xF2000000)).testTag("video_viewer"),
+    ) {
+        androidx.compose.ui.viewinterop.AndroidView(
+            factory = { c ->
+                android.widget.VideoView(c).apply {
+                    setVideoPath(path)
+                    val mc = android.widget.MediaController(c)
+                    mc.setAnchorView(this)
+                    setMediaController(mc)
+                    setOnPreparedListener { start() }
+                    vv = this
+                }
+            },
+            modifier = Modifier.fillMaxSize().padding(12.dp),
+        )
+        Row(
+            Modifier.fillMaxWidth().padding(14.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Box(
+                Modifier.size(40.dp).clip(CircleShape).background(RdCard)
+                    .border(1.dp, Color.White.copy(0.12f), CircleShape)
+                    .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) { onClose() },
+                contentAlignment = Alignment.Center,
+            ) { Icon(Icons.Filled.Close, null, Modifier.size(20.dp), tint = Color.White) }
+            Row(
+                Modifier.clip(RoundedCornerShape(18.dp)).background(RdCard)
+                    .border(1.dp, Color.White.copy(0.12f), RoundedCornerShape(18.dp))
+                    .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {
+                        if (Config.PREVIEW_UI_ONLY) {
+                            AppState.toast("Saved to device")
+                        } else {
+                            val ok = MediaSaver.saveToDevice(AppState.appCtx, m)
+                            AppState.toast(if (ok) "Saved to device" else "Couldn't save")
+                        }
+                        onClose()
+                    }
+                    .padding(horizontal = 14.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(Icons.Filled.SaveAlt, null, Modifier.size(17.dp), tint = Color.White)
+                Spacer(Modifier.width(7.dp))
+                Text("Save to device", fontSize = 13.5.sp, fontWeight = FontWeight.SemiBold, color = Color.White)
+            }
+        }
+    }
+}
+
 // ================= message bubbles (the file's BubbleRow) =================
 private fun Modifier.rdDrawLeftBar(): Modifier = this.drawBehind {
     drawRect(Color.White.copy(0.55f), topLeft = Offset.Zero, size = androidx.compose.ui.geometry.Size(3.dp.toPx(), size.height))
@@ -387,7 +476,7 @@ private fun RdBubbleRow(
     onReply: () -> Unit,
     onReact: (String) -> Unit,
     onMenu: () -> Unit,
-    onImageClick: () -> Unit,
+    onMediaTap: () -> Unit,
     onRetry: () -> Unit,
 ) {
     val scope = rememberCoroutineScope()
@@ -395,7 +484,7 @@ private fun RdBubbleRow(
     val heart = remember { Animatable(0f) }
     var heartKey by remember { mutableIntStateOf(0) }
     LaunchedEffect(heartKey) { if (heartKey > 0) { heart.snapTo(0f); heart.animateTo(1f, tween(800, easing = LinearEasing)) } }
-    val media = m.kind == MsgKind.IMAGE
+    val media = m.kind == MsgKind.IMAGE || m.kind == MsgKind.VIDEO
     Column(Modifier.fillMaxWidth()) {
         Row(
             Modifier.fillMaxWidth().rdBubbleIn(m.me, i),
@@ -423,7 +512,14 @@ private fun RdBubbleRow(
                                     heartKey++
                                 },
                                 onLongPress = { onMenu() },
-                                onTap = { if (m.kind == MsgKind.IMAGE && m.photo != null) onImageClick() },
+                                onTap = {
+                                    // image opens its viewer once decoded;
+                                    // a video tap either opens its player
+                                    // (loaded) or starts the tap-to-load —
+                                    // the caller decides by localPath.
+                                    if (m.kind == MsgKind.IMAGE && m.photo != null) onMediaTap()
+                                    else if (m.kind == MsgKind.VIDEO) onMediaTap()
+                                },
                             )
                         },
                     horizontalAlignment = if (m.me) Alignment.End else Alignment.Start,
@@ -435,7 +531,8 @@ private fun RdBubbleRow(
                     ) {
                         when (m.kind) {
                             MsgKind.IMAGE -> RdImageBubble(m)
-                            MsgKind.VOICE -> RdVoiceBubble(m, playing, onPlayToggle)
+                            MsgKind.VIDEO -> RdVideoBubble(m)
+                            MsgKind.VOICE, MsgKind.AUDIO -> RdVoiceBubble(m, playing, onPlayToggle)
                             else -> {
                                 if (m.replyQuote != null) {
                                     Text(
@@ -507,6 +604,50 @@ private fun RdImageBubble(m: TikuMessage) {
             Text(
                 m.text, color = Color.White, fontSize = 13.sp,
                 modifier = Modifier.align(Alignment.BottomStart).padding(12.dp),
+            )
+        }
+    }
+}
+
+/** ROUND 15 — the video bubble, in the photo bubble's fixed frame. The
+ *  poster frame (lifted from the decrypted file at load time) fills it
+ *  once the payload is on this device; before that it is a labelled
+ *  placeholder — duration + size + "Tap to load" — because video
+ *  payloads never auto-download. Tapping is wired by the row: loaded →
+ *  the player, unloaded → fetchMedia. */
+@Composable
+private fun RdVideoBubble(m: TikuMessage) {
+    val loaded = m.localPath != null
+    Box(Modifier.size(220.dp, 260.dp).background(RdCard)) {
+        val poster = m.photo
+        if (poster != null) {
+            Image(poster.asImageBitmap(), null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+            Box(Modifier.fillMaxSize().background(Color.Black.copy(0.18f)))
+        }
+        Box(
+            Modifier.align(Alignment.Center).size(52.dp).clip(CircleShape)
+                .background(Color.Black.copy(0.45f)).border(1.dp, Color.White.copy(0.25f), CircleShape),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(Icons.Filled.PlayArrow, null, tint = Color.White, modifier = Modifier.size(30.dp))
+        }
+        Row(
+            Modifier.align(Alignment.BottomStart).fillMaxWidth()
+                .background(Color.Black.copy(0.45f)).padding(horizontal = 10.dp, vertical = 7.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(Icons.Filled.Videocam, null, tint = Color.White, modifier = Modifier.size(14.dp))
+            Spacer(Modifier.width(6.dp))
+            Text(fmtDurSec(m.voiceDurSec), color = Color.White, fontSize = 12.sp)
+            Spacer(Modifier.weight(1f))
+            Text(
+                when {
+                    !loaded && m.mediaBytes > 0 -> "Tap to load · ${fmtMediaSize(m.mediaBytes)}"
+                    !loaded -> "Tap to load"
+                    m.mediaBytes > 0 -> fmtMediaSize(m.mediaBytes)
+                    else -> ""
+                },
+                color = Color.White.copy(0.85f), fontSize = 11.5.sp,
             )
         }
     }
@@ -592,6 +733,7 @@ private fun RdChatTopBar(
     onBack: () -> Unit,
     onInfo: () -> Unit,
     onCall: () -> Unit,
+    onVideoCall: () -> Unit,
 ) {
     Row(
         Modifier.padding(horizontal = 14.dp, vertical = 12.dp).fillMaxWidth().chatGlass(h, RoundedCornerShape(999.dp)).padding(8.dp),
@@ -612,6 +754,11 @@ private fun RdChatTopBar(
                 )
                 Text(status, color = RdSub, fontSize = 12.sp)
             }
+        }
+        // ROUND 15: video call sits next to audio call (owner's device
+        // report: the header had voice only). Same startCall path, video.
+        Box(Modifier.size(40.dp).clip(CircleShape).rdPress(onVideoCall), contentAlignment = Alignment.Center) {
+            Icon(Icons.Filled.Videocam, null, tint = Color.White, modifier = Modifier.size(21.dp))
         }
         Box(Modifier.size(40.dp).clip(CircleShape).rdPress(onCall), contentAlignment = Alignment.Center) {
             Icon(Icons.Filled.Call, null, tint = Color.White, modifier = Modifier.size(20.dp))
@@ -634,7 +781,15 @@ fun RdChatInput(
     onMic: () -> Unit,
     onRecCancel: () -> Unit,
     onRecSend: () -> Unit,
+    /** ROUND 15: composer camera (IG-style). Default no-op keeps direct
+     *  framings of this input (screenshot harness) compiling unchanged. */
+    onCamera: () -> Unit = {},
 ) {
+    // ROUND 15: the camera button lives only while the field is EMPTY and
+    // UNFOCUSED — tapping into the field to type takes focus and the
+    // button animates away (owner's exact ask).
+    var fieldFocused by remember { mutableStateOf(false) }
+    val showCamera = value.isEmpty() && !fieldFocused
     Column(Modifier.padding(horizontal = 14.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         AnimatedVisibility(
             visible = replyText != null,
@@ -672,6 +827,18 @@ fun RdChatInput(
                     Icon(Icons.Filled.Send, null, tint = Color.White, modifier = Modifier.size(20.dp))
                 }
             } else {
+                AnimatedVisibility(
+                    visible = showCamera,
+                    enter = fadeIn(tween(160)) + expandHorizontally(expandFrom = Alignment.Start),
+                    exit = fadeOut(tween(120)) + shrinkHorizontally(shrinkTowards = Alignment.Start),
+                ) {
+                    Box(
+                        Modifier.padding(end = 6.dp).size(40.dp).clip(CircleShape).background(accent).rdPress(onCamera),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(Icons.Filled.PhotoCamera, null, tint = Color.White, modifier = Modifier.size(20.dp))
+                    }
+                }
                 Box(Modifier.size(40.dp).clip(CircleShape).background(Color.White.copy(0.12f)).rdPress(onPlus), contentAlignment = Alignment.Center) {
                     Text("+", color = Color.White, fontSize = 24.sp)
                 }
@@ -681,7 +848,7 @@ fun RdChatInput(
                         value, onChange,
                         textStyle = TextStyle(color = Color.White, fontSize = 15.sp),
                         cursorBrush = SolidColor(accent),
-                        modifier = Modifier.fillMaxWidth(),
+                        modifier = Modifier.fillMaxWidth().onFocusChanged { fieldFocused = it.isFocused },
                     )
                 }
                 val has = value.isNotBlank()
@@ -717,6 +884,29 @@ private fun startRdRecording(recorder: VoiceRecorder, onStarted: () -> Unit) {
     runCatching { recorder.start(); onStarted() }
         .onFailure { AppState.toast("Couldn't start recording") }
 }
+
+/** ROUND 15: copy a picked content Uri into an app-cache file — the
+ *  media pipeline works on real files, and the copy outlives the
+ *  picker's temporary Uri grant. Null when the stream can't be read. */
+private fun copyUriToCacheFile(ctx: android.content.Context, uri: android.net.Uri, prefix: String): File? = runCatching {
+    val mime = ctx.contentResolver.getType(uri)
+    val ext = mime?.let { android.webkit.MimeTypeMap.getSingleton().getExtensionFromMimeType(it) } ?: "bin"
+    val f = File(ctx.cacheDir, "${prefix}_${System.currentTimeMillis()}.$ext")
+    val input = ctx.contentResolver.openInputStream(uri) ?: return null
+    input.use { inp -> f.outputStream().use { out -> inp.copyTo(out) } }
+    f
+}.getOrNull()
+
+/** ROUND 15: duration (seconds) of a media file, 0 when unreadable. */
+private fun mediaDurationSec(f: File): Int = runCatching {
+    val r = android.media.MediaMetadataRetriever()
+    try {
+        r.setDataSource(f.absolutePath)
+        ((r.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_DURATION) ?: "0").toLong() / 1000).toInt()
+    } finally {
+        runCatching { r.release() }
+    }
+}.getOrDefault(0)
 
 // ================= the chat screen =================
 @Composable
@@ -762,6 +952,8 @@ private fun RdChatContent(thread: ChatThread) {
     var moreEmoji by remember { mutableStateOf(false) }
     var attachOpen by remember { mutableStateOf(false) }
     var viewerMsg by remember { mutableStateOf<TikuMessage?>(null) }
+    var videoViewerMsg by remember { mutableStateOf<TikuMessage?>(null) }
+    var camChooserOpen by remember { mutableStateOf(false) }
     var recording by remember { mutableStateOf(false) }
     var recSecs by remember { mutableIntStateOf(0) }
     val recorder = remember { VoiceRecorder(ctx) }
@@ -770,11 +962,26 @@ private fun RdChatContent(thread: ChatThread) {
     val listState = rememberLazyListState()
     val startCall = rememberCallStarter()
     val clipboard = LocalClipboardManager.current
+    val keyboardController = LocalSoftwareKeyboardController.current
+    val focusManager = LocalFocusManager.current
+
+    // ROUND 15 — attach-sheet glitch fix: with the keyboard open, the
+    // sheet used to render as a small floating glass pill mid-screen
+    // (the IME window owned the bottom of the screen, so the sheet's
+    // bottom anchor floated above it over the chat). Opening the sheet
+    // now dismisses the keyboard + drops field focus FIRST, so the
+    // sheet always presents anchored to the real bottom edge.
+    LaunchedEffect(attachOpen) {
+        if (attachOpen) {
+            keyboardController?.hide()
+            focusManager.clearFocus()
+        }
+    }
 
     DisposableEffect(threadId) { onDispose { player.stop(); AppState.repo.closeThread(threadId) } }
 
-    // Photo ONLY (the engine has no video messages): the real Photo
-    // Picker -> decode -> the real encrypted image send.
+    // Photo picker: decode -> the real encrypted image send. (Video and
+    // audio-file pickers live with the round-15 launchers below.)
     val pickMedia = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
         if (uri != null) {
             ctx.contentResolver.openInputStream(uri)?.use { s ->
@@ -785,6 +992,63 @@ private fun RdChatContent(thread: ChatThread) {
     val askMic = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         if (granted) startRdRecording(recorder) { recording = true }
         else AppState.toast("Microphone permission needed for voice notes")
+    }
+
+    // ---- ROUND 15: video + audio file pickers (attach sheet) ----
+    // Both copy the pick into an app-cache file first: the pipeline works
+    // on real files, and the copy outlives the picker's Uri grant.
+    val pickVideo = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
+        if (uri != null) {
+            val f = copyUriToCacheFile(ctx, uri, "vid")
+            if (f != null) {
+                AppState.repo.sendVideo(threadId, f, ctx.contentResolver.getType(uri) ?: "video/mp4", mediaDurationSec(f))
+            } else AppState.toast("Couldn't read that video")
+        }
+    }
+    val pickAudio = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+        if (uri != null) {
+            val f = copyUriToCacheFile(ctx, uri, "aud")
+            if (f != null) {
+                AppState.repo.sendAudio(threadId, f, ctx.contentResolver.getType(uri) ?: "audio/mpeg", mediaDurationSec(f))
+            } else AppState.toast("Couldn't read that audio file")
+        }
+    }
+
+    // ---- ROUND 15: composer camera (IG-style) ----
+    // Captures land in app CACHE via FileProvider and are NEVER written
+    // to the gallery: the photo is decoded -> sent -> the cache file is
+    // deleted; the video file stays in cache as the sender's playable
+    // copy (the engine's rule for captured/picked media files).
+    var camPhotoFile by remember { mutableStateOf<File?>(null) }
+    var camVideoFile by remember { mutableStateOf<File?>(null) }
+    val takePhoto = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { ok ->
+        val f = camPhotoFile
+        camPhotoFile = null
+        if (ok && f != null && f.exists()) {
+            BitmapFactory.decodeFile(f.absolutePath)?.let { AppState.repo.sendPhoto(threadId, it) }
+            runCatching { f.delete() }
+        }
+    }
+    val recordVideoCapture = rememberLauncherForActivityResult(ActivityResultContracts.CaptureVideo()) { ok ->
+        val f = camVideoFile
+        camVideoFile = null
+        if (ok && f != null && f.exists() && f.length() > 0) {
+            AppState.repo.sendVideo(threadId, f, "video/mp4", mediaDurationSec(f))
+        } else if (f != null) {
+            runCatching { f.delete() }
+        }
+    }
+    fun launchCameraPhoto() {
+        val f = File(ctx.cacheDir, "cap_${System.currentTimeMillis()}.jpg")
+        camPhotoFile = f
+        ChatSession.expectExternalActivity = true
+        takePhoto.launch(FileProvider.getUriForFile(ctx, "tiku.app.fileprovider", f))
+    }
+    fun launchCameraVideo() {
+        val f = File(ctx.cacheDir, "cap_${System.currentTimeMillis()}.mp4")
+        camVideoFile = f
+        ChatSession.expectExternalActivity = true
+        recordVideoCapture.launch(FileProvider.getUriForFile(ctx, "tiku.app.fileprovider", f))
     }
 
     // recording clock + waveform sampling + 3-minute hard cap (build 47)
@@ -878,15 +1142,26 @@ private fun RdChatContent(thread: ChatThread) {
             settled = true
         }
     }
-    var prevNewestTs by remember(threadId) { mutableStateOf(0L) }
-    LaunchedEffect(visible.size, peerTyping) {
-        val newest = visible.maxOfOrNull { it.tsMs } ?: 0L
-        if (settled && newest > prevNewestTs && visible.isNotEmpty()) {
-            if (nearBottom || visible.lastOrNull()?.me == true) {
+    // ROUND 15: the follow trigger is the TAIL item's identity, not
+    // max(tsMs). The ts trigger misfired around sends twice over: an
+    // optimistic bubble's device-clock ts could sit BELOW the running
+    // max (no follow on send), then its server echo pushed the max up
+    // and fired a LATE re-anchor scroll — the second half of the send
+    // jump, chevron flash included. Identity never changes across
+    // optimistic -> echo (same client-chosen doc id), so a send now
+    // triggers exactly one gentle follow and the echo triggers none.
+    var prevTailId by remember(threadId) { mutableStateOf<String?>(null) }
+    LaunchedEffect(visible.lastOrNull()?.id, peerTyping) {
+        val tail = visible.lastOrNull()
+        if (settled && tail != null && tail.id != prevTailId) {
+            if (nearBottom || tail.me) {
                 runCatching { listState.animateScrollToItem(visible.lastIndex + if (peerTyping) 1 else 0) }
             }
+        } else if (settled && peerTyping && nearBottom && tail != null) {
+            // the typing bubble appended below the fold while following
+            runCatching { listState.animateScrollToItem(visible.lastIndex + 1) }
         }
-        if (newest > prevNewestTs) prevNewestTs = newest
+        if (tail != null) prevTailId = tail.id
     }
     // pagination: approaching the oldest loaded message fetches the next
     // older page (the engine no-ops when there is none / one is in flight)
@@ -912,13 +1187,13 @@ private fun RdChatContent(thread: ChatThread) {
                 ),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                items(visible, key = { it.id }) { m ->
+                itemsIndexed(visible, key = { _, m -> m.id }) { idx, m ->
                     Box(Modifier.animateItem()) {
                         if (m.kind == MsgKind.CALL) {
                             CallEventPill(m)
                         } else {
                             RdBubbleRow(
-                                i = visible.indexOf(m),
+                                i = idx,
                                 m = m,
                                 person = person,
                                 acc = acc,
@@ -931,6 +1206,12 @@ private fun RdChatContent(thread: ChatThread) {
                                             player.toggle(m.id, File(path)) { playingId = null }
                                             playingId = m.id
                                         }
+                                    } else if (!Config.PREVIEW_UI_ONLY && m.kind == MsgKind.AUDIO) {
+                                        // ROUND 15: an audio FILE with no
+                                        // payload on this device yet — the
+                                        // play tap IS the load tap.
+                                        AppState.repo.fetchMedia(threadId, m.id)
+                                        AppState.toast("Loading audio…")
                                     } else {
                                         // preview/design simulation: 4s "playing" state
                                         scope.launch {
@@ -942,7 +1223,19 @@ private fun RdChatContent(thread: ChatThread) {
                                 onReply = { replyTarget = m },
                                 onReact = { e -> react(m, e) },
                                 onMenu = { menuMsg = m; moreEmoji = false },
-                                onImageClick = { viewerMsg = m },
+                                onMediaTap = {
+                                    when (m.kind) {
+                                        MsgKind.IMAGE -> viewerMsg = m
+                                        MsgKind.VIDEO -> {
+                                            if (m.localPath != null) videoViewerMsg = m
+                                            else {
+                                                AppState.repo.fetchMedia(threadId, m.id)
+                                                AppState.toast("Loading video…")
+                                            }
+                                        }
+                                        else -> Unit
+                                    }
+                                },
                                 onRetry = { AppState.repo.retrySend(threadId, m.id) },
                             )
                         }
@@ -985,6 +1278,7 @@ private fun RdChatContent(thread: ChatThread) {
                 onBack = { AppState.go(Screen.Home) },
                 onInfo = { AppState.go(Screen.ChatDetails(threadId)) },
                 onCall = { startCall(threadId, false) },
+                onVideoCall = { startCall(threadId, true) },
             )
             if (thread.pinnedMsgIds.isNotEmpty()) {
                 val pinId = thread.pinnedMsgIds.last()
@@ -992,6 +1286,8 @@ private fun RdChatContent(thread: ChatThread) {
                 val pinPreview = when (pinnedMsg?.kind) {
                     MsgKind.IMAGE -> "Photo"
                     MsgKind.VOICE -> "Voice message"
+                    MsgKind.VIDEO -> "Video"
+                    MsgKind.AUDIO -> "Audio file"
                     MsgKind.CALL -> "Call"
                     else -> pinnedMsg?.text?.take(60) ?: "Pinned message"
                 }
@@ -1073,6 +1369,7 @@ private fun RdChatContent(thread: ChatThread) {
                             AppState.repo.sendVoice(threadId, f, recSecs.coerceAtLeast(1), recorder.normalizedAmps())
                         }
                     },
+                    onCamera = { camChooserOpen = true },
                 )
             }
         }
@@ -1163,7 +1460,16 @@ private fun RdChatContent(thread: ChatThread) {
                             }) {
                                 Icon(Icons.Filled.PushPin, null, tint = Color.White, modifier = Modifier.size(20.dp))
                             }
-                            if (mm.kind == MsgKind.IMAGE || mm.kind == MsgKind.VOICE) {
+                            // Save is offered for every media kind that
+                            // actually holds its payload on this device
+                            // (an unloaded video/audio loads via its
+                            // bubble tap first — round 15).
+                            val savable = when (mm.kind) {
+                                MsgKind.IMAGE -> mm.photo != null
+                                MsgKind.VOICE, MsgKind.VIDEO, MsgKind.AUDIO -> mm.localPath != null
+                                else -> false
+                            }
+                            if (savable) {
                                 RdDivider1()
                                 RdMenuItem("Save to device", onClick = {
                                     if (Config.PREVIEW_UI_ONLY) {
@@ -1191,7 +1497,10 @@ private fun RdChatContent(thread: ChatThread) {
             }
         }
 
-        // ---- attachment sheet: the file's glass sheet, Photo ONLY ----
+        // ---- attachment sheet: the file's glass sheet ----
+        // ROUND 15: Photo / Video / Audio file rows. The keyboard is
+        // dismissed the moment this opens (see the attachOpen effect), so
+        // the sheet always anchors to the true bottom edge.
         AnimatedVisibility(
             visible = attachOpen,
             enter = fadeIn(), exit = fadeOut(),
@@ -1220,6 +1529,76 @@ private fun RdChatContent(thread: ChatThread) {
                         Spacer(Modifier.width(12.dp))
                         Text("Photo", color = Color.White, fontSize = 16.sp)
                     }
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.fillMaxWidth().rdPress {
+                            attachOpen = false
+                            ChatSession.expectExternalActivity = true
+                            pickVideo.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.VideoOnly))
+                        }.padding(16.dp),
+                    ) {
+                        Icon(Icons.Filled.Videocam, null, tint = Color.White, modifier = Modifier.size(21.dp))
+                        Spacer(Modifier.width(12.dp))
+                        Text("Video", color = Color.White, fontSize = 16.sp)
+                    }
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.fillMaxWidth().rdPress {
+                            attachOpen = false
+                            ChatSession.expectExternalActivity = true
+                            pickAudio.launch("audio/*")
+                        }.padding(16.dp),
+                    ) {
+                        Icon(Icons.Filled.Audiotrack, null, tint = Color.White, modifier = Modifier.size(21.dp))
+                        Spacer(Modifier.width(12.dp))
+                        Text("Audio file", color = Color.White, fontSize = 16.sp)
+                    }
+                }
+            }
+        }
+
+        // ---- ROUND 15: camera chooser (composer camera button) ----
+        // Same bottom glass sheet as attach; the field is unfocused
+        // whenever the camera button exists, so the keyboard is already
+        // down and this presents cleanly at the bottom edge.
+        AnimatedVisibility(
+            visible = camChooserOpen,
+            enter = fadeIn(), exit = fadeOut(),
+            modifier = Modifier.fillMaxSize(),
+        ) {
+            Box(
+                Modifier.fillMaxSize().background(Color.Black.copy(0.55f))
+                    .clickable(remember { MutableInteractionSource() }, null) { camChooserOpen = false },
+                contentAlignment = Alignment.BottomCenter,
+            ) {
+                Column(
+                    Modifier.padding(14.dp).fillMaxWidth().animateEnterExit(
+                        enter = slideInVertically(spring(0.85f, 360f)) { it } + fadeIn(),
+                        exit = slideOutVertically(tween(220, easing = RdEase)) { it } + fadeOut(),
+                    ).chatGlass(haze, RoundedCornerShape(28.dp), 0.1f).padding(8.dp),
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.fillMaxWidth().rdPress {
+                            camChooserOpen = false
+                            launchCameraPhoto()
+                        }.padding(16.dp),
+                    ) {
+                        Icon(Icons.Filled.PhotoCamera, null, tint = Color.White, modifier = Modifier.size(21.dp))
+                        Spacer(Modifier.width(12.dp))
+                        Text("Take photo", color = Color.White, fontSize = 16.sp)
+                    }
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.fillMaxWidth().rdPress {
+                            camChooserOpen = false
+                            launchCameraVideo()
+                        }.padding(16.dp),
+                    ) {
+                        Icon(Icons.Filled.Videocam, null, tint = Color.White, modifier = Modifier.size(21.dp))
+                        Spacer(Modifier.width(12.dp))
+                        Text("Record video", color = Color.White, fontSize = 16.sp)
+                    }
                 }
             }
         }
@@ -1227,6 +1606,11 @@ private fun RdChatContent(thread: ChatThread) {
         // ---- full-screen image viewer ----
         viewerMsg?.let { vm ->
             ImageViewerOverlay(vm) { viewerMsg = null }
+        }
+
+        // ---- full-screen video player ----
+        videoViewerMsg?.let { vm ->
+            VideoViewerOverlay(vm) { videoViewerMsg = null }
         }
     }
 }

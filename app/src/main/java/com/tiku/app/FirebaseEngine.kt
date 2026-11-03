@@ -1304,10 +1304,34 @@ object FirebaseEngine : ChatRepo {
         val serverMsgs = cache.values.filter { m ->
             !m.deletedForMe && m.tsMs >= clearedBefore && (dmCutoff == 0L || m.tsMs >= dmCutoff)
         }
-        val serverIds = serverMsgs.map { it.id }.toHashSet()
-        val localOnly = (AppState.thread(id)?.messages ?: emptyList())
-            .filter { it.id !in serverIds && it.status != SendStatus.SENT }
-        val msgs = (serverMsgs + localOnly).sortedBy { it.tsMs }
+        // ROUND 15 — SEND-TELEPORT ROOT FIX. The old merge sorted server
+        // messages and optimistic locals TOGETHER by tsMs — but a local's
+        // tsMs is the DEVICE clock while every server tsMs is the SERVER
+        // clock. Whenever the two clocks disagreed (or the write simply
+        // landed a beat after a peer message's server stamp), the fresh
+        // bubble sorted UP the list on send, then fell to the bottom when
+        // its echo arrived with a server stamp — the visible "jump up,
+        // drop down" on every send. Now: server messages sort by server
+        // ts among themselves; never-yet-echoed locals (keyed against the
+        // CACHE, not the filtered list — a SENT-but-unechoed local no
+        // longer vanishes for a beat either) keep their send order at the
+        // TAIL, exactly where the sender put them. The echo carries the
+        // SAME client-chosen doc id, so it replaces the local 1:1 at the
+        // tail (its server ts is by construction the newest) — no item
+        // ever changes position on send.
+        val cacheIds = cache.keys
+        val localsById = (AppState.thread(id)?.messages ?: emptyList()).associateBy { it.id }
+        val mergedServer = serverMsgs.map { sm ->
+            // A sender's own VIDEO/AUDIO echo arrives as a metadata stub
+            // (those kinds never auto-download) — inherit the local copy's
+            // playable file + poster so the sender keeps instant playback.
+            val lm = localsById[sm.id]
+            if (lm != null && sm.localPath == null && lm.localPath != null) {
+                sm.copy(localPath = lm.localPath, photo = sm.photo ?: lm.photo)
+            } else sm
+        }
+        val localOnly = localsById.values.filter { it.id !in cacheIds }
+        val msgs = mergedServer.sortedBy { it.tsMs } + localOnly.sortedBy { it.tsMs }
         val lr = lastRead(id)
         val older = hasOlderCache[id] ?: false
         AppState.threads.value = AppState.threads.value.map { t ->
@@ -1378,7 +1402,7 @@ object FirebaseEngine : ChatRepo {
      *  the payload is already in memory, a metadata-only change (seen-by,
      *  reaction, star, delete flag) reuses the payload instead of
      *  re-downloading every chunk — the hot-path fix for items 4 + 7a. */
-    private suspend fun decryptDoc(chatId: String, doc: com.google.firebase.firestore.DocumentSnapshot, key: SecretKey, peerUid: String, light: Boolean = false, cached: TikuMessage? = null): TikuMessage {
+    private suspend fun decryptDoc(chatId: String, doc: com.google.firebase.firestore.DocumentSnapshot, key: SecretKey, peerUid: String, light: Boolean = false, cached: TikuMessage? = null, forceLoad: Boolean = false): TikuMessage {
         val sender = doc.getString("senderId") ?: ""
         val kindRaw = doc.getString("kind") ?: "text"
         // ITEM 2: bubble side derives ONLY from the doc's senderId vs the
@@ -1404,6 +1428,8 @@ object FirebaseEngine : ChatRepo {
         var amps: List<Int> = emptyList()
         var localPath: String? = null
         var mediaChunks = 0
+        var mimeType = ""
+        var mediaBytes = 0L
         // round 4 call-event payload (decrypted JSON from the ct field)
         var callCallerUid = ""; var callOutcome = ""; var callDurSec = 0; var callVideo = false
         when (kindRaw) {
@@ -1418,43 +1444,65 @@ object FirebaseEngine : ChatRepo {
                     callVideo = j.optBoolean("video")
                 }
             }
-            "image", "voice" -> {
+            "image", "voice", "video", "audio" -> {
                 mediaChunks = (doc.getLong("mediaChunks") ?: 0L).toInt()
+                mimeType = doc.getString("mime") ?: ""
+                mediaBytes = doc.getLong("mediaBytes") ?: 0L
+                val fileKind = kindRaw == "video" || kindRaw == "audio"
                 if (light) {
                     // preview stub — no chunk download (see decryptDoc doc)
-                    if (kindRaw == "voice") {
+                    if (kindRaw != "image") {
                         durSec = ((doc.getLong("durationMs") ?: 0L) / 1000).toInt()
-                        @Suppress("UNCHECKED_CAST")
-                        amps = (doc.get("amps") as? List<Long>)?.map { it.toInt() } ?: emptyList()
+                        if (kindRaw == "voice") {
+                            @Suppress("UNCHECKED_CAST")
+                            amps = (doc.get("amps") as? List<Long>)?.map { it.toInt() } ?: emptyList()
+                        }
                     }
                 } else if (cached != null && mediaChunks > 0 && mediaChunks == cached.mediaChunks &&
-                    ((kindRaw == "image" && cached.photo != null) || (kindRaw == "voice" && cached.localPath != null))) {
+                    ((kindRaw == "image" && cached.photo != null) || (kindRaw != "image" && cached.localPath != null))) {
                     // ROUND 8 — INCREMENTAL: only metadata changed on a media
                     // message whose payload this device already holds. Reuse
-                    // the payload; download NOTHING.
+                    // the payload; download NOTHING. (Round 15: for a loaded
+                    // VIDEO, `photo` is the poster frame and rides along.)
                     photo = cached.photo
                     localPath = cached.localPath
                     durSec = cached.voiceDurSec
                     amps = cached.amps
+                } else if (fileKind && !forceLoad) {
+                    // ROUND 15 — VIDEO / AUDIO files NEVER auto-download:
+                    // the open-chat listener builds this metadata stub
+                    // (duration/size/mime only) and the payload loads only
+                    // through fetchMedia() on an explicit tap.
+                    durSec = ((doc.getLong("durationMs") ?: 0L) / 1000).toInt()
                 } else {
                     val chunkCount = mediaChunks
                     val ctBytes = MediaStore.download(db, chatId, doc.id, chunkCount)
                     val plain = Crypto.decrypt(key, doc.getString("iv") ?: "", Crypto.b64(ctBytes))
                     if (kindRaw == "image") {
                         photo = BitmapFactory.decodeByteArray(plain, 0, plain.size)
-                    } else {
+                    } else if (kindRaw == "voice") {
                         durSec = ((doc.getLong("durationMs") ?: 0L) / 1000).toInt()
                         @Suppress("UNCHECKED_CAST")
                         amps = (doc.get("amps") as? List<Long>)?.map { it.toInt() } ?: emptyList()
                         val f = File(appCtx.cacheDir, "dl_${doc.id}.m4a")
                         if (!f.exists()) f.writeBytes(plain)
                         localPath = f.absolutePath
+                    } else {
+                        // video / audio — reachable ONLY via fetchMedia
+                        // (forceLoad): write the decrypted file to cache
+                        // and, for video, lift a poster frame into `photo`.
+                        durSec = ((doc.getLong("durationMs") ?: 0L) / 1000).toInt()
+                        val f = File(appCtx.cacheDir, "dl_${doc.id}.${mediaFileExt(mimeType, kindRaw)}")
+                        if (!f.exists()) f.writeBytes(plain)
+                        localPath = f.absolutePath
+                        if (kindRaw == "video") photo = videoPoster(f)
                     }
                 }
             }
         }
         val kind = when (kindRaw) {
             "image" -> MsgKind.IMAGE; "voice" -> MsgKind.VOICE; "call" -> MsgKind.CALL
+            "video" -> MsgKind.VIDEO; "audio" -> MsgKind.AUDIO
             else -> MsgKind.TEXT
         }
         return TikuMessage(doc.id, sender, kind, text, fmtTime(tsMs), me, durSec, amps,
@@ -1464,7 +1512,8 @@ object FirebaseEngine : ChatRepo {
             callDurationSec = callDurSec, callVideo = callVideo,
             callMine = callCallerUid.isNotEmpty() && callCallerUid == my,
             mediaChunks = mediaChunks,
-            editedAtMs = doc.getTimestamp("editedAt")?.toDate()?.time ?: 0L)
+            editedAtMs = doc.getTimestamp("editedAt")?.toDate()?.time ?: 0L,
+            mimeType = mimeType, mediaBytes = mediaBytes)
     }
 
     // ================= SEND PATH (round 3: optimistic + NO silent failures) ====
@@ -1550,9 +1599,117 @@ object FirebaseEngine : ChatRepo {
         }
     }
 
+    // ================= ROUND 15: video + audio FILES =================
+    // Size caps, enforced here so EVERY caller is safe. The payload rides
+    // the Firestore chunk pipeline (700 KB chunks): 64 MB of video is ~94
+    // chunk writes and a similar read count on load — reasonable on the
+    // Spark free tier for a 2-person app and a tolerable one-tap wait on
+    // mobile data; anything larger turns into minutes of chunk traffic.
+    // 32 MB of audio is ~13 minutes of 320 kbps music — far beyond any
+    // real song or voice file a picker would offer.
+    private const val VIDEO_MAX_BYTES = 64L * 1024 * 1024
+    private const val AUDIO_MAX_BYTES = 32L * 1024 * 1024
+
+    /** Cache-file extension for a decrypted media file, from its mime. */
+    private fun mediaFileExt(mime: String, kindRaw: String): String = when (mime.lowercase()) {
+        "video/mp4" -> "mp4"; "video/3gpp" -> "3gp"; "video/x-matroska" -> "mkv"
+        "video/webm" -> "webm"; "video/quicktime" -> "mov"
+        "audio/mpeg" -> "mp3"; "audio/mp4", "audio/aac" -> "m4a"; "audio/ogg" -> "ogg"
+        "audio/wav", "audio/x-wav" -> "wav"; "audio/flac" -> "flac"; "audio/amr" -> "amr"
+        else -> if (kindRaw == "video") "mp4" else "mp3"
+    }
+
+    /** One poster frame from a decrypted video file (bubble thumbnail). */
+    private fun videoPoster(f: File): Bitmap? = runCatching {
+        val r = android.media.MediaMetadataRetriever()
+        try {
+            r.setDataSource(f.absolutePath)
+            r.getFrameAtTime(0, android.media.MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+        } finally {
+            runCatching { r.release() }
+        }
+    }.getOrNull()
+
+    override fun sendVideo(id: String, file: File, mime: String, durSec: Int) {
+        sendMediaFile(id, file, mime, durSec, MsgKind.VIDEO)
+    }
+
+    override fun sendAudio(id: String, file: File, mime: String, durSec: Int) {
+        sendMediaFile(id, file, mime, durSec, MsgKind.AUDIO)
+    }
+
+    /** Shared VIDEO / AUDIO send: cap check -> optimistic bubble (with the
+     *  local file already playable + a poster for video) -> deliverMedia.
+     *  The source file is an app-cache file by construction (picker copy or
+     *  camera capture) and is KEPT after a successful send: it doubles as
+     *  the sender's own playable copy (the echo is a metadata stub), and a
+     *  FAILED send needs it for tap-to-retry. Cache is OS-purgeable, so
+     *  nothing here can fill the phone. */
+    private fun sendMediaFile(id: String, file: File, mime: String, durSec: Int, kind: MsgKind) {
+        val th = AppState.thread(id) ?: return
+        if (!file.exists()) {
+            AppState.toast("Couldn't send — the file is missing")
+            return
+        }
+        val cap = if (kind == MsgKind.VIDEO) VIDEO_MAX_BYTES else AUDIO_MAX_BYTES
+        if (file.length() > cap) {
+            AppState.toast(
+                if (kind == MsgKind.VIDEO) "Video is too large — up to 64 MB"
+                else "Audio file is too large — up to 32 MB"
+            )
+            return
+        }
+        val local = TikuMessage(
+            id = newLocalId(), senderUid = uid, kind = kind,
+            time = fmtTime(System.currentTimeMillis()), me = true,
+            voiceDurSec = durSec, localPath = file.absolutePath,
+            photo = if (kind == MsgKind.VIDEO) videoPoster(file) else null,
+            tsMs = System.currentTimeMillis(), status = SendStatus.SENDING,
+            mimeType = mime, mediaBytes = file.length(),
+        )
+        AppState.upsertMessage(id, local)
+        scope.launch {
+            val bytes = runCatching { file.readBytes() }.getOrNull()
+            if (bytes == null) {
+                Log.e("TikuSend", "$kind send failed in chat $id: file unreadable")
+                AppState.setMessageStatus(id, local.id, SendStatus.FAILED)
+                AppState.toast("Couldn't send — the file couldn't be read")
+            } else {
+                deliverMedia(id, th.person.uid, local, bytes)
+            }
+        }
+    }
+
+    /** ROUND 15: tap-to-load for VIDEO / AUDIO — the ONLY path that
+     *  downloads those payloads. Fetches the doc fresh, decrypts with
+     *  forceLoad (chunks -> cache file -> poster for video), then swaps
+     *  the loaded copy into the cache so the thread rebuild picks it up. */
+    override fun fetchMedia(id: String, msgId: String) {
+        scope.launch {
+            runCatching {
+                val peerUid = AppState.thread(id)?.person?.uid ?: return@runCatching
+                val key = convKeyOrNull(id, peerUid) ?: return@runCatching
+                val doc = msgRef(id, msgId).get().await()
+                if (!doc.exists()) return@runCatching
+                val cache = msgCache.getOrPut(id) { LinkedHashMap() }
+                val loaded = decryptDoc(id, doc, key, peerUid, cached = cache[msgId], forceLoad = true)
+                if (loaded.localPath != null) {
+                    cache[msgId] = loaded
+                    applyCacheToThread(id)
+                }
+            }.onFailure {
+                Log.e("TikuChat", "fetchMedia failed chat=$id msg=$msgId", it)
+                AppState.toast("Couldn't load the media")
+            }
+        }
+    }
+
     /** Shared media delivery: encrypt -> doc under the LOCAL id -> chunk upload. */
     private suspend fun deliverMedia(id: String, peerUid: String, local: TikuMessage, plainBytes: ByteArray) {
-        val kind = if (local.kind == MsgKind.IMAGE) "image" else "voice"
+        val kind = when (local.kind) {
+            MsgKind.IMAGE -> "image"; MsgKind.VIDEO -> "video"; MsgKind.AUDIO -> "audio"
+            else -> "voice"
+        }
         try {
             ensureChatDoc(id, peerUid)
             val key = convKeyOrNull(id, peerUid)
@@ -1567,6 +1724,8 @@ object FirebaseEngine : ChatRepo {
                 "reaction" to emptyMap<String, String>(), "starredBy" to emptyList<String>(),
                 "deletedFor" to emptyList<String>(), "seenBy" to listOf(uid),
                 "durationMs" to local.voiceDurSec * 1000, "amps" to local.amps, "mediaChunks" to 0,
+                // round 15: file-kind metadata ("" / 0 for image + voice)
+                "mime" to local.mimeType, "mediaBytes" to plainBytes.size.toLong(),
             )).await()
             val chunks = MediaStore.upload(db, id, local.id, ctBytes)
             ref.update("mediaChunks", chunks).await()
@@ -1604,6 +1763,16 @@ object FirebaseEngine : ChatRepo {
                     if (bytes == null) {
                         AppState.setMessageStatus(id, msgId, SendStatus.FAILED)
                         AppState.toast("Couldn't resend — the recording is gone from this device")
+                    } else deliverMedia(id, th.person.uid, m, bytes)
+                }
+                MsgKind.VIDEO, MsgKind.AUDIO -> {
+                    // the cache source file is kept after a failed send
+                    // precisely so this retry can re-read it
+                    val f = m.localPath?.let { File(it) }
+                    val bytes = f?.takeIf { it.exists() }?.let { runCatching { it.readBytes() }.getOrNull() }
+                    if (bytes == null) {
+                        AppState.setMessageStatus(id, msgId, SendStatus.FAILED)
+                        AppState.toast("Couldn't resend — the file is gone from this device")
                     } else deliverMedia(id, th.person.uid, m, bytes)
                 }
                 // call events are system-written, never optimistic/FAILED

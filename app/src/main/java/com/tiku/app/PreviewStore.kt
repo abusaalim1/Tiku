@@ -125,6 +125,8 @@ object PreviewStore {
         val body = when (m.kind) {
             MsgKind.VOICE -> "🎙 Voice message"
             MsgKind.IMAGE -> "📷 Photo"
+            MsgKind.VIDEO -> "Video"
+            MsgKind.AUDIO -> "Audio file"
             MsgKind.CALL -> callEventLabel(m, m.callMine)
             else -> m.text
         }
@@ -206,6 +208,22 @@ object PreviewRepo : ChatRepo {
         push(id, TikuMessage(UUID.randomUUID().toString(), "", MsgKind.VOICE, "", "now", me = true,
             voiceDurSec = durSec, amps = amps.ifEmpty { List(22) { 8 } },
             localPath = audioFile?.absolutePath))
+        simulateReply(id)
+    }
+
+    /** ROUND 15 preview sinks: the file kinds appear as already-loaded
+     *  bubbles (the harness has no real chunk pipeline to fetch from). */
+    override fun sendVideo(id: String, file: File, mime: String, durSec: Int) {
+        push(id, TikuMessage(UUID.randomUUID().toString(), "", MsgKind.VIDEO, "", "now", me = true,
+            voiceDurSec = durSec, localPath = file.absolutePath,
+            mimeType = mime, mediaBytes = if (file.exists()) file.length() else 0L))
+        simulateReply(id)
+    }
+
+    override fun sendAudio(id: String, file: File, mime: String, durSec: Int) {
+        push(id, TikuMessage(UUID.randomUUID().toString(), "", MsgKind.AUDIO, "", "now", me = true,
+            voiceDurSec = durSec, amps = List(22) { 8 }, localPath = file.absolutePath,
+            mimeType = mime, mediaBytes = if (file.exists()) file.length() else 0L))
         simulateReply(id)
     }
 

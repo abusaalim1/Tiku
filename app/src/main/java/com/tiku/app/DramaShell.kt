@@ -1,6 +1,7 @@
 package com.tiku.app
 
 import android.annotation.SuppressLint
+import android.graphics.BitmapFactory
 import android.view.View
 import android.view.ViewGroup
 import android.webkit.WebChromeClient
@@ -11,6 +12,7 @@ import android.webkit.WebViewClient
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.spring
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -56,6 +58,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -281,6 +284,44 @@ private fun GlassBackButton(onBack: () -> Unit) {
     ) { TikIcon("back", Modifier.size(20.dp)) }
 }
 
+/**
+ * ROUND 15 — a bundled facade still (assets/facade/photos/), decoded
+ * LOCALLY to a Bitmap. The old route fed Coil a
+ * "file:///android_asset/…" string, which has no reliable fetcher and
+ * left the hero (and the Photos shelf) blank/dark on the owner's
+ * phone even though the files ship inside the APK. Decoding the
+ * bundled bytes cannot miss: if a decode ever fails, the slot renders
+ * the brand gradient — never a black box.
+ */
+@Composable
+private fun FacadeAssetImage(
+    file: String,
+    modifier: Modifier = Modifier,
+    contentScale: ContentScale = ContentScale.Crop,
+) {
+    val pal = LocalPalette.current
+    val ctx = LocalContext.current
+    val bmp = remember(file) {
+        runCatching {
+            ctx.assets.open("facade/photos/$file").use { BitmapFactory.decodeStream(it) }
+        }.getOrNull()
+    }
+    if (bmp != null) {
+        Image(
+            bitmap = bmp.asImageBitmap(),
+            contentDescription = null,
+            modifier = modifier,
+            contentScale = contentScale,
+        )
+    } else {
+        Box(
+            modifier.background(
+                Brush.linearGradient(listOf(pal.ac.copy(alpha = 0.55f), pal.lens)),
+            ),
+        )
+    }
+}
+
 // ---------- HOME TAB ----------
 
 @Composable
@@ -353,10 +394,11 @@ private fun HeroCard(hero: DramaContent.Drama, onPlay: (DramaContent.Drama) -> U
                 interactionSource = remember { MutableInteractionSource() }, indication = null,
             ) { onPlay(hero) },
     ) {
-        AsyncImage(
-            model = DramaContent.photoModel(DramaContent.HERO_PHOTO),
-            contentDescription = null,
-            contentScale = ContentScale.Crop,
+        // Bundled hero still, decoded locally (FacadeAssetImage) — the
+        // title treatment lives in the glass panel below, so even a
+        // decode failure leaves a designed card, never a dark box.
+        FacadeAssetImage(
+            file = DramaContent.HERO_PHOTO,
             modifier = Modifier.fillMaxSize(),
         )
         Box(
@@ -412,8 +454,35 @@ private fun DramaCard(
     val pal = LocalPalette.current
     Column(Modifier.width(168.dp)) {
         Box {
+            // ROUND 15: a designed underlay (brand gradient + play
+            // glyph) sits UNDER the poster, so the card never reads as
+            // a dark void while the poster loads — or if it fails. The
+            // poster itself is the video's YouTube poster derived from
+            // its id (hqdefault, with an mqdefault fallback on error).
+            Box(
+                Modifier.fillMaxWidth().aspectRatio(16f / 9f)
+                    .clip(RoundedCornerShape(18.dp))
+                    .background(
+                        Brush.linearGradient(
+                            listOf(pal.ac.copy(alpha = 0.5f), pal.lens),
+                        ),
+                    ),
+                contentAlignment = Alignment.Center,
+            ) {
+                Box(
+                    Modifier.size(34.dp).clip(CircleShape)
+                        .background(Color.Black.copy(alpha = 0.28f)),
+                    contentAlignment = Alignment.Center,
+                ) { TikIcon("playFill", Modifier.size(15.dp), tint = Color.White) }
+            }
+            var thumbFailed by remember(drama.id) { mutableStateOf(false) }
             AsyncImage(
-                model = DramaContent.thumbUrl(drama.id),
+                model = if (thumbFailed) {
+                    "https://i.ytimg.com/vi/${drama.id}/mqdefault.jpg"
+                } else {
+                    DramaContent.thumbUrl(drama.id)
+                },
+                onError = { thumbFailed = true },
                 contentDescription = null,
                 contentScale = ContentScale.Crop,
                 modifier = Modifier.fillMaxWidth().aspectRatio(16f / 9f)
@@ -500,8 +569,12 @@ private fun FacadePlayer(drama: DramaContent.Drama, onClose: () -> Unit) {
     // Pane-owned WebView (Part B architecture): created here, destroyed in
     // the DisposableEffect below, touched by no other composable. Fullscreen
     // is hosted INSIDE the player only. This surface is never FLAG_SECURE.
+    // ROUND 15: built with the ACTIVITY context (ctx), not
+    // applicationContext — the application-context WebView was a root
+    // cause of the owner's black-video report on device (audio playing
+    // over a permanently dark picture, here and in the Tik Watch pane).
     val webView = remember(drama.id) {
-        WebView(ctx.applicationContext).apply {
+        WebView(ctx).apply {
             settings.apply {
                 javaScriptEnabled = true
                 domStorageEnabled = true
@@ -534,19 +607,27 @@ private fun FacadePlayer(drama: DramaContent.Drama, onClose: () -> Unit) {
                     runCatching { cb?.onCustomViewHidden() }
                 }
             }
-            // ROUND 14 — LOCKED EMBED: playback is a local page whose only
-            // content is a youtube-nocookie iframe (no watch page, no "Open
-            // App" pill, no comments, no related-video rail), and EVERY
-            // main-frame navigation away from that document is refused —
-            // watch pages, channel pages, intent:// and market:// alike.
-            // (The initial loadDataWithBaseURL load is programmatic and
-            // never passes through shouldOverrideUrlLoading; iframe
-            // subresource loads are unaffected.)
+            // ROUND 14 — LOCKED EMBED: playback is the youtube-nocookie
+            // embed page itself (no watch page, no "Open App" pill, no
+            // comments, no related-video rail), and every main-frame
+            // navigation away from it is refused — watch pages, channel
+            // pages, intent:// and market:// alike.
+            // ROUND 15: the embed now loads DIRECTLY (loadUrl — see
+            // loadYoutubeEmbed in Watch.kt; the old loadData iframe
+            // wrapper rendered black on device). The one main-frame
+            // target allowed through is this drama's embed document
+            // itself, so a redirect back to it can never cancel the
+            // load; subframe traffic is the player's own business.
             webViewClient = object : WebViewClient() {
                 override fun shouldOverrideUrlLoading(
                     view: WebView?,
                     request: WebResourceRequest?,
-                ): Boolean = true
+                ): Boolean {
+                    val req = request ?: return true
+                    if (!req.isForMainFrame) return false
+                    return !req.url.toString()
+                        .startsWith(YOUTUBE_EMBED_PREFIX + drama.id)
+                }
             }
             loadYoutubeEmbed(this, drama.id)
         }
@@ -775,10 +856,8 @@ private fun PhotosTab(onOpen: (Int) -> Unit) {
         }
         itemsIndexed(DramaContent.PHOTOS, key = { _, p -> p.first }) { idx, (file, caption) ->
             Column {
-                AsyncImage(
-                    model = DramaContent.photoModel(file),
-                    contentDescription = null,
-                    contentScale = ContentScale.Crop,
+                FacadeAssetImage(
+                    file = file,
                     modifier = Modifier.fillMaxWidth().aspectRatio(3f / 4f)
                         .clip(RoundedCornerShape(20.dp))
                         .clickable(
@@ -802,11 +881,10 @@ private fun PhotoViewer(index: Int, onBack: () -> Unit) {
     val (file, caption) = DramaContent.PHOTOS[index]
     BackHandler { onBack() }
     Box(Modifier.fillMaxSize().background(Color.Black)) {
-        AsyncImage(
-            model = DramaContent.photoModel(file),
-            contentDescription = null,
-            contentScale = ContentScale.Fit,
+        FacadeAssetImage(
+            file = file,
             modifier = Modifier.fillMaxSize(),
+            contentScale = ContentScale.Fit,
         )
         Box(
             Modifier.align(Alignment.TopStart).padding(14.dp).size(38.dp)
