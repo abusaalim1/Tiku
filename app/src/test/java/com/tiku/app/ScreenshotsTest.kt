@@ -655,4 +655,39 @@ class ScreenshotsTest {
         shot("34-incoming-ringing.png")
         CallController.endSilently()
     }
+
+    @Test fun shot35_momentsEntry() {
+        // ROUND 14 (owner order): the Memories entry — a fixed feature
+        // entry (not data-gated) directly under the notes row on
+        // Messages, opening the integrated couple-memories web surface.
+        AppState.homeTab = HomeTab.CHATS
+        AppState.goTik(0)
+        AppState.go(Screen.Home)
+        frame { HomeScreen() }
+        composeRule.waitForIdle()
+        org.junit.Assert.assertTrue(
+            "Messages must carry the Memories entry under the notes row",
+            composeRule.onAllNodesWithText("Memories").fetchSemanticsNodes().isNotEmpty(),
+        )
+        org.junit.Assert.assertTrue(
+            "Memories entry must carry its subtitle",
+            composeRule.onAllNodesWithText("Your private place, together")
+                .fetchSemanticsNodes().isNotEmpty(),
+        )
+        shot("35-moments-entry.png")
+    }
+
+    @Test fun shot36_momentsScreen() {
+        // The Moments surface in preview: the static dark placeholder
+        // (PREVIEW branch — never a real WebView headless) with its
+        // chrome title.
+        AppState.go(Screen.Moments)
+        frame { MomentsScreen() }
+        composeRule.waitForIdle()
+        org.junit.Assert.assertTrue(
+            "Moments placeholder must carry its title",
+            composeRule.onAllNodesWithText("Memories").fetchSemanticsNodes().isNotEmpty(),
+        )
+        shot("36-moments-screen.png")
+    }
 }

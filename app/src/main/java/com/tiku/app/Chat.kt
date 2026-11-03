@@ -12,7 +12,8 @@ import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.animateColorAsState
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
@@ -51,7 +52,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.animateItem
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
@@ -138,7 +138,10 @@ private val RdSheet = Color(0xFF16161B)
 private val RdRose = Color(0xFFFF5C8A)
 private val RdSub = Color(0xFF9A99A6)
 private val RdDanger = Color(0xFFFF453A)
-private val RdEase = CubicBezierEasing(0.22f, 1f, 0.36f, 1f)
+// RdEase is the shared declaration in Redesign.kt (identical value) —
+// no private copy here. The glass helpers below are Chat-local renames of
+// the file's originals (their no-HazeState fallback alphas differ from
+// Redesign.kt's shared versions, so they keep Chat's exact rendering).
 private val RdThemes = listOf(
     Color(0xFFFF5C8A) to Color(0xFFE23D74),
     Color(0xFF6AA8FF) to Color(0xFF3D7BE0),
@@ -185,8 +188,9 @@ private fun Modifier.rdPress(onClick: () -> Unit): Modifier = composed {
 /** The file's .glass: backdrop blur + light edge. When no HazeState is
  *  provided (preview builds + the screenshot harness) the same shape falls
  *  back to the sheet colour at near-full alpha, exactly like build 47's
- *  glass fallbacks. */
-private fun Modifier.rdGlass(h: HazeState?, shape: Shape, tint: Float = 0.07f): Modifier =
+ *  glass fallbacks. (Chat-local copy of Redesign.kt's rdGlass with this
+ *  file's original fallback alpha.) */
+private fun Modifier.chatGlass(h: HazeState?, shape: Shape, tint: Float = 0.07f): Modifier =
     if (h != null) {
         this.clip(shape)
             .hazeEffect(
@@ -201,7 +205,7 @@ private fun Modifier.rdGlass(h: HazeState?, shape: Shape, tint: Float = 0.07f): 
     }
 
 /** The file's .backdrop for the long-press menu (blur + dim). */
-private fun Modifier.rdBackdrop(h: HazeState?): Modifier =
+private fun Modifier.chatBackdrop(h: HazeState?): Modifier =
     if (h != null) {
         this.hazeEffect(state = h, style = HazeStyle(backgroundColor = Color.Black, tint = HazeTint(Color.Black.copy(alpha = 0.35f)), blurRadius = 28.dp, noiseFactor = 0f))
     } else {
@@ -588,7 +592,7 @@ private fun RdChatTopBar(
     onCall: () -> Unit,
 ) {
     Row(
-        Modifier.padding(horizontal = 14.dp, vertical = 12.dp).fillMaxWidth().rdGlass(h, RoundedCornerShape(999.dp)).padding(8.dp),
+        Modifier.padding(horizontal = 14.dp, vertical = 12.dp).fillMaxWidth().chatGlass(h, RoundedCornerShape(999.dp)).padding(8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Box(Modifier.size(40.dp).clip(CircleShape).rdPress(onBack), contentAlignment = Alignment.Center) {
@@ -636,7 +640,7 @@ fun RdChatInput(
             exit = fadeOut() + shrinkVertically(),
         ) {
             Row(
-                Modifier.fillMaxWidth().rdGlass(h, RoundedCornerShape(20.dp)).padding(horizontal = 14.dp, vertical = 8.dp),
+                Modifier.fillMaxWidth().chatGlass(h, RoundedCornerShape(20.dp)).padding(horizontal = 14.dp, vertical = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Box(Modifier.width(3.dp).height(28.dp).clip(RoundedCornerShape(2.dp)).background(accent))
@@ -648,7 +652,7 @@ fun RdChatInput(
             }
         }
         Row(
-            Modifier.fillMaxWidth().rdGlass(h, RoundedCornerShape(999.dp)).padding(start = 6.dp, end = 6.dp, top = 6.dp, bottom = 6.dp),
+            Modifier.fillMaxWidth().chatGlass(h, RoundedCornerShape(999.dp)).padding(start = 6.dp, end = 6.dp, top = 6.dp, bottom = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             if (recording) {
@@ -1024,7 +1028,7 @@ private fun RdChatContent(thread: ChatThread) {
             if (partnerBlocked) {
                 Row(
                     Modifier.padding(horizontal = 14.dp, vertical = 12.dp).fillMaxWidth()
-                        .rdGlass(haze, RoundedCornerShape(999.dp))
+                        .chatGlass(haze, RoundedCornerShape(999.dp))
                         .padding(horizontal = 18.dp, vertical = 14.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
@@ -1080,7 +1084,7 @@ private fun RdChatContent(thread: ChatThread) {
             val mm = menuMsg
             if (mm != null) {
                 Box(
-                    Modifier.fillMaxSize().rdBackdrop(haze)
+                    Modifier.fillMaxSize().chatBackdrop(haze)
                         .clickable(remember { MutableInteractionSource() }, null) { menuMsg = null; moreEmoji = false },
                     contentAlignment = Alignment.Center,
                 ) {
@@ -1200,7 +1204,7 @@ private fun RdChatContent(thread: ChatThread) {
                     Modifier.padding(14.dp).fillMaxWidth().animateEnterExit(
                         enter = slideInVertically(spring(0.85f, 360f)) { it } + fadeIn(),
                         exit = slideOutVertically(tween(220, easing = RdEase)) { it } + fadeOut(),
-                    ).rdGlass(haze, RoundedCornerShape(28.dp), 0.1f).padding(8.dp),
+                    ).chatGlass(haze, RoundedCornerShape(28.dp), 0.1f).padding(8.dp),
                 ) {
                     Text(
                         "🖼  Photo", color = Color.White, fontSize = 16.sp,

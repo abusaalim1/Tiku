@@ -38,6 +38,12 @@ sealed interface Screen {
     data class ChatDetails(val threadId: String) : Screen
     data class Call(val threadId: String, val video: Boolean) : Screen
     data object Story : Screen
+    /** ROUND 14 (owner order, 2026-11-03): the couple-memories WEB app
+     *  (tiku-moments.vercel.app) integrated as a Tik surface — opened
+     *  from the Messages "Memories" entry, full-screen WebView inside
+     *  the app (Moments.kt). Tik-side only, behind the gate; the facade
+     *  never references it. */
+    data object Moments : Screen
 }
 
 enum class HomeTab { CHATS, CALLS, WATCH, ME }
@@ -170,7 +176,7 @@ object AppState {
     fun isChatRoot(dest: Screen): Boolean = when (dest) {
         is Screen.Welcome, is Screen.Password, is Screen.Restore, is Screen.ProfileSetup,
         is Screen.TikGate, is Screen.Home, is Screen.Chat, is Screen.ChatDetails,
-        is Screen.Call, is Screen.Story -> true
+        is Screen.Call, is Screen.Story, is Screen.Moments -> true
         else -> false
     }
 

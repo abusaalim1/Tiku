@@ -40,7 +40,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
-import androidx.compose.foundation.lazy.animateItem
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
@@ -49,6 +48,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Slider
@@ -108,7 +108,7 @@ fun threadPreview(th: ChatThread): String {
     }
 }
 
-private sealed interface NoteTarget {
+internal sealed interface NoteTarget {
     data object Me : NoteTarget
     data class Peer(val thread: ChatThread) : NoteTarget
 }
@@ -342,6 +342,23 @@ fun MessagesScreen(onNote: (NoteTarget) -> Unit, onRequests: () -> Unit) {
                         onClick = { onNote(NoteTarget.Peer(th)) },
                     ) { Av(th.person, 58) }
                 }
+            }
+        }
+        item {
+            // ROUND 14 (owner order, 2026-11-03): the couple-memories web
+            // app, integrated as a Tik surface (Moments.kt) — a fixed
+            // feature entry (not data-gated) directly under the notes
+            // row, in the file's CardRow language.
+            CardRow({ AppState.go(Screen.Moments) }, idx = 2) {
+                Box(
+                    Modifier.size(50.dp).clip(CircleShape).background(Rose.copy(alpha = 0.16f)),
+                    contentAlignment = Alignment.Center,
+                ) { TikIcon("heartFill", Modifier.size(24.dp), tint = Rose) }
+                TwoLine(
+                    "Memories", "Your private place, together",
+                    Modifier.weight(1f).padding(start = 14.dp),
+                )
+                Icon(Icons.Filled.KeyboardArrowRight, null, tint = Sub, modifier = Modifier.size(22.dp))
             }
         }
         item {
@@ -842,7 +859,7 @@ private fun EditProfilePage(onBack: () -> Unit) {
             val res = runCatching {
                 val bytes = ctx.contentResolver.openInputStream(uri)!!.readBytes()
                 val bmp = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
-                FirebaseEngine.updateProfilePhoto(bytes, bmp)
+                FirebaseEngine.updateProfilePhoto(bmp)
             }
             if (res.isSuccess) AppState.toast("Photo updated")
             else AppState.toast("Couldn't update your photo — try again")
@@ -859,7 +876,15 @@ private fun EditProfilePage(onBack: () -> Unit) {
                 )
             }
         }
-        item { PresetAvatarPicker(dark = true) { AppState.myAvatarEmoji = it; AppState.myAvatar = null } }
+        item {
+            PresetAvatarPicker(dark = true) { bmp ->
+                scope.launch {
+                    val r = runCatching { FirebaseEngine.updateProfilePhoto(bmp) }
+                    if (r.isSuccess) AppState.toast("Photo updated")
+                    else AppState.toast("Couldn't update your photo — try again")
+                }
+            }
+        }
         item { Section("Name") }
         item { Field(name, { name = it }, "Display name") }
         item { Section("Username") }
@@ -967,14 +992,14 @@ object NewChatSheet {
             PreviewStore.people.filter {
                 it.username.contains(q, ignoreCase = true) || it.name.contains(q, ignoreCase = true)
             }
-        } else FirebaseEngine.searchUsers(q).getOrDefault(emptyList())
+        } else FirebaseEngine.searchPeople(q)
     }
 
     fun open() {
         var query = ""
         var people: List<Person> = emptyList()
         var searching = false
-        AppState.sheet { close ->
+        AppState.sheet {
             val scope = rememberCoroutineScope()
             var q by remember { mutableStateOf(query) }
             var results by remember { mutableStateOf(people) }
@@ -1005,7 +1030,7 @@ object NewChatSheet {
                 results.forEach { p ->
                     val existingId = threads.firstOrNull { it.person.uid == p.uid }?.id
                     CardRow({
-                        close()
+                        AppState.closeSheet()
                         val id = AppState.repo.startThreadWith(p)
                         AppState.repo.openThread(id)
                         AppState.go(Screen.Chat(id))
@@ -1028,7 +1053,7 @@ object NewChatSheet {
  */
 object EditProfileSheet {
     fun open() {
-        AppState.sheet { close ->
+        AppState.sheet {
             val scope = rememberCoroutineScope()
             val ctx = LocalContext.current
             val pick = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
@@ -1036,9 +1061,9 @@ object EditProfileSheet {
                     val res = runCatching {
                         val bytes = ctx.contentResolver.openInputStream(uri)!!.readBytes()
                         val bmp = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
-                        FirebaseEngine.updateProfilePhoto(bytes, bmp)
+                        FirebaseEngine.updateProfilePhoto(bmp)
                     }
-                    if (res.isSuccess) { AppState.toast("Photo updated"); close() }
+                    if (res.isSuccess) { AppState.toast("Photo updated"); AppState.closeSheet() }
                     else AppState.toast("Couldn't update your photo — try again")
                 }
             }
@@ -1051,7 +1076,13 @@ object EditProfileSheet {
                 Pill("Choose from gallery", Modifier.fillMaxWidth().padding(vertical = 6.dp), false) {
                     pick.launch("image/*")
                 }
-                PresetAvatarPicker(dark = true) { AppState.myAvatarEmoji = it; AppState.myAvatar = null; close() }
+                PresetAvatarPicker(dark = true) { bmp ->
+                    scope.launch {
+                        val r = runCatching { FirebaseEngine.updateProfilePhoto(bmp) }
+                        if (r.isSuccess) { AppState.toast("Photo updated"); AppState.closeSheet() }
+                        else AppState.toast("Couldn't update your photo — try again")
+                    }
+                }
                 Spacer(Modifier.height(8.dp))
             }
         }
@@ -1069,7 +1100,7 @@ object ChangePasswordSheet {
         var newPw = ""
         var confirm = ""
         var busy = false
-        AppState.sheet { close ->
+        AppState.sheet {
             var cur by remember { mutableStateOf(current) }
             var np by remember { mutableStateOf(newPw) }
             var cf by remember { mutableStateOf(confirm) }
@@ -1088,9 +1119,9 @@ object ChangePasswordSheet {
                 Spacer(Modifier.height(10.dp))
                 PasswordField(cf, { cf = it }, "Confirm new password")
                 Spacer(Modifier.height(16.dp))
-                TikPrimaryButton(if (b) "Changing…" else "Change password", !b) {
+                TikPrimaryButton(if (b) "Changing…" else "Change password", enabled = !b) {
                     when {
-                        !Crypto.passwordVerify(cur, SettingsStore.passwordHash) ->
+                        SettingsStore.passwordHash(ctx)?.let { Crypto.passwordVerify(cur, it) } != true ->
                             AppState.toast("Current password doesn't match")
                         np.length < 6 -> AppState.toast("New password needs at least 6 characters")
                         np != cf -> AppState.toast("New passwords don't match")
@@ -1098,17 +1129,16 @@ object ChangePasswordSheet {
                             b = true
                             scope.launch {
                                 val r = runCatching {
-                                    val backup = FirebaseEngine.fetchMyKeyBackup()
+                                    val backup = FirebaseEngine.backupBlob()
                                         ?: error("No key backup found for this account.")
-                                    val priv = Crypto.backupUnwrap(backup, cur)
-                                        ?: error("Couldn't unlock your key with the current password.")
+                                    val priv = runCatching { Crypto.backupUnwrap(backup, cur) }
+                                        .getOrElse { error("Couldn't unlock your key with the current password.") }
                                     val blob = Crypto.backupWrap(priv, np)
-                                    FirebaseEngine.updateBackupBlob(blob, np).getOrThrow()
-                                    SettingsStore.setPassword(np, Crypto.passwordHash(np))
-                                    OwnerGate.markKeyReady()
+                                    FirebaseEngine.updateBackupBlob(blob)
+                                    SettingsStore.savePasswordHash(ctx, Crypto.passwordHash(np))
                                 }
                                 b = false
-                                if (r.isSuccess) { close(); AppState.toast("Password changed") }
+                                if (r.isSuccess) { AppState.closeSheet(); AppState.toast("Password changed") }
                                 else AppState.toast(r.exceptionOrNull()?.message ?: "Couldn't change the password")
                             }
                         }
@@ -1121,7 +1151,18 @@ object ChangePasswordSheet {
 }
 
 // ---- story placeholder (facade-adjacent; kept from build 47) ----
-data class StoryContent(val title: String, val body: String, val emoji: String)
+// Merged model: the (title, body, emoji) shape StoryHelper writes, plus the
+// build-47 StoryScreen fields (quotes/grads/personIndex/person) defaulted
+// from it, so both consumers compile against one declaration.
+data class StoryContent(
+    val title: String,
+    val body: String,
+    val emoji: String,
+    val quotes: List<String> = listOf(body),
+    val grads: List<Pair<Color, Color>> = themeList,
+    val personIndex: Int = 0,
+    val person: Person = Person(name = title),
+)
 
 object StoryHelper {
     fun open(title: String, body: String, emoji: String) {

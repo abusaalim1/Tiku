@@ -18,8 +18,8 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.awaitEachGesture
-import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -44,18 +44,17 @@ import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
-import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.input.pointer.changedToUpOrCanceled
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
@@ -616,11 +615,22 @@ fun WatchHost() {
             if (expanded) maxH - WatchChromeHeaderHeight else WatchMiniHeight, spec, label = "watchH",
         )
         val rAnim by animateDpAsState(if (expanded) 0.dp else WatchMiniCorner, spec, label = "watchR")
-        val ax = remember { Animatable(0.dp) }
-        val ay = remember { Animatable(WatchChromeHeaderHeight) }
+        // Position Animatables run in PX floats (drag deltas arrive in
+        // px); the size animatables above stay Dp. Same targets and the
+        // same 340ms / RdEase glide as the design.
+        val density = LocalDensity.current
+        val posSpec = tween<Float>(340, easing = RdEase)
+        val headerPx = with(density) { WatchChromeHeaderHeight.toPx() }
+        val ax = remember { Animatable(0f) }
+        val ay = remember { Animatable(headerPx) }
         var hasCustomPos by remember { mutableStateOf(false) }
-        val defMiniX = maxW - WatchMiniWidth - WatchMiniEdgeMargin
-        val defMiniY = maxH - WatchMiniBottomClearance - WatchMiniHeight
+        val defMiniX = with(density) { (maxW - WatchMiniWidth - WatchMiniEdgeMargin).toPx() }
+        val defMiniY = with(density) { (maxH - WatchMiniBottomClearance - WatchMiniHeight).toPx() }
+        val miniHalfPx = with(density) { (WatchMiniWidth / 2).toPx() }
+        val midPx = with(density) { (maxW / 2).toPx() }
+        val marginPx = with(density) { WatchMiniEdgeMargin.toPx() }
+        val maxDragXPx = with(density) { (maxW - WatchMiniWidth).toPx() }
+        val maxDragYPx = with(density) { (maxH - WatchMiniHeight).toPx() }
         // Position driver: mode switches glide the window between the
         // expanded origin and the mini resting spot. Once the user has
         // dragged the mini, its position is theirs — mode switches and
@@ -629,15 +639,15 @@ fun WatchHost() {
         // taking over, so the two never fight.
         LaunchedEffect(expanded, hasCustomPos, defMiniX, defMiniY) {
             if (expanded) {
-                launch { ax.animateTo(0.dp, spec) }
-                launch { ay.animateTo(WatchChromeHeaderHeight, spec) }
+                launch { ax.animateTo(0f, posSpec) }
+                launch { ay.animateTo(headerPx, posSpec) }
             } else if (!hasCustomPos) {
-                launch { ax.animateTo(defMiniX, spec) }
-                launch { ay.animateTo(defMiniY, spec) }
+                launch { ax.animateTo(defMiniX, posSpec) }
+                launch { ay.animateTo(defMiniY, posSpec) }
             }
         }
-        val curX = ax.value.coerceIn(0.dp, (maxW - wAnim).coerceAtLeast(0.dp))
-        val curY = ay.value.coerceIn(0.dp, (maxH - hAnim).coerceAtLeast(0.dp))
+        val curX = with(density) { ax.value.coerceIn(0f, (maxW - wAnim).toPx().coerceAtLeast(0f)).toDp() }
+        val curY = with(density) { ay.value.coerceIn(0f, (maxH - hAnim).toPx().coerceAtLeast(0f)).toDp() }
         Box(
             Modifier
                 .offset(x = curX, y = curY)
@@ -658,53 +668,50 @@ fun WatchHost() {
             if (!expanded && !covered) {
                 // Drag / tap layer ABOVE the WebView (which would
                 // otherwise eat every touch as page interaction).
+                val gestureScope = rememberCoroutineScope()
                 Box(
-                    Modifier.fillMaxSize().pointerInput(maxW, maxH) {
-                        awaitEachGesture {
-                            val down = awaitFirstDown(requireUnconsumed = false)
-                            ax.stop()
-                            ay.stop()
-                            var movedPx = 0f
-                            var up = false
-                            while (!up) {
-                                val ev = awaitPointerEvent()
-                                val ch = ev.changes.firstOrNull { it.id == down.id }
-                                    ?: ev.changes.firstOrNull() ?: break
-                                if (ch.changedToUpOrCanceled()) {
-                                    up = true
-                                } else {
-                                    val d = ch.positionChange()
-                                    if (d != Offset.Zero) {
-                                        movedPx += d.getDistance()
-                                        if (movedPx > viewConfiguration.touchSlop) {
-                                            hasCustomPos = true
-                                            ax.snapTo(
-                                                (ax.value + d.x.toDp())
-                                                    .coerceIn(0.dp, maxW - WatchMiniWidth),
-                                            )
-                                            ay.snapTo(
-                                                (ay.value + d.y.toDp())
-                                                    .coerceIn(0.dp, maxH - WatchMiniHeight),
-                                            )
-                                        }
-                                        ch.consume()
-                                    }
-                                }
-                            }
-                            if (movedPx <= viewConfiguration.touchSlop) {
+                    Modifier.fillMaxSize()
+                        .pointerInput(maxW, maxH) {
+                            detectTapGestures {
                                 // Tap (not a drag): back to the Watch tab, expanded.
                                 AppState.goTik(2)
-                            } else {
-                                // Release: spring to the nearest horizontal edge.
-                                val targetX = if (ax.value + WatchMiniWidth / 2 < maxW / 2) {
-                                    WatchMiniEdgeMargin
-                                } else {
-                                    maxW - WatchMiniWidth - WatchMiniEdgeMargin
-                                }
-                                ax.animateTo(targetX, spring(dampingRatio = 0.78f, stiffness = 420f))
                             }
                         }
-                    },
+                        .pointerInput(maxW, maxH) {
+                            // The codebase's drag pattern (Chat.kt's swipe):
+                            // foundation detectors for the touch math, and
+                            // Animatable calls via scope.launch — the raw
+                            // awaitEachGesture loop can't call them (its
+                            // scope is @RestrictsSuspension). detectDrag-
+                            // Gestures applies the same touch-slop gate the
+                            // hand-rolled loop used before reporting a drag.
+                            detectDragGestures(
+                                onDragStart = {
+                                    gestureScope.launch { ax.stop() }
+                                    gestureScope.launch { ay.stop() }
+                                },
+                                onDragEnd = {
+                                    // Release: spring to the nearest horizontal edge.
+                                    val targetX = if (ax.value + miniHalfPx < midPx) {
+                                        marginPx
+                                    } else {
+                                        defMiniX
+                                    }
+                                    gestureScope.launch {
+                                        ax.animateTo(targetX, spring(dampingRatio = 0.78f, stiffness = 420f))
+                                    }
+                                },
+                            ) { change, dragAmount ->
+                                hasCustomPos = true
+                                gestureScope.launch {
+                                    ax.snapTo((ax.value + dragAmount.x).coerceIn(0f, maxDragXPx))
+                                }
+                                gestureScope.launch {
+                                    ay.snapTo((ay.value + dragAmount.y).coerceIn(0f, maxDragYPx))
+                                }
+                                change.consume()
+                            }
+                        },
                 )
                 // Mini ✕ — FULL stop (owner's rule), same as the bar's ✕.
                 Box(

@@ -243,6 +243,20 @@ fun TikuRoot(onGoogleClick: () -> Unit) {
                         ) {
                             (screen as? Screen.ChatDetails ?: lastDetails)?.let { ChatDetailsScreen(it.threadId) }
                         }
+                        // ROUND 14 (owner order): the Moments web surface
+                        // rides the same overlay pattern as Chat/Details —
+                        // full-screen above Home (so the NavPill, gated on
+                        // screen is Screen.Home, hides itself), and leaving
+                        // composition on close/lock destroys its WebView.
+                        AnimatedVisibility(
+                            visible = screen is Screen.Moments,
+                            enter = slideInVertically(tween(260, easing = TikEase)) { 24 } +
+                                fadeIn(tween(260, easing = TikEase)),
+                            exit = slideOutVertically(tween(200, easing = TikEase)) { 24 } +
+                                fadeOut(tween(200, easing = TikEase)),
+                        ) {
+                            MomentsScreen()
+                        }
                         AnimatedVisibility(
                             visible = screen is Screen.Call,
                             enter = fadeIn(tween(300, easing = TikuEase)) +
