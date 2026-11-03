@@ -291,7 +291,7 @@ fun HomeScreen() {
 
 // ================= Messages =================
 @Composable
-fun MessagesScreen(onNote: (NoteTarget) -> Unit, onRequests: () -> Unit) {
+internal fun MessagesScreen(onNote: (NoteTarget) -> Unit, onRequests: () -> Unit) {
     val threads by AppState.threads.collectAsState()
     val notes by AppState.notes.collectAsState()
     val blocked by AppState.blockedUids.collectAsState()
