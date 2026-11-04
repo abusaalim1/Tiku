@@ -1,6 +1,7 @@
 package com.tiku.app
 
 import android.content.Context
+import androidx.compose.ui.platform.LocalContext
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.core.Animatable
@@ -578,11 +579,21 @@ private fun RdIProfilePage(thread: ChatThread, onBack: () -> Unit) {
 @Composable
 private fun RdISearchPage(thread: ChatThread, onBack: () -> Unit) {
     var q by remember { mutableStateOf("") }
+    // ROUND 22 (parent): an UNOPENED gift message is sealed on this
+    // surface too — it can neither match a search (its text stays
+    // unguessable) nor render. Opened gifts behave as normal text.
+    val giftCtx = LocalContext.current
+    val giftOpened = remember {
+        giftCtx.getSharedPreferences("tiku_fx_gifts", Context.MODE_PRIVATE)
+            .getStringSet("opened", emptySet())?.toSet() ?: emptySet()
+    }
     val results = if (q.isBlank()) {
         emptyList()
     } else {
         thread.messages.filter {
-            !it.deletedForMe && it.kind == MsgKind.TEXT && it.text.contains(q, ignoreCase = true)
+            !it.deletedForMe && it.kind == MsgKind.TEXT &&
+                !(it.fx == "gift" && it.id !in giftOpened) &&
+                it.text.contains(q, ignoreCase = true)
         }
     }
     RdISubPage(bottom = 40.dp) {

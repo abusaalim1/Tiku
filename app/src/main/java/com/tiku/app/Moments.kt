@@ -98,6 +98,9 @@ private fun buildMomentsWebView(
         allowFileAccessFromFileURLs = false
         @Suppress("DEPRECATION")
         allowUniversalAccessFromFileURLs = false
+        // ROUND 22 (Play Protect / stability audit): mixed content was
+        // implicitly default-denied; made explicit like Watch/DramaShell.
+        mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_NEVER_ALLOW
     }
     wv.setBackgroundColor(android.graphics.Color.BLACK)
     wv.webViewClient = object : WebViewClient() {

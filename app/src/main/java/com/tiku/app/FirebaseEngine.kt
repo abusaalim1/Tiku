@@ -38,7 +38,7 @@ import javax.crypto.SecretKey
  * media rides inside Firestore via MediaStore chunks). Server holds ciphertext only.
  *   users/{uid} {username, displayName, photoData, publicKey, keyBackup{salt,iv,ct}, online, lastSeen}
  *   usernames/{username} -> {uid}
- *   chats/{chatId} {members:[uidA, uidB], typing:{uid:bool}, clearedBefore:{uid:ms}, updatedAt,
+ *   chats/{chatId} {members:[uidA, uidB], typing:{uid:epochMs} (round 22 — was {uid:bool}), clearedBefore:{uid:ms}, updatedAt,
  *       nicknames:{uid:nickname} (round 6 — IG semantics: key = the nickname OWNER's uid,
  *       written by either member, rendered by both),
  *       themeAccent/themeWallpaper (round 10 — per-chat theme indices),
@@ -52,6 +52,12 @@ import javax.crypto.SecretKey
  *       full the moment a call resolves; see Rtc.kt)
  *   moments/{uid}/items/{itemId} {quote, ts}
  */
+/** ROUND 22 — the Instagram-style send-effect kinds the `fx` message
+ *  field may carry (see [TikuMessage.fx]). One shared vocabulary: the
+ *  engine validates against it on both write and read, the chat UI
+ *  renders from it. */
+val MESSAGE_FX_KINDS = setOf("gift", "fire", "confetti", "hearts")
+
 object FirebaseEngine : ChatRepo {
     lateinit var appCtx: Context
 
@@ -750,7 +756,19 @@ object FirebaseEngine : ChatRepo {
                             // + my clearedBefore watermark) at zero extra reads.
                             @Suppress("UNCHECKED_CAST")
                             val typingMap = doc.get("typing") as? Map<String, Any?>
-                            AppState.setTyping(doc.id, typingMap?.get(peerUid) as? Boolean ?: false)
+                            // ROUND 22: the peer's typing entry is an
+                            // epoch-ms stamp (freshness judged reader-
+                            // side against the 5 s window). A legacy
+                            // Boolean from a pre-round-22 peer carries
+                            // no stamp to age: true counts as fresh on
+                            // the snapshot that carries it (that client
+                            // still clears its own entry), false as off.
+                            val peerTypingAt = when (val rawTyping = typingMap?.get(peerUid)) {
+                                is Number -> rawTyping.toLong()
+                                is Boolean -> if (rawTyping) System.currentTimeMillis() else 0L
+                                else -> 0L
+                            }
+                            AppState.setPeerTypingAt(doc.id, peerTypingAt)
                             @Suppress("UNCHECKED_CAST")
                             val cbMap = doc.get("clearedBefore") as? Map<String, Any?>
                             clearedBeforeCache[doc.id] = (cbMap?.get(uid) as? Number)?.toLong() ?: 0L
@@ -1564,6 +1582,11 @@ object FirebaseEngine : ChatRepo {
         @Suppress("UNCHECKED_CAST")
         val seenBy = (doc.get("seenBy") as? List<String>) ?: emptyList<String>()
         val tsMs = doc.getTimestamp("ts")?.toDate()?.time ?: 0L
+        // ROUND 22 — Instagram-style send effect (additive plaintext
+        // metadata, like `reaction`). Docs from older builds lack the
+        // field → null → plain render; unknown values are dropped here
+        // so a future effect kind can never confuse this build.
+        val fx = doc.getString("fx")?.takeIf { it in MESSAGE_FX_KINDS }
         val kind = when (kindRaw) {
             "image" -> MsgKind.IMAGE; "voice" -> MsgKind.VOICE; "call" -> MsgKind.CALL
             "video" -> MsgKind.VIDEO; "audio" -> MsgKind.AUDIO
@@ -1675,7 +1698,8 @@ object FirebaseEngine : ChatRepo {
             callMine = callCallerUid.isNotEmpty() && callCallerUid == my,
             mediaChunks = mediaChunks,
             editedAtMs = doc.getTimestamp("editedAt")?.toDate()?.time ?: 0L,
-            mimeType = mimeType, mediaBytes = mediaBytes)
+            mimeType = mimeType, mediaBytes = mediaBytes,
+            fx = fx)
     }
 
     // ================= SEND PATH (round 3: optimistic + NO silent failures) ====
@@ -1689,12 +1713,22 @@ object FirebaseEngine : ChatRepo {
 
     private fun newLocalId() = "m" + UUID.randomUUID().toString().replace("-", "")
 
-    override fun sendText(id: String, text: String, quote: String?) {
+    override fun sendText(id: String, text: String, quote: String?) =
+        sendTextFx(id, text, quote, null)
+
+    /** ROUND 22: the effect-carrying send. The local optimistic copy
+     *  carries [fx] from the start, so the sender's own bubble renders
+     *  the effect (gift wrap / overlay trigger) with zero wait, and the
+     *  server echo — same client-chosen id, fx read back by decryptDoc —
+     *  replaces it 1:1. Retry rides this same [local] through
+     *  [deliverText], so a failed effect send keeps its effect. */
+    override fun sendTextFx(id: String, text: String, quote: String?, fx: String?) {
         val th = AppState.thread(id) ?: return
         val local = TikuMessage(
             id = newLocalId(), senderUid = uid, kind = MsgKind.TEXT, text = text,
             time = fmtTime(System.currentTimeMillis()), me = true, replyQuote = quote,
             tsMs = System.currentTimeMillis(), status = SendStatus.SENDING,
+            fx = fx?.takeIf { it in MESSAGE_FX_KINDS },
         )
         AppState.upsertMessage(id, local)
         // ROUND 19: sender-intent glide — the open chat animates to this
@@ -1710,7 +1744,7 @@ object FirebaseEngine : ChatRepo {
                 ?: throw IllegalStateException("encryption key not ready — the other person may not have finished setting up")
             val (iv, ct) = Crypto.encryptText(key, local.text)
             val (rqIv, rqCt) = if (local.replyQuote != null) Crypto.encryptText(key, local.replyQuote) else ("" to "")
-            msgRef(id, local.id).set(mapOf(
+            val docData = mutableMapOf<String, Any?>(
                 "senderId" to uid, "kind" to "text", "ct" to ct, "iv" to iv,
                 "ts" to FieldValue.serverTimestamp(),
                 "replyToId" to local.replyToId,
@@ -1718,7 +1752,12 @@ object FirebaseEngine : ChatRepo {
                 "reaction" to emptyMap<String, String>(), "starredBy" to emptyList<String>(),
                 "deletedFor" to emptyList<String>(), "seenBy" to listOf(uid),
                 "durationMs" to 0, "amps" to emptyList<Int>(), "mediaChunks" to 0,
-            )).await()
+            )
+            // ROUND 22: the effect rides ONLY when armed — the field
+            // stays ABSENT on plain sends, so old builds see a doc shape
+            // identical to every pre-effects message (additive law).
+            local.fx?.let { docData["fx"] = it }
+            msgRef(id, local.id).set(docData).await()
             AppState.setMessageStatus(id, local.id, SendStatus.SENT)
             touchChat(id)
         } catch (e: Exception) {
@@ -2210,16 +2249,49 @@ object FirebaseEngine : ChatRepo {
         }
     }
 
+    /** ROUND 22 — typing presence stamps (see the chat-doc schema
+     *  note): my entry in chats/{id}.typing is the epoch ms of my last
+     *  refresh, and the peer renders "typing…" only while it is
+     *  younger than 5 s. This ledger is my outstanding stamp per
+     *  thread (threadId -> stamp written): refreshes write at most
+     *  once per 3 s, and a clear is written only when a stamp is
+     *  actually outstanding — the composer's per-keystroke calls are
+     *  therefore cheap. Every write is a single-leaf
+     *  update("typing.$uid", …): no other chat-doc field (updatedAt
+     *  included) is touched, and messages live in the subcollection,
+     *  so typing traffic can never perturb previews, unread counts or
+     *  the notification delta judge. All failures are silent —
+     *  presence is best-effort by design. */
+    private val typingStamps = mutableMapOf<String, Long>()
+
     override fun setTyping(id: String, on: Boolean) {
-        if (SettingsStore.state.value.hideTyping && on) return
-        scope.launch { setTypingRaw(id, on) }
+        if (on) {
+            if (SettingsStore.state.value.hideTyping) return
+            val now = System.currentTimeMillis()
+            val last = typingStamps[id]
+            if (last != null && now - last < 3_000L) return
+            typingStamps[id] = now
+            scope.launch {
+                runCatching {
+                    db.collection(Schema.Chats.COLL).document(id).update("typing.$uid", now).await()
+                }
+            }
+        } else {
+            if (typingStamps.remove(id) == null) return
+            scope.launch { setTypingRaw(id, false) }
+        }
     }
 
+    /** The unconditional clear — the send path (touchChat) funnels
+     *  here so a send always drops my stamp even if the throttle
+     *  ledger lost track of it. Clearing DELETES the leaf: a missing
+     *  entry reads as "not typing" on every client, old and new. */
     private suspend fun setTypingRaw(id: String, on: Boolean) {
-        runCatching { db.collection(Schema.Chats.COLL).document(id).update("typing.$uid", on).await() }
-        if (on) {
-            delay(3000)
-            runCatching { db.collection(Schema.Chats.COLL).document(id).update("typing.$uid", false).await() }
+        if (on) { setTyping(id, true); return }
+        typingStamps.remove(id)
+        runCatching {
+            db.collection(Schema.Chats.COLL).document(id)
+                .update("typing.$uid", FieldValue.delete()).await()
         }
     }
 

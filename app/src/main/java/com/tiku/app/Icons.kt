@@ -7,6 +7,8 @@ import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 
 /** Study-journal motif for the re-skinned Welcome orb: an open book in strokes. */
@@ -32,6 +34,41 @@ fun TikuBookIcon(modifier: Modifier = Modifier, tint: Color = Color.White) {
         drawLine(tint, Offset(X(6.8f), Y(11.5f)), Offset(X(10.2f), Y(11.5f)), stroke * 0.8f)
         drawLine(tint, Offset(X(13.8f), Y(8.5f)), Offset(X(17.2f), Y(8.5f)), stroke * 0.8f)
         drawLine(tint, Offset(X(13.8f), Y(11.5f)), Offset(X(17.2f), Y(11.5f)), stroke * 0.8f)
+    }
+}
+
+/** One four-point sparkle (concave star) as a filled path — the building
+ *  block of [TikuSparklesIcon]. (cx, cy, r) in the 24×24 icon grid. */
+private fun DrawScope.sparklePath(cx: Float, cy: Float, r: Float, sx: Float, sy: Float): Path {
+    fun X(v: Float) = v * sx
+    fun Y(v: Float) = v * sy
+    return Path().apply {
+        moveTo(X(cx), Y(cy - r))
+        quadraticBezierTo(X(cx), Y(cy), X(cx + r), Y(cy))
+        quadraticBezierTo(X(cx), Y(cy), X(cx), Y(cy + r))
+        quadraticBezierTo(X(cx), Y(cy), X(cx - r), Y(cy))
+        quadraticBezierTo(X(cx), Y(cy), X(cx), Y(cy - r))
+        close()
+    }
+}
+
+/** ROUND 22 — the message-effects affordance glyph: a cluster of
+ *  sparkles, drawn as vector paths (never an emoji — the owner's icon
+ *  law). Sits in the composer's left slot whenever text is present,
+ *  Instagram-style: tap it to arm a send effect for the next message. */
+@Composable
+fun TikuSparklesIcon(modifier: Modifier = Modifier, tint: Color = Color.White) {
+    Canvas(modifier) {
+        val sx = size.width / 24f
+        val sy = size.height / 24f
+        // main sparkle, upper-left
+        drawPath(sparklePath(9f, 9.5f, 6.2f, sx, sy), tint)
+        // small sparkle, upper-right
+        drawPath(sparklePath(18f, 5.5f, 3.1f, sx, sy), tint)
+        // small sparkle, lower-right
+        drawPath(sparklePath(17f, 16.5f, 2.6f, sx, sy), tint)
+        // dot, lower-left
+        drawCircle(tint, radius = 1.15f * sx, center = Offset(5.5f * sx, 18f * sy))
     }
 }
 

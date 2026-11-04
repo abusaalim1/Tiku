@@ -106,8 +106,12 @@ object AppState {
     // Round 6: the Calls tab only aggregates the encrypted in-chat call-event
     // messages; no other call record is kept anywhere.
     val threads = MutableStateFlow<List<ChatThread>>(emptyList())
-    /** threadId -> peer is typing (drives the chat header status + typing bubble). */
-    val typing = MutableStateFlow<Map<String, Boolean>>(emptyMap())
+    /** threadId -> the PEER's typing stamp, epoch ms on the WRITER's
+     *  clock (ROUND 22 — was a Boolean before). 0 / absent = not
+     *  typing. Readers show "typing…" only while the stamp is younger
+     *  than 5 s, so a peer who dies mid-typing ages out on its own.
+     *  Drives the chat header status + typing bubble. */
+    val typing = MutableStateFlow<Map<String, Long>>(emptyMap())
 
     /** ROUND 19 — an own-send's request to glide the open chat to the
      *  tail. The engine raises this AFTER the optimistic local is already
@@ -182,7 +186,18 @@ object AppState {
         threads.value = cur
     }
 
-    fun setTyping(id: String, on: Boolean) { typing.value = typing.value + (id to on) }
+    /** Boolean shim kept for the preview store, whose simulated peer
+     *  typing has no real clock behind it: "on" stamps the peer fresh
+     *  as of now, "off" clears the stamp. */
+    fun setTyping(id: String, on: Boolean) =
+        setPeerTypingAt(id, if (on) System.currentTimeMillis() else 0L)
+
+    /** Record the peer's typing stamp for a thread (epoch ms; 0
+     *  removes the entry). Written ONLY by the engine's chat-doc
+     *  listener — the messages listeners never see typing state. */
+    fun setPeerTypingAt(id: String, epochMs: Long) {
+        typing.value = if (epochMs > 0L) typing.value + (id to epochMs) else typing.value - id
+    }
 
     // ---- toast (design style, 2.2s) ----
     var toastText by mutableStateOf<String?>(null)
@@ -232,6 +247,15 @@ interface ChatRepo {
     fun openThread(id: String)
     fun closeThread(id: String) {}
     fun sendText(id: String, text: String, quote: String?)
+    /** ROUND 22: send a text message carrying an Instagram-style send
+     *  effect ([fx] = "gift" | "fire" | "confetti" | "hearts", null =
+     *  plain). Default routes to the plain send and drops the effect,
+     *  so implementers that predate effects (the preview store) keep
+     *  compiling and behaving exactly as before; the real engine
+     *  overrides it and writes the additive `fx` doc field. */
+    fun sendTextFx(id: String, text: String, quote: String?, fx: String?) {
+        sendText(id, text, quote)
+    }
     /** ROUND 14: send a reply to a partner's NOTE — a real text message in
      *  our thread whose encrypted reply-quote snapshot reads "Note: <text>"
      *  and whose doc carries replyToId "__note__" (the note sentinel).

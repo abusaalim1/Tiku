@@ -114,6 +114,10 @@ fun threadPreview(th: ChatThread): String {
     val last = th.messages.lastOrNull { !it.deletedForMe } ?: return ""
     if (last.deletedForEveryone) return "This message was deleted"
     if (last.undecryptable) return "This message can't be opened on this phone"
+    // ROUND 22: a gift-wrapped message previews as a gift — its text
+    // stays sealed on EVERY surface until the chat is opened and the
+    // gift is tapped open there.
+    if (last.fx == "gift") return "Gift message"
     return when (last.kind) {
         MsgKind.VOICE -> "Voice message"
         MsgKind.IMAGE -> "Photo"

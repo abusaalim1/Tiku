@@ -1,6 +1,7 @@
 package com.tiku.app
 
 import android.Manifest
+import android.content.Context
 import android.content.pm.PackageManager
 import android.util.Log
 import android.graphics.BitmapFactory
@@ -8,11 +9,15 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.CubicBezierEasing
+import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.StartOffset
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
@@ -31,6 +36,7 @@ import androidx.compose.animation.shrinkHorizontally
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -44,6 +50,7 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -146,6 +153,7 @@ import kotlinx.coroutines.withTimeoutOrNull
 import java.io.File
 import kotlin.math.abs
 import kotlin.math.roundToInt
+import kotlin.math.sin
 
 /**
  * CHAT — ROUND 14: the owner's TikuRedesign ChatList + overlays, ported
@@ -186,6 +194,150 @@ private val RdThemes = listOf(
 )
 private val RdBaseEmojis = listOf("❤️", "😂", "😮", "😢", "😡", "👍")
 private val RdMoreEmojis = listOf("🔥", "🙏", "😍", "🎉", "💯", "😭")
+
+// ================= ROUND 22 — Instagram-style message effects =================
+/** The four send effects, in picker order — the same four Instagram
+ *  offers from the effects slot beside its message field (verified
+ *  against IG's help/writeups): Gift (wrapped, tap to open), Fire,
+ *  Confetti, and Celebration (flying hearts). [kind] is the Firestore
+ *  `fx` value (see [MESSAGE_FX_KINDS]); [glyph] renders through
+ *  EmojiGlyph like every emoji surface in the app. */
+private data class FxDef(val kind: String, val glyph: String, val name: String, val blurb: String)
+
+private val RdMessageFx = listOf(
+    FxDef("gift", "🎁", "Gift", "Sent wrapped — tap to open"),
+    FxDef("fire", "🔥", "Fire", "Flames burst over the chat"),
+    FxDef("confetti", "🎉", "Confetti", "Confetti rains over the chat"),
+    FxDef("hearts", "💖", "Celebration", "Hearts float up the chat"),
+)
+
+private fun fxDef(kind: String?): FxDef? = RdMessageFx.firstOrNull { it.kind == kind }
+
+/** One deterministic overlay particle. The whole set is built ONCE per
+ *  playback from a fixed seed (remembered on the play key) and every
+ *  frame is a pure function of the progress value — the animation
+ *  allocates nothing per frame beyond the fixed set (~40 particles). */
+private data class FxParticle(
+    val xFrac: Float, val delay: Float, val span: Float,
+    val sizeDp: Float, val swayAmp: Float, val swayFreq: Float,
+    val spin: Float, val variant: Int,
+)
+
+private fun fxParticles(kind: String, count: Int): List<FxParticle> {
+    // a tiny deterministic LCG — identical particle fields on every
+    // device and every replay, no shared Random state to mutate.
+    var s = kind.hashCode() * 1103515245 + 12345
+    fun next(): Float {
+        s = s * 1103515245 + 12345
+        return ((s ushr 16) and 0x7FFF) / 32767f
+    }
+    val (minSize, maxSize) = when (kind) {
+        "confetti" -> 6f to 12f
+        "hearts" -> 20f to 38f
+        else -> 22f to 46f // fire
+    }
+    return List(count) {
+        FxParticle(
+            xFrac = next(),
+            delay = next() * 0.22f,
+            span = 0.62f + next() * 0.30f,
+            sizeDp = minSize + next() * (maxSize - minSize),
+            swayAmp = 6f + next() * 16f,
+            swayFreq = 0.6f + next() * 1.1f,
+            spin = (next() - 0.5f) * 2.4f,
+            variant = (next() * 997f).toInt(),
+        )
+    }
+}
+
+/** The one-shot full-chat effect overlay (fire / confetti / hearts —
+ *  gift has no overlay; its wrap IS the effect). [playKey] identifies
+ *  one playback: the progress Animatable runs 0→1 over ~2.6 s exactly
+ *  once per key, then [onDone] fires (the caller clears the playback
+ *  only if the key is still current, so a replay started mid-flight is
+ *  never cancelled by its predecessor's finally). The overlay carries
+ *  NO pointer input — taps fall through to the chat beneath it. */
+@Composable
+private fun RdFxOverlay(kind: String, playKey: String, onDone: () -> Unit) {
+    val progress = remember(playKey) { Animatable(0f) }
+    LaunchedEffect(playKey) {
+        progress.snapTo(0f)
+        try {
+            progress.animateTo(1f, tween(2600, easing = LinearEasing))
+        } finally {
+            onDone()
+        }
+    }
+    val particles = remember(playKey, kind) {
+        fxParticles(kind, when (kind) { "confetti" -> 42; "hearts" -> 24; else -> 30 })
+    }
+    val palette = remember {
+        listOf(RdRose, Color(0xFFFFC857), Color.White, Color(0xFFFF8A5C), Color(0xFF8E7CFF), Color(0xFF4FD1C5))
+    }
+    BoxWithConstraints(Modifier.fillMaxSize()) {
+        val w = maxWidth.value
+        val h = maxHeight.value
+        val p = progress.value
+        if (kind == "fire") {
+            // a warm glow pooled at the bottom while the flames run
+            Box(
+                Modifier.fillMaxWidth().height(220.dp).align(Alignment.BottomCenter)
+                    .graphicsLayer { alpha = (sin(p * 3.14159f).coerceIn(0f, 1f)) * 0.30f }
+                    .background(
+                        Brush.verticalGradient(
+                            listOf(Color.Transparent, Color(0xFFFF6A00).copy(0.55f), Color(0xFFFF3D00).copy(0.8f)),
+                        ),
+                    ),
+            )
+        }
+        particles.forEach { pt ->
+            val local = ((p - pt.delay) / pt.span).coerceIn(0f, 1f)
+            if (local <= 0f || local >= 1f) return@forEach
+            val fadeIn = (local / 0.12f).coerceIn(0f, 1f)
+            val sway = sin((local * pt.swayFreq + pt.variant) * 6.28318f) * pt.swayAmp
+            when (kind) {
+                "confetti" -> {
+                    val x = pt.xFrac * w + sway
+                    val y = -30f + local * (h + 60f)
+                    Box(
+                        Modifier.offset(x.dp, y.dp)
+                            .graphicsLayer {
+                                rotationZ = pt.spin * local * 360f
+                                alpha = fadeIn * (1f - ((local - 0.75f) / 0.25f).coerceIn(0f, 1f))
+                            }
+                            .size(pt.sizeDp.dp, (pt.sizeDp * 0.62f).dp)
+                            .clip(RoundedCornerShape(2.dp))
+                            .background(palette[pt.variant % palette.size]),
+                    )
+                }
+                "hearts" -> {
+                    val x = pt.xFrac * w + sway
+                    val y = (h + 30f) - local * (h + 70f)
+                    Box(
+                        Modifier.offset(x.dp, y.dp)
+                            .graphicsLayer {
+                                alpha = fadeIn * (1f - ((local - 0.6f) / 0.4f).coerceIn(0f, 1f))
+                                val sc = 0.7f + 0.4f * local
+                                scaleX = sc; scaleY = sc
+                            },
+                    ) { EmojiGlyph(if (pt.variant % 3 == 0) "❤️" else "💖", pt.sizeDp.dp) }
+                }
+                else -> { // fire — flames rise through the lower chat, flickering
+                    val x = pt.xFrac * w + sway * 0.5f
+                    val y = (h - pt.sizeDp) - local * (h * 0.72f)
+                    val flicker = 0.85f + 0.30f * sin(local * 40f + pt.variant * 2.1f)
+                    Box(
+                        Modifier.offset(x.dp, y.dp)
+                            .graphicsLayer {
+                                alpha = (fadeIn * (1f - ((local - 0.55f) / 0.45f).coerceIn(0f, 1f))).coerceIn(0f, 1f)
+                                scaleX = flicker; scaleY = flicker
+                            },
+                    ) { EmojiGlyph("🔥", pt.sizeDp.dp) }
+                }
+            }
+        }
+    }
+}
 
 /** Avatar fallback hues: the redesign file's people colours + extraColors. */
 private val RdAvatarHues = listOf(
@@ -276,7 +428,10 @@ private fun RdAv(person: Person, size: Int) {
  *  paths attach exactly the same quote (and note replies arrive with
  *  their "Note: …" snapshot in the same field). */
 fun replyQuoteLabel(m: TikuMessage): String = if (m.undecryptable) "This message can't be opened on this phone"
-    else if (m.deletedForEveryone) "This message was deleted" else when (m.kind) {
+    else if (m.deletedForEveryone) "This message was deleted"
+    // ROUND 22: quoting a gift message snapshots the gift label, never
+    // the sealed text — the quote rides encrypted like every snapshot.
+    else if (m.fx == "gift") "🎁 Gift" else when (m.kind) {
     MsgKind.IMAGE -> "Photo"
     MsgKind.VOICE -> "Voice message"
     MsgKind.VIDEO -> "Video"
@@ -573,6 +728,22 @@ private fun Modifier.rdDrawLeftBar(): Modifier = this.drawBehind {
     drawRect(Color.White.copy(0.55f), topLeft = Offset.Zero, size = androidx.compose.ui.geometry.Size(3.dp.toPx(), size.height))
 }
 
+/** ROUND 22 — the sealed gift, rendered in place of the bubble's
+ *  content: one big gift glyph + the tap caption, centred in the same
+ *  padded footprint a short text bubble takes. Shared by the bubble and
+ *  the long-press menu's preview, so the wrap looks identical on both. */
+@Composable
+private fun RdGiftWrap() {
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        modifier = Modifier.padding(horizontal = 10.dp, vertical = 2.dp),
+    ) {
+        EmojiGlyph("🎁", 46.dp)
+        Spacer(Modifier.height(6.dp))
+        Text("Tap to open", color = Color.White.copy(0.85f), fontSize = 12.sp, fontWeight = FontWeight.Medium)
+    }
+}
+
 /** Instagram-style per the file: my messages on the right (theme
  *  gradient), theirs on the left (CardC + 28dp avatar). Gestures are the
  *  file's own: horizontal drag springs back and arms reply past 70px,
@@ -591,10 +762,69 @@ private fun RdBubbleRow(
     onMenu: () -> Unit,
     onMediaTap: () -> Unit,
     onRetry: () -> Unit,
+    /** ROUND 22: for a gift message, whether THIS device has opened it;
+     *  taps on any effect message route to [onFxTap] (gift → unwrap,
+     *  fire / confetti / hearts → replay the overlay). */
+    fxOpened: Boolean = false,
+    onFxTap: (TikuMessage) -> Unit = {},
+    /** ROUND 22 (insta port): true only while this row is a FRESH tail
+     *  arrival inside its pop window (the caller tracks first-seen
+     *  ids — history and loadOlder rows always pass false). Drives the
+     *  graphicsLayer entrance pop; see the layer itself for why it can
+     *  never disturb layout or the follow glide. */
+    animateIn: Boolean = false,
 ) {
     val scope = rememberCoroutineScope()
     val off = remember { Animatable(0f) }
     val heart = remember { Animatable(0f) }
+    // ROUND 22: the gift reveal pop — when this row's gift flips to
+    // opened AFTER its wrap actually rendered on this screen, the
+    // revealed bubble springs 0.82 → 1 once. Rows composed already-open
+    // (history, another device... same device after restart) never
+    // animate: giftSeenWrapped only flips while the sealed wrap is up.
+    val giftPop = remember(m.id) { Animatable(1f) }
+    var giftSeenWrapped by remember(m.id) { mutableStateOf(false) }
+    LaunchedEffect(fxOpened) {
+        if (m.fx == "gift" && !fxOpened) giftSeenWrapped = true
+        if (fxOpened && m.fx == "gift" && giftSeenWrapped) {
+            giftPop.snapTo(0.82f)
+            giftPop.animateTo(1f, spring(0.5f, 380f))
+        }
+    }
+    // ROUND 22 (insta port): the entrance pop — an Animatable driven
+    // purely through graphicsLayer (alpha / scale / translationY), so
+    // it never feeds back into the row's layout size and can never
+    // fight the follow glide (the round-20 lesson: only layout-
+    // affecting entrances fought the scroll, which is why rdBubbleIn
+    // died; this port deliberately revives ONLY the transform half of
+    // the reference's MessageBubble). History rows never arm it
+    // (animateIn=false) and sit at 1f.
+    val enterPop = remember(m.id) { Animatable(1f) }
+    LaunchedEffect(m.id, animateIn) {
+        if (animateIn) {
+            enterPop.snapTo(0f)
+            enterPop.animateTo(1f, spring(dampingRatio = 0.55f, stiffness = Spring.StiffnessMediumLow))
+        }
+    }
+    // ROUND 22 (insta port): when a double-tap ADDS my ❤️, the
+    // reaction chip pops with the reference's bouncy spring
+    // (animateFloatAsState + DampingRatioMediumBouncy). Armed only by
+    // double-tap — picks from the reaction bar keep the chip's usual
+    // rdPop — and disarmed when my heart leaves, so the next add pops
+    // anew. The layer is only attached while armed, so the 0f rest
+    // value can never hide a chip the bar created.
+    var heartChipPop by remember(m.id) { mutableStateOf(false) }
+    val heartChipScale by animateFloatAsState(
+        targetValue = if (heartChipPop) 1f else 0f,
+        animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy),
+        label = "heartChipPop",
+    )
+    val myHearted = m.reactions[if (Config.PREVIEW_UI_ONLY) "me" else FirebaseEngine.myUid()] == "❤️"
+    LaunchedEffect(myHearted) { if (!myHearted) heartChipPop = false }
+    // ROUND 22: mixed text renders through the owner's iOS emoji font
+    // (emoji draw as iOS bitmaps, Latin falls back to the platform
+    // fonts — see EmojiArt.kt / worker A's report §5).
+    val emojiFont = rememberEmojiFontFamily()
     var heartKey by remember { mutableIntStateOf(0) }
     LaunchedEffect(heartKey) { if (heartKey > 0) { heart.snapTo(0f); heart.animateTo(1f, tween(800, easing = LinearEasing)) } }
     val media = m.kind == MsgKind.IMAGE || m.kind == MsgKind.VIDEO
@@ -608,6 +838,30 @@ private fun RdBubbleRow(
             Box(contentAlignment = Alignment.Center) {
                 Column(
                     Modifier.offset { IntOffset(off.value.roundToInt(), 0) }
+                        .graphicsLayer {
+                            // ROUND 22: two draw-only pops share this
+                            // layer — the insta-port entrance pop
+                            // (reference MessageBubble: alpha 0→1,
+                            // scale 0.6→1, translationY +40dp→0,
+                            // transformOrigin at the sender's bottom
+                            // corner) and the gift reveal pop
+                            // (identity for every non-gift row, and
+                            // for gifts at rest — giftPop sits at 1f,
+                            // and enterPop sits at 1f for every
+                            // non-fresh row, so at rest this layer is
+                            // an exact identity). Pure graphicsLayer
+                            // transforms never change the row's layout
+                            // size or position, so the follow glide's
+                            // measured deltas stay exact and the two
+                            // animations simply run in parallel.
+                            val ep = enterPop.value
+                            val gs = if (m.fx == "gift") giftPop.value else 1f
+                            val s = (0.6f + 0.4f * ep) * gs
+                            scaleX = s; scaleY = s
+                            alpha = (ep * gs).coerceIn(0f, 1f)
+                            translationY = (1f - ep) * 40.dp.toPx()
+                            transformOrigin = TransformOrigin(if (m.me) 1f else 0f, 1f)
+                        }
                         .pointerInput(m.id, m.me) {
                             detectHorizontalDragGestures(
                                 onDragEnd = { if (abs(off.value) > 70f) onReply(); scope.launch { off.animateTo(0f, spring(0.6f, 400f)) } },
@@ -620,17 +874,39 @@ private fun RdBubbleRow(
                         .pointerInput(m.id, m.reactions) {
                             detectTapGestures(
                                 onDoubleTap = {
-                                    val cur = m.reactions.values.firstOrNull()
-                                    if (cur != "❤️") onReact("❤️")
+                                    // ROUND 22 (insta port): double-tap
+                                    // TOGGLES my ❤️ through the existing
+                                    // reaction path — the caller's
+                                    // react() adds it, or removes it
+                                    // when it is already mine, exactly
+                                    // like picking ❤️ in the reaction
+                                    // bar (the old row gate suppressed
+                                    // the toggle-off whenever ANY
+                                    // reaction value read "❤️" first).
+                                    // The heart burst plays on every
+                                    // double-tap, as before; a tap that
+                                    // ADDS the heart also arms the
+                                    // chip's bouncy pop.
+                                    if (!myHearted) heartChipPop = true
+                                    onReact("❤️")
                                     heartKey++
                                 },
                                 onLongPress = { onMenu() },
                                 onTap = {
+                                    // ROUND 22: an effect message's tap
+                                    // belongs to the effect — gift
+                                    // unwraps, fire / confetti / hearts
+                                    // replay (the caller decides; an
+                                    // already-open gift falls through to
+                                    // nothing). Effect kinds only exist
+                                    // on TEXT, so media routing below is
+                                    // unreachable for them.
+                                    if (m.fx != null) onFxTap(m)
                                     // image opens its viewer once decoded;
                                     // a video tap either opens its player
                                     // (loaded) or starts the tap-to-load —
                                     // the caller decides by localPath.
-                                    if (m.kind == MsgKind.IMAGE && m.photo != null) onMediaTap()
+                                    else if (m.kind == MsgKind.IMAGE && m.photo != null) onMediaTap()
                                     else if (m.kind == MsgKind.VIDEO) onMediaTap()
                                 },
                             )
@@ -647,14 +923,35 @@ private fun RdBubbleRow(
                             MsgKind.VIDEO -> RdVideoBubble(m)
                             MsgKind.VOICE, MsgKind.AUDIO -> RdVoiceBubble(m, playing, onPlayToggle)
                             else -> {
-                                if (m.replyQuote != null) {
-                                    Text(
-                                        m.replyQuote, color = Color.White.copy(0.75f), fontSize = 12.sp, maxLines = 1,
-                                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
-                                        modifier = Modifier.padding(bottom = 6.dp).rdDrawLeftBar().padding(start = 8.dp),
-                                    )
+                                if (m.fx == "gift" && !fxOpened) {
+                                    // ROUND 22: the sealed gift — the
+                                    // text is NOT composed at all in
+                                    // this branch, so nothing on screen
+                                    // (or in an accessibility read of
+                                    // the bubble) can leak it.
+                                    RdGiftWrap()
+                                } else {
+                                    if (m.fx == "gift") {
+                                        // opened gift: a normal bubble,
+                                        // keeping a tiny gift marker.
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            modifier = Modifier.padding(bottom = 5.dp),
+                                        ) {
+                                            EmojiGlyph("🎁", 13.dp)
+                                            Spacer(Modifier.width(5.dp))
+                                            Text("Gift", color = Color.White.copy(0.7f), fontSize = 10.5.sp)
+                                        }
+                                    }
+                                    if (m.replyQuote != null) {
+                                        Text(
+                                            m.replyQuote, color = Color.White.copy(0.75f), fontSize = 12.sp, maxLines = 1,
+                                            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                                            modifier = Modifier.padding(bottom = 6.dp).rdDrawLeftBar().padding(start = 8.dp),
+                                        )
+                                    }
+                                    Text(m.text, color = Color.White, fontSize = textSp.sp, fontFamily = emojiFont)
                                 }
-                                Text(m.text, color = Color.White, fontSize = textSp.sp)
                             }
                         }
                     }
@@ -664,7 +961,16 @@ private fun RdBubbleRow(
                     val reactions = m.reactions.values.distinct()
                     if (reactions.isNotEmpty()) {
                         Row(
-                            Modifier.rdPop(0).offset(x = if (m.me) (-8).dp else 8.dp, y = (-8).dp)
+                            Modifier.rdPop(0)
+                                // ROUND 22 (insta port): the bouncy
+                                // chip pop, attached only while armed
+                                // by a double-tap add (see heartChipPop)
+                                .then(
+                                    if (heartChipPop) Modifier.graphicsLayer {
+                                        scaleX = heartChipScale; scaleY = heartChipScale
+                                    } else Modifier,
+                                )
+                                .offset(x = if (m.me) (-8).dp else 8.dp, y = (-8).dp)
                                 .clip(CircleShape).background(RdCard).border(1.dp, Color.Black, CircleShape)
                                 .padding(horizontal = 7.dp, vertical = 1.dp),
                             horizontalArrangement = Arrangement.spacedBy(2.dp),
@@ -814,23 +1120,55 @@ private fun RdVoiceBubble(m: TikuMessage, playing: Boolean, onToggle: () -> Unit
     }
 }
 
-/** The file's TypingBubble (3 bouncing dots + avatar) on real peer typing. */
+/** The file's TypingBubble (3 bouncing dots + avatar) on real peer
+ *  typing. ROUND 22 (insta port): the bubble's own pop-in and the dot
+ *  cycle now run the REFERENCE TypingBubble's exact numbers — pop
+ *  spring (0.55 / StiffnessMediumLow, scale 0.6→1, rise 30dp,
+ *  transformOrigin bottom-left) and per-dot tween(450,
+ *  FastOutSlowInEasing), RepeatMode.Reverse, StartOffset(k × 150),
+ *  translationY −6dp·y, alpha 0.5 + 0.5·y. The bubble's styling —
+ *  RdCard, 22dp corners, 16×15 padding, 7dp RdSub dots, avatar — is
+ *  Tiku's own and unchanged. */
 @Composable
 private fun RdTypingBubble(person: Person) {
+    val pop = remember { Animatable(0f) }
+    LaunchedEffect(Unit) {
+        pop.animateTo(1f, spring(dampingRatio = 0.55f, stiffness = Spring.StiffnessMediumLow))
+    }
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Bottom) {
         RdAv(person, 28); Spacer(Modifier.width(8.dp))
         Row(
-            Modifier.clip(RoundedCornerShape(22.dp)).background(RdCard).padding(horizontal = 16.dp, vertical = 15.dp),
+            Modifier.clip(RoundedCornerShape(22.dp)).background(RdCard).padding(horizontal = 16.dp, vertical = 15.dp)
+                .graphicsLayer {
+                    val p = pop.value
+                    alpha = p.coerceIn(0f, 1f)
+                    val s = 0.6f + 0.4f * p
+                    scaleX = s; scaleY = s
+                    translationY = (1f - p) * 30.dp.toPx()
+                    transformOrigin = TransformOrigin(0f, 1f)
+                },
             horizontalArrangement = Arrangement.spacedBy(5.dp),
+            verticalAlignment = Alignment.CenterVertically,
         ) {
             val t = rememberInfiniteTransition(label = "typing")
             repeat(3) { k ->
                 val y by t.animateFloat(
-                    0f, -5f,
-                    infiniteRepeatable(tween(420, easing = androidx.compose.animation.core.FastOutSlowInEasing), RepeatMode.Reverse, initialStartOffset = androidx.compose.animation.core.StartOffset(k * 140)),
+                    initialValue = 0f, targetValue = 1f,
+                    animationSpec = infiniteRepeatable(
+                        tween(450, easing = FastOutSlowInEasing),
+                        RepeatMode.Reverse,
+                        initialStartOffset = StartOffset(k * 150),
+                    ),
                     label = "d$k",
                 )
-                Box(Modifier.size(7.dp).graphicsLayer { translationY = y * density }.clip(CircleShape).background(RdSub))
+                Box(
+                    Modifier.size(7.dp)
+                        .graphicsLayer {
+                            translationY = -6.dp.toPx() * y
+                            alpha = 0.5f + 0.5f * y
+                        }
+                        .clip(CircleShape).background(RdSub),
+                )
             }
         }
     }
@@ -897,11 +1235,23 @@ fun RdChatInput(
     /** ROUND 15: composer camera (IG-style). Default no-op keeps direct
      *  framings of this input (screenshot harness) compiling unchanged. */
     onCamera: () -> Unit = {},
+    /** ROUND 22: the armed send effect (fx kind, null = none) + its
+     *  controls. The sparkles button takes the composer's left slot
+     *  whenever the field holds text (IG's effects-slot behaviour — the
+     *  camera sits there only while the field is empty); the armed chip
+     *  rides above the row with a ✕ to disarm. Defaults keep direct
+     *  framings of this input compiling unchanged. */
+    fxArmed: String? = null,
+    onFxClick: () -> Unit = {},
+    onFxDisarm: () -> Unit = {},
 ) {
     // ROUND 15: the camera button lives only while the field is EMPTY and
     // UNFOCUSED — tapping into the field to type takes focus and the
     // button animates away (owner's exact ask).
     var fieldFocused by remember { mutableStateOf(false) }
+    // ROUND 22: typed emoji render as iOS glyphs while typing (the
+    // same font the bubbles use — EmojiArt.kt, worker A §5).
+    val emojiFont = rememberEmojiFontFamily()
     val showCamera = value.isEmpty() && !fieldFocused
     Column(Modifier.padding(horizontal = 14.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         AnimatedVisibility(
@@ -919,6 +1269,32 @@ fun RdChatInput(
                     Text(replyText ?: "", color = RdSub, fontSize = 13.sp, maxLines = 1)
                 }
                 Text("✕", color = Color.White, fontSize = 16.sp, modifier = Modifier.rdPress(onClearReply).padding(6.dp))
+            }
+        }
+        // ROUND 22: the armed-effect chip (mirrors the reply strip's
+        // glass language). lastFxDef keeps the chip's content composed
+        // through its own exit animation after disarm.
+        var lastFxDef by remember { mutableStateOf<FxDef?>(null) }
+        LaunchedEffect(fxArmed) { if (fxArmed != null) lastFxDef = fxDef(fxArmed) }
+        AnimatedVisibility(
+            visible = fxArmed != null,
+            enter = fadeIn() + expandVertically(),
+            exit = fadeOut() + shrinkVertically(),
+        ) {
+            val def = fxDef(fxArmed) ?: lastFxDef
+            if (def != null) {
+                Row(
+                    Modifier.chatGlass(h, RoundedCornerShape(999.dp)).padding(horizontal = 12.dp, vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    EmojiGlyph(def.glyph, 16.dp)
+                    Spacer(Modifier.width(7.dp))
+                    Text(def.name, color = Color.White, fontSize = 12.5.sp, fontWeight = FontWeight.Medium)
+                    Text(
+                        "✕", color = RdSub, fontSize = 13.sp,
+                        modifier = Modifier.rdPress(onFxDisarm).padding(start = 8.dp, end = 2.dp, top = 2.dp, bottom = 2.dp),
+                    )
+                }
             }
         }
         Row(
@@ -940,6 +1316,25 @@ fun RdChatInput(
                     Icon(Icons.Filled.Send, null, tint = Color.White, modifier = Modifier.size(20.dp))
                 }
             } else {
+                // ROUND 22: the effects button — the left slot whenever
+                // the field holds text (the camera below owns the slot
+                // only while it is empty, so the two swap in place).
+                // A vector sparkles glyph (Icons.kt), never an emoji.
+                // Lit in the accent while an effect is armed.
+                AnimatedVisibility(
+                    visible = value.isNotBlank(),
+                    enter = fadeIn(tween(160)) + expandHorizontally(expandFrom = Alignment.Start),
+                    exit = fadeOut(tween(120)) + shrinkHorizontally(shrinkTowards = Alignment.Start),
+                ) {
+                    Box(
+                        Modifier.padding(end = 6.dp).size(40.dp).clip(CircleShape)
+                            .background(if (fxArmed != null) accent else Color.White.copy(0.12f))
+                            .rdPress(onFxClick),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        TikuSparklesIcon(Modifier.size(20.dp), tint = Color.White)
+                    }
+                }
                 AnimatedVisibility(
                     visible = showCamera,
                     enter = fadeIn(tween(160)) + expandHorizontally(expandFrom = Alignment.Start),
@@ -959,7 +1354,7 @@ fun RdChatInput(
                     if (value.isEmpty()) Text("Message…", color = RdSub, fontSize = 15.sp)
                     BasicTextField(
                         value, onChange,
-                        textStyle = TextStyle(color = Color.White, fontSize = 15.sp),
+                        textStyle = TextStyle(color = Color.White, fontSize = 15.sp, fontFamily = emojiFont),
                         cursorBrush = SolidColor(accent),
                         modifier = Modifier.fillMaxWidth().onFocusChanged { fieldFocused = it.isFocused },
                     )
@@ -970,8 +1365,25 @@ fun RdChatInput(
                     Modifier.size(42.dp).clip(CircleShape).background(bg).rdPress { if (has) onSend() else onMic() },
                     contentAlignment = Alignment.Center,
                 ) {
-                    if (has) Icon(Icons.Filled.Send, null, tint = Color.White, modifier = Modifier.size(20.dp))
-                    else Icon(Icons.Filled.Mic, null, tint = Color.White, modifier = Modifier.size(20.dp))
+                    // ROUND 22 (insta port): the mic ↔ send swap rides
+                    // the reference input bar's AnimatedContent
+                    // transition — (fadeIn(tween 150) + scaleIn(
+                    // spring(0.5, StiffnessMedium), initialScale 0.5))
+                    // togetherWith fadeOut(tween 100)). Purely visual:
+                    // the 42dp disc, its colour animation, the tap
+                    // target and the slot's size-neutrality (the
+                    // composer-height contract) are all unchanged.
+                    AnimatedContent(
+                        targetState = has,
+                        transitionSpec = {
+                            (fadeIn(tween(150)) + scaleIn(spring(0.5f, Spring.StiffnessMedium), initialScale = 0.5f))
+                                .togetherWith(fadeOut(tween(100)))
+                        },
+                        label = "sendSwap",
+                    ) { hasText ->
+                        if (hasText) Icon(Icons.Filled.Send, null, tint = Color.White, modifier = Modifier.size(20.dp))
+                        else Icon(Icons.Filled.Mic, null, tint = Color.White, modifier = Modifier.size(20.dp))
+                    }
                 }
             }
         }
@@ -1063,7 +1475,23 @@ private fun RdChatContent(thread: ChatThread) {
     val blockedUids by AppState.blockedUids.collectAsState()
     val partnerBlocked = person.uid in blockedUids
     val typingMap by AppState.typing.collectAsState()
-    val peerTyping = typingMap[threadId] == true
+    // ROUND 22: the peer's typing entry is an EPOCH stamp (their
+    // clock) — "typing" only while it is younger than 5 s. Refresh
+    // writes (≤ every 3 s from their composer) refire this screen via
+    // the chat-doc listener, but a peer who dies mid-typing produces
+    // no final write — so while a stamp is live, a local 500 ms clock
+    // re-evaluates the window and ages it out on screen on its own.
+    val peerTypingAt = typingMap[threadId] ?: 0L
+    var typingClock by remember(threadId) { mutableLongStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(threadId, peerTypingAt) {
+        typingClock = System.currentTimeMillis()
+        while (peerTypingAt > 0L && System.currentTimeMillis() - peerTypingAt < 5_000L) {
+            delay(500)
+            typingClock = System.currentTimeMillis()
+        }
+        typingClock = System.currentTimeMillis()
+    }
+    val peerTyping = peerTypingAt > 0L && typingClock - peerTypingAt < 5_000L
 
     var input by remember { mutableStateOf("") }
     var replyTarget by remember { mutableStateOf<TikuMessage?>(null) }
@@ -1078,6 +1506,56 @@ private fun RdChatContent(thread: ChatThread) {
     val recorder = remember { VoiceRecorder(ctx) }
     val player = remember { VoicePlayer() }
     var playingId by remember { mutableStateOf<String?>(null) }
+    // ---- ROUND 22: message-effects state ----
+    /** The effect armed for the NEXT send (fx kind), or null. Chosen in
+     *  the picker sheet, shown as the chip above the composer, consumed
+     *  by sendCurrent. */
+    var armedFx by remember(threadId) { mutableStateOf<String?>(null) }
+    var fxPickerOpen by remember(threadId) { mutableStateOf(false) }
+    /** The running overlay playback: fx kind to play key ("<msgId>#<n>").
+     *  The counter makes every playback — first play or tap replay — a
+     *  fresh key, so the overlay's Animatable restarts cleanly. */
+    var fxPlay by remember(threadId) { mutableStateOf<Pair<String, String>?>(null) }
+    var fxPlaySeq by remember(threadId) { mutableIntStateOf(0) }
+    /** Ids whose overlay already auto-played on this screen instance —
+     *  the one-shot discipline: scroll-back, recomposition and the
+     *  server echo (same id) can never replay; only an explicit bubble
+     *  tap replays, and it bypasses this set on purpose. */
+    val fxPlayed = remember(threadId) { mutableSetOf<String>() }
+    /** False until this screen has seen its first tail: history is
+     *  primed into [fxPlayed] silently, so opening a chat never erupts
+     *  with the effects of messages that were already there. */
+    var fxPrimed by remember(threadId) { mutableStateOf(false) }
+    // ---- ROUND 22 (insta port): bubble entrance-pop bookkeeping ----
+    /** Ids this screen has already accounted for: everything present
+     *  at prime time (the whole loaded history) plus every arrival
+     *  since. Only a TAIL id outside this set is "fresh" — prepends
+     *  from loadOlder join the set silently, so history can never pop,
+     *  no matter when its rows first compose. */
+    val popSeenIds = remember(threadId) { mutableSetOf<String>() }
+    var popPrimed by remember(threadId) { mutableStateOf(false) }
+    /** The tail ids inside their pop window. Freshness expires after
+     *  ~1.5 s, so a row first composed later (the user was scrolled
+     *  up when it landed) renders statically instead of popping out
+     *  of context. */
+    var popFresh by remember(threadId) { mutableStateOf<Set<String>>(emptySet()) }
+    /** Opened gift ids — per-device and DURABLE (SharedPreferences):
+     *  a gift unwraps once on this phone and stays a normal bubble
+     *  across restarts, exactly like IG. Local-only by design: nothing
+     *  about opening is written to the server. */
+    val giftPrefs = remember { ctx.getSharedPreferences("tiku_fx_gifts", Context.MODE_PRIVATE) }
+    var openedGifts by remember(threadId) {
+        mutableStateOf(giftPrefs.getStringSet("opened", emptySet())?.toSet() ?: emptySet())
+    }
+    fun playFx(kind: String, msgId: String) {
+        fxPlaySeq += 1
+        fxPlay = kind to "$msgId#$fxPlaySeq"
+    }
+    fun openGift(id: String) {
+        if (id in openedGifts) return
+        openedGifts = openedGifts + id
+        giftPrefs.edit().putStringSet("opened", openedGifts).apply()
+    }
     // ROUND 19: the list state STARTS at the tail (the thread's messages
     // are already in state when this screen first composes) — opening a
     // chat never flashes the top of the history before settling. The
@@ -1120,6 +1598,10 @@ private fun RdChatContent(thread: ChatThread) {
             // MediaRecorder keeps the mic busy and makes the NEXT record
             // attempt fail on several devices.
             recorder.stop(false)
+            // ROUND 22: leaving the thread drops my typing stamp
+            // (send + emptied-field clear it too; the peer-side 5 s
+            // aging is the backstop if this write is ever lost).
+            AppState.repo.setTyping(threadId, false)
             AppState.repo.closeThread(threadId)
         }
     }
@@ -1236,88 +1718,162 @@ private fun RdChatContent(thread: ChatThread) {
     // ROUND 19 — tail-glide machinery. ONE follow job at a time: every
     // glide request cancels the previous job, so a burst of arrivals (or
     // an own send racing its echo) coalesces into a single animation to
-    // the final tail instead of per-message stutters. The job first
-    // waits until the target row is actually composed (the layout total
-    // covers its index) — the round-18 follow decided from a layout
-    // that didn't contain the just-sent item yet, so on the owner's
-    // device the send glide simply never fired.
+    // the final tail instead of per-message stutters.
     //
-    // ROUND 21 — ONE SCROLL AUTHORITY (the owner's recording showed the
-    // round-19/20 pair FIGHTING: this glide animated with
-    // animateScrollToItem while the round-20 IME glue instantly
-    // re-anchored with scrollToItem on every viewport-height step. A
-    // send triggers BOTH: the reply strip collapses and a multi-line
-    // field shrinks back to one line, so the measured composer height —
-    // and with it the list's viewport height — steps down over ~300 ms
-    // while the glide is mid-flight. Glue pin + animated glide
-    // alternated per step: the recorded pop / overlap / lurch. Now:
-    //  - the follow is ONE animateScrollBy of the EXACT pixel delta to
-    //    the true bottom (never animateScrollToItem across indices —
-    //    that animated through the whole list on long deltas);
-    //  - [glideInFlight] is held for the whole job, and the IME glue
-    //    below skips every emission while it (or an unconsumed send
-    //    request) is active — the delta animation owns the list alone.
+    // ROUND 21 — ONE SCROLL AUTHORITY: the follow became ONE
+    // animateScrollBy of the exact pixel delta, and the IME glue was
+    // muted while a glide was in flight or a send request unconsumed.
+    //
+    // ROUND 22 — WHY BUILD 65 STILL LURCHED (owner: "message pehle
+    // niche jaata hai phir uper se jaata hai"), found by reading the
+    // round-21 code as an event sequence instead of as intentions:
+    //  (1) THE GUARD HAD A HOLE AT BOTH ENDS. The send effect CONSUMED
+    //      the request — handledTailSeq + consumeTailScroll null
+    //      pendingTail, so latestSendPending went false — BEFORE
+    //      calling glideToTail(), and glideInFlight was set INSIDE the
+    //      launched coroutine: asynchronously, one dispatch later.
+    //      Between the consume and the flag-set the glue was UNMUTED,
+    //      while the composer was already shrinking (the input clears
+    //      synchronously in the send tap and the reply strip starts
+    //      collapsing in the same recomposition). Any viewport-height
+    //      emission landing in that window ran the glue's instant
+    //      scrollToItem — the DOWN snap. At the other end the flag
+    //      dropped the instant the job finished, while the strip's
+    //      shrinkVertically collapse (~300 ms) outlasts the 260 ms
+    //      glide — late height steps hit an unmuted glue and pinned
+    //      again, on top of the landed glide.
+    //  (2) THE FALLBACK WAS AN INSTANT ANCHOR ON THE FOLLOW PATH. The
+    //      350 ms wait tested visibleItemsInfo — a set containing only
+    //      items INTERSECTING the viewport — and both its timeout
+    //      branch and the measure loop's `last.index < target` branch
+    //      answered with scrollToItem: a second instant jump racing
+    //      the animation it was supposed to serve.
+    //  (3) THE SECOND MEASURE PASS doubled the motion: pass 1 animated,
+    //      then pass 2 measured the remainder — real, because the
+    //      composer was still collapsing — and animated AGAIN, so the
+    //      bubble visibly arrived twice.
+    // ROUND 22 closes all three BY CONSTRUCTION:
+    //  - glideToTail() raises glideInFlight SYNCHRONOUSLY, in the
+    //    caller, before the job even exists — and the send effect now
+    //    arms the glide BEFORE consuming the request, so from the send
+    //    tap onward there is no unmuted instant in the whole sequence
+    //    (see the timeline argument in the round-22 report).
+    //  - The glue stays muted until 150 ms AFTER the glide job ends
+    //    ([glueMutedUntil]), outliving the strip collapse — and the
+    //    job itself ends with a settle pass (see glideToTail) that
+    //    reconciles any viewport motion the IME made mid-glide, which
+    //    is what keeps the tail glued exactly above the keyboard
+    //    through send / receive / typing alike.
+    //  - glideDeltaToTail awaits the tail's LAYOUT (totalItemsCount
+    //    covering the index), never its visibility, then measures ONE
+    //    delta from layoutInfo at animation start and runs ONE
+    //    animateScrollBy. There is NO scrollToItem fallback on the
+    //    at-bottom path: if the tail is somehow outside the visible
+    //    window there, the glide does nothing — the list physically
+    //    clamps at max scroll as the viewport grows, and the glue owns
+    //    any residual once it un-mutes. The historic instant anchor
+    //    survives ONLY for the not-at-bottom case (jump-to-latest pill,
+    //    own send from deep history), whose behaviour is unchanged
+    //    from rounds 19–21.
     val tailRequests by AppState.tailScrollRequests.collectAsState()
     val pendingTail = tailRequests[threadId]
     var handledTailSeq by remember(threadId) { mutableLongStateOf(0L) }
     var followJob by remember(threadId) { mutableStateOf<Job?>(null) }
     var glideInFlight by remember(threadId) { mutableStateOf(false) }
+    /** Glue mute deadline (wall-clock ms): the IME glue is silent while
+     *  a glide is in flight AND until this instant after it lands, so
+     *  the composer's trailing height steps can never re-pin the tail
+     *  on top of a finished glide. */
+    var glueMutedUntil by remember(threadId) { mutableLongStateOf(0L) }
     val currentVisible by rememberUpdatedState(visible)
     val currentPeerTyping by rememberUpdatedState(peerTyping)
 
     /** The single tail-follow animation: scroll forward by exactly the
      *  distance between the tail item's end (plus bottom content
-     *  padding) and the viewport's end. At the bottom that distance is
-     *  precisely the new bubble's height — IG's one clean shift. The
-     *  delta is computed AFTER the tail item composes (bounded wait);
-     *  a send from far up in history, where the tail never composes,
-     *  falls back to an instant anchor — scrollToItem on the LAST index
-     *  clamps at max scroll, which IS the true bottom. A second pass
-     *  re-measures after the animation: composer/viewport shifts that
-     *  landed mid-flight are absorbed by the remainder, and overshoot
-     *  is impossible (the list clamps at max scroll). */
-    suspend fun glideDeltaToTail() {
+     *  padding) and the viewport's end, measured from layoutInfo AFTER
+     *  the tail item is laid out (bounded wait on the layout total —
+     *  the round-21 visibility test could starve on a tail starting
+     *  below the fold and timed out into its instant fallback). At the
+     *  bottom that distance is precisely the new bubble's height —
+     *  IG's one clean shift. delta ≤ 0 means the tail is already fully
+     *  in view: nothing to do, and doing nothing is what keeps an echo
+     *  or a metadata-only snapshot from ever moving the list. */
+    suspend fun glideDeltaToTail(atBottom: Boolean) {
         val target = currentVisible.lastIndex + if (currentPeerTyping) 1 else 0
         if (target < 0) return
-        val composed = withTimeoutOrNull(350) {
-            snapshotFlow { listState.layoutInfo.visibleItemsInfo }
-                .first { items -> items.any { it.index == target } }
+        val laidOut = withTimeoutOrNull(600) {
+            snapshotFlow { listState.layoutInfo.totalItemsCount }
+                .first { it > target }
         } != null
-        if (!composed) {
-            runCatching { listState.scrollToItem(target) }
+        if (!laidOut) return
+        if (!currentCoroutineContext().isActive) return
+        val info = listState.layoutInfo
+        val last = info.visibleItemsInfo.lastOrNull() ?: return
+        if (last.index < target) {
+            // Tail outside the laid-out visible window. Reachable ONLY
+            // when the user was not at the bottom (there the new item
+            // always starts inside the window — it begins one spacing
+            // below the old tail's end, above the viewport's end edge
+            // by the bottom content padding). Keep the historic instant
+            // anchor for that case alone; on the follow path there is
+            // deliberately NO fallback — no scroll, of any kind.
+            if (!atBottom) runCatching { listState.scrollToItem(target) }
             return
         }
-        repeat(2) {
-            if (!currentCoroutineContext().isActive) return
-            val info = listState.layoutInfo
-            val last = info.visibleItemsInfo.lastOrNull() ?: return
-            if (last.index < target) {
-                runCatching { listState.scrollToItem(target) }
-                return
-            }
-            val delta = last.offset + last.size + info.afterContentPadding - info.viewportEndOffset
-            if (delta <= 0) return
-            try {
-                listState.animateScrollBy(delta.toFloat(), tween(260, easing = EaseOutCubic))
-            } catch (e: CancellationException) {
-                throw e
-            } catch (_: Exception) {
-                return
-            }
+        val delta = last.offset + last.size + info.afterContentPadding - info.viewportEndOffset
+        if (delta <= 0) return
+        try {
+            listState.animateScrollBy(delta.toFloat(), tween(260, easing = EaseOutCubic))
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            return
         }
     }
 
     fun glideToTail() {
+        // ROUND 22: capture the anchored state and raise the guard
+        // HERE, synchronously, in the caller — from this line onward
+        // the glue is muted no matter when the dispatcher runs the job.
+        // (Round 21 set the flag inside the coroutine body: one dispatch
+        // too late, and the send effect had already consumed the
+        // request that was the guard's other half.)
+        val atBottom = nearBottom
+        glideInFlight = true
         followJob?.cancel()
         val job = scope.launch {
-            glideInFlight = true
             try {
                 delay(60) // burst coalescing: a newer glide replaces this one
-                glideDeltaToTail()
+                glideDeltaToTail(atBottom)
+                // SETTLE PASS (keyboard invariant): the glide measured
+                // its delta at animation start, but the IME may still
+                // be animating — opening, closing, or resizing around
+                // a send/receive — stepping the viewport AFTER the
+                // measure. Before releasing the guard, wait out the
+                // mute window and measure once more: in the normal
+                // case delta ≤ 0 and this is a strict no-op; if the
+                // viewport moved mid-glide it applies exactly the
+                // remainder, so the tail ends glued above the IME —
+                // never slipped under it, never pinned twice. (This is
+                // NOT round 21's second pass: that one ran inline,
+                // back-to-back, chasing the collapsing composer with a
+                // second visible animation; this one runs after a
+                // settle delay and only ever fires when the first
+                // glide provably landed short.)
+                if (atBottom && followJob === currentCoroutineContext()[Job]) {
+                    delay(170)
+                    if (followJob === currentCoroutineContext()[Job]) {
+                        glideDeltaToTail(atBottom)
+                    }
+                }
             } finally {
-                // only the CURRENT job may lower the flag — a cancelled
-                // predecessor must not un-guard the glue mid-successor.
-                if (followJob === currentCoroutineContext()[Job]) glideInFlight = false
+                // only the CURRENT job may lower the guard — a cancelled
+                // predecessor must not un-mute the glue mid-successor.
+                // The mute outlives the job by 150 ms (see above).
+                if (followJob === currentCoroutineContext()[Job]) {
+                    glueMutedUntil = System.currentTimeMillis() + 150
+                    glideInFlight = false
+                }
             }
         }
         followJob = job
@@ -1388,7 +1944,15 @@ private fun RdChatContent(thread: ChatThread) {
     fun sendCurrent() {
         val v = input.trim()
         if (v.isEmpty()) return
-        AppState.repo.sendText(threadId, v, replyTarget?.let { replyQuoteLabel(it) })
+        // ROUND 22: the armed effect (if any) rides this one send and is
+        // consumed by it — the chip clears with the field. NOTE (keyboard
+        // invariant): nothing on this path touches focus or the IME —
+        // no hide(), no clearFocus, and the hoisted input state simply
+        // empties — so the keyboard stays exactly where it was, open,
+        // with the field still focused for the next message.
+        val fx = armedFx
+        AppState.repo.sendTextFx(threadId, v, replyTarget?.let { replyQuoteLabel(it) }, fx)
+        armedFx = null
         input = ""; replyTarget = null
         scope.launch { AppState.repo.setTyping(threadId, false) }
     }
@@ -1467,8 +2031,63 @@ private fun RdChatContent(thread: ChatThread) {
         if (!settled || req.seq <= handledTailSeq) return@LaunchedEffect
         if (visible.lastOrNull()?.id != req.tailId) return@LaunchedEffect
         handledTailSeq = req.seq
-        AppState.consumeTailScroll(threadId, req.seq)
+        // ROUND 22: arm the glide BEFORE consuming the request.
+        // Consuming nulls pendingTail — half of the round-21 glue
+        // guard — and round 21 called glideToTail only afterwards,
+        // whose flag rose a dispatch later still. Armed first (and
+        // raised synchronously inside glideToTail), the guard now
+        // never dips between the send tap and the landed glide.
         glideToTail()
+        AppState.consumeTailScroll(threadId, req.seq)
+    }
+    // ROUND 22 — effect auto-play: a fire / confetti / hearts message
+    // that BECOMES the tail — my send landing, or an arrival while this
+    // chat is open — plays its overlay exactly once. Keyed on the
+    // tail's identity, so scrolling and recomposition can never
+    // re-fire it; the first tail this screen sees only primes the
+    // played-set (history never erupts on open). Gift has no overlay:
+    // its wrap is the effect, opened by tap.
+    LaunchedEffect(visible.lastOrNull()?.id) {
+        val tail = visible.lastOrNull() ?: return@LaunchedEffect
+        if (!fxPrimed) {
+            fxPrimed = true
+            visible.forEach { m -> if (m.fx != null && m.fx != "gift") fxPlayed += m.id }
+            return@LaunchedEffect
+        }
+        if (!settled) return@LaunchedEffect
+        val k = tail.fx
+        if (k != null && k != "gift" && tail.id !in fxPlayed) {
+            fxPlayed += tail.id
+            playFx(k, tail.id)
+        }
+    }
+    // ROUND 22 (insta port) — entrance-pop marking, the same
+    // prime-then-fresh discipline as the effect auto-play above: the
+    // first tail this screen sees only primes the seen-set (opening a
+    // chat never pops its history); a LATER tail whose id is outside
+    // the set is fresh and pops exactly once. Keyed on the tail's
+    // identity + the size, so loadOlder (head changes, tail stays)
+    // and metadata-only snapshots (neither changes) can never mark
+    // anything. Own sends are covered too — the optimistic bubble is
+    // a fresh tail id, and its server echo carries the SAME id (the
+    // id is client-chosen), so the echo never re-pops.
+    LaunchedEffect(visible.lastOrNull()?.id, visible.size) {
+        if (visible.isEmpty()) return@LaunchedEffect
+        val tailId = visible.last().id
+        if (!popPrimed) {
+            popSeenIds += visible.map { it.id }
+            popPrimed = true
+            return@LaunchedEffect
+        }
+        val fresh = tailId.takeIf { it !in popSeenIds }
+        popSeenIds += visible.map { it.id }
+        if (fresh != null) {
+            popFresh = popFresh + fresh
+            // expiry rides the screen scope, not this effect's: a
+            // restart (the next arrival) must not cancel the removal
+            // and leave a stale id poppable forever.
+            scope.launch { delay(1_500); popFresh = popFresh - fresh }
+        }
     }
     // ROUND 15: the follow trigger is the TAIL item's identity, not
     // max(tsMs). The ts trigger misfired around sends twice over: an
@@ -1511,6 +2130,7 @@ private fun RdChatContent(thread: ChatThread) {
     val latestVisible by rememberUpdatedState(visible)
     val latestPeerTyping by rememberUpdatedState(peerTyping)
     val latestGlideInFlight by rememberUpdatedState(glideInFlight)
+    val latestGlueMutedUntil by rememberUpdatedState(glueMutedUntil)
     val latestSendPending by rememberUpdatedState(
         (pendingTail?.seq ?: 0L) > handledTailSeq,
     )
@@ -1528,7 +2148,20 @@ private fun RdChatContent(thread: ChatThread) {
             // glide — the pop/lurch in the owner's recording. Once the
             // glide has landed, the list is already at the true bottom,
             // so a late glue pin is a no-op anyway.
-            val glideBusy = latestGlideInFlight || latestSendPending
+            // ROUND 22: the mute is now three-layered and hole-free —
+            // an unconsumed send request (covers the tap → effect
+            // window), glideInFlight (raised SYNCHRONOUSLY by
+            // glideToTail, so it covers the coalesce delay, the layout
+            // wait, the animation AND the settle pass), and the
+            // [glueMutedUntil] deadline (150 ms past the job's end, so
+            // the strip collapse's trailing steps land in silence).
+            // Every height step OUTSIDE a glide still pins instantly —
+            // that per-step pinning is the keyboard invariant: while
+            // the user types, receives, or the IME opens/closes with
+            // no glide running, the tail is re-anchored on EVERY
+            // viewport step and can never slip under the keyboard.
+            val glideBusy = latestGlideInFlight || latestSendPending ||
+                System.currentTimeMillis() < latestGlueMutedUntil
             if (prevHeight >= 0 && h != prevHeight && wasAtTail && !glideBusy) {
                 val msgs = latestVisible
                 if (msgs.isNotEmpty()) {
@@ -1644,6 +2277,17 @@ private fun RdChatContent(thread: ChatThread) {
                                     }
                                 },
                                 onRetry = { AppState.repo.retrySend(threadId, m.id) },
+                                // ROUND 22 (insta port): pop only while
+                                // this tail arrival is inside its window
+                                animateIn = m.id in popFresh,
+                                // ROUND 22: gift seal state + effect taps
+                                fxOpened = m.id in openedGifts,
+                                onFxTap = { msg ->
+                                    when (msg.fx) {
+                                        "gift" -> openGift(msg.id)
+                                        "fire", "confetti", "hearts" -> playFx(msg.fx!!, msg.id)
+                                    }
+                                },
                             )
                         }
                         // ROUND 18 — "Seen" / "Sent" caption (IG-style)
@@ -1713,6 +2357,9 @@ private fun RdChatContent(thread: ChatThread) {
                 val pinnedMsg = thread.messages.firstOrNull { it.id == pinId }
                 val pinPreview = when {
                     pinnedMsg?.undecryptable == true -> "This message can't be opened on this phone"
+                    // ROUND 22: a pinned gift previews as a gift — the
+                    // strip must not leak the sealed text either.
+                    pinnedMsg?.fx == "gift" -> "Gift message"
                     else -> when (pinnedMsg?.kind) {
                     MsgKind.IMAGE -> "Photo"
                     MsgKind.VOICE -> "Voice message"
@@ -1782,7 +2429,15 @@ private fun RdChatContent(thread: ChatThread) {
                     value = input,
                     onChange = {
                         input = it
-                        if (it.isNotEmpty()) AppState.repo.setTyping(threadId, true)
+                        // ROUND 22: typing presence follows the field
+                        // BOTH ways — emptying the field clears my
+                        // stamp right away (the old code only ever set
+                        // it, and a 3 s timer raced to clear it). The
+                        // engine throttles the true refreshes (≤ 1
+                        // write / 3 s) and writes a clear only while a
+                        // stamp is outstanding, so per-keystroke calls
+                        // stay cheap.
+                        AppState.repo.setTyping(threadId, it.isNotEmpty())
                     },
                     onSend = { sendCurrent() },
                     accent = acc.first,
@@ -1821,6 +2476,10 @@ private fun RdChatContent(thread: ChatThread) {
                         }
                     },
                     onCamera = { camChooserOpen = true },
+                    // ROUND 22: message effects — arm state + picker
+                    fxArmed = armedFx,
+                    onFxClick = { fxPickerOpen = true },
+                    onFxDisarm = { armedFx = null },
                 )
             }
         }
@@ -1908,6 +2567,16 @@ private fun RdChatContent(thread: ChatThread) {
                                 Modifier.width(160.dp).height(190.dp).clip(RoundedCornerShape(22.dp)),
                                 contentScale = ContentScale.Crop,
                             )
+                        } else if (mm.fx == "gift" && mm.id !in openedGifts) {
+                            // ROUND 22: an unopened gift previews as
+                            // its wrap — the menu never shows the
+                            // sealed text.
+                            Box(
+                                Modifier.widthIn(max = 280.dp).clip(RoundedCornerShape(22.dp))
+                                    .background(if (mm.me) Brush.linearGradient(listOf(acc.first, acc.second)) else SolidColor(RdCard))
+                                    .padding(horizontal = 26.dp, vertical = 14.dp),
+                                contentAlignment = Alignment.Center,
+                            ) { RdGiftWrap() }
                         } else {
                             Text(
                                 if (mm.kind == MsgKind.TEXT) mm.text else replyQuoteLabel(mm),
@@ -1936,7 +2605,10 @@ private fun RdChatContent(thread: ChatThread) {
                             RdMenuItem("Reply", onClick = { replyTarget = mm; menuMsg = null }) {
                                 Text("↩", color = Color.White, fontSize = 20.sp)
                             }
-                            if (mm.kind == MsgKind.TEXT) {
+                            // ROUND 22: Copy is withheld for an
+                            // unopened gift — copying would hand out
+                            // the sealed text without opening it.
+                            if (mm.kind == MsgKind.TEXT && !(mm.fx == "gift" && mm.id !in openedGifts)) {
                                 RdDivider1()
                                 RdMenuItem("Copy", onClick = {
                                     clipboard.setText(AnnotatedString(mm.text))
@@ -2112,6 +2784,71 @@ private fun RdChatContent(thread: ChatThread) {
             }
         }
 
+        // ---- ROUND 22: message-effects picker ----
+        // The attach sheet's glass language: four effect rows (glyph +
+        // name + one-line blurb, a rose tick on the armed one) over a
+        // "No effect" row. Choosing arms the effect for the next send
+        // and closes; the composer chip is the visible armed state.
+        AnimatedVisibility(
+            visible = fxPickerOpen,
+            enter = fadeIn(), exit = fadeOut(),
+            modifier = Modifier.fillMaxSize(),
+        ) {
+            Box(
+                Modifier.fillMaxSize().background(Color.Black.copy(0.55f))
+                    .clickable(remember { MutableInteractionSource() }, null) { fxPickerOpen = false },
+                contentAlignment = Alignment.BottomCenter,
+            ) {
+                Column(
+                    Modifier.padding(14.dp).fillMaxWidth().animateEnterExit(
+                        enter = slideInVertically(spring(0.85f, 360f)) { it } + fadeIn(),
+                        exit = slideOutVertically(tween(220, easing = RdEase)) { it } + fadeOut(),
+                    ).chatGlass(haze, RoundedCornerShape(28.dp), 0.1f).padding(8.dp),
+                ) {
+                    Text(
+                        "Send with effect", color = RdSub, fontSize = 12.5.sp,
+                        modifier = Modifier.padding(start = 16.dp, top = 12.dp, bottom = 4.dp),
+                    )
+                    RdMessageFx.forEach { def ->
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.fillMaxWidth().rdPress {
+                                armedFx = def.kind
+                                fxPickerOpen = false
+                            }.padding(16.dp),
+                        ) {
+                            EmojiGlyph(def.glyph, 26.dp)
+                            Spacer(Modifier.width(12.dp))
+                            Column(Modifier.weight(1f)) {
+                                Text(def.name, color = Color.White, fontSize = 16.sp)
+                                Text(def.blurb, color = RdSub, fontSize = 12.sp)
+                            }
+                            if (armedFx == def.kind) {
+                                Text("✓", color = RdRose, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                            }
+                        }
+                    }
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.fillMaxWidth().rdPress {
+                            armedFx = null
+                            fxPickerOpen = false
+                        }.padding(16.dp),
+                    ) {
+                        Icon(Icons.Filled.Block, null, tint = RdSub, modifier = Modifier.size(24.dp))
+                        Spacer(Modifier.width(12.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text("No effect", color = Color.White, fontSize = 16.sp)
+                            Text("Send it plain", color = RdSub, fontSize = 12.sp)
+                        }
+                        if (armedFx == null) {
+                            Text("✓", color = RdRose, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                        }
+                    }
+                }
+            }
+        }
+
         // ---- full-screen image viewer ----
         viewerMsg?.let { vm ->
             ImageViewerOverlay(vm) { viewerMsg = null }
@@ -2120,6 +2857,18 @@ private fun RdChatContent(thread: ChatThread) {
         // ---- full-screen video player ----
         videoViewerMsg?.let { vm ->
             VideoViewerOverlay(vm) { videoViewerMsg = null }
+        }
+
+        // ---- ROUND 22: effect playback overlay ----
+        // Topmost in the chat root. RdFxOverlay has no pointer input of
+        // its own, so taps fall through to the list beneath while it
+        // runs. The clear is key-checked: a replay started mid-flight
+        // replaces the key, and the old playback's finally must not
+        // clear the new one.
+        fxPlay?.let { (kind, playKey) ->
+            RdFxOverlay(kind, playKey) {
+                if (fxPlay?.second == playKey) fxPlay = null
+            }
         }
     }
 }

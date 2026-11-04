@@ -198,6 +198,15 @@ object PreviewRepo : ChatRepo {
         simulateReply(id)
     }
 
+    /** ROUND 22 (parent): keep the armed effect on preview sends too,
+     *  so the harness renders gift/fire/confetti/hearts bubbles. */
+    override fun sendTextFx(id: String, text: String, quote: String?, fx: String?) {
+        push(id, TikuMessage(UUID.randomUUID().toString(), "", MsgKind.TEXT, text, "now", me = true,
+            amps = List(22) { 8 }, replyQuote = quote, tsMs = System.currentTimeMillis(),
+            fx = fx?.takeIf { it in MESSAGE_FX_KINDS }))
+        simulateReply(id)
+    }
+
     override fun sendPhoto(id: String, bmp: Bitmap) {
         push(id, TikuMessage(UUID.randomUUID().toString(), "", MsgKind.IMAGE, "", "now", me = true,
             amps = List(22) { 8 }, photo = PreviewStore.scaled(bmp)))

@@ -329,7 +329,12 @@ object OwnerNotify {
             ?: "Tiku"
     }
 
-    private fun messageBody(m: TikuMessage): String = when (m.kind) {
+    private fun messageBody(m: TikuMessage): String =
+        // ROUND 22: a gift message's text is sealed until opened in
+        // the chat — the alert carries the generic gift line, never
+        // the message text.
+        if (m.fx == "gift") "Sent you a gift"
+        else when (m.kind) {
         MsgKind.IMAGE -> "Photo"
         MsgKind.VIDEO -> "Video"
         MsgKind.VOICE -> "Voice message"

@@ -103,6 +103,19 @@ data class TikuMessage(
      *  decryptable NEVER carry this flag, and a stub must never overwrite
      *  a copy whose plaintext this device already holds. */
     val undecryptable: Boolean = false,
+    // ---- round 22 (appended last, same discipline) ----
+    /** Instagram-style send effect (Firestore `fx`, plaintext metadata
+     *  exactly like `reaction`): "gift" | "fire" | "confetti" |
+     *  "hearts", null = no effect. The field is ADDITIVE — docs written
+     *  by older builds simply lack it (fx reads null), and older builds
+     *  reading a doc that carries it ignore the unknown field and render
+     *  the plain message, so cross-version messaging never breaks.
+     *  "gift" seals the text behind a tap-to-open wrap on every surface
+     *  (bubble, list preview, notification, reply quote) until THIS
+     *  device opens it; the other three are one-shot overlay animations
+     *  played when the message is sent / arrives in the open chat, and
+     *  replayed by tapping the bubble. TEXT messages only. */
+    val fx: String? = null,
 )
 
 /** One 1:1 conversation. */
@@ -281,7 +294,11 @@ object Schema {
         const val MESSAGES = "messages"
         data class Doc(
             val participants: List<String> = emptyList(),
-            val typing: Map<String, Boolean> = emptyMap(),
+            /** ROUND 22: typing presence stamps — uid -> epoch ms of
+             *  that member's last typing refresh (was Map<String,
+             *  Boolean> before round 22; readers treat a legacy Boolean
+             *  true as fresh-on-arrival, see FirebaseEngine). */
+            val typing: Map<String, Long> = emptyMap(),
             val clearedBefore: Map<String, Long> = emptyMap(),
             val updatedAt: Any? = null,
         )
@@ -297,6 +314,10 @@ object Schema {
             val deletedFor: List<String> = emptyList(),
             /** ROUND 18: sender's delete-for-everyone tombstone flag. */
             val delAll: Boolean = false,
+            /** ROUND 22: Instagram-style send effect ("gift" | "fire" |
+             *  "confetti" | "hearts"); absent/null = none. Additive —
+             *  see [TikuMessage.fx]. */
+            val fx: String? = null,
             val seenBy: List<String> = emptyList(),
             val durationMs: Int = 0, val amps: List<Int> = emptyList(),
             /** Media kinds (image/voice/video/audio): ciphertext lives in the chunks

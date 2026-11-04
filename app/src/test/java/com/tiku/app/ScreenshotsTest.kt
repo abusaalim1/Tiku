@@ -12,6 +12,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.test.click
+import androidx.compose.ui.test.doubleClick
 import androidx.compose.ui.test.hasScrollAction
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createComposeRule
@@ -166,39 +167,81 @@ class ScreenshotsTest {
     }
 
     @Test fun shot05_hiddenEntryStory() {
-        // ROUND 14 ADDENDUM: the For You tab + "For You, Always" entry are
-        // REMOVED. The hidden Tik entry is now the LAST story in Stories,
-        // titled exactly "2023,05" (single tap = decoy story, double tap =
-        // the gate). This shot proves the entry story is listed — and that
-        // the facade still carries the word "Tik" NOWHERE.
-        // Data-level guard: the entry story is genuinely the LAST story.
+        // ROUND 22 (supersedes the Round 14 note): the shelf is back to
+        // TEN stories and the hidden entry is NO LONGER the last one —
+        // the "2023,05" story sits SECOND FROM THE BOTTOM (story index
+        // size-2), with one ordinary story below it, so the shelf does
+        // not end on the door. Facade.kt keys the card's double-tap gate
+        // on the story's ID (SECRET_STORY_ID), never its position.
+        // Data-level guards: exactly ten stories, the entry at size-2,
+        // and an ordinary story underneath it.
         org.junit.Assert.assertEquals(
-            "the hidden entry story must be the last story in the data",
-            "2023,05", DramaContent.stories.last().title,
+            "the stories shelf must hold exactly ten stories",
+            10, DramaContent.stories.size,
+        )
+        org.junit.Assert.assertEquals(
+            "the hidden entry story must sit second from the bottom",
+            "2023,05", DramaContent.stories[DramaContent.stories.size - 2].title,
+        )
+        org.junit.Assert.assertEquals(
+            "one ordinary story must sit below the hidden entry",
+            "The Morning You Almost Quit", DramaContent.stories.last().title,
         )
         frame { FacadeHome(initialTab = FacadeTab.STORIES) }
-        // The entry story sits at the very end of the shelf — scroll the
-        // list's OWN semantics node straight to it (lazy items: header =
-        // 0, stories = 1..size, so index size IS the last story — the
-        // Round-16 shelf has no footer item). Swiping the ROOT node
-        // did not drive the facade's LazyColumn under Robolectric in
-        // build 51 (the last item was never composed, so the text query
-        // below found nothing). The query is substring because a composed
-        // card may merge its texts into one semantics node; the title is
-        // unique on the facade, so the proof is unchanged.
+        // Scroll the list's OWN semantics node straight to the entry
+        // card (lazy items: header = 0, stories = 1..size, so the entry
+        // — story index size-2 — is lazy index size-1). Swiping the ROOT
+        // node did not drive the facade's LazyColumn under Robolectric
+        // in build 51 (the item was never composed, so the text query
+        // below found nothing). The query is substring because a
+        // composed card may merge its texts into one semantics node; the
+        // title is unique on the facade, so the proof is unchanged.
         composeRule.onNode(hasScrollAction())
-            .performScrollToIndex(DramaContent.stories.size)
+            .performScrollToIndex(DramaContent.stories.size - 1)
         composeRule.waitForIdle()
         org.junit.Assert.assertTrue(
             "stories list must not contain any Tik wording",
             composeRule.onAllNodesWithText("Tik").fetchSemanticsNodes().isEmpty(),
         )
         org.junit.Assert.assertTrue(
-            "stories list must end with the hidden entry story",
+            "stories list must show the hidden entry story second from the bottom",
             composeRule.onAllNodesWithText("2023,05", substring = true)
                 .fetchSemanticsNodes().isNotEmpty(),
         )
         shot("05-hidden-entry-story.png")
+        // DECOY: a single tap on the entry card opens its innocent
+        // reader, exactly like any other story (a body paragraph from
+        // deep in the story proves the reader — the list card only ever
+        // shows the opening lines). detectTapGestures fires onTap only
+        // once the double-tap window closes, so advance the clock past
+        // it before asserting.
+        composeRule.onAllNodesWithText("2023,05", substring = true)[0]
+            .performTouchInput { click() }
+        composeRule.mainClock.advanceTimeBy(1000)
+        composeRule.waitForIdle()
+        org.junit.Assert.assertTrue(
+            "single tap on the entry story must open the decoy reader",
+            composeRule.onAllNodesWithText("last Friday of May", substring = true)
+                .fetchSemanticsNodes().isNotEmpty(),
+        )
+        // Back at the shelf (fresh composition — the reader state is
+        // shell-internal), scroll to the entry card once more.
+        frame { FacadeHome(initialTab = FacadeTab.STORIES) }
+        composeRule.onNode(hasScrollAction())
+            .performScrollToIndex(DramaContent.stories.size - 1)
+        composeRule.waitForIdle()
+        // THE DOOR: a double tap on the SAME card routes to the Tik
+        // password gate. App lock is ON in this harness, so the gate is
+        // never skipped — SecretEntry lands on Screen.TikGate.
+        composeRule.onAllNodesWithText("2023,05", substring = true)[0]
+            .performTouchInput { doubleClick() }
+        composeRule.waitForIdle()
+        org.junit.Assert.assertEquals(
+            "double tap on the entry story must route to the Tik gate",
+            Screen.TikGate, AppState.screen,
+        )
+        // Leave the shared AppState slate as the harness found it.
+        AppState.go(Screen.Welcome)
     }
 
     @Test fun shot06_playerPlaceholder() {

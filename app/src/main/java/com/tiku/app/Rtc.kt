@@ -825,7 +825,7 @@ object CallController {
             is CallUiState.Connected -> st.video
             else -> false
         }
-        val callId = ids(st)!!.second
+        val callId = ids(st)?.second ?: ""
         ringJob?.cancel(); ringJob = null
         callDocReg?.remove(); callDocReg = null
         session?.dispose(); session = null
