@@ -1,6 +1,7 @@
 package com.tiku.app
 
 import android.content.Context
+import android.graphics.BitmapFactory
 import androidx.compose.ui.platform.LocalContext
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedContent
@@ -25,6 +26,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -583,8 +585,15 @@ private fun RdISearchPage(thread: ChatThread, onBack: () -> Unit) {
     // surface too — it can neither match a search (its text stays
     // unguessable) nor render. Opened gifts behave as normal text.
     val giftCtx = LocalContext.current
-    val giftOpened = remember {
-        giftCtx.getSharedPreferences("tiku_fx_gifts", Context.MODE_PRIVATE)
+    // ROUND 28b: same per-account namespace as Chat.kt's gift store —
+    // this reader must look in the signed-in account's file, or a gift
+    // opened in chat would still count as sealed here.
+    val giftUid = (if (Config.PREVIEW_UI_ONLY) "me" else FirebaseEngine.myUid())
+        .filter { it.isLetterOrDigit() || it == '-' || it == '_' }
+        .take(64)
+        .ifEmpty { "anon" }
+    val giftOpened = remember(giftUid) {
+        giftCtx.getSharedPreferences("tiku_fx_gifts_$giftUid", Context.MODE_PRIVATE)
             .getStringSet("opened", emptySet())?.toSet() ?: emptySet()
     }
     val results = if (q.isBlank()) {
@@ -628,6 +637,17 @@ private fun RdICustomizePage(thread: ChatThread, onBack: () -> Unit) {
     val themeIdx = thread.effectiveSettings(globalSettings).accentIdx
     RdISubPage(bottom = 40.dp) {
         item { RdISubHeader("Customize chat", onBack) }
+        // ROUND 26 — the shared wallpaper themes (the owner's six):
+        // picking one re-skins BOTH phones (chats/{id}.theme).
+        item { RdISection("Theme") }
+        item {
+            RdICardRow {
+                val current = ChatThemes.byId(thread.themeId)
+                RdINavRow("Theme", current?.name ?: "Default") {
+                    openRdThemePicker(thread)
+                }
+            }
+        }
         item { RdISection("Chat theme") }
         item {
             RdICardRow {
@@ -679,6 +699,106 @@ private fun RdICustomizePage(thread: ChatThread, onBack: () -> Unit) {
                 }
             }
         }
+    }
+}
+
+/** ROUND 26 — the theme picker, opened from Customize chat ▸ Theme.
+ *  AppState.sheet is the house pattern; the sheet host renders it in
+ *  the Tik sheet skin over this screen. A Default tile + the six
+ *  wallpaper tiles (the owner's images, decoded from assets exactly
+ *  as supplied). Tapping one writes the SHARED chats/{id}.theme via
+ *  the repo and closes — both phones re-skin live through the
+ *  threads listener, the open chat included. */
+private fun openRdThemePicker(thread: ChatThread) {
+    AppState.sheet {
+        Column(Modifier.padding(horizontal = 6.dp)) {
+            Text(
+                "Theme", color = Color.White, fontSize = 20.sp,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+            )
+            Text(
+                "Applies to both of you", color = RdISub, fontSize = 13.sp,
+                modifier = Modifier.padding(horizontal = 16.dp),
+            )
+            Spacer(Modifier.height(12.dp))
+            val tiles: List<ChatTheme?> = listOf(null) + ChatThemes.all
+            tiles.chunked(3).forEach { rowTiles ->
+                Row(
+                    Modifier.fillMaxWidth().padding(horizontal = 10.dp),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    rowTiles.forEach { t ->
+                        RdThemeTile(
+                            theme = t,
+                            selected = (t?.id ?: "") == thread.themeId,
+                            modifier = Modifier.weight(1f),
+                        ) {
+                            AppState.repo.setTheme(thread.id, t?.id ?: "")
+                            AppState.closeSheet()
+                        }
+                    }
+                    repeat(3 - rowTiles.size) { Spacer(Modifier.weight(1f)) }
+                }
+                Spacer(Modifier.height(12.dp))
+            }
+        }
+    }
+}
+
+/** One picker tile: the wallpaper itself (Default = the plain black
+ *  chat of today), a rose ring + ✓ on the live theme, name beneath. */
+@Composable
+private fun RdThemeTile(
+    theme: ChatTheme?,
+    selected: Boolean,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit,
+) {
+    val ctx = LocalContext.current
+    Column(modifier) {
+        Box(
+            Modifier.fillMaxWidth().aspectRatio(0.66f)
+                .clip(RoundedCornerShape(14.dp))
+                .background(Color.Black)
+                .then(
+                    if (selected) Modifier.border(2.5.dp, RdIRose, RoundedCornerShape(14.dp))
+                    else Modifier.border(1.dp, Color.White.copy(0.14f), RoundedCornerShape(14.dp)),
+                )
+                .rdIPress(onClick),
+            contentAlignment = Alignment.Center,
+        ) {
+            if (theme != null) {
+                val bmp = remember(theme.id) {
+                    runCatching {
+                        ctx.assets.open("themes/${theme.asset}")
+                            .use { BitmapFactory.decodeStream(it) }
+                    }.getOrNull()
+                }
+                if (bmp != null) {
+                    Image(
+                        bmp.asImageBitmap(), null, Modifier.fillMaxSize(),
+                        contentScale = ContentScale.Crop,
+                    )
+                }
+            }
+            if (selected) {
+                Box(
+                    Modifier.align(Alignment.TopEnd).padding(6.dp).size(20.dp)
+                        .clip(CircleShape).background(RdIRose),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text("✓", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                }
+            }
+        }
+        Spacer(Modifier.height(6.dp))
+        Text(
+            theme?.name ?: "Default",
+            color = if (selected) Color.White else RdISub,
+            fontSize = 12.5.sp, textAlign = TextAlign.Center,
+            modifier = Modifier.fillMaxWidth(),
+        )
     }
 }
 

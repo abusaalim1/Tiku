@@ -225,13 +225,16 @@ private fun fxDef(kind: String?): FxDef? = RdMessageFx.firstOrNull { it.kind == 
  *  whatever insets the chat root sits under. */
 private data class FxAnchor(val cxPx: Float, val bottomPx: Float)
 
-/** Durable per-device "already auto-played" id log for effect
+/** Durable per-account "already auto-played" id log for effect
  *  animations (ROUND 24 playback rule: an effect plays the FIRST time
- *  its message is rendered on THIS device — at send for the sender, on
- *  first sight for the recipient, even hours later — and never again on
- *  its own; only a bubble tap replays). Stored as one comma-joined
- *  string so the cap is a true FIFO trim (newest [CAP] ids kept);
- *  message ids are client-chosen doc ids and never contain a comma. */
+ *  its message is rendered for THIS account on this device — at send
+ *  for the sender, on first sight for the recipient, even hours
+ *  later — and never again on its own; only a bubble tap replays).
+ *  ROUND 28: the caller hands in a uid-namespaced prefs file, so each
+ *  signed-in account keeps its own log even on a shared phone.
+ *  Stored as one comma-joined string so the cap is a true FIFO trim
+ *  (newest [CAP] ids kept); message ids are client-chosen doc ids and
+ *  never contain a comma. */
 private class FxPlayedLog(private val prefs: android.content.SharedPreferences) {
     private val ids = LinkedHashSet<String>(
         prefs.getString(KEY, null)?.split(',')?.filter { it.isNotEmpty() } ?: emptyList(),
@@ -1216,8 +1219,20 @@ private fun RdBubbleRow(
      *  graphicsLayer entrance pop; see the layer itself for why it can
      *  never disturb layout or the follow glide. */
     animateIn: Boolean = false,
+    /** ROUND 26: the shared chat theme, or null = Default. When set,
+     *  the bubble BASE colour + its text colour come from the theme —
+     *  the fx dressing overlays are untouched, and media bubbles / the
+     *  sealed gift wrap keep their own rendering. */
+    theme: ChatTheme? = null,
 ) {
     val scope = rememberCoroutineScope()
+    // ROUND 26: this bubble's text colour under the theme (on Default
+    // it is Color.White — the exact pre-round constant).
+    val bubbleText = when {
+        theme == null -> Color.White
+        m.me -> theme.ownText
+        else -> theme.peerText
+    }
     val off = remember { Animatable(0f) }
     val heart = remember { Animatable(0f) }
     // ROUND 22: the gift reveal pop — when this row's gift flips to
@@ -1398,13 +1413,13 @@ private fun RdBubbleRow(
                         if (m.fx == "fire") RdFxFireGlow()
                         Column(
                             Modifier.widthIn(max = 280.dp).clip(RoundedCornerShape(22.dp))
-                                .background(if (media) SolidColor(RdCard) else if (sealedGift) SolidColor(Color.Transparent) else if (m.me) Brush.linearGradient(listOf(acc.first, acc.second)) else SolidColor(RdCard))
+                                .background(if (media) SolidColor(RdCard) else if (sealedGift) SolidColor(Color.Transparent) else if (theme != null) SolidColor(if (m.me) theme.ownBubble else theme.peerBubble) else if (m.me) Brush.linearGradient(listOf(acc.first, acc.second)) else SolidColor(RdCard))
                                 .then(if (media || sealedGift) Modifier else Modifier.padding(horizontal = 16.dp, vertical = 11.dp)),
                         ) {
                             when (m.kind) {
                                 MsgKind.IMAGE -> RdImageBubble(m)
                                 MsgKind.VIDEO -> RdVideoBubble(m)
-                                MsgKind.VOICE, MsgKind.AUDIO -> RdVoiceBubble(m, playing, onPlayToggle)
+                                MsgKind.VOICE, MsgKind.AUDIO -> RdVoiceBubble(m, playing, onPlayToggle, tint = bubbleText)
                                 else -> {
                                     if (sealedGift) {
                                         // ROUND 24: the sealed gift — the
@@ -1419,28 +1434,22 @@ private fun RdBubbleRow(
                                         // below: this column clips content.
                                         RdGiftWrapPill(unwrapP.value, withBow = false)
                                     } else {
-                                        if (m.fx == "gift") {
-                                            // opened gift: a normal bubble,
-                                            // keeping a tiny gift marker.
-                                            Row(
-                                                verticalAlignment = Alignment.CenterVertically,
-                                                modifier = Modifier.padding(bottom = 5.dp),
-                                            ) {
-                                                EmojiGlyph("🎁", 13.dp)
-                                                Spacer(Modifier.width(5.dp))
-                                                Text("Gift", color = Color.White.copy(0.7f), fontSize = 10.5.sp)
-                                            }
-                                        }
+                                        // ROUND 28: an opened gift is a plain
+                                        // bubble — the message text only, no
+                                        // "🎁 Gift" header label above it
+                                        // (owner's order). The sealed wrap
+                                        // above is untouched; list previews
+                                        // still say "Gift message".
                                         if (m.replyQuote != null) {
                                             Text(
-                                                m.replyQuote, color = Color.White.copy(0.75f), fontSize = 12.sp, maxLines = 1,
+                                                m.replyQuote, color = bubbleText.copy(0.75f), fontSize = 12.sp, maxLines = 1,
                                                 fontFamily = emojiFont,
                                                 overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
                                                 modifier = Modifier.padding(bottom = 6.dp).rdDrawLeftBar().padding(start = 8.dp),
                                             )
                                         }
                                         Text(
-                                            m.text, color = Color.White,
+                                            m.text, color = bubbleText,
                                             fontSize = if (loneEmoji != null) 34.sp else textSp.sp,
                                             fontFamily = emojiFont,
                                         )
@@ -1589,7 +1598,12 @@ private fun RdVideoBubble(m: TikuMessage) {
  *  the waveform bars are the message's real recorded amplitudes and the
  *  played portion lights up over the real duration. */
 @Composable
-private fun RdVoiceBubble(m: TikuMessage, playing: Boolean, onToggle: () -> Unit) {
+private fun RdVoiceBubble(
+    m: TikuMessage, playing: Boolean, onToggle: () -> Unit,
+    /** ROUND 26: the bubble's theme text colour. Defaults to White —
+     *  the exact pre-round rendering. */
+    tint: Color = Color.White,
+) {
     val prog = remember(m.id) { Animatable(0f) }
     LaunchedEffect(playing) {
         if (playing) {
@@ -1609,10 +1623,10 @@ private fun RdVoiceBubble(m: TikuMessage, playing: Boolean, onToggle: () -> Unit
     }
     Row(Modifier.widthIn(min = 190.dp), verticalAlignment = Alignment.CenterVertically) {
         Box(
-            Modifier.size(34.dp).clip(CircleShape).background(Color.White.copy(0.25f)).rdPress(onToggle),
+            Modifier.size(34.dp).clip(CircleShape).background(tint.copy(0.25f)).rdPress(onToggle),
             contentAlignment = Alignment.Center,
         ) {
-            Text(if (playing) "❚❚" else "▶", color = Color.White, fontSize = 12.sp)
+            Text(if (playing) "❚❚" else "▶", color = tint, fontSize = 12.sp)
         }
         Row(
             Modifier.weight(1f).padding(horizontal = 10.dp),
@@ -1621,13 +1635,13 @@ private fun RdVoiceBubble(m: TikuMessage, playing: Boolean, onToggle: () -> Unit
             bars.forEachIndexed { k, h ->
                 Box(
                     Modifier.width(3.dp).height(h.dp).clip(RoundedCornerShape(2.dp))
-                        .background(Color.White.copy(if (k < prog.value * bars.size) 1f else 0.45f)),
+                        .background(tint.copy(if (k < prog.value * bars.size) 1f else 0.45f)),
                 )
             }
         }
         Text(
             "${m.voiceDurSec / 60}:${(m.voiceDurSec % 60).toString().padStart(2, '0')}",
-            color = Color.White, fontSize = 12.sp,
+            color = tint, fontSize = 12.sp,
         )
     }
 }
@@ -1642,7 +1656,7 @@ private fun RdVoiceBubble(m: TikuMessage, playing: Boolean, onToggle: () -> Unit
  *  RdCard, 22dp corners, 16×15 padding, 7dp RdSub dots, avatar — is
  *  Tiku's own and unchanged. */
 @Composable
-private fun RdTypingBubble(person: Person) {
+private fun RdTypingBubble(person: Person, theme: ChatTheme? = null) {
     val pop = remember { Animatable(0f) }
     LaunchedEffect(Unit) {
         pop.animateTo(1f, spring(dampingRatio = 0.55f, stiffness = Spring.StiffnessMediumLow))
@@ -1650,7 +1664,7 @@ private fun RdTypingBubble(person: Person) {
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Bottom) {
         RdAv(person, 28); Spacer(Modifier.width(8.dp))
         Row(
-            Modifier.clip(RoundedCornerShape(22.dp)).background(RdCard).padding(horizontal = 16.dp, vertical = 15.dp)
+            Modifier.clip(RoundedCornerShape(22.dp)).background(theme?.peerBubble ?: RdCard).padding(horizontal = 16.dp, vertical = 15.dp)
                 .graphicsLayer {
                     val p = pop.value
                     alpha = p.coerceIn(0f, 1f)
@@ -1679,7 +1693,7 @@ private fun RdTypingBubble(person: Person) {
                             translationY = -6.dp.toPx() * y
                             alpha = 0.5f + 0.5f * y
                         }
-                        .clip(CircleShape).background(RdSub),
+                        .clip(CircleShape).background(theme?.peerText ?: RdSub),
                 )
             }
         }
@@ -1756,7 +1770,21 @@ fun RdChatInput(
     fxArmed: String? = null,
     onFxClick: () -> Unit = {},
     onFxDisarm: () -> Unit = {},
+    /** ROUND 26: the shared chat theme, or null = Default. When set,
+     *  the composer pill + reply strip + fx chip wear the theme's
+     *  composer colours instead of the glass skin. */
+    theme: ChatTheme? = null,
 ) {
+    // ROUND 26: themed composer colours. Every value falls back to the
+    // EXACT pre-round expression when theme == null, so the Default
+    // composer renders identically to before this round.
+    val contentCol = theme?.composerText ?: Color.White
+    val subCol = theme?.composerText?.copy(alpha = 0.62f) ?: RdSub
+    val faintBg = theme?.composerText?.copy(alpha = 0.12f) ?: Color.White.copy(0.12f)
+    fun barMod(shape: RoundedCornerShape): Modifier =
+        if (theme != null) Modifier.clip(shape).background(theme.composerBar)
+            .border(1.dp, theme.composerText.copy(alpha = 0.10f), shape)
+        else Modifier.chatGlass(h, shape)
     // ROUND 15: the camera button lives only while the field is EMPTY and
     // UNFOCUSED — tapping into the field to type takes focus and the
     // button animates away (owner's exact ask).
@@ -1772,15 +1800,15 @@ fun RdChatInput(
             exit = fadeOut() + shrinkVertically(),
         ) {
             Row(
-                Modifier.fillMaxWidth().chatGlass(h, RoundedCornerShape(20.dp)).padding(horizontal = 14.dp, vertical = 8.dp),
+                Modifier.fillMaxWidth().then(barMod(RoundedCornerShape(20.dp))).padding(horizontal = 14.dp, vertical = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Box(Modifier.width(3.dp).height(28.dp).clip(RoundedCornerShape(2.dp)).background(accent))
                 Column(Modifier.weight(1f).padding(horizontal = 10.dp)) {
                     Text("Replying", color = accent, fontSize = 11.sp)
-                    Text(replyText ?: "", color = RdSub, fontSize = 13.sp, maxLines = 1, fontFamily = emojiFont)
+                    Text(replyText ?: "", color = subCol, fontSize = 13.sp, maxLines = 1, fontFamily = emojiFont)
                 }
-                Text("✕", color = Color.White, fontSize = 16.sp, modifier = Modifier.rdPress(onClearReply).padding(6.dp))
+                Text("✕", color = contentCol, fontSize = 16.sp, modifier = Modifier.rdPress(onClearReply).padding(6.dp))
             }
         }
         // ROUND 22: the armed-effect chip (mirrors the reply strip's
@@ -1796,21 +1824,21 @@ fun RdChatInput(
             val def = fxDef(fxArmed) ?: lastFxDef
             if (def != null) {
                 Row(
-                    Modifier.chatGlass(h, RoundedCornerShape(999.dp)).padding(horizontal = 12.dp, vertical = 6.dp),
+                    Modifier.then(barMod(RoundedCornerShape(999.dp))).padding(horizontal = 12.dp, vertical = 6.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     EmojiGlyph(def.glyph, 16.dp)
                     Spacer(Modifier.width(7.dp))
-                    Text(def.name, color = Color.White, fontSize = 12.5.sp, fontWeight = FontWeight.Medium)
+                    Text(def.name, color = contentCol, fontSize = 12.5.sp, fontWeight = FontWeight.Medium)
                     Text(
-                        "✕", color = RdSub, fontSize = 13.sp,
+                        "✕", color = subCol, fontSize = 13.sp,
                         modifier = Modifier.rdPress(onFxDisarm).padding(start = 8.dp, end = 2.dp, top = 2.dp, bottom = 2.dp),
                     )
                 }
             }
         }
         Row(
-            Modifier.fillMaxWidth().chatGlass(h, RoundedCornerShape(999.dp)).padding(start = 6.dp, end = 6.dp, top = 6.dp, bottom = 6.dp),
+            Modifier.fillMaxWidth().then(barMod(RoundedCornerShape(999.dp))).padding(start = 6.dp, end = 6.dp, top = 6.dp, bottom = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             if (recording) {
@@ -1820,10 +1848,10 @@ fun RdChatInput(
                 Box(Modifier.padding(start = 14.dp).size(10.dp).clip(CircleShape).background(RdDanger.copy(alpha = pulse)))
                 Text(
                     "${recSecs / 60}:${(recSecs % 60).toString().padStart(2, '0')}",
-                    color = Color.White, fontWeight = FontWeight.SemiBold,
+                    color = contentCol, fontWeight = FontWeight.SemiBold,
                     modifier = Modifier.weight(1f).padding(start = 12.dp),
                 )
-                Text("Cancel", color = RdSub, modifier = Modifier.rdPress(onRecCancel).padding(10.dp))
+                Text("Cancel", color = subCol, modifier = Modifier.rdPress(onRecCancel).padding(10.dp))
                 Box(Modifier.size(42.dp).clip(CircleShape).background(accent).rdPress(onRecSend), contentAlignment = Alignment.Center) {
                     Icon(Icons.Filled.Send, null, tint = Color.White, modifier = Modifier.size(20.dp))
                 }
@@ -1840,11 +1868,11 @@ fun RdChatInput(
                 ) {
                     Box(
                         Modifier.padding(end = 6.dp).size(40.dp).clip(CircleShape)
-                            .background(if (fxArmed != null) accent else Color.White.copy(0.12f))
+                            .background(if (fxArmed != null) accent else faintBg)
                             .rdPress(onFxClick),
                         contentAlignment = Alignment.Center,
                     ) {
-                        TikuSparklesIcon(Modifier.size(20.dp), tint = Color.White)
+                        TikuSparklesIcon(Modifier.size(20.dp), tint = if (fxArmed != null) Color.White else contentCol)
                     }
                 }
                 AnimatedVisibility(
@@ -1859,20 +1887,20 @@ fun RdChatInput(
                         Icon(Icons.Filled.PhotoCamera, null, tint = Color.White, modifier = Modifier.size(20.dp))
                     }
                 }
-                Box(Modifier.size(40.dp).clip(CircleShape).background(Color.White.copy(0.12f)).rdPress(onPlus), contentAlignment = Alignment.Center) {
-                    Text("+", color = Color.White, fontSize = 24.sp)
+                Box(Modifier.size(40.dp).clip(CircleShape).background(faintBg).rdPress(onPlus), contentAlignment = Alignment.Center) {
+                    Text("+", color = contentCol, fontSize = 24.sp)
                 }
                 Box(Modifier.weight(1f).padding(horizontal = 12.dp)) {
-                    if (value.isEmpty()) Text("Message…", color = RdSub, fontSize = 15.sp)
+                    if (value.isEmpty()) Text("Message…", color = subCol, fontSize = 15.sp)
                     BasicTextField(
                         value, onChange,
-                        textStyle = TextStyle(color = Color.White, fontSize = 15.sp, fontFamily = emojiFont),
+                        textStyle = TextStyle(color = contentCol, fontSize = 15.sp, fontFamily = emojiFont),
                         cursorBrush = SolidColor(accent),
                         modifier = Modifier.fillMaxWidth().onFocusChanged { fieldFocused = it.isFocused },
                     )
                 }
                 val has = value.isNotBlank()
-                val bg by animateColorAsState(if (has) accent else Color.White.copy(0.12f), label = "sendBg")
+                val bg by animateColorAsState(if (has) accent else faintBg, label = "sendBg")
                 Box(
                     Modifier.size(42.dp).clip(CircleShape).background(bg).rdPress { if (has) onSend() else onMic() },
                     contentAlignment = Alignment.Center,
@@ -1894,7 +1922,7 @@ fun RdChatInput(
                         label = "sendSwap",
                     ) { hasText ->
                         if (hasText) Icon(Icons.Filled.Send, null, tint = Color.White, modifier = Modifier.size(20.dp))
-                        else Icon(Icons.Filled.Mic, null, tint = Color.White, modifier = Modifier.size(20.dp))
+                        else Icon(Icons.Filled.Mic, null, tint = if (theme != null) contentCol else Color.White, modifier = Modifier.size(20.dp))
                     }
                 }
             }
@@ -1983,6 +2011,11 @@ private fun RdChatContent(thread: ChatThread) {
     // appearance theme as the fallback (effectiveSettings resolves both).
     val themeIdx = thread.effectiveSettings(globalSettings).accentIdx
     val acc = RdThemes[themeIdx.coerceIn(0, RdThemes.lastIndex)]
+    // ROUND 26: the shared wallpaper theme. `thread` streams from the
+    // threads listener, so a theme set on EITHER phone re-skins this
+    // open chat live. null = Default: every render site below guards on
+    // chatTheme != null and the Default path is byte-for-byte today's.
+    val chatTheme = ChatThemes.byId(thread.themeId)
     val haze = LocalHazeState.current
     val blockedUids by AppState.blockedUids.collectAsState()
     val partnerBlocked = person.uid in blockedUids
@@ -2042,14 +2075,28 @@ private fun RdChatContent(thread: ChatThread) {
     /** Bubble anchors by message id. A plain map on purpose: it is
      *  read only at play time, so layout callbacks never recompose. */
     val fxAnchorMap = remember(threadId) { mutableMapOf<String, FxAnchor>() }
-    /** ROUND 24 — the durable per-device played logs (fx kinds in one
-     *  file, single-emoji effects in the other). An effect auto-plays
-     *  the FIRST time its message is rendered on this device and never
+    /** ROUND 24 — the durable played logs (fx kinds in one file,
+     *  single-emoji effects in the other). An effect auto-plays the
+     *  FIRST time its message is rendered for this account and never
      *  again on its own; only a bubble tap replays, bypassing the logs
      *  on purpose. (ROUND 22's in-memory tail-only set + priming are
-     *  gone: first DISPLAY is the trigger now, not becoming the tail.) */
-    val fxPlayedLog = remember { FxPlayedLog(ctx.getSharedPreferences("tiku_fx_played", Context.MODE_PRIVATE)) }
-    val emojiFxPlayedLog = remember { FxPlayedLog(ctx.getSharedPreferences("tiku_emoji_fx_played", Context.MODE_PRIVATE)) }
+     *  gone: first DISPLAY is the trigger now, not becoming the tail.)
+     *  ROUND 28 — the logs are PER ACCOUNT: the prefs file name carries
+     *  the signed-in uid. The old per-device files let the sender's
+     *  play consume the recipient's first view whenever both accounts
+     *  shared one phone, so the other side never saw the effect; now
+     *  every account's first view plays. The pre-28 files are simply
+     *  abandoned (effects may auto-play once more per account — the
+     *  accepted migration). The remember is keyed on the uid, so an
+     *  account switch rebinds the logs even if this screen never left
+     *  composition; a missing uid falls back to the "anon" namespace
+     *  instead of crashing. */
+    val fxUid = (if (Config.PREVIEW_UI_ONLY) "me" else FirebaseEngine.myUid())
+        .filter { it.isLetterOrDigit() || it == '-' || it == '_' }
+        .take(64)
+        .ifEmpty { "anon" }
+    val fxPlayedLog = remember(fxUid) { FxPlayedLog(ctx.getSharedPreferences("tiku_fx_played_$fxUid", Context.MODE_PRIVATE)) }
+    val emojiFxPlayedLog = remember(fxUid) { FxPlayedLog(ctx.getSharedPreferences("tiku_emoji_fx_played_$fxUid", Context.MODE_PRIVATE)) }
     // ---- ROUND 22 (insta port): bubble entrance-pop bookkeeping ----
     /** Ids this screen has already accounted for: everything present
      *  at prime time (the whole loaded history) plus every arrival
@@ -2063,12 +2110,19 @@ private fun RdChatContent(thread: ChatThread) {
      *  up when it landed) renders statically instead of popping out
      *  of context. */
     var popFresh by remember(threadId) { mutableStateOf<Set<String>>(emptySet()) }
-    /** Opened gift ids — per-device and DURABLE (SharedPreferences):
-     *  a gift unwraps once on this phone and stays a normal bubble
+    /** Opened gift ids — per-account and DURABLE (SharedPreferences):
+     *  a gift unwraps once for this account and stays a normal bubble
      *  across restarts, exactly like IG. Local-only by design: nothing
-     *  about opening is written to the server. */
-    val giftPrefs = remember { ctx.getSharedPreferences("tiku_fx_gifts", Context.MODE_PRIVATE) }
-    var openedGifts by remember(threadId) {
+     *  about opening is written to the server. ROUND 28b — the prefs
+     *  file carries the same uid namespace as the played logs above:
+     *  per-device storage let the sender's unwrap consume the
+     *  recipient's sealed surprise whenever both accounts shared one
+     *  phone; now every account unwraps for itself. The pre-28b file
+     *  is abandoned like the pre-28 logs (gifts show sealed once more
+     *  per account — the accepted migration). The remember is keyed
+     *  on the uid, so an account switch rebinds it. */
+    val giftPrefs = remember(fxUid) { ctx.getSharedPreferences("tiku_fx_gifts_$fxUid", Context.MODE_PRIVATE) }
+    var openedGifts by remember(threadId, fxUid) {
         mutableStateOf(giftPrefs.getStringSet("opened", emptySet())?.toSet() ?: emptySet())
     }
     fun playFx(kind: String, msgId: String, anchored: Boolean = false) {
@@ -2704,6 +2758,25 @@ private fun RdChatContent(thread: ChatThread) {
     }
 
     Box(Modifier.fillMaxSize().background(Color.Black)) {
+        // ROUND 26: the theme wallpaper — full-bleed behind the message
+        // list, under the header and composer (both draw later in this
+        // Box). The asset is the owner's image exactly as supplied,
+        // decoded once per theme. Default (chatTheme == null) draws
+        // nothing: the list still sits on the same black as today.
+        if (chatTheme != null) {
+            val wallpaper = remember(chatTheme.id) {
+                runCatching {
+                    ctx.assets.open("themes/${chatTheme.asset}")
+                        .use { BitmapFactory.decodeStream(it) }
+                }.getOrNull()
+            }
+            if (wallpaper != null) {
+                Image(
+                    wallpaper.asImageBitmap(), null,
+                    Modifier.fillMaxSize(), contentScale = ContentScale.Crop,
+                )
+            }
+        }
         // ---- message list (the haze source the overlays blur) ----
         // ROUND 20: bounded above the composer by its MEASURED height
         // (see composerHeightPx) — the list's visible bottom IS the
@@ -2736,8 +2809,9 @@ private fun RdChatContent(thread: ChatThread) {
                     // glide shifts the list, and the stable keys keep
                     // prepend/echo positions exact.
                     // ROUND 24 — first-display effect playback: the
-                    // FIRST time this message renders on THIS device
-                    // its effect plays (fx kinds anchored to the
+                    // FIRST time this message renders for THIS ACCOUNT
+                    // (ROUND 28: the played logs are per-account) its
+                    // effect plays (fx kinds anchored to the
                     // bubble; lone-emoji effects screen-wide) and the
                     // durable log marks it, so scroll-backs,
                     // recompositions, the server echo (same
@@ -2756,7 +2830,7 @@ private fun RdChatContent(thread: ChatThread) {
                             // route to EmojiFxOverlay; the Round-24
                             // families keep RdFxOverlay. Both share
                             // this ONE durable played log, so a message
-                            // auto-plays exactly once per device,
+                            // auto-plays exactly once per account,
                             // whichever engine renders it.
                             val dk = singleEmojiDesignKind(m)
                             val ek = if (dk == null) singleEmojiOverlayKind(m) else null
@@ -2789,6 +2863,7 @@ private fun RdChatContent(thread: ChatThread) {
                                 m = m,
                                 person = person,
                                 acc = acc,
+                                theme = chatTheme,
                                 textSp = textSp,
                                 playing = playingId == m.id,
                                 onPlayToggle = {
@@ -2870,14 +2945,17 @@ private fun RdChatContent(thread: ChatThread) {
                                     Modifier.fillMaxWidth().padding(top = 2.dp, end = 4.dp),
                                     horizontalArrangement = Arrangement.End,
                                 ) {
-                                    Text(caption, fontSize = 11.5.sp, color = RdSub)
+                                    // ROUND 26: on a theme the caption sits
+                                    // on the wallpaper — each theme carries
+                                    // a shade picked for it (Themes.kt).
+                                    Text(caption, fontSize = 11.5.sp, color = chatTheme?.caption ?: RdSub)
                                 }
                             }
                         }
                     }
                 }
                 if (peerTyping) {
-                    item(key = "typing") { RdTypingBubble(person) }
+                    item(key = "typing") { RdTypingBubble(person, theme = chatTheme) }
                 }
             }
         }
@@ -2973,12 +3051,19 @@ private fun RdChatContent(thread: ChatThread) {
             if (partnerBlocked) {
                 Row(
                     Modifier.padding(horizontal = 14.dp, vertical = 12.dp).fillMaxWidth()
-                        .chatGlass(haze, RoundedCornerShape(999.dp))
+                        // ROUND 26: the blocked bar wears the composer
+                        // colours under a theme (same pill language).
+                        .then(
+                            if (chatTheme != null) Modifier.clip(RoundedCornerShape(999.dp))
+                                .background(chatTheme.composerBar)
+                            else Modifier.chatGlass(haze, RoundedCornerShape(999.dp))
+                        )
                         .padding(horizontal = 18.dp, vertical = 14.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Text(
-                        "You blocked this person", color = Color.White, fontSize = 15.sp,
+                        "You blocked this person",
+                        color = chatTheme?.composerText ?: Color.White, fontSize = 15.sp,
                         modifier = Modifier.weight(1f),
                     )
                     Text(
@@ -3003,7 +3088,8 @@ private fun RdChatContent(thread: ChatThread) {
                         AppState.repo.setTyping(threadId, it.isNotEmpty())
                     },
                     onSend = { sendCurrent() },
-                    accent = acc.first,
+                    accent = chatTheme?.accent ?: acc.first,
+                    theme = chatTheme,
                     replyText = replyTarget?.let { replyQuoteLabel(it) },
                     onClearReply = { replyTarget = null },
                     recording = recording,
@@ -3159,9 +3245,16 @@ private fun RdChatContent(thread: ChatThread) {
                         } else {
                             Text(
                                 if (mm.kind == MsgKind.TEXT) mm.text else replyQuoteLabel(mm),
-                                color = Color.White, fontSize = textSp.sp, fontFamily = rememberEmojiFontFamily(),
+                                // ROUND 26: the menu preview IS the bubble —
+                                // it wears the theme colours too.
+                                color = if (chatTheme == null) Color.White
+                                    else if (mm.me) chatTheme.ownText else chatTheme.peerText,
+                                fontSize = textSp.sp, fontFamily = rememberEmojiFontFamily(),
                                 modifier = Modifier.widthIn(max = 280.dp).clip(RoundedCornerShape(22.dp))
-                                    .background(if (mm.me) Brush.linearGradient(listOf(acc.first, acc.second)) else SolidColor(RdCard))
+                                    .background(
+                                        if (chatTheme != null) SolidColor(if (mm.me) chatTheme.ownBubble else chatTheme.peerBubble)
+                                        else if (mm.me) Brush.linearGradient(listOf(acc.first, acc.second)) else SolidColor(RdCard)
+                                    )
                                     .padding(horizontal = 16.dp, vertical = 11.dp),
                             )
                         }
@@ -3407,7 +3500,15 @@ private fun RdChatContent(thread: ChatThread) {
                             Box(
                                 Modifier.width(128.dp),
                                 contentAlignment = Alignment.Center,
-                            ) { RdFxMiniPreview(def.kind, fxPreviewText, acc) }
+                            ) {
+                                // ROUND 26: the tray previews MY bubble —
+                                // under a theme it previews in the theme's
+                                // own-bubble colour (solid pair).
+                                RdFxMiniPreview(
+                                    def.kind, fxPreviewText,
+                                    if (chatTheme != null) chatTheme.ownBubble to chatTheme.ownBubble else acc,
+                                )
+                            }
                             Spacer(Modifier.width(12.dp))
                             Column(Modifier.weight(1f)) {
                                 Text(def.name, color = Color.White, fontSize = 16.sp)

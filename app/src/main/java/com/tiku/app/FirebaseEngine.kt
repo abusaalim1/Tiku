@@ -806,6 +806,9 @@ object FirebaseEngine : ChatRepo {
                                 myNickname = myNickname,
                                 themeAccent = themeAccentVal,
                                 themeWallpaper = themeWallpaperVal,
+                                // ROUND 26: the shared wallpaper theme
+                                // (missing field = Default, "").
+                                themeId = doc.getString("theme") ?: "",
                                 receiptsOffMine = uid in receiptsOffList,
                                 pinnedMsgIds = pinnedMsgsList,
                                 isRequest = deriveIsRequest(knownMsgs, accMs > 0L),
@@ -2229,6 +2232,26 @@ object FirebaseEngine : ChatRepo {
                 }
                 Log.d("TikuChat", "theme updated in chat $id: $updates")
             }.onFailure { Log.e("TikuChat", "setTheme failed for chat $id", it) }
+        }
+    }
+
+    /** ROUND 26 — the SHARED wallpaper theme: a single additive string
+     *  field `theme` on the chat doc (a ChatThemes id). Both members'
+     *  thread listeners stream the chat doc, so either phone setting it
+     *  re-skins both chats live, exactly like the legacy theme above.
+     *  Default ("") DELETES the field, keeping "absent = Default" the
+     *  one true representation; old builds ignore the field entirely. */
+    override fun setTheme(id: String, themeId: String) {
+        AppState.threads.value = AppState.threads.value.map {
+            if (it.id == id) it.copy(themeId = themeId) else it
+        }
+        scope.launch {
+            runCatching {
+                val ref = db.collection(Schema.Chats.COLL).document(id)
+                if (themeId.isBlank()) ref.update("theme", FieldValue.delete()).await()
+                else ref.update("theme", themeId).await()
+                Log.d("TikuChat", "chat theme -> '$themeId' in chat $id")
+            }.onFailure { Log.e("TikuChat", "setTheme(id) failed for chat $id", it) }
         }
     }
 

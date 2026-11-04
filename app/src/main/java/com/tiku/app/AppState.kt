@@ -327,6 +327,10 @@ interface ChatRepo {
     /** Set this chat's own theme (chat doc themeAccent/themeWallpaper;
      *  null leaves that half unchanged). Default no-op. */
     fun setTheme(id: String, accentIdx: Int?, wallpaperIdx: Int?) {}
+    /** ROUND 26: set the SHARED wallpaper theme (chat doc `theme`, a
+     *  ChatThemes id; "" = Default). Either member setting it re-skins
+     *  both phones via the threads listener. Default no-op. */
+    fun setTheme(id: String, themeId: String) {}
     /** My per-chat read-receipts switch (chat doc receiptsOff array).
      *  Default no-op. */
     fun setReceipts(id: String, on: Boolean) {}

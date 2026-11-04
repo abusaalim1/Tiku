@@ -180,6 +180,9 @@ data class ChatThread(
      *  on device (rounds 18/19 — the divider never appeared). UI-only
      *  bookkeeping, rewritten on every open. */
     val unreadAtOpen: Int = 0,
+    // ROUND 26 — the shared chat theme (chats/{id}.theme): "" = Default.
+    // Additive + a plain string, so old builds ignore the field entirely.
+    val themeId: String = "",
 ) {
     /** What every surface renders as this chat's title: nickname first,
      *  profile name otherwise. Real name + @username stay visible in the

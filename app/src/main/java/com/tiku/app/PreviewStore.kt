@@ -283,6 +283,13 @@ object PreviewRepo : ChatRepo {
         }
     }
 
+    /** ROUND 26: the shared wallpaper theme, local-only in preview. */
+    override fun setTheme(id: String, themeId: String) {
+        AppState.threads.value = AppState.threads.value.map {
+            if (it.id == id) it.copy(themeId = themeId) else it
+        }
+    }
+
     override fun setReceipts(id: String, on: Boolean) {
         AppState.threads.value = AppState.threads.value.map {
             if (it.id == id) it.copy(receiptsOffMine = !on) else it
