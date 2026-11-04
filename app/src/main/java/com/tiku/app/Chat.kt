@@ -125,6 +125,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
@@ -304,12 +305,37 @@ private fun singleEmojiOverlayKind(m: TikuMessage): String? {
     if (m.kind != MsgKind.TEXT || m.fx != null || m.undecryptable || m.deletedForEveryone) return null
     val g = singleEmojiGrapheme(m.text) ?: return null
     return when (g.replace("\uFE0F", "")) {
-        "❤", "💖", "💕", "💗", "💓", "💞", "🥰", "😍" -> "hearts"
-        "😘" -> "kiss"
+        // ROUND 25: ❤ and 😘 are NOT here any more — they belong to
+        // the owner's supplied design kinds ([singleEmojiDesignKind])
+        // and every caller checks that mapping first.
+        "💖", "💕", "💗", "💓", "💞", "🥰", "😍" -> "hearts"
         "🎉", "🎊", "🥳" -> "confetti"
         "🔥" -> "fire"
         "😂", "🤣" -> "laugh"
         "✨", "🌟", "⭐" -> "sparkles"
+        else -> null
+    }
+}
+
+/** ROUND 25: the owner's own supplied emoji-effect design
+ *  (EmojiFx.kt). A lone ❤ / 😘 / 🫣 / 👀 / 😚 / 🤭 plays that
+ *  design's centre-stage animation via [EmojiFxOverlay] INSTEAD of a
+ *  Round-24 particle kind. Returns the design's kind index
+ *  (0=heart, 1=kiss, 2=peek, 3=eyes, 4=kissing, 5=giggle), or null.
+ *  Same qualification gate as [singleEmojiOverlayKind]: plain TEXT,
+ *  no fx field, exactly one strict grapheme. ❤ accepts U+2764 with
+ *  or without VS16 (the compare strips it, like the mapping above).
+ *  Every caller checks this BEFORE [singleEmojiOverlayKind]. */
+private fun singleEmojiDesignKind(m: TikuMessage): Int? {
+    if (m.kind != MsgKind.TEXT || m.fx != null || m.undecryptable || m.deletedForEveryone) return null
+    val g = singleEmojiGrapheme(m.text) ?: return null
+    return when (g.replace("\uFE0F", "")) {
+        "❤" -> 0
+        "😘" -> 1
+        "🫣" -> 2
+        "👀" -> 3
+        "😚" -> 4
+        "🤭" -> 5
         else -> null
     }
 }
@@ -1343,7 +1369,7 @@ private fun RdBubbleRow(
                                             }
                                         }
                                     }
-                                    else if (m.fx != null || singleEmojiOverlayKind(m) != null) onFxTap(m)
+                                    else if (m.fx != null || singleEmojiOverlayKind(m) != null || singleEmojiDesignKind(m) != null) onFxTap(m)
                                     // image opens its viewer once decoded;
                                     // a video tap either opens its player
                                     // (loaded) or starts the tap-to-load —
@@ -2006,6 +2032,13 @@ private fun RdChatContent(thread: ChatThread) {
      *  around their bubble (the row reports its position into
      *  [fxAnchorMap]); every other playback is screen-wide (null). */
     var fxPlayAnchor by remember(threadId) { mutableStateOf<FxAnchor?>(null) }
+    /** ROUND 25: the running EmojiFxOverlay playback (the owner's
+     *  design): design kind index to play key, same "<msgId>#<n>"
+     *  scheme as [fxPlay]. The two playbacks are mutually exclusive —
+     *  starting one clears the other, so a single effect owns the
+     *  screen at a time, exactly like the single-state Round-24
+     *  design. */
+    var emojiFxPlay by remember(threadId) { mutableStateOf<Pair<Int, String>?>(null) }
     /** Bubble anchors by message id. A plain map on purpose: it is
      *  read only at play time, so layout callbacks never recompose. */
     val fxAnchorMap = remember(threadId) { mutableMapOf<String, FxAnchor>() }
@@ -2040,8 +2073,18 @@ private fun RdChatContent(thread: ChatThread) {
     }
     fun playFx(kind: String, msgId: String, anchored: Boolean = false) {
         fxPlaySeq += 1
+        emojiFxPlay = null
         fxPlayAnchor = if (anchored) fxAnchorMap[msgId] else null
         fxPlay = kind to "$msgId#$fxPlaySeq"
+    }
+    /** ROUND 25: start an EmojiFxOverlay playback. Screen-wide by
+     *  design (the design's stage IS the full chat), so any running
+     *  RdFxOverlay playback and its anchor are cleared. */
+    fun playEmojiFx(kindIdx: Int, msgId: String) {
+        fxPlaySeq += 1
+        fxPlay = null
+        fxPlayAnchor = null
+        emojiFxPlay = kindIdx to "$msgId#$fxPlaySeq"
     }
     fun openGift(id: String) {
         if (id in openedGifts) return
@@ -2709,10 +2752,17 @@ private fun RdChatContent(thread: ChatThread) {
                                 playFx(k, m.id, anchored = true)
                             }
                         } else if (k == null) {
-                            val ek = singleEmojiOverlayKind(m)
-                            if (ek != null && !emojiFxPlayedLog.seen(m.id)) {
+                            // ROUND 25: the owner's design emojis
+                            // route to EmojiFxOverlay; the Round-24
+                            // families keep RdFxOverlay. Both share
+                            // this ONE durable played log, so a message
+                            // auto-plays exactly once per device,
+                            // whichever engine renders it.
+                            val dk = singleEmojiDesignKind(m)
+                            val ek = if (dk == null) singleEmojiOverlayKind(m) else null
+                            if ((dk != null || ek != null) && !emojiFxPlayedLog.seen(m.id)) {
                                 emojiFxPlayedLog.mark(m.id)
-                                playFx(ek, m.id)
+                                if (dk != null) playEmojiFx(dk, m.id) else playFx(ek!!, m.id)
                             }
                         }
                     }
@@ -2788,9 +2838,15 @@ private fun RdChatContent(thread: ChatThread) {
                                     when (msg.fx) {
                                         "gift" -> openGift(msg.id)
                                         "fire", "confetti", "hearts" -> playFx(msg.fx!!, msg.id, anchored = true)
-                                        // ROUND 24: a lone-emoji message
-                                        // replays its text-derived effect
-                                        null -> singleEmojiOverlayKind(msg)?.let { playFx(it, msg.id) }
+                                        // ROUND 24 + 25: a lone-emoji
+                                        // message replays its text-derived
+                                        // effect — the owner's design kinds
+                                        // first, Round-24 families after.
+                                        null -> {
+                                            val dk = singleEmojiDesignKind(msg)
+                                            if (dk != null) playEmojiFx(dk, msg.id)
+                                            else singleEmojiOverlayKind(msg)?.let { playFx(it, msg.id) }
+                                        }
                                     }
                                 },
                                 // ROUND 24: bubble anchor for fx playback
@@ -3403,6 +3459,20 @@ private fun RdChatContent(thread: ChatThread) {
         fxPlay?.let { (kind, playKey) ->
             RdFxOverlay(kind, playKey, fxPlayAnchor) {
                 if (fxPlay?.second == playKey) fxPlay = null
+            }
+        }
+
+        // ---- ROUND 25: the owner's EmojiFx design overlay ----
+        // Same host position and key-checked clear as RdFxOverlay
+        // above. key(playKey) gives every playback a FRESH overlay
+        // (fresh Fx engine), so a tap replay mid-flight restarts the
+        // design cleanly instead of resuming a half-run show. The
+        // overlay is transparent and carries no pointer input.
+        emojiFxPlay?.let { (kindIdx, playKey) ->
+            key(playKey) {
+                EmojiFxOverlay(kindIdx) {
+                    if (emojiFxPlay?.second == playKey) emojiFxPlay = null
+                }
             }
         }
     }
