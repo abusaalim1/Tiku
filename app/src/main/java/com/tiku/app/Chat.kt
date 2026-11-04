@@ -1730,7 +1730,7 @@ private fun RdChatContent(thread: ChatThread) {
     //  (1) THE GUARD HAD A HOLE AT BOTH ENDS. The send effect CONSUMED
     //      the request — handledTailSeq + consumeTailScroll null
     //      pendingTail, so latestSendPending went false — BEFORE
-    //      calling glideToTail(), and glideInFlight was set INSIDE the
+    //      calling glideToTail(nearBottom), and glideInFlight was set INSIDE the
     //      launched coroutine: asynchronously, one dispatch later.
     //      Between the consume and the flag-set the glue was UNMUTED,
     //      while the composer was already shrinking (the input clears
@@ -1753,7 +1753,7 @@ private fun RdChatContent(thread: ChatThread) {
     //      composer was still collapsing — and animated AGAIN, so the
     //      bubble visibly arrived twice.
     // ROUND 22 closes all three BY CONSTRUCTION:
-    //  - glideToTail() raises glideInFlight SYNCHRONOUSLY, in the
+    //  - glideToTail(nearBottom) raises glideInFlight SYNCHRONOUSLY, in the
     //    caller, before the job even exists — and the send effect now
     //    arms the glide BEFORE consuming the request, so from the send
     //    tap onward there is no unmuted instant in the whole sequence
@@ -1831,14 +1831,14 @@ private fun RdChatContent(thread: ChatThread) {
         }
     }
 
-    fun glideToTail() {
-        // ROUND 22: capture the anchored state and raise the guard
-        // HERE, synchronously, in the caller — from this line onward
-        // the glue is muted no matter when the dispatcher runs the job.
-        // (Round 21 set the flag inside the coroutine body: one dispatch
-        // too late, and the send effect had already consumed the
-        // request that was the guard's other half.)
-        val atBottom = nearBottom
+    fun glideToTail(atBottom: Boolean) {
+        // ROUND 22: the caller passes the anchored state it captured
+        // (nearBottom in the screen scope) and the guard rises HERE,
+        // synchronously — from this line onward the glue is muted no
+        // matter when the dispatcher runs the job. (Round 21 set the
+        // flag inside the coroutine body: one dispatch too late, and
+        // the send effect had already consumed the request that was
+        // the guard's other half.)
         glideInFlight = true
         followJob?.cancel()
         val job = scope.launch {
@@ -2037,7 +2037,7 @@ private fun RdChatContent(thread: ChatThread) {
         // whose flag rose a dispatch later still. Armed first (and
         // raised synchronously inside glideToTail), the guard now
         // never dips between the send tap and the landed glide.
-        glideToTail()
+        glideToTail(nearBottom)
         AppState.consumeTailScroll(threadId, req.seq)
     }
     // ROUND 22 — effect auto-play: a fire / confetti / hearts message
@@ -2108,10 +2108,10 @@ private fun RdChatContent(thread: ChatThread) {
             // the same single animation. Metadata-only snapshot changes
             // (seen / reaction) never change the tail id, so they can
             // never re-trigger a glide or a re-sort jump.
-            if (nearBottom) glideToTail()
+            if (nearBottom) glideToTail(nearBottom)
         } else if (settled && peerTyping && nearBottom && tail != null) {
             // the typing bubble appended below the fold while following
-            glideToTail()
+            glideToTail(nearBottom)
         }
         if (tail != null) prevTailId = tail.id
     }
@@ -2332,7 +2332,7 @@ private fun RdChatContent(thread: ChatThread) {
                     .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {
                         // ROUND 19: the pill rides the same single
                         // coalesced glide as every other tail follow.
-                        glideToTail()
+                        glideToTail(nearBottom)
                     },
                 contentAlignment = Alignment.Center,
             ) {

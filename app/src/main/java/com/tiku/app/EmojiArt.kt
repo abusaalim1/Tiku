@@ -93,7 +93,7 @@ object EmojiArt {
 fun rememberEmojiFontFamily(): FontFamily {
     val ctx = LocalContext.current
     return remember {
-        FontFamily(EmojiArt.FONT_ASSET_PATHS.map { Font(ctx.assets, it) })
+        FontFamily(EmojiArt.FONT_ASSET_PATHS.map { Font(it, ctx.assets) })
     }
 }
 
