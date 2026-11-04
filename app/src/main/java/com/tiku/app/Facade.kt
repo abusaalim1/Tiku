@@ -497,7 +497,7 @@ private fun StoriesScreen(
         Modifier.fillMaxSize(),
         contentPadding = PaddingValues(top = topInset() + 24.dp, bottom = 140.dp)
     ) {
-        item { Header(DramaContent.storiesTitle, "Tiny love stories from Seoul"); Spacer(Modifier.height(22.dp)) }
+        item { Header(DramaContent.storiesTitle, "Short reads for every mood"); Spacer(Modifier.height(22.dp)) }
         items(stories.size) { i ->
             val s = stories[i]
             StoryCard(

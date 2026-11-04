@@ -18,8 +18,8 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.detectDragGestures
-import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -53,9 +53,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.TransformOrigin
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -188,6 +189,38 @@ import kotlinx.coroutines.launch
 // window, an element-based scroll-into-view, watchdog re-arming on
 // every page (re)load, and a revive hook for the call-end path.
 // EXPANDED mode disarms the watchdog: the owner's own pause rules.
+//
+// ROUND 21 (owner device test, build 64) — THE MINI WAS A SLIVER.
+// His screenshot: a tall narrow white window stuck to one side, the
+// page squished into part of it, no video properly visible — and
+// tapping it did not reliably expand. Three structural defects:
+// (1) GEOMETRY BY TRANSFORM: the window the owner SEES was the
+//     208x117 layout POST-MULTIPLIED by the Round-19 graphicsLayer
+//     scale glide. Rest state depended on a 340 ms Animatable
+//     effect landing exactly on identity through every mode flip;
+//     off identity, layout stayed 16:9 while the painted rect did
+//     not (tall + narrow + parked mid-glide) and the page — laid
+//     out for the true box — stretched inside it. FIX: the scale
+//     glide is DELETED (no transform but hideMini's alpha remains),
+//     and the mini size is a formula of the live constraints —
+//     width 58% of the screen, clamped [190, 240].dp, height
+//     width * 9/16 — resting bottom-end, 12.dp end margin, bottom
+//     clearance NavBlock + 12 (stacking above the "Now watching"
+//     bar where that bar shows). Painted rect ≡ layout rect.
+// (2) NOTHING RE-ASSERTED THE WEBVIEW'S SIZE: the pane's AndroidView
+//     had no update block. FIX: MATCH_PARENT layout params set at
+//     build time and re-applied by the AndroidView update block on
+//     every recomposition, mode changes included.
+// (3) THE MINI FLOATED WHATEVER PAGE WAS LIVE: his sliver showed an
+//     ad-landing page, not the player. FIX: WatchSession records
+//     lastPlayableUrl (playable pages only); entering MINI with the
+//     pane on a non-playable document restores that page, and the
+//     framing JS falls back to the player container when no <video>
+//     element exists yet. The Round-20 pause watchdog is untouched.
+// TAP: the two sibling gesture detectors (tap vs drag racing over
+// one stream) are replaced by ONE awaitEachGesture state machine —
+// release within touch slop expands, past slop drags — so a tap
+// expands deterministically, including after drags.
 // ============================================================================
 
 /** Plain session state for Watch — NO View references, ever. */
@@ -195,6 +228,14 @@ object WatchSession {
     const val HOME_URL = "https://m.youtube.com"
 
     var lastUrl by mutableStateOf(HOME_URL)
+
+    /** ROUND 21: the last PLAYABLE page (/watch, /shorts, /live) the
+     *  pane was on — unlike [lastUrl], browse/search/channel pages
+     *  never overwrite it. Entering MINI restores this page when the
+     *  pane has drifted onto a non-playable document (the owner's
+     *  build-64 mini floated an ad-landing page instead of the
+     *  video): the floating window exists to show the VIDEO. */
+    var lastPlayableUrl by mutableStateOf("")
     var lastTitle by mutableStateOf("")
     var hasSession by mutableStateOf(false)
 
@@ -216,6 +257,7 @@ object WatchSession {
         if (fromEpoch != epoch) return
         if (!url.startsWith("http")) return
         lastUrl = url
+        if (playablePageId(url) != null) lastPlayableUrl = url
         if (title.isNotBlank()) lastTitle = title
     }
 
@@ -232,6 +274,7 @@ object WatchSession {
     fun clear() {
         epoch++
         lastUrl = HOME_URL
+        lastPlayableUrl = ""
         lastTitle = ""
         hasSession = false
         forceMini = false
@@ -401,9 +444,15 @@ val WatchChromeTopPadding = 24.dp
 val WatchChromeButtonSize = 46.dp
 val WatchChromeHeaderHeight = 70.dp
 
-/** Mini window: 208x117 is exact 16:9. */
-val WatchMiniWidth = 208.dp
-val WatchMiniHeight = 117.dp
+/** ROUND 21 — the mini window's size is a FORMULA, never a frozen
+ *  constant: width = 58% of the host's width clamped to
+ *  [WatchMiniMinWidth, WatchMiniMaxWidth], height = width * 9/16,
+ *  computed inside WatchHost from its live constraints. The old
+ *  frozen 208x117 pair is retired (the host still renders an exact
+ *  16:9 box — now sized to the actual phone). */
+val WatchMiniWidthFraction = 0.58f
+val WatchMiniMinWidth = 190.dp
+val WatchMiniMaxWidth = 240.dp
 val WatchMiniCorner = 12.dp
 val WatchMiniEdgeMargin = 12.dp
 
@@ -463,6 +512,13 @@ private fun buildWatchWebView(
     onPageReady: (WebView) -> Unit = {},
 ): WebView {
     val wv = WebView(ctx)
+    // ROUND 21: the WebView is born MATCH_PARENT and the pane's
+    // AndroidView update block re-asserts it on every mode change —
+    // the view can never sit in the host box at a stale size.
+    wv.layoutParams = ViewGroup.LayoutParams(
+        ViewGroup.LayoutParams.MATCH_PARENT,
+        ViewGroup.LayoutParams.MATCH_PARENT,
+    )
     wv.settings.apply {
         javaScriptEnabled = true
         domStorageEnabled = true
@@ -679,6 +735,12 @@ private fun scrollWatchPlayerIntoView(wv: WebView) {
               try { window.scrollTo(0, 0); } catch(e) {}
               var v = null;
               try { v = document.querySelector('video'); } catch(e) {}
+              if (!v) {
+                // ROUND 21: no <video> element yet (page still
+                // settling) — frame the PLAYER CONTAINER instead, so
+                // the mini is aimed at the player region either way.
+                try { v = document.querySelector('#movie_player, .html5-video-player, #player-container-id, #player'); } catch(e) {}
+              }
               if (v) {
                 try { v.scrollIntoView({ block: 'start', inline: 'nearest' }); }
                 catch(e) { try { v.scrollIntoView(); } catch(e2) {} }
@@ -888,6 +950,16 @@ fun WatchPane(chromeInsets: Boolean = true, boundedAboveNav: Boolean = false) {
             setWatchMiniGuard(webView, on = false)
             resumeWatchWebView(webView, autoplay = true)
         } else {
+            // ROUND 21: the mini shows THE VIDEO — if the pane has
+            // drifted onto a non-playable document (his build-64 mini
+            // floated an ad-landing page), restore the last playable
+            // page before framing/watchdog work begins. The restore
+            // load re-fires onPageReady, which re-arms + re-frames.
+            val recordedPlayable = WatchSession.lastPlayableUrl
+            val liveUrl = runCatching { webView.url }.getOrNull() ?: currentUrl
+            if (!onPlayablePage && recordedPlayable.isNotBlank() && recordedPlayable != liveUrl) {
+                runCatching { webView.loadUrl(recordedPlayable) }
+            }
             setWatchMiniGuard(webView, on = true)
             resumeWatchWebView(webView, autoplay = true)
             scrollWatchPlayerIntoView(webView)
@@ -960,6 +1032,17 @@ fun WatchPane(chromeInsets: Boolean = true, boundedAboveNav: Boolean = false) {
         AndroidView(
             factory = { webView },
             modifier = Modifier.fillMaxSize(),
+            update = { view ->
+                // ROUND 21: re-asserted on EVERY recomposition (mode
+                // changes included) — the WebView's layout params are
+                // pinned to the pane box by construction, so a mode
+                // snap can never leave the view at the other mode's
+                // size inside the right box.
+                view.layoutParams = ViewGroup.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                )
+            },
         )
     }
 }
@@ -1078,53 +1161,63 @@ fun WatchHost() {
         // surface could not track the moving target and ended up
         // stranded — the mini rendered black/frozen while the page
         // lived. A single relayout (a browser window being resized
-        // once) is what WebView playback reliably survives. The
-        // visible shrink/grow glide is a graphicsLayer SCALE over the
-        // already-final layout (see the pane Box below): [glide] runs
-        // 0→1 while the scale lerps from [glideFrom] — the factor that
-        // maps the NEW layout onto the OLD mode's rect — to 1. The
-        // position Animatables below glide the origin at the same
-        // time, with the same 340 ms / RdEase timing as before.
-        val layoutW = if (expanded) maxW else WatchMiniWidth
+        // once) is what WebView playback reliably survives. (Round 19
+        // painted the shrink as a graphicsLayer scale over this
+        // layout — ROUND 21 removed that transform entirely; see the
+        // size block below. The position Animatables still glide the
+        // origin with the same 340 ms / RdEase timing.)
+        // ROUND 21 — the mini's size is computed from the LIVE
+        // constraints: width = 58% of the host width clamped to
+        // [190.dp, 240.dp], height = width * 9/16 — an exact 16:9
+        // box on any phone. The layout still snaps to the mode's
+        // target in ONE step (the Round-19 layout decision stands).
+        // What Round 21 REMOVES is the graphicsLayer SCALE glide
+        // that painted over it: the transform's terminal state
+        // depended on a 340 ms Animatable effect reaching exactly
+        // 1f through every mode flip, and on the owner's phone the
+        // window came to rest OFF identity — layout a correct 16:9
+        // box, painted rect stretched by a leftover scale (the
+        // tall narrow sliver of his build-64 screenshot, page
+        // squished inside it). With no scale anywhere in the tree,
+        // the painted rect IS the layout rect by construction and
+        // that state cannot exist. The position glide below moves
+        // only the origin; it cannot distort size.
+        val miniW = (maxW * WatchMiniWidthFraction)
+            .coerceIn(WatchMiniMinWidth, WatchMiniMaxWidth)
+        val miniH = miniW * 9f / 16f
+        val layoutW = if (expanded) maxW else miniW
         val layoutH = if (expanded) {
             (maxH - WatchChromeHeaderHeight - WatchNavBlock).coerceAtLeast(0.dp)
-        } else WatchMiniHeight
-        val glide = remember { Animatable(1f) }
-        var glideFrom by remember { mutableStateOf(1f to 1f) }
-        var glideArmed by remember { mutableStateOf(false) }
-        LaunchedEffect(expanded) {
-            // Keyed on the mode ONLY: a constraints change (IME
-            // opening over the Watch tab shrinks maxH) must not
-            // replay the glide. The host's FIRST mode is its starting
-            // state, not a transition: never glide in on composition.
-            if (!glideArmed) { glideArmed = true; return@LaunchedEffect }
-            val bigW = maxW.coerceAtLeast(1.dp)
-            val bigH = (maxH - WatchChromeHeaderHeight - WatchNavBlock).coerceAtLeast(1.dp)
-            glideFrom = if (expanded) {
-                (WatchMiniWidth / bigW) to (WatchMiniHeight / bigH)
-            } else {
-                (bigW / WatchMiniWidth) to (bigH / WatchMiniHeight)
-            }
-            glide.snapTo(0f)
-            glide.animateTo(1f, tween(340, easing = RdEase))
-        }
-        // Position Animatables run in PX floats (drag deltas arrive in
-        // px). Same targets and the same 340ms / RdEase glide as the
-        // design — and as the scale glide above, so origin and size
-        // arrive together.
+        } else miniH
+        // Position Animatables run in PX floats (drag deltas arrive
+        // in px). Same targets and the same 340ms / RdEase glide as
+        // the design — origin only (Round 21: no size transform).
         val density = LocalDensity.current
         val posSpec = tween<Float>(340, easing = RdEase)
         val headerPx = with(density) { WatchChromeHeaderHeight.toPx() }
         val ax = remember { Animatable(0f) }
         val ay = remember { Animatable(headerPx) }
         var hasCustomPos by remember { mutableStateOf(false) }
-        val defMiniX = with(density) { (maxW - WatchMiniWidth - WatchMiniEdgeMargin).toPx() }
-        val defMiniY = with(density) { (maxH - WatchMiniBottomClearance - WatchMiniHeight).toPx() }
-        val miniHalfPx = with(density) { (WatchMiniWidth / 2).toPx() }
+        // Resting bottom clearance: the floor is the NavPill band
+        // (WatchNavBlock) + the 12.dp edge margin — but where the
+        // "Now watching" bar will show (it is composed ABOVE this
+        // host in TikuRoot), the mini keeps the shipped stack and
+        // rests above the bar instead of sliding under it. The bar
+        // gate mirrors NowWatchingBar's own `show`.
+        val barShowsHere = hasSession && dest != 2 &&
+            AppState.screen is Screen.Home && ChatSession.unlocked
+        val miniBottomClearance = if (barShowsHere) {
+            WatchMiniBottomClearance
+        } else {
+            WatchNavBlock + WatchMiniEdgeMargin
+        }
+        val defMiniX = with(density) { (maxW - miniW - WatchMiniEdgeMargin).toPx() }
+        val defMiniY = with(density) { (maxH - miniBottomClearance - miniH).toPx() }
+        val miniHalfPx = with(density) { (miniW / 2).toPx() }
         val midPx = with(density) { (maxW / 2).toPx() }
         val marginPx = with(density) { WatchMiniEdgeMargin.toPx() }
-        val maxDragXPx = with(density) { (maxW - WatchMiniWidth).toPx() }
-        val maxDragYPx = with(density) { (maxH - WatchMiniHeight).toPx() }
+        val maxDragXPx = with(density) { (maxW - miniW).toPx() }
+        val maxDragYPx = with(density) { (maxH - miniH).toPx() }
         // Position driver: mode switches glide the window between the
         // expanded origin and the mini resting spot. Once the user has
         // dragged the mini, its position is theirs — mode switches and
@@ -1147,17 +1240,11 @@ fun WatchHost() {
                 .offset(x = curX, y = curY)
                 .size(layoutW, layoutH)
                 .graphicsLayer {
-                    // ROUND 19: the mode glide as a pure transform of
-                    // the FINAL layout (see the glide driver above) —
-                    // top-left origin, so the layer's rect tracks the
-                    // position Animatables exactly. At rest glide = 1
-                    // and the scale is identity. hideMini (a live call
-                    // owns the screen) fades the mini out here instead
-                    // of collapsing its bounds.
-                    val p = glide.value
-                    scaleX = glideFrom.first + (1f - glideFrom.first) * p
-                    scaleY = glideFrom.second + (1f - glideFrom.second) * p
-                    transformOrigin = TransformOrigin(0f, 0f)
+                    // ROUND 21: no scale transform exists any more
+                    // (see the size block above) — the painted rect is
+                    // the layout rect by construction. hideMini (a
+                    // live call owns the screen) fades the mini out
+                    // here instead of collapsing its bounds.
                     alpha = if (hideMini) 0f else 1f
                 }
                 .shadow(if (expanded) 0.dp else 14.dp, RoundedCornerShape(rAnim))
@@ -1179,53 +1266,80 @@ fun WatchHost() {
                 val gestureScope = rememberCoroutineScope()
                 Box(
                     Modifier.fillMaxSize()
-                        .pointerInput(maxW, maxH) {
-                            detectTapGestures {
-                                // Tap (not a drag): back to the Watch tab,
-                                // expanded — and drop any Back-minimize,
-                                // so a mini armed on the Watch tab itself
-                                // expands in place.
-                                WatchSession.forceMini = false
-                                AppState.goTik(2)
-                            }
-                        }
-                        .pointerInput(maxW, maxH) {
-                            // The codebase's drag pattern (Chat.kt's swipe):
-                            // foundation detectors for the touch math, and
-                            // Animatable calls via scope.launch — the raw
-                            // awaitEachGesture loop can't call them (its
-                            // scope is @RestrictsSuspension). detectDrag-
-                            // Gestures applies the same touch-slop gate the
-                            // hand-rolled loop used before reporting a drag.
-                            detectDragGestures(
-                                onDragStart = {
-                                    gestureScope.launch { ax.stop() }
-                                    gestureScope.launch { ay.stop() }
-                                    // A drag takes the window over: end
-                                    // any in-flight glide transform so
-                                    // scale and position never fight.
-                                    gestureScope.launch { glide.snapTo(1f) }
-                                },
-                                onDragEnd = {
-                                    // Release: spring to the nearest horizontal edge.
+                        // ROUND 21 — ONE gesture state machine, not two
+                        // competing detectors. Rounds 19/20 stacked
+                        // detectTapGestures and detectDragGestures as
+                        // sibling pointerInput blocks on this Box: both
+                        // await the same stream in parallel, and whether
+                        // the TAP (expand!) fired depended on which
+                        // detector consumed what — the owner's "tap the
+                        // small window and it must open" was a race.
+                        // Now a single awaitEachGesture loop decides:
+                        // release within touch slop = TAP (expand);
+                        // movement past slop = DRAG (the position
+                        // Animatables stop, the window follows, release
+                        // springs to the nearest edge). A tap after any
+                        // number of drags takes the exact same path.
+                        // Animatable calls go through gestureScope.launch
+                        // (the loop's own scope is @RestrictsSuspension).
+                        .pointerInput(maxW, maxH, miniW, miniH) {
+                            awaitEachGesture {
+                                val down = awaitFirstDown(requireUnconsumed = false)
+                                var dragged = false
+                                var released = false
+                                do {
+                                    val event = awaitPointerEvent()
+                                    val change = event.changes
+                                        .firstOrNull { it.id == down.id } ?: break
+                                    if (!dragged &&
+                                        (change.position - down.position).getDistance() >
+                                        viewConfiguration.touchSlop
+                                    ) {
+                                        dragged = true
+                                        hasCustomPos = true
+                                        gestureScope.launch { ax.stop() }
+                                        gestureScope.launch { ay.stop() }
+                                    }
+                                    if (dragged && change.pressed) {
+                                        val delta = change.positionChange()
+                                        if (delta != Offset.Zero) {
+                                            gestureScope.launch {
+                                                ax.snapTo((ax.value + delta.x).coerceIn(0f, maxDragXPx))
+                                            }
+                                            gestureScope.launch {
+                                                ay.snapTo((ay.value + delta.y).coerceIn(0f, maxDragYPx))
+                                            }
+                                        }
+                                        change.consume()
+                                    }
+                                    released = !change.pressed
+                                } while (!released)
+                                // A cancelled stream (the layer left
+                                // composition mid-touch) decides
+                                // NOTHING — no tap, no spring.
+                                if (!released) return@awaitEachGesture
+                                if (!dragged) {
+                                    // TAP: back to the Watch tab, expanded —
+                                    // and drop any Back-minimize, so a mini
+                                    // armed on the Watch tab itself expands
+                                    // in place.
+                                    WatchSession.forceMini = false
+                                    AppState.goTik(2)
+                                } else {
+                                    // Release after a drag: spring to the
+                                    // nearest horizontal edge.
                                     val targetX = if (ax.value + miniHalfPx < midPx) {
                                         marginPx
                                     } else {
                                         defMiniX
                                     }
                                     gestureScope.launch {
-                                        ax.animateTo(targetX, spring(dampingRatio = 0.78f, stiffness = 420f))
+                                        ax.animateTo(
+                                            targetX,
+                                            spring(dampingRatio = 0.78f, stiffness = 420f),
+                                        )
                                     }
-                                },
-                            ) { change, dragAmount ->
-                                hasCustomPos = true
-                                gestureScope.launch {
-                                    ax.snapTo((ax.value + dragAmount.x).coerceIn(0f, maxDragXPx))
                                 }
-                                gestureScope.launch {
-                                    ay.snapTo((ay.value + dragAmount.y).coerceIn(0f, maxDragYPx))
-                                }
-                                change.consume()
                             }
                         },
                 )

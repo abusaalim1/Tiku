@@ -104,6 +104,13 @@ fun myUidKey(): String = if (Config.PREVIEW_UI_ONLY) "me" else FirebaseEngine.my
  *  the same honest label the chat placeholder shows — never a kind label,
  *  never blank. */
 fun threadPreview(th: ChatThread): String {
+    // ROUND 21 — IG LIST RULE (owner's Instagram reference): with
+    // several unread, the preview line itself becomes the summary —
+    // more than 5 unread reads "4+ new messages", 2–5 reads
+    // "N new messages". A single unread (and any read thread) keeps
+    // the ordinary last-message preview below.
+    if (th.unread > 5) return "4+ new messages"
+    if (th.unread >= 2) return "${th.unread} new messages"
     val last = th.messages.lastOrNull { !it.deletedForMe } ?: return ""
     if (last.deletedForEveryone) return "This message was deleted"
     if (last.undecryptable) return "This message can't be opened on this phone"

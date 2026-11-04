@@ -1304,10 +1304,18 @@ object FirebaseEngine : ChatRepo {
         // row was showing RIGHT HERE, synchronously, before anything can
         // zero it, and write it onto the live thread object in the same
         // instant so the very first chat composition already carries it.
-        val badgeAtOpen = AppState.thread(id)?.unread ?: 0
-        unreadAtOpenCache[id] = badgeAtOpen
-        AppState.threads.value = AppState.threads.value.map { t ->
-            if (t.id == id) t.copy(unreadAtOpen = badgeAtOpen) else t
+        // ROUND 21: capture ONLY on a closed->open transition. The chat
+        // screen now calls openThread itself as an entry safety net (so
+        // go()-only entries — call screens, deep links — get the full
+        // open sequence too); without this guard, that second call,
+        // landing after markRead, would re-capture the badge as 0 and
+        // erase the row tap's good capture.
+        if (id !in openChatIds) {
+            val badgeAtOpen = AppState.thread(id)?.unread ?: 0
+            unreadAtOpenCache[id] = badgeAtOpen
+            AppState.threads.value = AppState.threads.value.map { t ->
+                if (t.id == id) t.copy(unreadAtOpen = badgeAtOpen) else t
+            }
         }
         markRead(id)
         // opening a chat also tops up the parent doc guarantee (async, logged)

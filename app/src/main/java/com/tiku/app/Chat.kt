@@ -19,6 +19,7 @@ import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.EaseOutCubic
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.expandHorizontally
 import androidx.compose.animation.expandVertically
@@ -34,6 +35,7 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.animateScrollBy
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.rememberTransformableState
@@ -133,8 +135,11 @@ import dev.chrisbanes.haze.HazeStyle
 import dev.chrisbanes.haze.HazeTint
 import dev.chrisbanes.haze.hazeEffect
 import dev.chrisbanes.haze.hazeSource
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
@@ -1236,52 +1241,137 @@ private fun RdChatContent(thread: ChatThread) {
     // covers its index) — the round-18 follow decided from a layout
     // that didn't contain the just-sent item yet, so on the owner's
     // device the send glide simply never fired.
+    //
+    // ROUND 21 — ONE SCROLL AUTHORITY (the owner's recording showed the
+    // round-19/20 pair FIGHTING: this glide animated with
+    // animateScrollToItem while the round-20 IME glue instantly
+    // re-anchored with scrollToItem on every viewport-height step. A
+    // send triggers BOTH: the reply strip collapses and a multi-line
+    // field shrinks back to one line, so the measured composer height —
+    // and with it the list's viewport height — steps down over ~300 ms
+    // while the glide is mid-flight. Glue pin + animated glide
+    // alternated per step: the recorded pop / overlap / lurch. Now:
+    //  - the follow is ONE animateScrollBy of the EXACT pixel delta to
+    //    the true bottom (never animateScrollToItem across indices —
+    //    that animated through the whole list on long deltas);
+    //  - [glideInFlight] is held for the whole job, and the IME glue
+    //    below skips every emission while it (or an unconsumed send
+    //    request) is active — the delta animation owns the list alone.
     val tailRequests by AppState.tailScrollRequests.collectAsState()
     val pendingTail = tailRequests[threadId]
     var handledTailSeq by remember(threadId) { mutableLongStateOf(0L) }
     var followJob by remember(threadId) { mutableStateOf<Job?>(null) }
-    fun glideToTail() {
-        followJob?.cancel()
-        followJob = scope.launch {
-            delay(60) // burst coalescing: a newer glide replaces this one
-            val target = visible.lastIndex + if (peerTyping) 1 else 0
-            if (target < 0) return@launch
-            withTimeoutOrNull(500) {
-                snapshotFlow { listState.layoutInfo.totalItemsCount }.first { it > target }
+    var glideInFlight by remember(threadId) { mutableStateOf(false) }
+    val currentVisible by rememberUpdatedState(visible)
+    val currentPeerTyping by rememberUpdatedState(peerTyping)
+
+    /** The single tail-follow animation: scroll forward by exactly the
+     *  distance between the tail item's end (plus bottom content
+     *  padding) and the viewport's end. At the bottom that distance is
+     *  precisely the new bubble's height — IG's one clean shift. The
+     *  delta is computed AFTER the tail item composes (bounded wait);
+     *  a send from far up in history, where the tail never composes,
+     *  falls back to an instant anchor — scrollToItem on the LAST index
+     *  clamps at max scroll, which IS the true bottom. A second pass
+     *  re-measures after the animation: composer/viewport shifts that
+     *  landed mid-flight are absorbed by the remainder, and overshoot
+     *  is impossible (the list clamps at max scroll). */
+    suspend fun glideDeltaToTail() {
+        val target = currentVisible.lastIndex + if (currentPeerTyping) 1 else 0
+        if (target < 0) return
+        val composed = withTimeoutOrNull(350) {
+            snapshotFlow { listState.layoutInfo.visibleItemsInfo }
+                .first { items -> items.any { it.index == target } }
+        } != null
+        if (!composed) {
+            runCatching { listState.scrollToItem(target) }
+            return
+        }
+        repeat(2) {
+            if (!currentCoroutineContext().isActive) return
+            val info = listState.layoutInfo
+            val last = info.visibleItemsInfo.lastOrNull() ?: return
+            if (last.index < target) {
+                runCatching { listState.scrollToItem(target) }
+                return
             }
-            runCatching { listState.animateScrollToItem(target) }
+            val delta = last.offset + last.size + info.afterContentPadding - info.viewportEndOffset
+            if (delta <= 0) return
+            try {
+                listState.animateScrollBy(delta.toFloat(), tween(260, easing = EaseOutCubic))
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                return
+            }
         }
     }
 
-    // ROUND 18 — UNREAD DIVIDER anchor, captured ONCE from the thread as
-    // it stood when this chat was opened. The unread set is, by the
-    // engine's own definition, the newest [unreadAtOpen] incoming
-    // non-call messages — the divider pins above the earliest of them.
-    // remembered by message ID: pagination prepends and new arrivals can
-    // shift indices freely, the divider never moves or duplicates.
-    // ROUND 20: the VALUE no longer comes from `thread.unread` — the row
-    // tap runs openThread (markRead + first snapshot zero the badge)
-    // before this screen composes, so the old capture read 0 on device
-    // and the divider never appeared. The engine now records the badge
-    // in ChatThread.unreadAtOpen inside openThread itself, synchronously,
-    // before anything can zero it; that is what we read here. Preview has
-    // no engine race (the harness navigates without openThread, and the
-    // preview repo zeroes `unread` on ITS openThread), so the fixture's
-    // live `unread` remains the preview source.
-    val unreadAtOpen = remember(threadId) {
-        if (Config.PREVIEW_UI_ONLY) thread.unread else thread.unreadAtOpen
+    fun glideToTail() {
+        followJob?.cancel()
+        val job = scope.launch {
+            glideInFlight = true
+            try {
+                delay(60) // burst coalescing: a newer glide replaces this one
+                glideDeltaToTail()
+            } finally {
+                // only the CURRENT job may lower the flag — a cancelled
+                // predecessor must not un-guard the glue mid-successor.
+                if (followJob === currentCoroutineContext()[Job]) glideInFlight = false
+            }
+        }
+        followJob = job
     }
-    val dividerBeforeId = remember(threadId) {
-        if (unreadAtOpen <= 0) null
-        else {
-            val incoming = thread.messages.filter {
-                !it.deletedForMe && !it.me && it.kind != MsgKind.CALL
-            }
-            when {
-                incoming.size >= unreadAtOpen -> incoming[incoming.size - unreadAtOpen].id
-                incoming.isNotEmpty() -> incoming.first().id
-                else -> null
-            }
+
+    // ROUND 18 — UNREAD DIVIDER anchor. The unread set is, by the
+    // engine's own definition, the newest [unreadAtOpen] incoming
+    // non-call messages — the divider pins above the earliest of them,
+    // identified by message ID: pagination prepends and new arrivals
+    // can shift indices freely, the divider never moves or duplicates.
+    // ROUND 20: the count comes from ChatThread.unreadAtOpen, recorded
+    // by the engine inside openThread, synchronously, before markRead
+    // can zero the badge (reading `thread.unread` here captured 0).
+    //
+    // ROUND 21 — two device holes in the round-20 capture, both from
+    // freezing the values in remember() at FIRST composition:
+    //  (a) entry paths that navigate with go(Screen.Chat) ALONE —
+    //      the call screens' message button (Call.kt / Rtc.kt) and any
+    //      deep entry — never ran openThread before this screen
+    //      composed, so unreadAtOpen was stale (previous session) or 0;
+    //  (b) the pin was computed once from whatever messages the thread
+    //      object held at first composition — on a cold entry that list
+    //      can still be empty / a beat behind the newest page, so the
+    //      pin froze null (or above the wrong message) forever.
+    // Fixes: this screen now runs the engine's open sequence itself as
+    // an entry safety net (device only — PreviewRepo.openThread zeroes
+    // the fixture's `unread`, which is the harness's divider source),
+    // and the engine only captures the badge on a closed->open
+    // transition, so the net can never clobber the row tap's capture.
+    // The pin itself is reactive state: it lands the first moment the
+    // loaded incoming set actually covers the count (the newest page
+    // loads first, so that is the first snapshot in practice), then
+    // freezes for the life of this composition.
+    LaunchedEffect(threadId) {
+        if (!Config.PREVIEW_UI_ONLY) AppState.repo.openThread(threadId)
+    }
+    var dividerPin by remember(threadId) { mutableStateOf<Pair<String, Int>?>(null) }
+    LaunchedEffect(
+        threadId, thread.messages.size, thread.unreadAtOpen, thread.unread, thread.hasOlder,
+    ) {
+        if (dividerPin != null) return@LaunchedEffect
+        val count = if (Config.PREVIEW_UI_ONLY) thread.unread else thread.unreadAtOpen
+        if (count <= 0) return@LaunchedEffect
+        val incoming = thread.messages.filter {
+            !it.deletedForMe && !it.me && it.kind != MsgKind.CALL
+        }
+        when {
+            incoming.size >= count ->
+                dividerPin = incoming[incoming.size - count].id to count
+            // every page is loaded and the set still falls short (e.g.
+            // some unread were deleted-for-me locally): pin above the
+            // earliest loaded incoming rather than never.
+            incoming.isNotEmpty() && !thread.hasOlder ->
+                dividerPin = incoming.first().id to count
         }
     }
 
@@ -1420,11 +1510,26 @@ private fun RdChatContent(thread: ChatThread) {
     // height changes (pinned strip appearing) behave the same way.
     val latestVisible by rememberUpdatedState(visible)
     val latestPeerTyping by rememberUpdatedState(peerTyping)
+    val latestGlideInFlight by rememberUpdatedState(glideInFlight)
+    val latestSendPending by rememberUpdatedState(
+        (pendingTail?.seq ?: 0L) > handledTailSeq,
+    )
     LaunchedEffect(threadId) {
         var prevHeight = -1
         var wasAtTail = false
         snapshotFlow { listState.layoutInfo.viewportSize.height to nearBottom }.collect { (h, atTail) ->
-            if (prevHeight >= 0 && h != prevHeight && wasAtTail) {
+            // ROUND 21: the glue NEVER runs while the delta glide owns
+            // the list — a glide in flight, or a send whose tail
+            // request is still unconsumed, mutes it entirely. A send
+            // shrinks the composer (reply-strip collapse, multi-line
+            // field returning to one line), which steps the viewport
+            // height exactly like an IME resize; in rounds 19/20 those
+            // steps made the glue instant-pin against the animated
+            // glide — the pop/lurch in the owner's recording. Once the
+            // glide has landed, the list is already at the true bottom,
+            // so a late glue pin is a no-op anyway.
+            val glideBusy = latestGlideInFlight || latestSendPending
+            if (prevHeight >= 0 && h != prevHeight && wasAtTail && !glideBusy) {
                 val msgs = latestVisible
                 if (msgs.isNotEmpty()) {
                     runCatching {
@@ -1477,8 +1582,9 @@ private fun RdChatContent(thread: ChatThread) {
                     // glide shifts the list, and the stable keys keep
                     // prepend/echo positions exact.
                     Column {
-                        if (m.id == dividerBeforeId) {
-                            RdUnreadDivider(unreadAtOpen)
+                        val pin = dividerPin
+                        if (pin != null && m.id == pin.first) {
+                            RdUnreadDivider(pin.second)
                             Spacer(Modifier.height(4.dp))
                         }
                         when {
