@@ -37,6 +37,7 @@ import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -50,12 +51,14 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
@@ -120,6 +123,7 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.platform.LocalClipboardManager
@@ -212,6 +216,104 @@ private val RdMessageFx = listOf(
 
 private fun fxDef(kind: String?): FxDef? = RdMessageFx.firstOrNull { it.kind == kind }
 
+// ================= ROUND 24 — premium effects: dressing, first-display
+// playback, single-emoji effects =================
+/** A bubble's on-screen anchor in root (window-content) pixels, captured
+ *  by the row via onGloballyPositioned for hearts / fire messages. The
+ *  overlay subtracts its own root position, so the pair stays correct
+ *  whatever insets the chat root sits under. */
+private data class FxAnchor(val cxPx: Float, val bottomPx: Float)
+
+/** Durable per-device "already auto-played" id log for effect
+ *  animations (ROUND 24 playback rule: an effect plays the FIRST time
+ *  its message is rendered on THIS device — at send for the sender, on
+ *  first sight for the recipient, even hours later — and never again on
+ *  its own; only a bubble tap replays). Stored as one comma-joined
+ *  string so the cap is a true FIFO trim (newest [CAP] ids kept);
+ *  message ids are client-chosen doc ids and never contain a comma. */
+private class FxPlayedLog(private val prefs: android.content.SharedPreferences) {
+    private val ids = LinkedHashSet<String>(
+        prefs.getString(KEY, null)?.split(',')?.filter { it.isNotEmpty() } ?: emptyList(),
+    )
+    @Synchronized fun seen(id: String): Boolean = id in ids
+    @Synchronized fun mark(id: String) {
+        if (!ids.add(id)) return
+        while (ids.size > CAP) { val it = ids.iterator(); it.next(); it.remove() }
+        prefs.edit().putString(KEY, ids.joinToString(",")).apply()
+    }
+    private companion object { const val KEY = "ids"; const val CAP = 400 }
+}
+
+/** ROUND 24: if [text] (trimmed) is EXACTLY ONE emoji grapheme,
+ *  returns that grapheme, else null. Strict by construction: the whole
+ *  string must parse as one cluster — a base emoji codepoint plus only
+ *  combining marks / variation selectors / skin tones, ZWJ-joined
+ *  further bases, a regional-indicator PAIR (flag), or a keycap
+ *  sequence. Any letter, digit (outside a keycap), punctuation, space
+ *  or second emoji makes it null, so a normal sentence containing an
+ *  emoji can never qualify. */
+private fun singleEmojiGrapheme(text: String): String? {
+    val t = text.trim()
+    if (t.isEmpty() || t.length > 24) return null
+    val cps = ArrayList<Int>(4)
+    var idx = 0
+    while (idx < t.length) {
+        val cp = Character.codePointAt(t, idx)
+        cps += cp
+        idx += Character.charCount(cp)
+    }
+    fun isModifier(cp: Int) =
+        cp in 0x1F3FB..0x1F3FF || cp == 0xFE0F || cp == 0xFE0E || cp in 0x0300..0x036F
+    fun isRegional(cp: Int) = cp in 0x1F1E6..0x1F1FF
+    fun isEmojiBase(cp: Int): Boolean = when {
+        cp in 0x1F000..0x1FAFF -> true
+        cp in 0x2600..0x27BF -> true   // ☀..➿ — ❤ (U+2764), ✨ (U+2728)…
+        cp in 0x2B00..0x2BFF -> true   // ⭐ (U+2B50)…
+        cp == 0x203C || cp == 0x2049 || cp == 0x2122 || cp == 0x2139 -> true
+        cp == 0x3030 || cp == 0x303D || cp == 0x3297 || cp == 0x3299 -> true
+        cp == 0x00A9 || cp == 0x00AE -> true
+        else -> false
+    }
+    // flag: exactly two regional indicators
+    if (cps.size == 2 && isRegional(cps[0]) && isRegional(cps[1])) return t
+    // keycap: [0-9#*] + optional VS16 + U+20E3
+    if ((cps.size == 2 || cps.size == 3) && cps.last() == 0x20E3 &&
+        (cps[0] in 0x30..0x39 || cps[0] == 0x23 || cps[0] == 0x2A) &&
+        (cps.size == 2 || cps[1] == 0xFE0F)
+    ) return t
+    // general cluster: base modifiers* (ZWJ base modifiers*)*
+    if (!isEmojiBase(cps[0])) return null
+    var i = 1
+    while (i < cps.size && isModifier(cps[i])) i++
+    while (i < cps.size) {
+        if (cps[i] != 0x200D) return null // ZWJ
+        i++
+        if (i >= cps.size || !isEmojiBase(cps[i])) return null
+        i++
+        while (i < cps.size && isModifier(cps[i])) i++
+    }
+    return t
+}
+
+/** ROUND 24: the full-screen effect a message earns PURELY from its
+ *  text — a lone emoji from a known family (no schema field; every
+ *  build derives it identically from the decrypted text). Returns an
+ *  RdFxOverlay kind, or null. Fx-carrying, media, tombstone and
+ *  undecryptable messages never qualify. */
+private fun singleEmojiOverlayKind(m: TikuMessage): String? {
+    if (m.kind != MsgKind.TEXT || m.fx != null || m.undecryptable || m.deletedForEveryone) return null
+    val g = singleEmojiGrapheme(m.text) ?: return null
+    return when (g.replace("\uFE0F", "")) {
+        "❤", "💖", "💕", "💗", "💓", "💞", "🥰", "😍" -> "hearts"
+        "😘" -> "kiss"
+        "🎉", "🎊", "🥳" -> "confetti"
+        "🔥" -> "fire"
+        "😂", "🤣" -> "laugh"
+        "✨", "🌟", "⭐" -> "sparkles"
+        else -> null
+    }
+}
+
 /** One deterministic overlay particle. The whole set is built ONCE per
  *  playback from a fixed seed (remembered on the play key) and every
  *  frame is a pure function of the progress value — the animation
@@ -220,6 +322,10 @@ private data class FxParticle(
     val xFrac: Float, val delay: Float, val span: Float,
     val sizeDp: Float, val swayAmp: Float, val swayFreq: Float,
     val spin: Float, val variant: Int,
+    /** ROUND 24: vertical field position for the stationary sparkles
+     *  kind (other kinds travel and ignore it). Drawn LAST from the
+     *  LCG so every pre-round-24 field keeps its exact old value. */
+    val yFrac: Float,
 )
 
 private fun fxParticles(kind: String, count: Int): List<FxParticle> {
@@ -233,6 +339,9 @@ private fun fxParticles(kind: String, count: Int): List<FxParticle> {
     val (minSize, maxSize) = when (kind) {
         "confetti" -> 6f to 12f
         "hearts" -> 20f to 38f
+        "kiss" -> 20f to 36f
+        "laugh" -> 26f to 44f
+        "sparkles" -> 15f to 28f
         else -> 22f to 46f // fire
     }
     return List(count) {
@@ -245,19 +354,29 @@ private fun fxParticles(kind: String, count: Int): List<FxParticle> {
             swayFreq = 0.6f + next() * 1.1f,
             spin = (next() - 0.5f) * 2.4f,
             variant = (next() * 997f).toInt(),
+            yFrac = next(),
         )
     }
 }
 
-/** The one-shot full-chat effect overlay (fire / confetti / hearts —
- *  gift has no overlay; its wrap IS the effect). [playKey] identifies
- *  one playback: the progress Animatable runs 0→1 over ~2.6 s exactly
- *  once per key, then [onDone] fires (the caller clears the playback
- *  only if the key is still current, so a replay started mid-flight is
- *  never cancelled by its predecessor's finally). The overlay carries
- *  NO pointer input — taps fall through to the chat beneath it. */
+/** The one-shot effect overlay (gift has no overlay; its wrap IS the
+ *  effect). Kinds: the fx kinds "fire" / "confetti" / "hearts" plus the
+ *  ROUND 24 single-emoji kinds "kiss" / "laugh" / "sparkles" ("hearts",
+ *  "confetti" and "fire" are shared with the emoji families). [playKey]
+ *  identifies one playback: the progress Animatable runs 0→1 over
+ *  ~2.6 s exactly once per key, then [onDone] fires (the caller clears
+ *  the playback only if the key is still current, so a replay started
+ *  mid-flight is never cancelled by its predecessor's finally). The
+ *  overlay carries NO pointer input — taps fall through to the chat
+ *  beneath it.
+ *
+ *  ROUND 24 anchoring: for an fx hearts / fire playback the caller
+ *  passes the bubble's [anchor]; hearts then rise from the bubble and
+ *  flames erupt around it instead of filling the screen. Confetti and
+ *  every emoji-kind playback stay screen-wide (anchor null), exactly
+ *  like Instagram. */
 @Composable
-private fun RdFxOverlay(kind: String, playKey: String, onDone: () -> Unit) {
+private fun RdFxOverlay(kind: String, playKey: String, anchor: FxAnchor? = null, onDone: () -> Unit) {
     val progress = remember(playKey) { Animatable(0f) }
     LaunchedEffect(playKey) {
         progress.snapTo(0f)
@@ -268,26 +387,54 @@ private fun RdFxOverlay(kind: String, playKey: String, onDone: () -> Unit) {
         }
     }
     val particles = remember(playKey, kind) {
-        fxParticles(kind, when (kind) { "confetti" -> 42; "hearts" -> 24; else -> 30 })
+        fxParticles(
+            kind,
+            when (kind) {
+                "confetti" -> 42; "hearts" -> 24; "kiss" -> 24
+                "laugh" -> 18; "sparkles" -> 30; else -> 30
+            },
+        )
     }
     val palette = remember {
         listOf(RdRose, Color(0xFFFFC857), Color.White, Color(0xFFFF8A5C), Color(0xFF8E7CFF), Color(0xFF4FD1C5))
     }
-    BoxWithConstraints(Modifier.fillMaxSize()) {
+    // The overlay's own root position, so an anchor captured in root
+    // pixels converts into this box's local dp space exactly.
+    var selfOrigin by remember { mutableStateOf(Offset.Zero) }
+    val density = LocalDensity.current.density
+    BoxWithConstraints(
+        Modifier.fillMaxSize().onGloballyPositioned { selfOrigin = it.positionInRoot() },
+    ) {
         val w = maxWidth.value
         val h = maxHeight.value
         val p = progress.value
+        val aCx = anchor?.let { (it.cxPx - selfOrigin.x) / density }
+        val aBottom = anchor?.let { (it.bottomPx - selfOrigin.y) / density }
         if (kind == "fire") {
-            // a warm glow pooled at the bottom while the flames run
-            Box(
-                Modifier.fillMaxWidth().height(220.dp).align(Alignment.BottomCenter)
-                    .graphicsLayer { alpha = (sin(p * 3.14159f).coerceIn(0f, 1f)) * 0.30f }
-                    .background(
-                        Brush.verticalGradient(
-                            listOf(Color.Transparent, Color(0xFFFF6A00).copy(0.55f), Color(0xFFFF3D00).copy(0.8f)),
+            val glowAlpha = (sin(p * 3.14159f).coerceIn(0f, 1f)) * 0.30f
+            if (aCx != null && aBottom != null) {
+                // ROUND 24: anchored — the glow pools around the bubble
+                Box(
+                    Modifier.offset((aCx - 120f).dp, (aBottom - 132f).dp).size(240.dp, 150.dp)
+                        .graphicsLayer { alpha = glowAlpha }
+                        .background(
+                            Brush.radialGradient(
+                                listOf(Color(0xFFFF6A00).copy(0.55f), Color(0xFFFF3D00).copy(0.25f), Color.Transparent),
+                            ),
                         ),
-                    ),
-            )
+                )
+            } else {
+                // a warm glow pooled at the bottom while the flames run
+                Box(
+                    Modifier.fillMaxWidth().height(220.dp).align(Alignment.BottomCenter)
+                        .graphicsLayer { alpha = glowAlpha }
+                        .background(
+                            Brush.verticalGradient(
+                                listOf(Color.Transparent, Color(0xFFFF6A00).copy(0.55f), Color(0xFFFF3D00).copy(0.8f)),
+                            ),
+                        ),
+                )
+            }
         }
         particles.forEach { pt ->
             val local = ((p - pt.delay) / pt.span).coerceIn(0f, 1f)
@@ -309,9 +456,13 @@ private fun RdFxOverlay(kind: String, playKey: String, onDone: () -> Unit) {
                             .background(palette[pt.variant % palette.size]),
                     )
                 }
-                "hearts" -> {
-                    val x = pt.xFrac * w + sway
-                    val y = (h + 30f) - local * (h + 70f)
+                "hearts", "kiss" -> {
+                    // hearts rise from the bubble when anchored (the fx
+                    // playback), else float up the whole chat (emoji
+                    // playback, and every kiss). kiss mixes 💋 in.
+                    val anchored = aCx != null && aBottom != null
+                    val x = if (anchored) (aCx!! - 160f) + pt.xFrac * 320f + sway else pt.xFrac * w + sway
+                    val y = if (anchored) (aBottom!! + 24f) - local * (h * 0.72f) else (h + 30f) - local * (h + 70f)
                     Box(
                         Modifier.offset(x.dp, y.dp)
                             .graphicsLayer {
@@ -319,11 +470,60 @@ private fun RdFxOverlay(kind: String, playKey: String, onDone: () -> Unit) {
                                 val sc = 0.7f + 0.4f * local
                                 scaleX = sc; scaleY = sc
                             },
-                    ) { EmojiGlyph(if (pt.variant % 3 == 0) "❤️" else "💖", pt.sizeDp.dp) }
+                    ) {
+                        EmojiGlyph(
+                            when {
+                                kind == "kiss" && pt.variant % 3 == 0 -> "💋"
+                                pt.variant % 3 == 0 -> "❤️"
+                                else -> "💖"
+                            },
+                            pt.sizeDp.dp,
+                        )
+                    }
                 }
-                else -> { // fire — flames rise through the lower chat, flickering
-                    val x = pt.xFrac * w + sway * 0.5f
-                    val y = (h - pt.sizeDp) - local * (h * 0.72f)
+                "laugh" -> {
+                    // 😂 glyphs pop in oversized, then float up swaying
+                    val x = pt.xFrac * w + sway
+                    val y = (h + 30f) - local * (h * 0.85f + 60f)
+                    val pop = if (local < 0.16f) 0.4f + (local / 0.16f) * 0.75f
+                        else 1.15f - 0.15f * ((local - 0.16f) / 0.84f)
+                    Box(
+                        Modifier.offset(x.dp, y.dp)
+                            .graphicsLayer {
+                                alpha = fadeIn * (1f - ((local - 0.65f) / 0.35f).coerceIn(0f, 1f))
+                                scaleX = pop; scaleY = pop
+                                rotationZ = sin(local * 3.14159f) * pt.spin * 16f
+                            },
+                    ) { EmojiGlyph(if (pt.variant % 4 == 3) "🤣" else "😂", pt.sizeDp.dp) }
+                }
+                "sparkles" -> {
+                    // stationary field: each sparkle twinkles in place
+                    // (alpha + scale pulse on its own phase) under a
+                    // slow fade-in / fade-out envelope
+                    val x = pt.xFrac * w + sway * 0.3f
+                    val y = pt.yFrac * (h - 40f) + 10f
+                    val tw = abs(sin(local * 9.42477f + pt.variant * 1.7f))
+                    val env = (local / 0.15f).coerceIn(0f, 1f) *
+                        (1f - ((local - 0.7f) / 0.3f).coerceIn(0f, 1f))
+                    Box(
+                        Modifier.offset(x.dp, y.dp)
+                            .graphicsLayer {
+                                alpha = env * (0.30f + 0.70f * tw)
+                                val sc = 0.7f + 0.5f * tw
+                                scaleX = sc; scaleY = sc
+                            },
+                    ) {
+                        EmojiGlyph(
+                            when (pt.variant % 3) { 0 -> "✨"; 1 -> "🌟"; else -> "⭐" },
+                            pt.sizeDp.dp,
+                        )
+                    }
+                }
+                else -> { // fire — flames erupt around the bubble when
+                    // anchored, else rise through the lower chat
+                    val anchored = aCx != null && aBottom != null
+                    val x = if (anchored) (aCx!! - 170f) + pt.xFrac * 340f + sway * 0.5f else pt.xFrac * w + sway * 0.5f
+                    val y = if (anchored) (aBottom!! - pt.sizeDp) - local * (h * 0.38f) else (h - pt.sizeDp) - local * (h * 0.72f)
                     val flicker = 0.85f + 0.30f * sin(local * 40f + pt.variant * 2.1f)
                     Box(
                         Modifier.offset(x.dp, y.dp)
@@ -727,19 +927,233 @@ private fun Modifier.rdDrawLeftBar(): Modifier = this.drawBehind {
     drawRect(Color.White.copy(0.55f), topLeft = Offset.Zero, size = androidx.compose.ui.geometry.Size(3.dp.toPx(), size.height))
 }
 
-/** ROUND 22 — the sealed gift, rendered in place of the bubble's
- *  content: one big gift glyph + the tap caption, centred in the same
- *  padded footprint a short text bubble takes. Shared by the bubble and
- *  the long-press menu's preview, so the wrap looks identical on both. */
+/** ROUND 24 — the sealed gift as Instagram's actual wrap: the bubble
+ *  IS a pink gift — rose→pink gradient pill, a white ribbon band down
+ *  the middle crossed by a horizontal band, and a 🎀 bow riding the
+ *  top edge. NO text of the message is composed anywhere in it (the
+ *  seal is structural, not a caption over hidden text). [unwrap] is
+ *  the 0→1 tap-out animation: bands + bow fade (the bow also swells)
+ *  before the caller flips the gift open and the real bubble pops in.
+ *  The bow is a child of the UN-clipped root box so it can overlap the
+ *  pill's edge — the bubble call site passes withBow = false and draws
+ *  its bow in the row's dressing layer instead, because the bubble
+ *  column clips its own content. Shared by the bubble, the long-press
+ *  menu preview and (mini) the picker tray. */
 @Composable
-private fun RdGiftWrap() {
-    Column(
-        horizontalAlignment = Alignment.CenterHorizontally,
-        modifier = Modifier.padding(horizontal = 10.dp, vertical = 2.dp),
-    ) {
-        EmojiGlyph("🎁", 46.dp)
-        Spacer(Modifier.height(6.dp))
-        Text("Tap to open", color = Color.White.copy(0.85f), fontSize = 12.sp, fontWeight = FontWeight.Medium)
+private fun RdGiftWrapPill(unwrap: Float = 0f, withBow: Boolean = true, mini: Boolean = false) {
+    val band = if (mini) 9.dp else 13.dp
+    Box {
+        Box(
+            Modifier.width(if (mini) 96.dp else 124.dp).height(if (mini) 40.dp else 56.dp)
+                .clip(RoundedCornerShape(if (mini) 14.dp else 20.dp))
+                .background(Brush.linearGradient(listOf(Color(0xFFFF7EB0), Color(0xFFF43F8E)))),
+        ) {
+            Box(
+                Modifier.width(band).fillMaxHeight().align(Alignment.Center)
+                    .graphicsLayer { alpha = 1f - unwrap }
+                    .background(Color.White.copy(0.92f)),
+            )
+            Box(
+                Modifier.height(band).fillMaxWidth().align(Alignment.Center)
+                    .graphicsLayer { alpha = 1f - unwrap }
+                    .background(Color.White.copy(0.92f)),
+            )
+        }
+        if (withBow) {
+            Box(
+                Modifier.align(Alignment.TopCenter).offset(y = if (mini) (-8).dp else (-11).dp)
+                    .graphicsLayer {
+                        alpha = 1f - unwrap
+                        val s = 1f + 0.45f * unwrap
+                        scaleX = s; scaleY = s
+                    },
+            ) { EmojiGlyph("🎀", if (mini) 18.dp else 24.dp) }
+        }
+    }
+}
+
+// ================= ROUND 24 — persistent bubble dressing =================
+// Instagram's effects are not a passing overlay: the sent bubble WEARS
+// the effect, on both phones, forever. These composables are children
+// of the bubble's wrap Box (see RdBubbleRow) — glyphs pinned over the
+// bubble's corners/edges, drawn outside the bubble column so its clip
+// can't cut them, and laid out so they never change the bubble's own
+// size or position (overflow only, via align + offset).
+
+/** fx="hearts": small pink hearts pinned around the corners. */
+@Composable
+private fun BoxScope.RdFxHeartsDressing() {
+    Box(
+        Modifier.align(Alignment.TopStart).offset(x = (-6).dp, y = (-9).dp)
+            .graphicsLayer { rotationZ = -14f },
+    ) { EmojiGlyph("💗", 17.dp) }
+    Box(
+        Modifier.align(Alignment.TopEnd).offset(x = 5.dp, y = (-10).dp)
+            .graphicsLayer { rotationZ = 12f },
+    ) { EmojiGlyph("🩷", 15.dp) }
+    Box(
+        Modifier.align(Alignment.BottomEnd).offset(x = 6.dp, y = 7.dp)
+            .graphicsLayer { rotationZ = -8f },
+    ) { EmojiGlyph("💖", 14.dp) }
+    Box(
+        Modifier.align(Alignment.BottomStart).offset(x = (-4).dp, y = 6.dp)
+            .graphicsLayer { rotationZ = 10f; alpha = 0.9f },
+    ) { EmojiGlyph("🩷", 12.dp) }
+}
+
+/** fx="fire", behind the bubble: a warm radial glow hugging it,
+ *  breathing on a slow reverse loop. */
+@Composable
+private fun BoxScope.RdFxFireGlow() {
+    val tr = rememberInfiniteTransition(label = "fxFireGlow")
+    val a by tr.animateFloat(
+        initialValue = 0.72f, targetValue = 1f,
+        animationSpec = infiniteRepeatable(tween(840, easing = LinearEasing), RepeatMode.Reverse),
+        label = "fxFireGlowA",
+    )
+    Box(
+        Modifier.matchParentSize()
+            .graphicsLayer { scaleX = 1.28f; scaleY = 1.38f; alpha = a }
+            .background(
+                Brush.radialGradient(
+                    listOf(Color(0xFFFF7A00).copy(0.42f), Color(0xFFFF3D00).copy(0.16f), Color.Transparent),
+                ),
+            ),
+    )
+}
+
+/** fx="fire", in front: small flames licking the top edge and bottom
+ *  corners, flickering on two cheap infinite loops. The bubble's own
+ *  colours are untouched — the fire dresses it, never recolours it. */
+@Composable
+private fun BoxScope.RdFxFireFlames() {
+    val tr = rememberInfiniteTransition(label = "fxFireFlames")
+    val f1 by tr.animateFloat(
+        initialValue = 0.92f, targetValue = 1.09f,
+        animationSpec = infiniteRepeatable(tween(620, easing = LinearEasing), RepeatMode.Reverse),
+        label = "fxFireF1",
+    )
+    val f2 by tr.animateFloat(
+        initialValue = 1.07f, targetValue = 0.93f,
+        animationSpec = infiniteRepeatable(tween(930, easing = LinearEasing), RepeatMode.Reverse),
+        label = "fxFireF2",
+    )
+    Box(
+        Modifier.align(Alignment.TopStart).offset(x = 16.dp, y = (-11).dp)
+            .graphicsLayer { scaleX = f1; scaleY = f1 },
+    ) { EmojiGlyph("🔥", 16.dp) }
+    Box(
+        Modifier.align(Alignment.TopCenter).offset(y = (-13).dp)
+            .graphicsLayer { scaleX = f2; scaleY = f2 },
+    ) { EmojiGlyph("🔥", 19.dp) }
+    Box(
+        Modifier.align(Alignment.TopEnd).offset(x = (-14).dp, y = (-11).dp)
+            .graphicsLayer { scaleX = f1; scaleY = f1 },
+    ) { EmojiGlyph("🔥", 15.dp) }
+    Box(
+        Modifier.align(Alignment.BottomStart).offset(x = (-3).dp, y = 6.dp)
+            .graphicsLayer { scaleX = f2; scaleY = f2 },
+    ) { EmojiGlyph("🔥", 13.dp) }
+    Box(
+        Modifier.align(Alignment.BottomEnd).offset(x = 3.dp, y = 6.dp)
+            .graphicsLayer { scaleX = f1; scaleY = f1 },
+    ) { EmojiGlyph("🔥", 13.dp) }
+}
+
+/** fx="confetti": a deterministic sprinkle of dots + short dashes
+ *  riding the bubble's rim (seeded by the message id — identical on
+ *  every device, every frame, no per-frame allocation beyond the
+ *  fixed dozen) plus one 🎉 at the top-right corner. Drawn just
+ *  inside the rim: a Canvas cannot paint past its own bounds, and
+ *  enlarging it would move layout — the glyph supplies the overflow. */
+@Composable
+private fun BoxScope.RdFxConfettiDressing(seed: Int) {
+    val palette = remember {
+        listOf(RdRose, Color(0xFFFFC857), Color.White, Color(0xFFFF8A5C), Color(0xFF8E7CFF), Color(0xFF4FD1C5))
+    }
+    Canvas(Modifier.matchParentSize()) {
+        var s = seed * 1103515245 + 12345
+        fun next(): Float {
+            s = s * 1103515245 + 12345
+            return ((s ushr 16) and 0x7FFF) / 32767f
+        }
+        val inset = 3.dp.toPx()
+        repeat(12) { k ->
+            val frac = next()
+            val col = palette[k % palette.size]
+            val pt = when (k % 4) {
+                0 -> Offset(frac * size.width, inset)
+                1 -> Offset(size.width - inset, frac * size.height)
+                2 -> Offset(frac * size.width, size.height - inset)
+                else -> Offset(inset, frac * size.height)
+            }
+            if (k % 3 == 2) {
+                val ang = next() * 3.14159f
+                val len = 5.dp.toPx()
+                drawLine(
+                    col, pt,
+                    Offset(pt.x + len * kotlin.math.cos(ang), pt.y + len * kotlin.math.sin(ang)),
+                    strokeWidth = 1.8.dp.toPx(),
+                )
+            } else {
+                drawCircle(col, (1.5f + next() * 1.4f).dp.toPx(), pt)
+            }
+        }
+    }
+    Box(
+        Modifier.align(Alignment.TopEnd).offset(x = 5.dp, y = (-9).dp)
+            .graphicsLayer { rotationZ = 14f },
+    ) { EmojiGlyph("🎉", 15.dp) }
+}
+
+/** ROUND 24 — the picker tray's live preview: the CURRENT typed text
+ *  rendered as a mini dressed bubble for this effect, like Instagram's
+ *  tray (your own words inside each effect before you pick). Gift
+ *  previews as the sealed mini wrap — text hidden, as the real bubble
+ *  will be. Static small-scale variants of the dressing on purpose:
+ *  the tray needs a thumbnail, not the full animated dressing. */
+@Composable
+private fun RdFxMiniPreview(kind: String, text: String, acc: Pair<Color, Color>) {
+    when (kind) {
+        "gift" -> RdGiftWrapPill(mini = true)
+        else -> Box {
+            Box(
+                Modifier.widthIn(max = 120.dp).clip(RoundedCornerShape(13.dp))
+                    .background(Brush.linearGradient(listOf(acc.first, acc.second)))
+                    .padding(horizontal = 10.dp, vertical = 6.dp),
+            ) {
+                Text(
+                    text, color = Color.White, fontSize = 11.5.sp, maxLines = 1,
+                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                )
+            }
+            when (kind) {
+                "hearts" -> {
+                    Box(
+                        Modifier.align(Alignment.TopStart).offset(x = (-4).dp, y = (-6).dp)
+                            .graphicsLayer { rotationZ = -14f },
+                    ) { EmojiGlyph("💗", 11.dp) }
+                    Box(
+                        Modifier.align(Alignment.BottomEnd).offset(x = 4.dp, y = 5.dp)
+                            .graphicsLayer { rotationZ = 10f },
+                    ) { EmojiGlyph("🩷", 10.dp) }
+                }
+                "fire" -> {
+                    Box(
+                        Modifier.align(Alignment.TopCenter).offset(y = (-7).dp),
+                    ) { EmojiGlyph("🔥", 11.dp) }
+                    Box(
+                        Modifier.align(Alignment.BottomStart).offset(x = (-3).dp, y = 4.dp),
+                    ) { EmojiGlyph("🔥", 9.dp) }
+                }
+                "confetti" -> {
+                    Box(
+                        Modifier.align(Alignment.TopEnd).offset(x = 4.dp, y = (-6).dp)
+                            .graphicsLayer { rotationZ = 14f },
+                    ) { EmojiGlyph("🎉", 11.dp) }
+                }
+            }
+        }
     }
 }
 
@@ -766,6 +1180,10 @@ private fun RdBubbleRow(
      *  fire / confetti / hearts → replay the overlay). */
     fxOpened: Boolean = false,
     onFxTap: (TikuMessage) -> Unit = {},
+    /** ROUND 24: the bubble's on-screen anchor (root px), reported on
+     *  layout for hearts / fire messages only — the caller keeps it so
+     *  the message's overlay playback can erupt AROUND this bubble. */
+    onBubblePositioned: (FxAnchor) -> Unit = {},
     /** ROUND 22 (insta port): true only while this row is a FRESH tail
      *  arrival inside its pop window (the caller tracks first-seen
      *  ids — history and loadOlder rows always pass false). Drives the
@@ -789,6 +1207,19 @@ private fun RdBubbleRow(
             giftPop.snapTo(0.82f)
             giftPop.animateTo(1f, spring(0.5f, 380f))
         }
+    }
+    // ROUND 24: the sealed-gift unwrap — a tap first runs this 0→1
+    // (~260 ms: ribbon bands fade, the bow swells and fades), THEN the
+    // caller flips the gift open and the giftPop spring above brings
+    // the real bubble in. fxOpened is read through a state holder
+    // because the tap gesture lambda below is keyed on (id, reactions)
+    // and would otherwise capture a stale value.
+    val sealedGift = m.fx == "gift" && !fxOpened
+    val unwrapP = remember(m.id) { Animatable(0f) }
+    val fxOpenedState = rememberUpdatedState(fxOpened)
+    // ROUND 24: a lone-emoji message renders its glyph large, IG-style.
+    val loneEmoji = remember(m.text) {
+        if (m.kind == MsgKind.TEXT) singleEmojiGrapheme(m.text) else null
     }
     // ROUND 22 (insta port): the entrance pop — an Animatable driven
     // purely through graphicsLayer (alpha / scale / translationY), so
@@ -892,15 +1323,27 @@ private fun RdBubbleRow(
                                 },
                                 onLongPress = { onMenu() },
                                 onTap = {
-                                    // ROUND 22: an effect message's tap
-                                    // belongs to the effect — gift
-                                    // unwraps, fire / confetti / hearts
-                                    // replay (the caller decides; an
-                                    // already-open gift falls through to
-                                    // nothing). Effect kinds only exist
-                                    // on TEXT, so media routing below is
-                                    // unreachable for them.
-                                    if (m.fx != null) onFxTap(m)
+                                    // ROUND 22 + 24: an effect message's
+                                    // tap belongs to the effect. A SEALED
+                                    // gift first plays its unwrap (bands
+                                    // fade, bow swells — see unwrapP) and
+                                    // only then routes to the caller,
+                                    // which flips it open into the pop.
+                                    // Any other fx, and any lone-emoji
+                                    // message with a text-derived effect,
+                                    // replays its animation. Effect
+                                    // messages are TEXT-only, so the
+                                    // media routing below is unreachable
+                                    // for them.
+                                    if (m.fx == "gift" && !fxOpenedState.value) {
+                                        if (unwrapP.value == 0f) {
+                                            scope.launch {
+                                                unwrapP.animateTo(1f, tween(260, easing = LinearEasing))
+                                                onFxTap(m)
+                                            }
+                                        }
+                                    }
+                                    else if (m.fx != null || singleEmojiOverlayKind(m) != null) onFxTap(m)
                                     // image opens its viewer once decoded;
                                     // a video tap either opens its player
                                     // (loaded) or starts the tap-to-load —
@@ -912,47 +1355,90 @@ private fun RdBubbleRow(
                         },
                     horizontalAlignment = if (m.me) Alignment.End else Alignment.Start,
                 ) {
-                    Column(
-                        Modifier.widthIn(max = 280.dp).clip(RoundedCornerShape(22.dp))
-                            .background(if (media) SolidColor(RdCard) else if (m.me) Brush.linearGradient(listOf(acc.first, acc.second)) else SolidColor(RdCard))
-                            .then(if (media) Modifier else Modifier.padding(horizontal = 16.dp, vertical = 11.dp)),
+                    // ROUND 24: the bubble's dressing wrap. The fire glow
+                    // sits BEHIND the bubble, the dressing glyphs/canvas sit
+                    // IN FRONT — all children of this box, whose bounds are
+                    // exactly the bubble's (dressing overflows via align +
+                    // offset, never via layout). hearts / fire rows also
+                    // report the box's root position as the overlay anchor.
+                    Box(
+                        Modifier.then(
+                            if (m.fx == "hearts" || m.fx == "fire") Modifier.onGloballyPositioned { c ->
+                                val pos = c.positionInRoot()
+                                onBubblePositioned(FxAnchor(pos.x + c.size.width / 2f, pos.y + c.size.height))
+                            } else Modifier,
+                        ),
                     ) {
-                        when (m.kind) {
-                            MsgKind.IMAGE -> RdImageBubble(m)
-                            MsgKind.VIDEO -> RdVideoBubble(m)
-                            MsgKind.VOICE, MsgKind.AUDIO -> RdVoiceBubble(m, playing, onPlayToggle)
-                            else -> {
-                                if (m.fx == "gift" && !fxOpened) {
-                                    // ROUND 22: the sealed gift — the
-                                    // text is NOT composed at all in
-                                    // this branch, so nothing on screen
-                                    // (or in an accessibility read of
-                                    // the bubble) can leak it.
-                                    RdGiftWrap()
-                                } else {
-                                    if (m.fx == "gift") {
-                                        // opened gift: a normal bubble,
-                                        // keeping a tiny gift marker.
-                                        Row(
-                                            verticalAlignment = Alignment.CenterVertically,
-                                            modifier = Modifier.padding(bottom = 5.dp),
-                                        ) {
-                                            EmojiGlyph("🎁", 13.dp)
-                                            Spacer(Modifier.width(5.dp))
-                                            Text("Gift", color = Color.White.copy(0.7f), fontSize = 10.5.sp)
+                        if (m.fx == "fire") RdFxFireGlow()
+                        Column(
+                            Modifier.widthIn(max = 280.dp).clip(RoundedCornerShape(22.dp))
+                                .background(if (media) SolidColor(RdCard) else if (sealedGift) SolidColor(Color.Transparent) else if (m.me) Brush.linearGradient(listOf(acc.first, acc.second)) else SolidColor(RdCard))
+                                .then(if (media || sealedGift) Modifier else Modifier.padding(horizontal = 16.dp, vertical = 11.dp)),
+                        ) {
+                            when (m.kind) {
+                                MsgKind.IMAGE -> RdImageBubble(m)
+                                MsgKind.VIDEO -> RdVideoBubble(m)
+                                MsgKind.VOICE, MsgKind.AUDIO -> RdVoiceBubble(m, playing, onPlayToggle)
+                                else -> {
+                                    if (sealedGift) {
+                                        // ROUND 24: the sealed gift — the
+                                        // bubble IS the wrap (the pink pill
+                                        // replaces the themed bubble; see the
+                                        // transparent background / no padding
+                                        // above) and the text is NOT composed
+                                        // at all in this branch, so nothing
+                                        // on screen (or in an accessibility
+                                        // read of the bubble) can leak it.
+                                        // The bow rides the dressing layer
+                                        // below: this column clips content.
+                                        RdGiftWrapPill(unwrapP.value, withBow = false)
+                                    } else {
+                                        if (m.fx == "gift") {
+                                            // opened gift: a normal bubble,
+                                            // keeping a tiny gift marker.
+                                            Row(
+                                                verticalAlignment = Alignment.CenterVertically,
+                                                modifier = Modifier.padding(bottom = 5.dp),
+                                            ) {
+                                                EmojiGlyph("🎁", 13.dp)
+                                                Spacer(Modifier.width(5.dp))
+                                                Text("Gift", color = Color.White.copy(0.7f), fontSize = 10.5.sp)
+                                            }
                                         }
-                                    }
-                                    if (m.replyQuote != null) {
+                                        if (m.replyQuote != null) {
+                                            Text(
+                                                m.replyQuote, color = Color.White.copy(0.75f), fontSize = 12.sp, maxLines = 1,
+                                                fontFamily = emojiFont,
+                                                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                                                modifier = Modifier.padding(bottom = 6.dp).rdDrawLeftBar().padding(start = 8.dp),
+                                            )
+                                        }
                                         Text(
-                                            m.replyQuote, color = Color.White.copy(0.75f), fontSize = 12.sp, maxLines = 1,
+                                            m.text, color = Color.White,
+                                            fontSize = if (loneEmoji != null) 34.sp else textSp.sp,
                                             fontFamily = emojiFont,
-                                            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
-                                            modifier = Modifier.padding(bottom = 6.dp).rdDrawLeftBar().padding(start = 8.dp),
                                         )
                                     }
-                                    Text(m.text, color = Color.White, fontSize = textSp.sp, fontFamily = emojiFont)
                                 }
                             }
+                        }
+                        when (m.fx) {
+                            "hearts" -> RdFxHeartsDressing()
+                            "fire" -> RdFxFireFlames()
+                            "confetti" -> RdFxConfettiDressing(m.id.hashCode())
+                        }
+                        if (sealedGift) {
+                            // the gift bow, overlapping the wrap's top edge —
+                            // out here because the bubble column clips its own
+                            // content; it swells + fades with the unwrap.
+                            Box(
+                                Modifier.align(Alignment.TopCenter).offset(y = (-12).dp)
+                                    .graphicsLayer {
+                                        alpha = 1f - unwrapP.value
+                                        val s = 1f + 0.45f * unwrapP.value
+                                        scaleX = s; scaleY = s
+                                    },
+                            ) { EmojiGlyph("🎀", 26.dp) }
                         }
                     }
                     if (m.starredByMe) {
@@ -1516,15 +2002,21 @@ private fun RdChatContent(thread: ChatThread) {
      *  fresh key, so the overlay's Animatable restarts cleanly. */
     var fxPlay by remember(threadId) { mutableStateOf<Pair<String, String>?>(null) }
     var fxPlaySeq by remember(threadId) { mutableIntStateOf(0) }
-    /** Ids whose overlay already auto-played on this screen instance —
-     *  the one-shot discipline: scroll-back, recomposition and the
-     *  server echo (same id) can never replay; only an explicit bubble
-     *  tap replays, and it bypasses this set on purpose. */
-    val fxPlayed = remember(threadId) { mutableSetOf<String>() }
-    /** False until this screen has seen its first tail: history is
-     *  primed into [fxPlayed] silently, so opening a chat never erupts
-     *  with the effects of messages that were already there. */
-    var fxPrimed by remember(threadId) { mutableStateOf(false) }
+    /** The anchor of the running playback: fx hearts / fire erupt
+     *  around their bubble (the row reports its position into
+     *  [fxAnchorMap]); every other playback is screen-wide (null). */
+    var fxPlayAnchor by remember(threadId) { mutableStateOf<FxAnchor?>(null) }
+    /** Bubble anchors by message id. A plain map on purpose: it is
+     *  read only at play time, so layout callbacks never recompose. */
+    val fxAnchorMap = remember(threadId) { mutableMapOf<String, FxAnchor>() }
+    /** ROUND 24 — the durable per-device played logs (fx kinds in one
+     *  file, single-emoji effects in the other). An effect auto-plays
+     *  the FIRST time its message is rendered on this device and never
+     *  again on its own; only a bubble tap replays, bypassing the logs
+     *  on purpose. (ROUND 22's in-memory tail-only set + priming are
+     *  gone: first DISPLAY is the trigger now, not becoming the tail.) */
+    val fxPlayedLog = remember { FxPlayedLog(ctx.getSharedPreferences("tiku_fx_played", Context.MODE_PRIVATE)) }
+    val emojiFxPlayedLog = remember { FxPlayedLog(ctx.getSharedPreferences("tiku_emoji_fx_played", Context.MODE_PRIVATE)) }
     // ---- ROUND 22 (insta port): bubble entrance-pop bookkeeping ----
     /** Ids this screen has already accounted for: everything present
      *  at prime time (the whole loaded history) plus every arrival
@@ -1546,8 +2038,9 @@ private fun RdChatContent(thread: ChatThread) {
     var openedGifts by remember(threadId) {
         mutableStateOf(giftPrefs.getStringSet("opened", emptySet())?.toSet() ?: emptySet())
     }
-    fun playFx(kind: String, msgId: String) {
+    fun playFx(kind: String, msgId: String, anchored: Boolean = false) {
         fxPlaySeq += 1
+        fxPlayAnchor = if (anchored) fxAnchorMap[msgId] else null
         fxPlay = kind to "$msgId#$fxPlaySeq"
     }
     fun openGift(id: String) {
@@ -2039,27 +2532,13 @@ private fun RdChatContent(thread: ChatThread) {
         glideToTail(nearBottom)
         AppState.consumeTailScroll(threadId, req.seq)
     }
-    // ROUND 22 — effect auto-play: a fire / confetti / hearts message
-    // that BECOMES the tail — my send landing, or an arrival while this
-    // chat is open — plays its overlay exactly once. Keyed on the
-    // tail's identity, so scrolling and recomposition can never
-    // re-fire it; the first tail this screen sees only primes the
-    // played-set (history never erupts on open). Gift has no overlay:
-    // its wrap is the effect, opened by tap.
-    LaunchedEffect(visible.lastOrNull()?.id) {
-        val tail = visible.lastOrNull() ?: return@LaunchedEffect
-        if (!fxPrimed) {
-            fxPrimed = true
-            visible.forEach { m -> if (m.fx != null && m.fx != "gift") fxPlayed += m.id }
-            return@LaunchedEffect
-        }
-        if (!settled) return@LaunchedEffect
-        val k = tail.fx
-        if (k != null && k != "gift" && tail.id !in fxPlayed) {
-            fxPlayed += tail.id
-            playFx(k, tail.id)
-        }
-    }
+    // ROUND 24 — effect auto-play lives in the list items now (see the
+    // LaunchedEffect inside itemsIndexed): first DISPLAY on this
+    // device is the trigger, for the sender at send and for the
+    // recipient whenever the message first renders — the round-22
+    // tail-only trigger + history priming that used to sit here are
+    // replaced by the durable played logs. Gift has no overlay: its
+    // wrap is the effect, opened by tap.
     // ROUND 22 (insta port) — entrance-pop marking, the same
     // prime-then-fresh discipline as the effect auto-play above: the
     // first tail this screen sees only primes the seen-set (opening a
@@ -2213,6 +2692,30 @@ private fun RdChatContent(thread: ChatThread) {
                     // too — a message simply appears, the ONE coalesced
                     // glide shifts the list, and the stable keys keep
                     // prepend/echo positions exact.
+                    // ROUND 24 — first-display effect playback: the
+                    // FIRST time this message renders on THIS device
+                    // its effect plays (fx kinds anchored to the
+                    // bubble; lone-emoji effects screen-wide) and the
+                    // durable log marks it, so scroll-backs,
+                    // recompositions, the server echo (same
+                    // client-chosen id) and later visits never replay
+                    // it. A row composed while scrolling into view
+                    // counts as displayed — that IS first sight.
+                    LaunchedEffect(m.id) {
+                        val k = m.fx
+                        if (k == "fire" || k == "confetti" || k == "hearts") {
+                            if (!fxPlayedLog.seen(m.id)) {
+                                fxPlayedLog.mark(m.id)
+                                playFx(k, m.id, anchored = true)
+                            }
+                        } else if (k == null) {
+                            val ek = singleEmojiOverlayKind(m)
+                            if (ek != null && !emojiFxPlayedLog.seen(m.id)) {
+                                emojiFxPlayedLog.mark(m.id)
+                                playFx(ek, m.id)
+                            }
+                        }
+                    }
                     Column {
                         val pin = dividerPin
                         if (pin != null && m.id == pin.first) {
@@ -2284,9 +2787,14 @@ private fun RdChatContent(thread: ChatThread) {
                                 onFxTap = { msg ->
                                     when (msg.fx) {
                                         "gift" -> openGift(msg.id)
-                                        "fire", "confetti", "hearts" -> playFx(msg.fx!!, msg.id)
+                                        "fire", "confetti", "hearts" -> playFx(msg.fx!!, msg.id, anchored = true)
+                                        // ROUND 24: a lone-emoji message
+                                        // replays its text-derived effect
+                                        null -> singleEmojiOverlayKind(msg)?.let { playFx(it, msg.id) }
                                     }
                                 },
+                                // ROUND 24: bubble anchor for fx playback
+                                onBubblePositioned = { a -> fxAnchorMap[m.id] = a },
                             )
                         }
                         // ROUND 18 — "Seen" / "Sent" caption (IG-style)
@@ -2587,15 +3095,11 @@ private fun RdChatContent(thread: ChatThread) {
                                 contentScale = ContentScale.Crop,
                             )
                         } else if (mm.fx == "gift" && mm.id !in openedGifts) {
-                            // ROUND 22: an unopened gift previews as
-                            // its wrap — the menu never shows the
+                            // ROUND 22 + 24: an unopened gift previews
+                            // as its wrap — the same pink pill the
+                            // bubble wears; the menu never shows the
                             // sealed text.
-                            Box(
-                                Modifier.widthIn(max = 280.dp).clip(RoundedCornerShape(22.dp))
-                                    .background(if (mm.me) Brush.linearGradient(listOf(acc.first, acc.second)) else SolidColor(RdCard))
-                                    .padding(horizontal = 26.dp, vertical = 14.dp),
-                                contentAlignment = Alignment.Center,
-                            ) { RdGiftWrap() }
+                            Box(Modifier.widthIn(max = 280.dp)) { RdGiftWrapPill() }
                         } else {
                             Text(
                                 if (mm.kind == MsgKind.TEXT) mm.text else replyQuoteLabel(mm),
@@ -2803,9 +3307,10 @@ private fun RdChatContent(thread: ChatThread) {
             }
         }
 
-        // ---- ROUND 22: message-effects picker ----
-        // The attach sheet's glass language: four effect rows (glyph +
-        // name + one-line blurb, a rose tick on the armed one) over a
+        // ---- ROUND 22 + 24: message-effects picker ----
+        // The attach sheet's glass language: four effect rows (a live
+        // mini preview of the typed text inside the effect + name +
+        // one-line blurb, a rose tick on the armed one) over a
         // "No effect" row. Choosing arms the effect for the next send
         // and closes; the composer chip is the visible armed state.
         AnimatedVisibility(
@@ -2828,6 +3333,13 @@ private fun RdChatContent(thread: ChatThread) {
                         "Send with effect", color = RdSub, fontSize = 12.5.sp,
                         modifier = Modifier.padding(start = 16.dp, top = 12.dp, bottom = 4.dp),
                     )
+                    // ROUND 24: every row previews the CURRENT typed
+                    // text rendered inside the effect — a mini dressed
+                    // bubble (gift: the sealed mini wrap, text hidden),
+                    // the way Instagram's tray shows your own words in
+                    // each effect before you choose.
+                    val fxPreviewText = input.trim().ifEmpty { "Hello" }
+                        .let { if (it.length > 14) it.take(14) + "…" else it }
                     RdMessageFx.forEach { def ->
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
@@ -2836,7 +3348,10 @@ private fun RdChatContent(thread: ChatThread) {
                                 fxPickerOpen = false
                             }.padding(16.dp),
                         ) {
-                            EmojiGlyph(def.glyph, 26.dp)
+                            Box(
+                                Modifier.width(128.dp),
+                                contentAlignment = Alignment.Center,
+                            ) { RdFxMiniPreview(def.kind, fxPreviewText, acc) }
                             Spacer(Modifier.width(12.dp))
                             Column(Modifier.weight(1f)) {
                                 Text(def.name, color = Color.White, fontSize = 16.sp)
@@ -2878,14 +3393,15 @@ private fun RdChatContent(thread: ChatThread) {
             VideoViewerOverlay(vm) { videoViewerMsg = null }
         }
 
-        // ---- ROUND 22: effect playback overlay ----
+        // ---- ROUND 22 + 24: effect playback overlay ----
         // Topmost in the chat root. RdFxOverlay has no pointer input of
         // its own, so taps fall through to the list beneath while it
         // runs. The clear is key-checked: a replay started mid-flight
         // replaces the key, and the old playback's finally must not
-        // clear the new one.
+        // clear the new one. fxPlayAnchor anchors fx hearts / fire to
+        // their bubble; everything else plays screen-wide (null).
         fxPlay?.let { (kind, playKey) ->
-            RdFxOverlay(kind, playKey) {
+            RdFxOverlay(kind, playKey, fxPlayAnchor) {
                 if (fxPlay?.second == playKey) fxPlay = null
             }
         }
