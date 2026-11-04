@@ -1018,7 +1018,9 @@ fun EmojiPickerSheetContent(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
-                        Text(icon, fontSize = 15.sp)
+                        // ROUND 23: category tab icons are emoji — they go
+                        // through the iOS emoji font like every emoji surface.
+                        Text(icon, fontSize = 15.sp, fontFamily = rememberEmojiFontFamily())
                         Text(
                             text = label,
                             color = if (isSel) p.tx else p.sub,
@@ -1106,6 +1108,9 @@ fun EmojiGridCategoryHeader(title: String) {
         color = p.sub,
         fontSize = 12.sp,
         fontWeight = FontWeight.SemiBold,
+        // ROUND 23: headers lead with a category emoji ("😀 Smileys") —
+        // the chained iOS family draws the emoji, Latin falls back.
+        fontFamily = rememberEmojiFontFamily(),
         modifier = Modifier
             .fillMaxWidth()
             .padding(top = 14.dp, bottom = 4.dp, start = 4.dp)

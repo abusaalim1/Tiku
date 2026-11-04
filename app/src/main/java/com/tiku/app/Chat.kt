@@ -193,7 +193,6 @@ private val RdThemes = listOf(
     Color(0xFF4FD1C5) to Color(0xFF22A99D),
 )
 private val RdBaseEmojis = listOf("❤️", "😂", "😮", "😢", "😡", "👍")
-private val RdMoreEmojis = listOf("🔥", "🙏", "😍", "🎉", "💯", "😭")
 
 // ================= ROUND 22 — Instagram-style message effects =================
 /** The four send effects, in picker order — the same four Instagram
@@ -946,6 +945,7 @@ private fun RdBubbleRow(
                                     if (m.replyQuote != null) {
                                         Text(
                                             m.replyQuote, color = Color.White.copy(0.75f), fontSize = 12.sp, maxLines = 1,
+                                            fontFamily = emojiFont,
                                             overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
                                             modifier = Modifier.padding(bottom = 6.dp).rdDrawLeftBar().padding(start = 8.dp),
                                         )
@@ -1266,7 +1266,7 @@ fun RdChatInput(
                 Box(Modifier.width(3.dp).height(28.dp).clip(RoundedCornerShape(2.dp)).background(accent))
                 Column(Modifier.weight(1f).padding(horizontal = 10.dp)) {
                     Text("Replying", color = accent, fontSize = 11.sp)
-                    Text(replyText ?: "", color = RdSub, fontSize = 13.sp, maxLines = 1)
+                    Text(replyText ?: "", color = RdSub, fontSize = 13.sp, maxLines = 1, fontFamily = emojiFont)
                 }
                 Text("✕", color = Color.White, fontSize = 16.sp, modifier = Modifier.rdPress(onClearReply).padding(6.dp))
             }
@@ -1496,7 +1496,6 @@ private fun RdChatContent(thread: ChatThread) {
     var input by remember { mutableStateOf("") }
     var replyTarget by remember { mutableStateOf<TikuMessage?>(null) }
     var menuMsg by remember { mutableStateOf<TikuMessage?>(null) }
-    var moreEmoji by remember { mutableStateOf(false) }
     var attachOpen by remember { mutableStateOf(false) }
     var viewerMsg by remember { mutableStateOf<TikuMessage?>(null) }
     var videoViewerMsg by remember { mutableStateOf<TikuMessage?>(null) }
@@ -2226,10 +2225,10 @@ private fun RdChatContent(thread: ChatThread) {
                             // other branch, so no kind (not even CALL)
                             // can render it as an empty bubble/pill.
                             m.undecryptable -> RdUndecryptableRow(m, person) {
-                                menuMsg = m; moreEmoji = false
+                                menuMsg = m
                             }
                             m.deletedForEveryone -> RdTombstoneRow(m, person) {
-                                menuMsg = m; moreEmoji = false
+                                menuMsg = m
                             }
                             m.kind == MsgKind.CALL -> CallEventPill(m)
                             else -> RdBubbleRow(
@@ -2262,7 +2261,7 @@ private fun RdChatContent(thread: ChatThread) {
                                 },
                                 onReply = { replyTarget = m },
                                 onReact = { e -> react(m, e) },
-                                onMenu = { menuMsg = m; moreEmoji = false },
+                                onMenu = { menuMsg = m },
                                 onMediaTap = {
                                     when (m.kind) {
                                         MsgKind.IMAGE -> viewerMsg = m
@@ -2388,7 +2387,7 @@ private fun RdChatContent(thread: ChatThread) {
                     Spacer(Modifier.width(6.dp))
                     Text(
                         "Pinned · $pinPreview",
-                        fontSize = 12.5.sp, color = Color.White,
+                        fontSize = 12.5.sp, color = Color.White, fontFamily = rememberEmojiFontFamily(),
                         maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
                         modifier = Modifier.weight(1f),
                     )
@@ -2494,7 +2493,7 @@ private fun RdChatContent(thread: ChatThread) {
             if (mm != null) {
                 Box(
                     Modifier.fillMaxSize().chatBackdrop(haze)
-                        .clickable(remember { MutableInteractionSource() }, null) { menuMsg = null; moreEmoji = false },
+                        .clickable(remember { MutableInteractionSource() }, null) { menuMsg = null },
                     contentAlignment = Alignment.Center,
                 ) {
                     Column(
@@ -2515,20 +2514,40 @@ private fun RdChatContent(thread: ChatThread) {
                                 .padding(horizontal = 8.dp, vertical = 6.dp),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
-                            (if (moreEmoji) RdMoreEmojis else RdBaseEmojis).forEachIndexed { k, e ->
+                            RdBaseEmojis.forEachIndexed { k, e ->
                                 Box(
                                     Modifier.rdPop(k).rdPress {
-                                        react(mm, e); menuMsg = null; moreEmoji = false
+                                        react(mm, e); menuMsg = null
                                     }.padding(6.dp),
                                 ) { EmojiGlyph(e, 28.dp) }
                             }
                             Box(
                                 Modifier.padding(start = 4.dp).size(42.dp).clip(CircleShape)
                                     .background(Color.White.copy(0.12f))
-                                    .rdPress { moreEmoji = !moreEmoji },
+                                    .rdPress {
+                                        // ROUND 23 (owner order): "+" opens the FULL
+                                        // emoji picker in react mode for this message
+                                        // (the old expanded second quick row is gone —
+                                        // the picker replaces it). Picking applies the
+                                        // reaction through react() and closes
+                                        // everything; dismissing returns to the chat.
+                                        val target = mm
+                                        menuMsg = null
+                                        AppState.sheet {
+                                            EmojiPickerSheetContent(
+                                                initialTab = 0,
+                                                recentEmojis = emptyList(),
+                                                onClose = { AppState.closeSheet() },
+                                                onSelectEmoji = { e ->
+                                                    react(target, e)
+                                                    AppState.closeSheet()
+                                                },
+                                            )
+                                        }
+                                    },
                                 contentAlignment = Alignment.Center,
                             ) {
-                                Text(if (moreEmoji) "−" else "+", color = Color.White, fontSize = 24.sp)
+                                Text("+", color = Color.White, fontSize = 24.sp)
                             }
                         }
                         if (mm.undecryptable) {
@@ -2580,7 +2599,7 @@ private fun RdChatContent(thread: ChatThread) {
                         } else {
                             Text(
                                 if (mm.kind == MsgKind.TEXT) mm.text else replyQuoteLabel(mm),
-                                color = Color.White, fontSize = textSp.sp,
+                                color = Color.White, fontSize = textSp.sp, fontFamily = rememberEmojiFontFamily(),
                                 modifier = Modifier.widthIn(max = 280.dp).clip(RoundedCornerShape(22.dp))
                                     .background(if (mm.me) Brush.linearGradient(listOf(acc.first, acc.second)) else SolidColor(RdCard))
                                     .padding(horizontal = 16.dp, vertical = 11.dp),

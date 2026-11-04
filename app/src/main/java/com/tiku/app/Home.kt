@@ -434,7 +434,7 @@ private fun ThreadRow(th: ChatThread, idx: Int, modifier: Modifier = Modifier) {
         Column(Modifier.weight(1f).padding(horizontal = 14.dp)) {
             Text(th.displayName, color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.SemiBold,
                 maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Text(threadPreview(th), color = Sub, fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(threadPreview(th), fontFamily = rememberEmojiFontFamily(), color = Sub, fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
         Column(horizontalAlignment = Alignment.End) {
             Text(th.time, color = Sub, fontSize = 12.sp)
@@ -519,7 +519,7 @@ fun RequestsScreen(onBack: () -> Unit) {
                         Column(Modifier.weight(1f).padding(horizontal = 14.dp)) {
                             Text(th.displayName, color = Color.White, fontSize = 17.sp, fontWeight = FontWeight.SemiBold,
                                 maxLines = 1, overflow = TextOverflow.Ellipsis)
-                            Text(threadPreview(th), color = Sub, fontSize = 15.sp,
+                            Text(threadPreview(th), fontFamily = rememberEmojiFontFamily(), color = Sub, fontSize = 15.sp,
                                 maxLines = 1, overflow = TextOverflow.Ellipsis)
                         }
                         Text(th.time, color = Sub, fontSize = 14.sp)

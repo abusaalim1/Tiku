@@ -50,6 +50,10 @@ class TikuApp : Application() {
         super.onCreate()
         SettingsStore.init(this)
         OwnerPrefs.init(this)
+        // ROUND 23: warm both halves of the iOS emoji font on a background
+        // thread so the first transient emoji surface (reaction-bar popup,
+        // picker) never paints with the device fallback mid-load.
+        EmojiArt.preload(this)
         // NOTE: zero chat notifications by design — no notification channel is
         // created at startup, ever. ROUND 9 exception (owner account only, his
         // own phone, opt-in): OwnerNotify creates ONE channel lazily at the
