@@ -5,6 +5,7 @@ import android.content.Context
 import android.os.Build
 import android.content.pm.PackageManager
 import android.util.Log
+import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
