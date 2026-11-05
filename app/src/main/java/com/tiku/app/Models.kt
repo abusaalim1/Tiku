@@ -16,7 +16,7 @@ import android.graphics.Bitmap
  *  or captured, carries a mime type, and — like VIDEO — loads its payload
  *  ONLY on tap (no auto-download). Both ride the same encrypted chunk
  *  pipeline as IMAGE/VOICE. */
-enum class MsgKind { TEXT, IMAGE, VOICE, CALL, VIDEO, AUDIO }
+enum class MsgKind { TEXT, IMAGE, VOICE, CALL, VIDEO, AUDIO, GAME }
 
 /** Delivery state of an outgoing message (round 3: no silent send failures).
  *  Local optimistic copies start SENDING; the Firestore write landing flips
@@ -140,6 +140,22 @@ data class TikuMessage(
      *  older builds lack it, read false, and render the message as a
      *  normal message from the sender. */
     val ai: Boolean = false,
+    // ---- round 41 (appended last, same discipline) ----
+    /** An AI-built 2-player GAME (Firestore `game=true`): the payload
+     *  riding the chunk pipeline (mime "text/html") is ONE self-contained
+     *  HTML file Tika wrote for the `/babeg` command — never shown as
+     *  code in the chat, only as a tappable game card + full-screen
+     *  player (GamePlayer.kt). The doc kind is "game"; older builds map
+     *  the unknown kind to a plain (empty) TEXT bubble — degraded, never
+     *  a crash — and ignore both additive fields. Local optimistic and
+     *  loaded copies hold the HTML file in [localPath] (dl_<id>.html),
+     *  exactly like the VIDEO/AUDIO file kinds. */
+    val game: Boolean = false,
+    /** The game's display title, derived from the asker's command text
+     *  (first ~48 chars) and stored as the plaintext doc field `gtitle`
+     *  — metadata, readable on the not-yet-loaded stub like mime/size,
+     *  so the card can name the game before its bytes are fetched. */
+    val gameTitle: String = "",
 )
 
 /** One 1:1 conversation. */
@@ -365,6 +381,11 @@ object Schema {
             /** ROUND 37: authored by the in-chat AI (Tika). Additive —
              *  see [TikuMessage.ai]. */
             val ai: Boolean = false,
+            /** ROUND 41: an AI-built game message (kind "game", payload
+             *  = one HTML file in the chunks). Additive — see
+             *  [TikuMessage.game] / [TikuMessage.gameTitle]. */
+            val game: Boolean = false,
+            val gtitle: String = "",
             val seenBy: List<String> = emptyList(),
             val durationMs: Int = 0, val amps: List<Int> = emptyList(),
             /** Media kinds (image/voice/video/audio): ciphertext lives in the chunks

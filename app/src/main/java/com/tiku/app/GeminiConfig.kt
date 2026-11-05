@@ -37,4 +37,56 @@ object GeminiConfig {
     )
 
     const val BASE = "https://generativelanguage.googleapis.com/v1beta/models"
+
+    /** Free no-key image fallback (Pollinations.ai), ROUND 38 — used
+     *  only after the whole Gemini image cascade fails. The full URL
+     *  is "<base>/<url-encoded prompt>?width=..&height=..&nologo=true&model=flux". */
+    const val POLLINATIONS_BASE = "https://image.pollinations.ai/prompt"
+
+    // ---- ROUND 41: MiniMax via NVIDIA (the /babeg coding fallback) ----
+    // Owner-supplied key for NVIDIA's OpenAI-compatible endpoint,
+    // fragmented + assembled exactly like the Gemini key above. Used
+    // ONLY to write game code when the Gemini cascade fails to produce
+    // a valid game. Do not log it.
+    private val NV_KEY_PARTS = listOf(
+        "bnZhcGktQkNuRzhPUkY2bXFtRkVMQmVC",
+        "RVI3dUdmNVhoNDVvbC1xOFBKZzlqaExs",
+        "VVhQWDZwcWNSci0xclR3c2l6Y3FVQQ==",
+    )
+
+    val NV_API_KEY: String by lazy {
+        NV_KEY_PARTS.joinToString("") {
+            String(android.util.Base64.decode(it, android.util.Base64.DEFAULT), Charsets.UTF_8)
+        }
+    }
+
+    const val NV_BASE = "https://integrate.api.nvidia.com/v1/chat/completions"
+    const val NV_MODEL = "minimaxai/minimax-m3.1-flash"
+
+    // ---- ROUND 41: Cloudflare Workers AI image route ----
+    // FLUX.1-schnell on the owner's free Cloudflare account — the
+    // middle image step (after Gemini, before Pollinations). The
+    // parent filled these once the signup landed and verified the
+    // endpoint live (a real FLUX image, no watermark); the token is
+    // fragmented + assembled exactly like the keys above. Do not log it.
+    const val CF_ACCOUNT_ID = "c64404468367dedd1b46ba1c05086bd2"
+
+    private val CF_TOKEN_PARTS = listOf(
+        "Y2Z1dF8wZDJMb3NObmJRamQ=",
+        "OE80SUJiNmdkVGIyOGlQeTg=",
+        "cjh5Unh4Y216WGlkZmM2ZTc4OQ==",
+    )
+
+    val CF_API_TOKEN: String by lazy {
+        if (CF_TOKEN_PARTS.isEmpty()) ""
+        else CF_TOKEN_PARTS.joinToString("") {
+            String(android.util.Base64.decode(it, android.util.Base64.DEFAULT), Charsets.UTF_8)
+        }
+    }
+
+    /** True only when the parent has filled both Cloudflare values. */
+    val CF_CONFIGURED: Boolean
+        get() = CF_ACCOUNT_ID.isNotBlank() && CF_API_TOKEN.isNotBlank()
+
+    const val CF_IMAGE_MODEL = "@cf/black-forest-labs/flux-1-schnell"
 }

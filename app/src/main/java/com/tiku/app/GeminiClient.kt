@@ -14,6 +14,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
+import java.net.URLEncoder
 
 /**
  * ROUND 37 — TIKA, the in-chat AI (owner's order, Meta-AI style).
@@ -35,8 +36,22 @@ import java.net.URL
  * 429 and nothing succeeded, [Outcome.Failed] for everything else —
  * the caller toasts and posts NOTHING fake.
  *
+ * Images carry one extra safety net (ROUND 38): when every Gemini
+ * image model has failed — the owner's key currently has zero image
+ * quota — [generateImage] falls back to Pollinations.ai, a free
+ * no-key image service, and a hit there returns through the exact
+ * same success path. Gemini stays FIRST: the day its image quota
+ * opens, it silently takes over again and the fallback never runs.
+ *
  * Timeouts are generous (image generation is slow): 20 s connect,
- * 60 s read, per model, on Dispatchers.IO.
+ * 60 s read per Gemini model, 120 s read for the fallback (its
+ * queue can crawl), all on Dispatchers.IO.
+ *
+ * ROUND 41 adds three things: a `/babeg` game writer ([generateGame]
+ * — Gemini cascade, then MiniMax via NVIDIA, one strict validator so
+ * only a complete HTML game is ever posted); a Cloudflare FLUX image
+ * step between the Gemini image cascade and Pollinations (skipped
+ * while its config is blank); and 180 s reads on game calls.
  */
 object GeminiClient {
 
@@ -52,12 +67,19 @@ object GeminiClient {
         data object Failed : Raw
     }
 
-    /** Who Tika is, prepended to text asks only (image prompts go to
-     *  the image models verbatim — a persona line would pollute the
-     *  picture). */
-    private const val PERSONA =
-        "You are Tika, a friendly AI assistant inside a private chat app. " +
-        "Answer briefly and helpfully, in the same language the user wrote in."
+    /** Who Tika is — the owner's FIXED identity for the text-answer
+     *  path (ROUND 41 addition, owner's exact words). It rides as the
+     *  request's `system_instruction` on EVERY cascade attempt (the
+     *  body is built once and shared by all TEXT_MODELS), never as
+     *  part of the user's prompt. Text asks only: image prompts go to
+     *  the image models verbatim, and game generation carries its own
+     *  separate contract (GAME_CONTRACT) — both untouched by this. */
+    private const val IDENTITY =
+        "You are Tika, the friendly AI assistant inside the Tiku chat app. " +
+        "You were created by Abu Saalim, a solo developer. If anyone asks who made you, " +
+        "who created you, who developed you, or similar, answer proudly that Abu Saalim " +
+        "made you — a solo developer. Never claim to be made by Google or anyone else. " +
+        "Keep answers helpful and concise; reply in the language the user writes in."
 
     /** A /tiku text answer: cascade TEXT_MODELS until one returns a
      *  non-empty answer. */
@@ -68,8 +90,11 @@ object GeminiClient {
             )
         }
         val body = JSONObject().apply {
+            put("system_instruction", JSONObject().apply {
+                put("parts", JSONArray().put(JSONObject().put("text", IDENTITY)))
+            })
             put("contents", JSONArray().put(JSONObject().apply {
-                put("parts", JSONArray().put(JSONObject().put("text", "$PERSONA\n\n$prompt")))
+                put("parts", JSONArray().put(JSONObject().put("text", prompt)))
             }))
         }
         var sawQuota = false
@@ -89,7 +114,9 @@ object GeminiClient {
 
     /** A /tika image: cascade IMAGE_MODELS until one returns an
      *  inline image part; the bytes decode straight to a Bitmap that
-     *  the caller feeds into the encrypted photo-send pipeline. */
+     *  the caller feeds into the encrypted photo-send pipeline. If
+     *  the whole cascade fails, the free Pollinations fallback gets
+     *  one attempt before the honest error is returned. */
     suspend fun generateImage(prompt: String): Outcome<Bitmap> {
         if (Config.PREVIEW_UI_ONLY) return Outcome.Ok(previewBitmap())
         val body = JSONObject().apply {
@@ -112,20 +139,293 @@ object GeminiClient {
                 Raw.Failed -> Unit
             }
         }
+        // Gemini exhausted (quota / capacity / network). ROUND 41:
+        // Cloudflare's FLUX route (the owner's free daily quota, a
+        // proper key route with no watermark) gets the next shot when
+        // the parent has configured it; while its config is blank the
+        // step is skipped silently.
+        if (GeminiConfig.CF_CONFIGURED) {
+            fetchCloudflareImage(prompt)?.let { return Outcome.Ok(it) }
+        }
+        // Last resort: the free no-key fallback (ROUND 38).
+        fetchPollinationsImage(prompt)?.let { return Outcome.Ok(it) }
         return if (sawQuota) Outcome.Quota else Outcome.Failed
     }
 
+    /** ROUND 41: Cloudflare Workers AI — FLUX.1-schnell behind the
+     *  owner's API token. POST {prompt, steps} and the answer carries
+     *  the JPEG base64 at result.image. Same success guards as the
+     *  Pollinations fallback (payload ≥ ~8 KB AND actually decodes as
+     *  a Bitmap) so an error JSON can never be posted as a "photo";
+     *  any miss returns null and the cascade moves on. */
+    private suspend fun fetchCloudflareImage(prompt: String): Bitmap? =
+        withContext(Dispatchers.IO) {
+            var conn: HttpURLConnection? = null
+            try {
+                val url = "https://api.cloudflare.com/client/v4/accounts/" +
+                    "${GeminiConfig.CF_ACCOUNT_ID}/ai/run/${GeminiConfig.CF_IMAGE_MODEL}"
+                val payload = JSONObject().apply {
+                    put("prompt", prompt)
+                    put("steps", 4)
+                }
+                conn = (URL(url).openConnection() as HttpURLConnection).apply {
+                    requestMethod = "POST"
+                    connectTimeout = 20_000
+                    readTimeout = 120_000
+                    doOutput = true
+                    setRequestProperty("Content-Type", "application/json")
+                    setRequestProperty("Authorization", "Bearer ${GeminiConfig.CF_API_TOKEN}")
+                }
+                conn.outputStream.use { it.write(payload.toString().toByteArray(Charsets.UTF_8)) }
+                if (conn.responseCode !in 200..299) {
+                    Log.w("TikaAi", "cloudflare -> HTTP ${conn.responseCode}")
+                    return@withContext null
+                }
+                val text = conn.inputStream.bufferedReader(Charsets.UTF_8).readText()
+                val b64 = runCatching {
+                    JSONObject(text).optJSONObject("result")?.optString("image")
+                }.getOrNull()
+                if (b64.isNullOrEmpty()) {
+                    Log.w("TikaAi", "cloudflare answered without an image")
+                    return@withContext null
+                }
+                val bytes = runCatching { Base64.decode(b64, Base64.DEFAULT) }.getOrNull()
+                if (bytes == null || bytes.size < 8 * 1024) {
+                    Log.w("TikaAi", "cloudflare payload too small (${bytes?.size ?: 0} B)")
+                    return@withContext null
+                }
+                val bmp = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+                if (bmp == null) Log.w("TikaAi", "cloudflare payload was not an image")
+                bmp
+            } catch (e: Exception) {
+                Log.w("TikaAi", "cloudflare call failed (${e.javaClass.simpleName})")
+                null
+            } finally {
+                conn?.disconnect()
+            }
+        }
+
+    // ================= ROUND 41: /babeg game generation =================
+
+    /** The contract every game-writing model receives. It pins the
+     *  four things the app depends on: (1) output is ONLY one complete
+     *  HTML file — the chat never shows code, so anything else the
+     *  model says is stripped by [cleanGameHtml] or rejected;
+     *  (2) two-player sync happens EXCLUSIVELY through the injected
+     *  window.TikuGame bridge (one shared JSON state — the app syncs
+     *  it between the two phones); (3) the game is 2D, turn-based,
+     *  touch-first; (4) the owner's COLOUR LAW, verbatim-hard: warm
+     *  cream/paper world, mustard + pastels, never neon, never
+     *  blue-dominant, never a dark background. */
+    private const val GAME_CONTRACT =
+        "You are Tika's game builder inside a private chat app. Build a small 2D game " +
+        "that TWO people play together in this chat, each on their own phone, taking turns. " +
+        "Return ONLY the complete HTML file — no explanations, no markdown fences, no text " +
+        "before or after the HTML.\n\n" +
+        "TECHNICAL RULES (all mandatory):\n" +
+        "- ONE single self-contained HTML file: all CSS in a <style> tag, all JavaScript in " +
+        "a <script> tag at the end of <body>. NO external resources of any kind: no CDN, no " +
+        "web fonts, no images or scripts loaded from URLs. No fetch, no XMLHttpRequest, no " +
+        "WebSocket, no eval.\n" +
+        "- The app injects this exact bridge object — use ONLY it for multiplayer sync:\n" +
+        "  window.TikuGame = {\n" +
+        "    myRole(): returns \"host\" or \"guest\" (the host moves first),\n" +
+        "    myName(): my display name, peerName(): the other player's display name,\n" +
+        "    state(): the latest shared state as a JSON string, or null before the first move,\n" +
+        "    setState(jsonString): publish a new shared state (the app delivers it to the other phone),\n" +
+        "    onState(callback): register ONE callback; the app calls it with the new state string " +
+        "whenever the partner changes the state, and once at the start with the current state (or null)\n" +
+        "  }\n" +
+        "- Keep ALL shared game state in ONE JSON object. Design: the game registers onState " +
+        "once at startup and renders purely from the state; when state() is null the HOST " +
+        "creates the initial state and publishes it with setState; a move updates the state " +
+        "and calls setState with the whole new JSON. Turn-based only — both players must " +
+        "always know whose turn it is.\n" +
+        "- Show a visible game title, a clear whose-turn indicator (using the player names), " +
+        "and a restart button that resets the game by publishing a fresh initial state.\n" +
+        "- Touch-friendly, fits a phone screen (max-width about 480px), DOM or canvas, 2D only.\n\n" +
+        "COLOUR RULES (hard, never break): warm cream / ivory / paper backgrounds " +
+        "(around #FFF9EE), soft dark-ink text (around #33261A), mustard-yellow and soft " +
+        "pastel accents (peach, mint, blush, butter). STRICTLY FORBIDDEN: neon colours, " +
+        "blue-dominant palettes, dark or black backgrounds.\n\n"
+
+    /** A /babeg game: cascade the Gemini TEXT_MODELS with the game
+     *  contract; when none of them yields a VALID game (see
+     *  [cleanGameHtml]), fall back to MiniMax on NVIDIA's endpoint
+     *  with the identical contract + validation. Only a validated,
+     *  complete HTML file ever comes back as [Outcome.Ok] — the
+     *  caller posts it as a game message; on total failure NOTHING is
+     *  posted, the caller just toasts. */
+    suspend fun generateGame(prompt: String): Outcome<String> {
+        if (Config.PREVIEW_UI_ONLY) return Outcome.Ok(PreviewStore.SAMPLE_GAME_HTML)
+        val full = GAME_CONTRACT + "Build this game: " + prompt
+        val body = JSONObject().apply {
+            put("contents", JSONArray().put(JSONObject().apply {
+                put("parts", JSONArray().put(JSONObject().put("text", full)))
+            }))
+            put("generationConfig", JSONObject().apply {
+                put("temperature", 0.7)
+                put("maxOutputTokens", 8192)
+            })
+        }
+        var sawQuota = false
+        for (model in GeminiConfig.TEXT_MODELS) {
+            when (val r = post(model, body, readTimeoutMs = 180_000)) {
+                is Raw.Ok -> {
+                    val html = cleanGameHtml(extractText(r.json))
+                    if (html != null) return Outcome.Ok(html)
+                    Log.w("TikaAi", "model $model returned no valid game — cascading")
+                }
+                Raw.Quota -> sawQuota = true
+                Raw.Failed -> Unit
+            }
+        }
+        // Gemini could not build a valid game — MiniMax (NVIDIA) gets
+        // the same contract and the same validation.
+        val mm = postMiniMaxGame(full)
+        val mmHtml = cleanGameHtml(mm)
+        if (mmHtml != null) return Outcome.Ok(mmHtml)
+        if (mm == null) Log.w("TikaAi", "minimax game call failed")
+        else Log.w("TikaAi", "minimax returned no valid game")
+        return if (sawQuota) Outcome.Quota else Outcome.Failed
+    }
+
+    /** Validate + normalise a model's game answer: strip markdown
+     *  fences and any prose around the document, then require a
+     *  complete HTML document (starts with <!DOCTYPE html> or <html,
+     *  ends with </html>) of 2 KB – 200 KB. Anything else is rejected
+     *  (null) so broken code is never posted into the chat. */
+    private fun cleanGameHtml(raw: String?): String? {
+        if (raw.isNullOrBlank()) return null
+        var s = raw.trim()
+        // Markdown fences: keep only the fenced block when present.
+        val fence = s.indexOf("```")
+        if (fence >= 0) {
+            val start = s.indexOf('\n', fence)
+            val end = s.lastIndexOf("```")
+            if (start >= 0 && end > start) s = s.substring(start + 1, end).trim()
+        }
+        // Prose before/after the document: cut to the document itself.
+        val lower = s.lowercase()
+        val docStart = listOf(lower.indexOf("<!doctype"), lower.indexOf("<html"))
+            .filter { it >= 0 }.minOrNull() ?: return null
+        val docEnd = lower.lastIndexOf("</html>")
+        if (docEnd < 0) return null
+        s = s.substring(docStart, docEnd + "</html>".length).trim()
+        val head = s.lowercase()
+        if (!head.startsWith("<!doctype") && !head.startsWith("<html")) return null
+        if (!head.endsWith("</html>")) return null
+        val bytes = s.toByteArray(Charsets.UTF_8).size
+        if (bytes < 2 * 1024 || bytes > 200 * 1024) {
+            Log.w("TikaAi", "game html size out of range ($bytes B)")
+            return null
+        }
+        return s
+    }
+
+    /** MiniMax (NVIDIA, OpenAI-compatible chat completions) game
+     *  call. Returns the raw message content; transport/parse failure
+     *  returns null. The key rides the Bearer header from
+     *  GeminiConfig — never logged. */
+    private suspend fun postMiniMaxGame(fullPrompt: String): String? =
+        withContext(Dispatchers.IO) {
+            var conn: HttpURLConnection? = null
+            try {
+                val payload = JSONObject().apply {
+                    put("model", GeminiConfig.NV_MODEL)
+                    put("messages", JSONArray().put(JSONObject().apply {
+                        put("role", "user")
+                        put("content", fullPrompt)
+                    }))
+                    put("max_tokens", 8000)
+                    put("temperature", 0.7)
+                }
+                conn = (URL(GeminiConfig.NV_BASE).openConnection() as HttpURLConnection).apply {
+                    requestMethod = "POST"
+                    connectTimeout = 20_000
+                    readTimeout = 180_000
+                    doOutput = true
+                    setRequestProperty("Content-Type", "application/json")
+                    setRequestProperty("Authorization", "Bearer ${GeminiConfig.NV_API_KEY}")
+                }
+                conn.outputStream.use { it.write(payload.toString().toByteArray(Charsets.UTF_8)) }
+                if (conn.responseCode !in 200..299) {
+                    Log.w("TikaAi", "minimax -> HTTP ${conn.responseCode}")
+                    return@withContext null
+                }
+                val text = conn.inputStream.bufferedReader(Charsets.UTF_8).readText()
+                runCatching {
+                    JSONObject(text).optJSONArray("choices")?.optJSONObject(0)
+                        ?.optJSONObject("message")?.optString("content")
+                        ?.takeIf { it.isNotBlank() }
+                }.getOrNull()
+            } catch (e: Exception) {
+                Log.w("TikaAi", "minimax call failed (${e.javaClass.simpleName})")
+                null
+            } finally {
+                conn?.disconnect()
+            }
+        }
+
+    /** ROUND 38 fallback: Pollinations.ai renders the prompt with no
+     *  key and no signup — GET <base>/<url-encoded prompt>?…. Their
+     *  queue can be slow, hence the 120 s read timeout. A hit counts
+     *  only when ALL THREE guards pass: HTTP 200, a payload of at
+     *  least ~8 KB, and bytes that actually decode as a Bitmap —
+     *  together they reject the HTML error pages a free service
+     *  answers with when it is overloaded. Any miss returns null and
+     *  the caller keeps the Gemini cascade's own error mapping. */
+    private suspend fun fetchPollinationsImage(prompt: String): Bitmap? =
+        withContext(Dispatchers.IO) {
+            var conn: HttpURLConnection? = null
+            try {
+                val encoded = URLEncoder.encode(prompt.take(400), "UTF-8")
+                    .replace("+", "%20")
+                val url = "${GeminiConfig.POLLINATIONS_BASE}/$encoded" +
+                    "?width=1024&height=1024&nologo=true&model=flux"
+                conn = (URL(url).openConnection() as HttpURLConnection).apply {
+                    requestMethod = "GET"
+                    connectTimeout = 20_000
+                    readTimeout = 120_000
+                    instanceFollowRedirects = true
+                    setRequestProperty(
+                        "User-Agent",
+                        "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 " +
+                            "(KHTML, like Gecko) Chrome/126.0 Mobile Safari/537.36",
+                    )
+                }
+                if (conn.responseCode != 200) {
+                    Log.w("TikaAi", "pollinations -> HTTP ${conn.responseCode}")
+                    return@withContext null
+                }
+                val bytes = conn.inputStream.use { it.readBytes() }
+                if (bytes.size < 8 * 1024) {
+                    Log.w("TikaAi", "pollinations payload too small (${bytes.size} B)")
+                    return@withContext null
+                }
+                val bmp = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+                if (bmp == null) Log.w("TikaAi", "pollinations payload was not an image")
+                bmp
+            } catch (e: Exception) {
+                Log.w("TikaAi", "pollinations call failed (${e.javaClass.simpleName})")
+                null
+            } finally {
+                conn?.disconnect()
+            }
+        }
+
     /** One generateContent call. 429 maps to [Raw.Quota]; every other
      *  non-2xx and every transport/parse failure maps to [Raw.Failed]
-     *  so the cascade moves on. */
-    private suspend fun post(model: String, body: JSONObject): Raw = withContext(Dispatchers.IO) {
+     *  so the cascade moves on. Game generation passes a longer read
+     *  timeout (a whole HTML file is a lot of tokens). */
+    private suspend fun post(model: String, body: JSONObject, readTimeoutMs: Int = 60_000): Raw = withContext(Dispatchers.IO) {
         var conn: HttpURLConnection? = null
         try {
             conn = (URL("${GeminiConfig.BASE}/$model:generateContent").openConnection()
                 as HttpURLConnection).apply {
                 requestMethod = "POST"
                 connectTimeout = 20_000
-                readTimeout = 60_000
+                readTimeout = readTimeoutMs
                 doOutput = true
                 setRequestProperty("Content-Type", "application/json")
                 setRequestProperty("x-goog-api-key", GeminiConfig.API_KEY)

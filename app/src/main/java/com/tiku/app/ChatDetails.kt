@@ -651,28 +651,61 @@ private fun RdISearchPage(thread: ChatThread, onBack: () -> Unit) {
 @Composable
 private fun RdICustomizePage(thread: ChatThread, onBack: () -> Unit) {
     val globalSettings by SettingsStore.state.collectAsState()
+    // ROUND 39: the gallery launcher lives HERE now, not in a sheet —
+    // the theme grid moved inline onto this page (see the Theme card
+    // below), and a pick still routes to the Round-35 confirm sheet;
+    // nothing is written until that sheet's apply.
+    val ctx = LocalContext.current
+    val pickLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.PickVisualMedia(),
+    ) { uri ->
+        if (uri != null) {
+            val picked = runCatching {
+                val raw = ctx.contentResolver.openInputStream(uri)
+                    ?.use { BitmapFactory.decodeStream(it) }
+                raw?.let {
+                    val jpeg = MediaStore.compressPhoto(it, maxSide = 1080, quality = 82)
+                    BitmapFactory.decodeByteArray(jpeg, 0, jpeg.size)?.let { small -> small to jpeg }
+                }
+            }.getOrNull()
+            if (picked != null) {
+                openRdCustomThemeConfirm(thread, picked.first, picked.second)
+            } else {
+                AppState.toast("Couldn't read that photo")
+            }
+        }
+    }
     RdISubPage(bottom = 40.dp) {
         item { RdISubHeader("Customize chat", onBack) }
         // ROUND 26 — the shared wallpaper themes (the owner's six):
         // picking one re-skins BOTH phones (chats/{id}.theme).
-        // ROUND 35: this picker is now the ONLY theme control here —
+        // ROUND 35: this picker is the ONLY theme control here —
         // the legacy accent-swatch row ("Chat theme": five gradient
         // circles writing the old themeAccent index) was removed on
         // the owner's order. The accent DATA path itself is untouched:
         // effectiveSettings / ThemeCodec still resolve whatever accent
         // a chat already carries, exactly as before; there is simply
         // no UI left that changes it.
+        // ROUND 39: the tiles are INLINE under the Theme heading —
+        // the "Theme" nav row that used to open the picker as a sheet
+        // is deleted on the owner's order: the themes show the moment
+        // Customize opens, no extra tap.
         item { RdISection("Theme") }
         item {
             RdICardRow {
-                val current = ChatThemes.byId(thread.themeId)
-                val currentName = when {
-                    ChatThemes.isCustom(thread.themeId) -> "Custom photo"
-                    current != null -> current.name
-                    else -> "Default"
-                }
-                RdINavRow("Theme", currentName) {
-                    openRdThemePicker(thread)
+                Column(Modifier.padding(horizontal = 4.dp, vertical = 8.dp)) {
+                    Text(
+                        "Applies to both of you", color = RdISub, fontSize = 13.sp,
+                        modifier = Modifier.padding(horizontal = 10.dp),
+                    )
+                    Spacer(Modifier.height(12.dp))
+                    RdThemeGrid(thread) {
+                        pickLauncher.launch(
+                            PickVisualMediaRequest(
+                                ActivityResultContracts.PickVisualMedia.ImageOnly,
+                            ),
+                        )
+                    }
                 }
             }
         }
@@ -710,87 +743,54 @@ private sealed interface RdThemeTileSpec {
     data object Custom : RdThemeTileSpec
 }
 
-/** ROUND 26 — the theme picker, opened from Customize chat ▸ Theme.
- *  AppState.sheet is the house pattern; the sheet host renders it in
- *  the Tik sheet skin over this screen. A Default tile + the six
- *  wallpaper tiles (the owner's images, decoded from assets exactly
- *  as supplied). Tapping one writes the SHARED chats/{id}.theme via
- *  the repo and closes — both phones re-skin live through the
- *  threads listener, the open chat included.
+/** ROUND 39 — the theme tile grid, hosted INLINE by the Customize
+ *  page. ROUND 26 built this as a sheet (openRdThemePicker) behind a
+ *  "Theme" nav row in Customize; the owner ordered the row gone and
+ *  the themes visible the moment Customize opens, so the sheet form
+ *  is deleted and this section composable is what remains of it.
  *
- *  ROUND 35 adds the eighth tile, "Custom photo": it launches the
- *  system photo picker; the chosen image (downscaled to a ≤1080px
- *  JPEG) goes to a confirm sheet where a colour palette is picked
- *  with it, and only then is anything written — the photo uploads
- *  ENCRYPTED as the chat's theme asset and the field becomes
- *  "custom:<palette>" (see FirebaseEngine.setCustomTheme). */
-private fun openRdThemePicker(thread: ChatThread) {
-    AppState.sheet {
-        val ctx = LocalContext.current
-        val pickLauncher = rememberLauncherForActivityResult(
-            ActivityResultContracts.PickVisualMedia(),
-        ) { uri ->
-            if (uri != null) {
-                val picked = runCatching {
-                    val raw = ctx.contentResolver.openInputStream(uri)
-                        ?.use { BitmapFactory.decodeStream(it) }
-                    raw?.let {
-                        val jpeg = MediaStore.compressPhoto(it, maxSide = 1080, quality = 82)
-                        BitmapFactory.decodeByteArray(jpeg, 0, jpeg.size)?.let { small -> small to jpeg }
-                    }
-                }.getOrNull()
-                if (picked != null) {
-                    openRdCustomThemeConfirm(thread, picked.first, picked.second)
-                } else {
-                    AppState.toast("Couldn't read that photo")
-                }
-            }
-        }
-        Column(Modifier.padding(horizontal = 6.dp)) {
-            Text(
-                "Theme", color = Color.White, fontSize = 20.sp,
-                fontWeight = FontWeight.Bold,
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
-            )
-            Text(
-                "Applies to both of you", color = RdISub, fontSize = 13.sp,
-                modifier = Modifier.padding(horizontal = 16.dp),
-            )
-            Spacer(Modifier.height(12.dp))
-            val specs: List<RdThemeTileSpec> =
-                (listOf<ChatTheme?>(null) + ChatThemes.all).map { RdThemeTileSpec.Builtin(it) } +
-                    RdThemeTileSpec.Custom
-            specs.chunked(3).forEach { rowTiles ->
-                Row(
-                    Modifier.fillMaxWidth().padding(horizontal = 10.dp),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                ) {
-                    rowTiles.forEach { spec ->
-                        when (spec) {
-                            is RdThemeTileSpec.Builtin -> RdThemeTile(
-                                theme = spec.theme,
-                                selected = (spec.theme?.id ?: "") == thread.themeId,
-                                modifier = Modifier.weight(1f),
-                            ) {
-                                AppState.repo.setTheme(thread.id, spec.theme?.id ?: "")
-                                AppState.closeSheet()
-                            }
-                            RdThemeTileSpec.Custom -> RdCustomThemeTile(
-                                thread = thread,
-                                selected = ChatThemes.isCustom(thread.themeId),
-                                modifier = Modifier.weight(1f),
-                            ) {
-                                pickLauncher.launch(
-                                    PickVisualMediaRequest(
-                                        ActivityResultContracts.PickVisualMedia.ImageOnly,
-                                    ),
-                                )
-                            }
+ *  Tiles: Default + the six built-in wallpapers (the owner's images,
+ *  decoded from assets exactly as supplied) + the ROUND-35 eighth
+ *  tile, "Custom photo". A built-in tap writes the SHARED
+ *  chats/{id}.theme via the repo and STAYS on the page (there is no
+ *  sheet to close) — both phones re-skin live through the threads
+ *  listener, the open chat included. The Custom tile defers to
+ *  [onCustomPick]: the page's gallery launcher → the picked image
+ *  (downscaled to a ≤1080px JPEG) goes to a confirm sheet where a
+ *  colour palette is picked with it, and only then is anything
+ *  written — the photo uploads ENCRYPTED as the chat's theme asset
+ *  and the field becomes "custom:<palette>" (see
+ *  FirebaseEngine.setCustomTheme). */
+@Composable
+private fun RdThemeGrid(thread: ChatThread, onCustomPick: () -> Unit) {
+    val specs: List<RdThemeTileSpec> =
+        (listOf<ChatTheme?>(null) + ChatThemes.all).map { RdThemeTileSpec.Builtin(it) } +
+            RdThemeTileSpec.Custom
+    Column {
+        specs.chunked(3).forEachIndexed { rowIdx, rowTiles ->
+            if (rowIdx > 0) Spacer(Modifier.height(12.dp))
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                rowTiles.forEach { spec ->
+                    when (spec) {
+                        is RdThemeTileSpec.Builtin -> RdThemeTile(
+                            theme = spec.theme,
+                            selected = (spec.theme?.id ?: "") == thread.themeId,
+                            modifier = Modifier.weight(1f),
+                        ) {
+                            AppState.repo.setTheme(thread.id, spec.theme?.id ?: "")
                         }
+                        RdThemeTileSpec.Custom -> RdCustomThemeTile(
+                            thread = thread,
+                            selected = ChatThemes.isCustom(thread.themeId),
+                            modifier = Modifier.weight(1f),
+                            onClick = onCustomPick,
+                        )
                     }
-                    repeat(3 - rowTiles.size) { Spacer(Modifier.weight(1f)) }
                 }
-                Spacer(Modifier.height(12.dp))
+                repeat(3 - rowTiles.size) { Spacer(Modifier.weight(1f)) }
             }
         }
     }

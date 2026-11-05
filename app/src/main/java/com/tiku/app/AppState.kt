@@ -271,6 +271,14 @@ interface ChatRepo {
     fun sendPhotoAi(id: String, bmp: Bitmap) {
         sendPhoto(id, bmp)
     }
+    /** ROUND 41: send an AI-built 2-player GAME (the `/babeg` result) —
+     *  [html] is ONE self-contained HTML file, delivered through the
+     *  encrypted chunk pipeline as a game message (see
+     *  TikuMessage.game); [title] is the asker's command text (first
+     *  ~48 chars) shown on the card. Default no-op keeps implementers
+     *  that predate games (test doubles) compiling and behaving
+     *  exactly as before; the real engine + preview store override it. */
+    fun sendGame(id: String, html: String, title: String) {}
     /** ROUND 14: send a reply to a partner's NOTE — a real text message in
      *  our thread whose encrypted reply-quote snapshot reads "Note: <text>"
      *  and whose doc carries replyToId "__note__" (the note sentinel).

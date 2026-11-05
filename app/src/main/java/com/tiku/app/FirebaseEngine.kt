@@ -51,6 +51,8 @@ import javax.crypto.SecretKey
  *   chats/{chatId}/calls/{callId} {kind, caller, callee, state, offer, answer,
  *       callerCands, calleeCands, createdAt} (WebRTC signaling only — deleted in
  *       full the moment a call resolves; see Rtc.kt)
+ *   chats/{chatId}/gamestate/{msgId} {json, by, updatedAt} (round 41 — the
+ *       shared board state of one /babeg game message; see listenGameState)
  *   moments/{uid}/items/{itemId} {quote, ts}
  */
 /** ROUND 22 — the Instagram-style send-effect kinds the `fx` message
@@ -953,7 +955,7 @@ object FirebaseEngine : ChatRepo {
         val sender = doc.getString("senderId") ?: return null
         val kind = when (doc.getString("kind") ?: "text") {
             "image" -> MsgKind.IMAGE; "voice" -> MsgKind.VOICE; "call" -> MsgKind.CALL
-            "video" -> MsgKind.VIDEO; "audio" -> MsgKind.AUDIO
+            "video" -> MsgKind.VIDEO; "audio" -> MsgKind.AUDIO; "game" -> MsgKind.GAME
             else -> MsgKind.TEXT
         }
         val my = myUid()
@@ -1709,9 +1711,16 @@ object FirebaseEngine : ChatRepo {
         // voDone). Docs from older builds lack the field → false →
         // ordinary message; the flag only steers rendering.
         val ai = doc.getBoolean("ai") == true
+        // ROUND 41 — AI-built game flag + title (additive, same
+        // discipline). Older builds lack both → false / "" → their
+        // unknown-kind path renders an empty TEXT bubble (no crash);
+        // this build routes the doc through the media pipeline below
+        // as a tap-to-load file kind, like video/audio.
+        val game = doc.getBoolean("game") == true
+        val gameTitle = doc.getString("gtitle") ?: ""
         val kind = when (kindRaw) {
             "image" -> MsgKind.IMAGE; "voice" -> MsgKind.VOICE; "call" -> MsgKind.CALL
-            "video" -> MsgKind.VIDEO; "audio" -> MsgKind.AUDIO
+            "video" -> MsgKind.VIDEO; "audio" -> MsgKind.AUDIO; "game" -> MsgKind.GAME
             else -> MsgKind.TEXT
         }
         // ROUND 18 — TOMBSTONE: the sender deleted this message for
@@ -1777,11 +1786,13 @@ object FirebaseEngine : ChatRepo {
                     callVideo = j.optBoolean("video")
                 }
             }
-            "image", "voice", "video", "audio" -> {
+            "image", "voice", "video", "audio", "game" -> {
                 mediaChunks = (doc.getLong("mediaChunks") ?: 0L).toInt()
                 mimeType = doc.getString("mime") ?: ""
                 mediaBytes = doc.getLong("mediaBytes") ?: 0L
-                val fileKind = kindRaw == "video" || kindRaw == "audio"
+                // ROUND 41: a game is a FILE kind for loading purposes —
+                // never auto-downloaded, tap-to-load via fetchMedia.
+                val fileKind = kindRaw == "video" || kindRaw == "audio" || kindRaw == "game"
                 if (light) {
                     // preview stub — no chunk download (see decryptDoc doc)
                     if (kindRaw != "image") {
@@ -1836,11 +1847,14 @@ object FirebaseEngine : ChatRepo {
                         f.writeBytes(plain)
                         localPath = f.absolutePath
                     } else {
-                        // video / audio — reachable ONLY via fetchMedia
-                        // (forceLoad): write the decrypted file to cache
-                        // and, for video, lift a poster frame into `photo`.
+                        // video / audio / game — reachable ONLY via
+                        // fetchMedia (forceLoad): write the decrypted
+                        // file to cache and, for video, lift a poster
+                        // frame into `photo`. ROUND 41: a game's file
+                        // extension is .html regardless of mime mapping.
                         durSec = ((doc.getLong("durationMs") ?: 0L) / 1000).toInt()
-                        val f = File(appCtx.cacheDir, "dl_${doc.id}.${mediaFileExt(mimeType, kindRaw)}")
+                        val ext = if (kindRaw == "game") "html" else mediaFileExt(mimeType, kindRaw)
+                        val f = File(appCtx.cacheDir, "dl_${doc.id}.$ext")
                         // ROUND 34: unconditional write — see the voice
                         // branch above (a truncated husk must never stick).
                         f.writeBytes(plain)
@@ -1859,7 +1873,8 @@ object FirebaseEngine : ChatRepo {
             mediaChunks = mediaChunks,
             editedAtMs = doc.getTimestamp("editedAt")?.toDate()?.time ?: 0L,
             mimeType = mimeType, mediaBytes = mediaBytes,
-            fx = fx, vo = vo, voDone = voDone, ai = ai)
+            fx = fx, vo = vo, voDone = voDone, ai = ai,
+            game = game, gameTitle = gameTitle)
         // ROUND 33 — HIDE RECOVERY: mirror this copy into the hidden
         // registry (or drop its entry, when the doc no longer hides it
         // for me — e.g. right after an unhide lands).
@@ -2030,6 +2045,39 @@ object FirebaseEngine : ChatRepo {
         scope.launch { deliverMedia(id, th.person.uid, local, MediaStore.compressPhoto(bmp)) }
     }
 
+    /** ROUND 41: the game send — Tika's validated HTML file rides the
+     *  exact media pipeline (encrypt -> doc -> chunk upload via
+     *  deliverMedia) under kind "game" with the additive `game` /
+     *  `gtitle` fields. The sender's phone writes its playable copy to
+     *  the SAME dl_<id>.html cache shape the receiver's tap-to-load
+     *  produces, so the sender can play instantly and a FAILED send
+     *  can re-read the file on tap-to-retry (the file is KEPT after a
+     *  successful send, like the video/audio sources). The size guard
+     *  mirrors the generator's validator (200 KB max) so no caller can
+     *  push an oversized "game" into the chunk pipeline. */
+    override fun sendGame(id: String, html: String, title: String) {
+        val th = AppState.thread(id) ?: return
+        val bytes = html.toByteArray(Charsets.UTF_8)
+        if (bytes.isEmpty() || bytes.size > GAME_MAX_BYTES) {
+            AppState.toast("Couldn't send — the game file is too large")
+            return
+        }
+        val localId = newLocalId()
+        val f = File(appCtx.cacheDir, "dl_$localId.html")
+        val written = runCatching { f.writeBytes(bytes); true }.getOrDefault(false)
+        val local = TikuMessage(
+            id = localId, senderUid = uid, kind = MsgKind.GAME,
+            time = fmtTime(System.currentTimeMillis()), me = true,
+            localPath = if (written) f.absolutePath else null,
+            tsMs = System.currentTimeMillis(), status = SendStatus.SENDING,
+            mimeType = "text/html", mediaBytes = bytes.size.toLong(),
+            game = true, gameTitle = title.trim().take(48),
+        )
+        AppState.upsertMessage(id, local)
+        AppState.requestTailScroll(id, local.id)
+        scope.launch { deliverMedia(id, th.person.uid, local, bytes) }
+    }
+
     override fun sendVoice(id: String, audioFile: File?, durSec: Int, amps: List<Int>) {
         val th = AppState.thread(id) ?: return
         if (audioFile == null || !audioFile.exists()) {
@@ -2066,6 +2114,9 @@ object FirebaseEngine : ChatRepo {
     // real song or voice file a picker would offer.
     private const val VIDEO_MAX_BYTES = 64L * 1024 * 1024
     private const val AUDIO_MAX_BYTES = 32L * 1024 * 1024
+    /** ROUND 41: a game's HTML cap — the same 200 KB the generator's
+     *  validator enforces (GeminiClient.cleanGameHtml). */
+    private const val GAME_MAX_BYTES = 200 * 1024
 
     /** Cache-file extension for a decrypted media file, from its mime. */
     private fun mediaFileExt(mime: String, kindRaw: String): String = when (mime.lowercase()) {
@@ -2202,6 +2253,7 @@ object FirebaseEngine : ChatRepo {
     private suspend fun deliverMedia(id: String, peerUid: String, local: TikuMessage, plainBytes: ByteArray) {
         val kind = when (local.kind) {
             MsgKind.IMAGE -> "image"; MsgKind.VIDEO -> "video"; MsgKind.AUDIO -> "audio"
+            MsgKind.GAME -> "game"
             else -> "voice"
         }
         try {
@@ -2228,6 +2280,13 @@ object FirebaseEngine : ChatRepo {
             local.vo?.let { docData["vo"] = it }
             // ROUND 37: same additive discipline for AI authorship.
             if (local.ai) docData["ai"] = true
+            // ROUND 41: same additive discipline for games — `game` +
+            // `gtitle` ride ONLY on game sends; every other media doc
+            // keeps its pre-games shape exactly.
+            if (local.game) {
+                docData["game"] = true
+                docData["gtitle"] = local.gameTitle
+            }
             ref.set(docData).await()
             val chunks = MediaStore.upload(db, id, local.id, ctBytes)
             ref.update("mediaChunks", chunks).await()
@@ -2267,9 +2326,10 @@ object FirebaseEngine : ChatRepo {
                         AppState.toast("Couldn't resend — the recording is gone from this device")
                     } else deliverMedia(id, th.person.uid, m, bytes)
                 }
-                MsgKind.VIDEO, MsgKind.AUDIO -> {
+                MsgKind.VIDEO, MsgKind.AUDIO, MsgKind.GAME -> {
                     // the cache source file is kept after a failed send
-                    // precisely so this retry can re-read it
+                    // precisely so this retry can re-read it (ROUND 41:
+                    // a game's dl_<id>.html copy rides the same path)
                     val f = m.localPath?.let { File(it) }
                     val bytes = f?.takeIf { it.exists() }?.let { runCatching { it.readBytes() }.getOrNull() }
                     if (bytes == null) {
@@ -2291,6 +2351,52 @@ object FirebaseEngine : ChatRepo {
 
     private fun msgRef(id: String, msgId: String) =
         db.collection(Schema.Chats.COLL).document(id).collection(Schema.Chats.MESSAGES).document(msgId)
+
+    // ================= ROUND 41: shared game state =================
+    // A game's two phones sync through ONE tiny doc per game message:
+    //   chats/{chatId}/gamestate/{msgId} {json: String, by: uid, updatedAt}
+    // The payload is the game's own JSON state string (the app treats
+    // it as opaque — the TikuGame bridge contract lives in
+    // GamePlayer.kt). Plaintext by design: it is board state (X/O
+    // positions and the like), not chat content; the game HTML itself
+    // stays inside the E2EE message chunks like every media payload.
+    private fun gameStateRef(chatId: String, msgId: String) =
+        db.collection(Schema.Chats.COLL).document(chatId)
+            .collection("gamestate").document(msgId)
+
+    /** Observe one game's shared state; the callback receives the
+     *  latest json (null = no state published yet) and the uid that
+     *  wrote it (the player UI skips its own echo). Registration is
+     *  the caller's to remove. Real mode only — the preview player
+     *  keeps its state in memory and never calls this. */
+    fun listenGameState(
+        chatId: String, msgId: String,
+        onState: (json: String?, byUid: String?) -> Unit,
+    ): ListenerRegistration =
+        gameStateRef(chatId, msgId).addSnapshotListener { snap, e ->
+            if (e != null) {
+                Log.w("TikuGame", "gamestate listener failed chat=$chatId msg=$msgId", e)
+                return@addSnapshotListener
+            }
+            onState(snap?.getString("json"), snap?.getString("by"))
+        }
+
+    /** Publish one game's new shared state (fire-and-forget; failures
+     *  are logged, the in-page copy stays authoritative on this phone
+     *  until the next successful write lands). */
+    fun writeGameState(chatId: String, msgId: String, json: String) {
+        val by = uid
+        scope.launch {
+            runCatching {
+                gameStateRef(chatId, msgId).set(
+                    mapOf(
+                        "json" to json, "by" to by,
+                        "updatedAt" to FieldValue.serverTimestamp(),
+                    ),
+                ).await()
+            }.onFailure { Log.w("TikuGame", "gamestate write failed chat=$chatId msg=$msgId", it) }
+        }
+    }
 
     /**
      * CALL EVENT (round 4, item 3): when a call resolves, a small E2EE note is

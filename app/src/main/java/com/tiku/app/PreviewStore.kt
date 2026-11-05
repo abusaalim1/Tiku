@@ -128,11 +128,120 @@ object PreviewStore {
             MsgKind.VIDEO -> "Video"
             MsgKind.AUDIO -> "Audio file"
             MsgKind.CALL -> callEventLabel(m, m.callMine)
+            MsgKind.GAME -> "🎮 Game"
             else -> m.text
         }
         val seen = if (m.me && m.kind != MsgKind.CALL && m.seenByPeer) "Seen · " else ""
         return seen + body
     }
+
+    /** ROUND 41: the built-in sample game — a minimal WORKING
+     *  tic-tac-toe on the exact TikuGame bridge the AI games use
+     *  (host = X moves first, one JSON state via setState/onState,
+     *  restart button), in the house colour law (cream paper, ink,
+     *  mustard + pastels). GeminiClient.generateGame returns this in
+     *  preview mode and PreviewRepo.sendGame posts it, so the harness
+     *  exercises the game card + player fully offline. Written as a
+     *  literal; the JS deliberately avoids template literals (and the
+     *  file avoids the dollar sign) so the Kotlin raw string stays
+     *  inert. */
+    const val SAMPLE_GAME_HTML = """<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Tic Tac Toe</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: #FFF9EE; color: #33261A; font-family: Georgia, 'Times New Roman', serif;
+         display: flex; flex-direction: column; align-items: center; padding: 22px 14px; min-height: 100vh; }
+  h1 { font-size: 26px; letter-spacing: 1px; margin-bottom: 4px; }
+  .sub { font-size: 13px; color: #8A7360; margin-bottom: 14px; }
+  #status { font-size: 17px; font-weight: bold; background: #FCEFC7; border: 2px solid #E8A812;
+            border-radius: 999px; padding: 7px 18px; margin-bottom: 18px; text-align: center; }
+  #board { display: grid; grid-template-columns: repeat(3, 92px); gap: 10px; margin-bottom: 20px; }
+  .cell { width: 92px; height: 92px; border-radius: 18px; border: 2px solid #E5D3AC;
+          background: #FFF3D6; font-size: 44px; font-weight: bold; color: #33261A;
+          display: flex; align-items: center; justify-content: center; cursor: pointer;
+          -webkit-tap-highlight-color: transparent; }
+  .cell.o { background: #FBE3E8; color: #B23A55; }
+  .cell.x { background: #FFF3D6; color: #9A6B00; }
+  .cell.win { background: #CDEAC0; border-color: #7FB069; }
+  #again { background: #E8A812; color: #FFF9EE; border: none; font-size: 16px; font-weight: bold;
+           padding: 12px 30px; border-radius: 999px; cursor: pointer; font-family: inherit; }
+  #again:active { opacity: 0.8; }
+  .names { font-size: 13px; color: #8A7360; margin-top: 14px; text-align: center; }
+</style>
+</head>
+<body>
+  <h1>Tic Tac Toe</h1>
+  <div class="sub">A two-player game for this chat</div>
+  <div id="status">Loading…</div>
+  <div id="board"></div>
+  <button id="again">Play again</button>
+  <div class="names" id="names"></div>
+<script>
+(function () {
+  var role = window.TikuGame.myRole();
+  var me = window.TikuGame.myName();
+  var peer = window.TikuGame.peerName();
+  var myMark = role === "host" ? "X" : "O";
+  var state = fresh();
+  function fresh() { return { b: ["", "", "", "", "", "", "", "", ""], t: "host", w: "" }; }
+  function winLine(b) {
+    var lines = [[0,1,2],[3,4,5],[6,7,8],[0,3,6],[1,4,7],[2,5,8],[0,4,8],[2,4,6]];
+    for (var i = 0; i < lines.length; i++) {
+      var L = lines[i];
+      if (b[L[0]] !== "" && b[L[0]] === b[L[1]] && b[L[1]] === b[L[2]]) return L;
+    }
+    return null;
+  }
+  function render() {
+    var board = document.getElementById("board");
+    board.innerHTML = "";
+    var line = state.w ? winLine(state.b) : null;
+    for (var i = 0; i < 9; i++) {
+      (function (idx) {
+        var d = document.createElement("div");
+        d.className = "cell" + (state.b[idx] === "X" ? " x" : state.b[idx] === "O" ? " o" : "") +
+          (line && line.indexOf(idx) >= 0 ? " win" : "");
+        d.textContent = state.b[idx];
+        d.onclick = function () { tap(idx); };
+        board.appendChild(d);
+      })(i);
+    }
+    var st = document.getElementById("status");
+    if (state.w === "draw") st.textContent = "It's a draw — play again!";
+    else if (state.w !== "") st.textContent = (state.w === role ? "You win!" : peer + " wins!");
+    else if (state.t === role) st.textContent = "Your turn — you are " + myMark;
+    else st.textContent = peer + "'s turn…";
+    document.getElementById("names").textContent =
+      "You: " + me + " (" + myMark + ") · " + peer + " (" + (myMark === "X" ? "O" : "X") + ")";
+  }
+  function tap(i) {
+    if (state.w !== "" || state.t !== role || state.b[i] !== "") return;
+    state.b[i] = myMark;
+    if (winLine(state.b)) state.w = role;
+    else if (state.b.indexOf("") < 0) state.w = "draw";
+    else state.t = role === "host" ? "guest" : "host";
+    window.TikuGame.setState(JSON.stringify(state));
+    render();
+  }
+  document.getElementById("again").onclick = function () {
+    state = fresh();
+    window.TikuGame.setState(JSON.stringify(state));
+    render();
+  };
+  window.TikuGame.onState(function (s) {
+    if (s) { try { state = JSON.parse(s); } catch (e) {} }
+    else if (role === "host") { window.TikuGame.setState(JSON.stringify(state)); }
+    render();
+  });
+  render();
+})();
+</script>
+</body>
+</html>"""
 
     val storyQuotes = listOf(
         "Slow mornings, good coffee ☕",
@@ -237,6 +346,27 @@ object PreviewRepo : ChatRepo {
         push(id, TikuMessage(UUID.randomUUID().toString(), "", MsgKind.IMAGE, "", "now", me = true,
             amps = List(22) { 8 }, photo = PreviewStore.scaled(bmp),
             tsMs = System.currentTimeMillis(), ai = true))
+    }
+
+    /** ROUND 41: the game send, preview mirror — the pushed copy is a
+     *  fully LOADED game message (its HTML written to the same
+     *  dl_<id>.html cache shape the real engine produces, so the card
+     *  preview + player read it identically). In preview the html is
+     *  always PreviewStore.SAMPLE_GAME_HTML (GeminiClient's preview
+     *  short-circuit), so the whole /babeg flow renders offline. No
+     *  simulated partner reply — the game IS the reply. */
+    override fun sendGame(id: String, html: String, title: String) {
+        val msgId = UUID.randomUUID().toString()
+        val bytes = html.toByteArray(Charsets.UTF_8)
+        val f = runCatching {
+            val file = File(AppState.appCtx.cacheDir, "dl_$msgId.html")
+            file.writeBytes(bytes)
+            file
+        }.getOrNull()
+        push(id, TikuMessage(msgId, "", MsgKind.GAME, "", "now", me = true,
+            amps = List(22) { 8 }, localPath = f?.absolutePath,
+            tsMs = System.currentTimeMillis(), mimeType = "text/html",
+            mediaBytes = bytes.size.toLong(), game = true, gameTitle = title.take(48)))
     }
 
     override fun sendVoice(id: String, audioFile: File?, durSec: Int, amps: List<Int>) {

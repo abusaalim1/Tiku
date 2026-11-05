@@ -1348,21 +1348,37 @@ private fun BoxScope.RdFxHeartsDressing() {
  *  bounds (matchParentSize) behind the bubble column — which stays
  *  transparent for opened gifts, exactly like the sealed state. The
  *  🎀 rides the caller's un-clipped dressing layer (see the row), the
- *  same trick as the sealed bow. */
+ *  same trick as the sealed bow.
+ *
+ *  ROUND 39 — the wrap reads as ONE box, not layers (the owner's
+ *  order: "border ko link kardo" — the frame must connect). A single
+ *  geometry governs everything: [shape] is the very RoundedCornerShape
+ *  instance the bubble column clips itself with (the row passes it
+ *  in), and inside it, in draw order: the gradient; the ribbon bands
+ *  spanning the FULL box edge-to-edge (fillMaxHeight / fillMaxWidth,
+ *  so each band's ends reach the frame on both sides); and finally a
+ *  CONTINUOUS soft-white border stroke on that same shape, drawn
+ *  LAST as an overlay so the frame line is unbroken and the bands
+ *  visibly run INTO it — linked, no floating segments, no gaps. The
+ *  caller's 🎀 sits at top-centre, exactly where the vertical band
+ *  meets the top border — the classic knot point. */
 @Composable
-private fun BoxScope.RdOpenedGiftWrap() {
+private fun BoxScope.RdOpenedGiftWrap(shape: RoundedCornerShape) {
     Box(
-        Modifier.matchParentSize().clip(RoundedCornerShape(22.dp))
+        Modifier.matchParentSize().clip(shape)
             .background(Brush.linearGradient(listOf(Color(0xFFFF7EB0), Color(0xFFF43F8E)))),
     ) {
         Box(
             Modifier.width(11.dp).fillMaxHeight().align(Alignment.Center)
-                .background(Color.White.copy(0.25f)),
+                .background(Color.White.copy(0.30f)),
         )
         Box(
             Modifier.height(11.dp).fillMaxWidth().align(Alignment.Center)
-                .background(Color.White.copy(0.25f)),
+                .background(Color.White.copy(0.30f)),
         )
+        // The frame: one continuous stroke on the box's own shape,
+        // over the band ends so ribbon and border read as one box.
+        Box(Modifier.matchParentSize().border(1.75.dp, Color.White.copy(0.55f), shape))
     }
 }
 
@@ -1752,6 +1768,12 @@ private fun RdBubbleRow(
                         },
                     horizontalAlignment = if (m.me) Alignment.End else Alignment.Start,
                 ) {
+                    // ROUND 39: ONE corner geometry for the whole bubble —
+                    // this single shape instance clips the bubble column
+                    // below AND frames the opened gift's wrap, so the
+                    // gift's border can never drift from the bubble it
+                    // wraps (the value is the pre-round 22.dp constant).
+                    val bubbleShape = RoundedCornerShape(22.dp)
                     // ROUND 24: the bubble's dressing wrap. The fire glow
                     // sits BEHIND the bubble, the dressing glyphs/canvas sit
                     // IN FRONT — all children of this box, whose bounds are
@@ -1770,9 +1792,11 @@ private fun RdBubbleRow(
                         // ROUND 34: the opened gift's wrap, behind the
                         // (transparent) bubble column — the message sits
                         // INSIDE the gift, permanently, both sides.
-                        if (openedGift) RdOpenedGiftWrap()
+                        // ROUND 39: it takes the bubble's own shape so
+                        // its border IS the bubble's outline.
+                        if (openedGift) RdOpenedGiftWrap(bubbleShape)
                         Column(
-                            Modifier.widthIn(max = 280.dp).clip(RoundedCornerShape(22.dp))
+                            Modifier.widthIn(max = 280.dp).clip(bubbleShape)
                                 .background(if (media) SolidColor(RdCard) else if (sealedGift || openedGift) SolidColor(Color.Transparent) else if (theme != null) SolidColor(if (m.me) theme.ownBubble else theme.peerBubble) else if (m.me) Brush.linearGradient(listOf(acc.first, acc.second)) else SolidColor(RdCard))
                                 .then(if (media || sealedGift) Modifier else Modifier.padding(horizontal = 16.dp, vertical = 11.dp)),
                         ) {
@@ -1851,6 +1875,10 @@ private fun RdBubbleRow(
                             // wrap itself (the unwrap bow above has faded
                             // out by the time this state exists). Out here
                             // for the same clip reason as the sealed bow.
+                            // ROUND 39: TopCenter + the −10 dp offset put
+                            // the 20 dp glyph's centre exactly ON the top
+                            // border, at the point where the wrap's
+                            // vertical band meets it — the knot point.
                             Box(
                                 Modifier.align(Alignment.TopCenter).offset(y = (-10).dp),
                             ) { EmojiGlyph("🎀", 20.dp) }
@@ -2248,6 +2276,177 @@ private fun RdAiBubbleRow(
     }
 }
 
+/** ROUND 41 — the game card palette: the generated games' own cream
+ *  world (the colour law), so a game message reads as a little paper
+ *  game box sitting in the dark chat. */
+private val GameCardCream = Color(0xFFFFF6E3)
+private val GameCardInk = Color(0xFF33261A)
+
+/** ROUND 41 — one AI-built game message (see GamePlayer.kt). A cream
+ *  card aligned like an ordinary bubble (mine right, theirs left):
+ *  🎮 + the game's title (the asker's own words from the command) +
+ *  "2-player · tap to play", over a ~210 dp LIVE preview of the game
+ *  itself once its bytes are on this phone. Games are tap-to-load
+ *  like every file kind (house media law — nothing auto-downloads):
+ *  before the load, the preview area is the load affordance with the
+ *  payload size; a FAILED own send turns the tap into a retry. The
+ *  code is NEVER shown — the card shows the game or nothing.
+ *  Long-press reaches the ordinary message menu. */
+@Composable
+private fun RdGameCard(
+    m: TikuMessage,
+    person: Person,
+    onMenu: () -> Unit,
+    onLoad: () -> Unit,
+    onPlay: () -> Unit,
+    onRetry: () -> Unit,
+) {
+    val loadedPath = m.localPath?.takeIf { File(it).exists() }
+    val loaded = loadedPath != null
+    val failed = m.me && m.status == SendStatus.FAILED
+    Column(Modifier.fillMaxWidth()) {
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = if (m.me) Arrangement.End else Arrangement.Start,
+        ) {
+            Column(
+                Modifier.width(264.dp)
+                    .clip(RoundedCornerShape(22.dp))
+                    .background(GameCardCream)
+                    .border(1.dp, GameCardInk.copy(alpha = 0.16f), RoundedCornerShape(22.dp))
+                    .pointerInput(m.id, loaded, failed) {
+                        detectTapGestures(
+                            onTap = {
+                                when {
+                                    failed -> onRetry()
+                                    loaded -> onPlay()
+                                    else -> onLoad()
+                                }
+                            },
+                            onLongPress = { onMenu() },
+                        )
+                    }
+                    .padding(12.dp),
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    EmojiGlyph("🎮", 19.dp)
+                    Spacer(Modifier.width(8.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            m.gameTitle.ifBlank { "Game" },
+                            color = GameCardInk, fontSize = 14.5.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                        )
+                        Text(
+                            "2-player · tap to play",
+                            color = GameCardInk.copy(alpha = 0.55f), fontSize = 11.5.sp,
+                        )
+                    }
+                }
+                Spacer(Modifier.height(10.dp))
+                Box(
+                    Modifier.fillMaxWidth().height(210.dp)
+                        .clip(RoundedCornerShape(14.dp))
+                        .background(GameCardInk.copy(alpha = 0.05f)),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    when {
+                        failed -> Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Text("Couldn't send", color = Color(0xFFB3261E),
+                                fontSize = 13.5.sp, fontWeight = FontWeight.SemiBold)
+                            Text("Tap to retry", color = GameCardInk.copy(alpha = 0.55f),
+                                fontSize = 12.sp)
+                        }
+                        !loaded -> Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            EmojiGlyph("🎮", 30.dp)
+                            Spacer(Modifier.height(8.dp))
+                            Text(
+                                if (m.mediaBytes > 0) "Tap to load game · ${fmtMediaSize(m.mediaBytes)}"
+                                else "Tap to load game",
+                                color = GameCardInk.copy(alpha = 0.7f), fontSize = 13.sp,
+                                fontWeight = FontWeight.SemiBold,
+                            )
+                        }
+                        Config.PREVIEW_UI_ONLY -> Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                        ) {
+                            // House rule (Moments/Watch): no WebView
+                            // under the screenshot harness — the card
+                            // shows its static face instead.
+                            EmojiGlyph("🎮", 40.dp)
+                            Spacer(Modifier.height(8.dp))
+                            Text(
+                                m.gameTitle.ifBlank { "Game" },
+                                color = GameCardInk, fontSize = 14.sp,
+                                fontWeight = FontWeight.SemiBold,
+                            )
+                        }
+                        else -> RdGamePreview(m = m, path = loadedPath, peerName = person.name)
+                    }
+                }
+                if (m.me && m.status == SendStatus.SENDING) {
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        "Sending…", color = GameCardInk.copy(alpha = 0.5f),
+                        fontSize = 11.5.sp,
+                    )
+                }
+            }
+        }
+    }
+}
+
+/** ROUND 41 — the game card's live mini preview: the game's actual
+ *  first frame in a small WebView (built once per message, destroyed
+ *  with the row — Moments discipline), running on the inert
+ *  [GamePreviewNative] bridge (state() = null, setState goes nowhere)
+ *  with the shared shim, so the game renders its initial board but
+ *  can never act as a third player. Touch is swallowed whole — the
+ *  card's own gesture layer underneath owns taps (play) and
+ *  long-presses (menu); a transparent overlay keeps that true even
+ *  over the WebView's surface. Inert and silent: if the file vanished
+ *  between the exists() check and the read, the area simply stays
+ *  cream. */
+@Composable
+private fun RdGamePreview(m: TikuMessage, path: String, peerName: String) {
+    val ctx = LocalContext.current
+    val html by produceState<String?>(null, m.id, path) {
+        value = withContext(Dispatchers.IO) {
+            runCatching { File(path).readText(Charsets.UTF_8) }.getOrNull()
+        }
+    }
+    val wvHolder = remember(m.id) { mutableStateOf<android.webkit.WebView?>(null) }
+    val webView = remember(m.id) {
+        buildGameWebView(ctx, GamePreviewNative(if (m.me) "host" else "guest", peerName)) {
+            // First frame: re-assert the shim, then deliver the one
+            // null snapshot — a game that renders only inside its
+            // onState callback still draws its initial board.
+            val w = wvHolder.value ?: return@buildGameWebView
+            runCatching { w.evaluateJavascript(TIKU_GAME_SHIM, null) }
+            deliverGameState(w, null)
+        }.also {
+            it.setOnTouchListener { _, _ -> true }
+            wvHolder.value = it
+        }
+    }
+    DisposableEffect(m.id) {
+        onDispose { destroyGameWebView(webView) }
+    }
+    val doc = html
+    LaunchedEffect(m.id, doc) {
+        if (doc != null) {
+            webView.loadDataWithBaseURL(null, injectGameShim(doc), "text/html", "utf-8", null)
+        }
+    }
+    if (doc != null) {
+        androidx.compose.ui.viewinterop.AndroidView(
+            factory = { webView },
+            modifier = Modifier.fillMaxSize(),
+        )
+    }
+}
+
 /** ROUND 37 — the transient "Tika is thinking…" indicator: the
  *  typing bubble's visual language (peer-coloured pill, bouncing
  *  dots) carrying the label, composed only while this phone's ask is
@@ -2332,6 +2531,19 @@ private fun RdChatTopBar(
         }
     }
 }
+
+/** ROUND 42: the composer's slash commands — the sheet above the
+ *  input row lists these while the field holds a bare "/"-prefixed
+ *  token; tapping one fills "<name> " into the field. Mirrors the
+ *  commands sendCurrent already parses (Rounds 37 + 41); this list is
+ *  display-only — sending logic never reads it. */
+private data class SlashCommand(val name: String, val desc: String)
+
+private val SlashCommands = listOf(
+    SlashCommand("/tiku", "AI se sawal pucho"),
+    SlashCommand("/tika", "AI photo banayega"),
+    SlashCommand("/babeg", "AI game banayega"),
+)
 
 @Composable
 fun RdChatInput(
@@ -2424,6 +2636,54 @@ fun RdChatInput(
                         "✕", color = subCol, fontSize = 13.sp,
                         modifier = Modifier.rdPress(onFxDisarm).padding(start = 8.dp, end = 2.dp, top = 2.dp, bottom = 2.dp),
                     )
+                }
+            }
+        }
+        // ROUND 42: the slash-command sheet — the owner's ask: typing
+        // "/" pops the command list so a tap replaces typing it all.
+        // Visible only while the field is a bare slash-prefixed
+        // SINGLE token (no space yet), with no reply target and no
+        // armed effect (the two states sendCurrent treats specially);
+        // the live filter is a plain prefix match on the token. A tap
+        // fills "<name> " — the trailing space ends the token, so the
+        // sheet closes itself and never reopens over the finished
+        // command. Focus and the IME are never touched: onChange only
+        // rewrites the field's text (String field → caret lands after
+        // the space). lastSlashMatches keeps the rows composed through
+        // the exit animation, the fx chip's trick above.
+        val slashMatches = if (
+            value.startsWith("/") && !value.contains(' ') &&
+            replyText == null && fxArmed == null && !recording
+        ) SlashCommands.filter { it.name.startsWith(value.lowercase()) } else emptyList()
+        var lastSlashMatches by remember { mutableStateOf<List<SlashCommand>>(emptyList()) }
+        LaunchedEffect(slashMatches) { if (slashMatches.isNotEmpty()) lastSlashMatches = slashMatches }
+        AnimatedVisibility(
+            visible = slashMatches.isNotEmpty(),
+            enter = fadeIn() + expandVertically(),
+            exit = fadeOut() + shrinkVertically(),
+        ) {
+            val rows = slashMatches.ifEmpty { lastSlashMatches }
+            if (rows.isNotEmpty()) {
+                Column(
+                    Modifier.fillMaxWidth().then(barMod(RoundedCornerShape(24.dp))).padding(vertical = 6.dp),
+                ) {
+                    rows.forEachIndexed { i, cmd ->
+                        if (i > 0) Box(
+                            Modifier.padding(horizontal = 16.dp).fillMaxWidth().height(1.dp)
+                                .background(contentCol.copy(alpha = 0.07f)),
+                        )
+                        Row(
+                            Modifier.fillMaxWidth().rdPress { onChange(cmd.name + " ") }
+                                .padding(horizontal = 16.dp, vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Column(Modifier.weight(1f)) {
+                                Text(cmd.name, color = contentCol, fontSize = 15.sp, fontWeight = FontWeight.Bold)
+                                Text(cmd.desc, color = subCol, fontSize = 12.5.sp)
+                            }
+                            Text("›", color = subCol, fontSize = 18.sp)
+                        }
+                    }
                 }
             }
         }
@@ -2642,6 +2902,10 @@ private fun RdChatContent(thread: ChatThread) {
     var attachOpen by remember { mutableStateOf(false) }
     var viewerMsg by remember { mutableStateOf<TikuMessage?>(null) }
     var videoViewerMsg by remember { mutableStateOf<TikuMessage?>(null) }
+    /** ROUND 41: the game message whose full-screen player is open
+     *  (GamePlayer.kt), or null. Only ever set for a LOADED game —
+     *  the card gates the tap (unloaded → fetchMedia first). */
+    var gamePlayerMsg by remember { mutableStateOf<TikuMessage?>(null) }
     var camChooserOpen by remember { mutableStateOf(false) }
     var recording by remember { mutableStateOf(false) }
     var recSecs by remember { mutableIntStateOf(0) }
@@ -3174,6 +3438,18 @@ private fun RdChatContent(thread: ChatThread) {
         return if (prompt.isEmpty()) null else isImage to prompt
     }
 
+    /** ROUND 41: parse the game command — "/babeg <description>" asks
+     *  Tika to BUILD a 2-player game for this chat. Same prefix
+     *  discipline as [tikaCommand]: case-insensitive, the prefix must
+     *  be the whole field or be followed by a space, and an empty
+     *  description is not a command. Returns the game description. */
+    fun gameCommand(v: String): String? {
+        val lower = v.lowercase()
+        if (lower != "/babeg" && !lower.startsWith("/babeg ")) return null
+        val prompt = v.substring(6).trim()
+        return prompt.ifEmpty { null }
+    }
+
     fun sendCurrent() {
         val v = input.trim()
         if (v.isEmpty()) return
@@ -3185,6 +3461,42 @@ private fun RdChatContent(thread: ChatThread) {
         // ask per chat at a time; a failure posts nothing, only a
         // toast says why. Keyboard invariants match the plain path:
         // the field just empties, focus and IME are never touched.
+        // ROUND 41: "/babeg <description>" takes the game path — the
+        // command sends FIRST as the user's normal message (both sides
+        // see what was asked for, like the Tika commands), then the
+        // build runs ASYNC in the background: the chat stays fully
+        // usable while Tika writes the game (only the transient
+        // indicator shows), and the finished game lands as its own
+        // game message. The in-flight gate is SHARED with /tiku +
+        // /tika (aiThinking) — one AI job per chat at a time, whichever
+        // kind it is. A failed build posts NOTHING — just a toast.
+        val gamePrompt = if (replyTarget == null && armedFx == null) gameCommand(v) else null
+        if (gamePrompt != null) {
+            if (aiThinking != null) {
+                AppState.toast("Tika pehle wale kaam pe laga hai")
+                return
+            }
+            AppState.repo.sendText(threadId, v, null)
+            input = ""
+            scope.launch { AppState.repo.setTyping(threadId, false) }
+            aiThinking = "Tika game bana raha hai…"
+            scope.launch {
+                try {
+                    when (val out = GeminiClient.generateGame(gamePrompt)) {
+                        is GeminiClient.Outcome.Ok -> AppState.repo.sendGame(
+                            threadId, out.value, gamePrompt.take(48),
+                        )
+                        GeminiClient.Outcome.Quota ->
+                            AppState.toast("Tika: quota abhi khatam hai — thodi der baad try karo")
+                        GeminiClient.Outcome.Failed ->
+                            AppState.toast("Tika game nahi bana paya — dobara try karo")
+                    }
+                } finally {
+                    aiThinking = null
+                }
+            }
+            return
+        }
         val cmd = if (replyTarget == null && armedFx == null) tikaCommand(v) else null
         if (cmd != null) {
             if (aiThinking != null) {
@@ -3599,6 +3911,21 @@ private fun RdChatContent(thread: ChatThread) {
                                 }
                             }
                             m.kind == MsgKind.CALL -> CallEventPill(m)
+                            // ROUND 41: a game message renders as its
+                            // own cream game card (never the AI bubble,
+                            // never code) — see RdGameCard.
+                            m.game -> RdGameCard(
+                                m = m, person = person,
+                                onMenu = { menuMsg = m },
+                                onLoad = {
+                                    if (!Config.PREVIEW_UI_ONLY) {
+                                        AppState.repo.fetchMedia(threadId, m.id)
+                                        AppState.toast("Loading game…")
+                                    }
+                                },
+                                onPlay = { gamePlayerMsg = m },
+                                onRetry = { AppState.repo.retrySend(threadId, m.id) },
+                            )
                             // ROUND 37: an AI (Tika) message renders
                             // as Tika's own left-aligned bubble with
                             // its label — whichever member's client
@@ -4410,6 +4737,19 @@ private fun RdChatContent(thread: ChatThread) {
                     if (emojiFxPlay?.second == playKey) emojiFxPlay = null
                 }
             }
+        }
+
+        // ---- ROUND 41: full-screen game player (topmost) ----
+        gamePlayerMsg?.let { gm ->
+            GamePlayerOverlay(
+                chatId = threadId, m = gm,
+                myUid = if (Config.PREVIEW_UI_ONLY) "me" else FirebaseEngine.myUid(),
+                myName = if (Config.PREVIEW_UI_ONLY) "You"
+                    else FirebaseEngine.myPerson.name.takeIf { it.isNotBlank() && it != "You" }
+                        ?: AppState.myUsername.ifEmpty { "You" },
+                peerName = thread.displayName,
+                onClose = { gamePlayerMsg = null },
+            )
         }
     }
 }
