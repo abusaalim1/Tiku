@@ -895,7 +895,7 @@ private fun SettingsMain(
                     lifecycleOwner.lifecycle.addObserver(observer)
                     onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
                 }
-                val askExemption = {
+                val askExemption: () -> Unit = {
                     runCatching {
                         ctx.startActivity(
                             Intent(
@@ -913,6 +913,7 @@ private fun SettingsMain(
                             )
                         }
                     }
+                    Unit
                 }
                 if (batteryExempt) {
                     CardRow({}, idx = 0) {
