@@ -82,12 +82,40 @@ import androidx.core.content.ContextCompat
  * judge runs purely in-process off the engine's preview hook; the
  * gate/toggle wiring lives in [NotifyGate] (NotifyService.kt).
  *
+ * ROUND 29 (owner's reversal, knowingly taken): a foreground service
+ * ([TikuAlertService]) again keeps this judge — and the engine feeding
+ * it — alive across the app being closed, for exactly the lifetime of
+ * an unlocked, notifications-on session. This judge is SERVICE-OWNED
+ * now: [pipelineLive] is true only while that service exists, and
+ * [onPreviewMessages] refuses every snapshot otherwise, so the UI path
+ * can never alert on its own and the two can never double-alert (one
+ * process, one engine, one judge — the service only guarantees their
+ * survival). The delta semantics above are untouched: a restarted
+ * service re-baselines every thread from its first snapshot and the
+ * persisted alerted set survives, so a restart replays nothing.
+ * Incoming CALLS get the parallel treatment in [onIncomingCall]: the
+ * engine's ringing watcher hands a backgrounded ringing call here for
+ * a high-importance alert, deduped per call id.
+ *
  * There is no FCM and no server push: the server holds ciphertext only.
  * Every entry point is runCatching-wrapped — the notification path can
  * never crash the process.
  */
 object OwnerNotify {
     private const val CHANNEL_ID = "tiku_reminders"
+
+    /** ROUND 29: the incoming-call channel (HIGH importance — a call
+     *  must ring through; same generic shade name as the messages
+     *  channel, per the standing naming convention). */
+    private const val CALL_CHANNEL_ID = "tiku_call_alerts"
+
+    /** ROUND 29 — pipeline ownership. True only while
+     *  [TikuAlertService] exists (set in its onCreate/onStartCommand,
+     *  cleared in its onDestroy). The judge's single ownership switch:
+     *  no service, no judging — locked or toggle-off states are silent
+     *  by construction, and an unlocked session always has the service
+     *  up when the toggle is on, so coverage is unchanged in-app. */
+    @Volatile var pipelineLive: Boolean = false
 
     /** Kinds that may alert as messages. CALL is handled separately (only
      *  a genuinely missed incoming call), everything else never alerts. */
@@ -117,6 +145,14 @@ object OwnerNotify {
     /** Threads with a message/call alert currently standing on the
      *  shade — cleared when the app comes to the foreground. */
     private val standing = mutableSetOf<String>()
+
+    /** ROUND 29: call ids a ringing alert was already posted for (the
+     *  call watcher re-fires on every ICE write — a call alerts ONCE),
+     *  and the rings currently standing (callId → threadId), cleared
+     *  with the other standing alerts when the app comes forward: at
+     *  that point the in-app ringing flow owns the call. */
+    private val callAlertedIds = mutableSetOf<String>()
+    private val standingRings = mutableMapOf<String, String>()
 
     /** Rate guard state: last post time per thread, the coalesced
      *  pending alert (latest wins), and threads with a flush posted. */
@@ -160,6 +196,12 @@ object OwnerNotify {
         runCatching {
             if (!OwnerPrefs.notifyOn) return
             if (Config.PREVIEW_UI_ONLY) return
+            // ROUND 29: service-owned — without the service there is
+            // no pipeline at all (see pipelineLive). Snapshots offered
+            // in the gap are simply dropped; the first snapshot the
+            // service-era judge does see baselines the thread, so the
+            // gap can never turn into a backlog alert.
+            if (!pipelineLive) return
             synchronized(lock) { onPreviewLocked(ctx, threadId, msgs) }
         }
     }
@@ -281,16 +323,22 @@ object OwnerNotify {
     }
 
     private fun clearStandingLocked(ctx: Context) {
-        if (standing.isEmpty() && pending.isEmpty()) return
+        if (standing.isEmpty() && pending.isEmpty() && standingRings.isEmpty()) return
         val nm = ctx.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
         if (nm != null) {
             for (tid in standing) {
                 runCatching { nm.cancel(messageNotifId(tid)) }
                 runCatching { nm.cancel(callNotifId(tid)) }
             }
+            // ROUND 29: standing ringing-call alerts come down too —
+            // foregrounded, the in-app ringing UI owns the call now.
+            for (callId in standingRings.keys) {
+                runCatching { nm.cancel(ringNotifId(callId)) }
+            }
         }
         standing.clear()
         pending.clear()
+        standingRings.clear()
     }
 
     /** Pipeline died (lock / sign-out — via FirebaseEngine.lock): forget
@@ -304,6 +352,12 @@ object OwnerNotify {
             prevIds.clear()
             pending.clear()
             lastPostAt.clear()
+            // ROUND 29: the ringing-alert bookkeeping is per-run too.
+            // (An alert already standing survives in the shade until
+            // its ring timeout or the next foreground clear — it can
+            // never re-post from here.)
+            callAlertedIds.clear()
+            standingRings.clear()
             runArmed = false
         }
     }
@@ -342,6 +396,83 @@ object OwnerNotify {
         else -> m.text.replace(Regex("\\s+"), " ").trim()
             .take(140)
             .ifBlank { "New message" }
+    }
+
+    // ================= INCOMING CALLS (ROUND 29) =================
+
+    /** A call is RINGING while the service holds the pipeline and the
+     *  app is not in front (the engine's watcher routes here only in
+     *  that state — foregrounded, it rings in-app exactly as before).
+     *  Deduped per call id: the watcher re-fires on every caller ICE
+     *  write for the call's whole ring, and the alert posts once. The
+     *  notification self-dismisses at the ring timeout; if he opens
+     *  the app first, the foreground clear takes it down and the
+     *  in-app ring takes over. A call he never answers still lands
+     *  later as a missed-call MESSAGE event, judged by the delta judge
+     *  above — the two never stack for one call in one moment (this
+     *  alert dies at the ring timeout, the missed-call alert is a
+     *  separate later event, as on any phone). */
+    fun onIncomingCall(ctx: Context, threadId: String, callId: String, video: Boolean, callerName: String) {
+        runCatching {
+            if (!pipelineLive || !OwnerPrefs.notifyOn) return
+            if (Config.PREVIEW_UI_ONLY) return
+            if (ChatSession.foreground) return // in-app ringing owns it
+            synchronized(lock) {
+                if (!callAlertedIds.add(callId)) return
+                standingRings[callId] = threadId
+            }
+            postRing(ctx, threadId, callId, video, callerName)
+        }
+    }
+
+    private fun ringNotifId(callId: String): Int = (callId.hashCode() and 0x3FFF) + 0xC000
+
+    private fun postRing(ctx: Context, threadId: String, callId: String, video: Boolean, callerName: String) {
+        runCatching {
+            if (Build.VERSION.SDK_INT >= 33 &&
+                ContextCompat.checkSelfPermission(ctx, android.Manifest.permission.POST_NOTIFICATIONS)
+                    != PackageManager.PERMISSION_GRANTED
+            ) return
+            val nm = ctx.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager ?: return
+            ensureCallChannel(nm)
+            // Tap: bring the app forward (SINGLE_TOP reuses a live
+            // MainActivity instead of recreating it over the session)
+            // carrying the ringing chat's id — MainActivity re-runs
+            // the engine start on that extra, whose fresh watcher
+            // snapshot hands the still-ringing call to the in-app
+            // ringing flow. Locked, the same tap lands on the gate,
+            // and unlock attaches the watchers to the same end.
+            val intent = Intent(ctx, MainActivity::class.java).apply {
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP
+                putExtra(TikuAlertService.EXTRA_CALL_THREAD, threadId)
+            }
+            val pi = PendingIntent.getActivity(
+                ctx, callId.hashCode(), intent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+            )
+            val name = callerName.takeIf { it.isNotBlank() } ?: "Tiku"
+            val notif = Notification.Builder(ctx, CALL_CHANNEL_ID)
+                .setSmallIcon(android.R.drawable.stat_notify_chat)
+                .setContentTitle(name)
+                .setContentText(if (video) "Incoming video call" else "Incoming voice call")
+                .setCategory(Notification.CATEGORY_CALL)
+                .setPriority(Notification.PRIORITY_HIGH)
+                .setAutoCancel(true)
+                .setContentIntent(pi)
+                .setVisibility(Notification.VISIBILITY_PRIVATE)
+                // The caller gives up at the ring timeout; the alert
+                // must not outlive the call it announces.
+                .setTimeoutAfter(Config.CALL_RING_TIMEOUT_MS)
+                .build()
+            nm.notify(ringNotifId(callId), notif)
+        }
+    }
+
+    private fun ensureCallChannel(nm: NotificationManager) {
+        if (nm.getNotificationChannel(CALL_CHANNEL_ID) != null) return
+        val ch = NotificationChannel(CALL_CHANNEL_ID, "Reminders", NotificationManager.IMPORTANCE_HIGH)
+        ch.enableVibration(true)
+        nm.createNotificationChannel(ch)
     }
 
     private fun postMessage(ctx: Context, threadId: String, m: TikuMessage) {

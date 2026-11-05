@@ -94,6 +94,24 @@ object FirebaseEngine : ChatRepo {
 
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate + TikuEngineHandler)
 
+    /** ROUND 29: true while this process's listeners are attached
+     *  (set by [start], cleared by [stop] — lock and sign-out both run
+     *  through stop). [TikuAlertService] reads it to decide whether a
+     *  cold process must bootstrap the engine itself or the UI already
+     *  did — the engine is started exactly once per process either
+     *  way, so its snapshots can never be double-fed to the judge. */
+    @Volatile var listenersActive: Boolean = false
+        private set
+
+    /** ROUND 29: true while the alert service holds a background
+     *  session in a UI-less (restarted) process. The listener-error
+     *  retries below re-attach while EITHER the in-app session is
+     *  unlocked OR this is set — same law, both lives of the session.
+     *  Set by the service's bootstrap; cleared by [stop]. */
+    @Volatile var serviceSession: Boolean = false
+
+    private fun sessionLive(): Boolean = ChatSession.unlocked || serviceSession
+
     // ---------- identity ----------
     private var myPrivBytes: ByteArray? = null
     private val convKeyCache = mutableMapOf<String, SecretKey>()
@@ -699,6 +717,7 @@ object FirebaseEngine : ChatRepo {
         readPrefs = ctx.getSharedPreferences("tiku_read", Context.MODE_PRIVATE)
         pinPrefs = ctx.getSharedPreferences("tiku_pins", Context.MODE_PRIVATE)
         if (uid.isEmpty()) return
+        listenersActive = true
         threadsReg?.remove()
         // ROUND 6 — BUGS 2+3 SHARED ROOT CAUSE (proven server-side before this
         // round): this query used to add .orderBy("updatedAt", DESCENDING).
@@ -727,7 +746,7 @@ object FirebaseEngine : ChatRepo {
                     Log.e("TikuChat", "threads listener error — keeping current list/watchers", err)
                     if (threadsErrorRetries < 3) {
                         threadsErrorRetries++
-                        scope.launch { delay(3000); if (ChatSession.unlocked) start(appCtx) }
+                        scope.launch { delay(3000); if (sessionLive()) start(appCtx) }
                     }
                     return@addSnapshotListener
                 }
@@ -834,7 +853,7 @@ object FirebaseEngine : ChatRepo {
                             threadsRetryCount++
                             Log.w("TikuChat", "threads snapshot skipped $skipped chat(s) " +
                                 "(peer profile fetch failed) — re-attaching listener, retry $threadsRetryCount")
-                            scope.launch { delay(3000); if (ChatSession.unlocked) start(appCtx) }
+                            scope.launch { delay(3000); if (sessionLive()) start(appCtx) }
                         } else if (skipped == 0) {
                             threadsRetryCount = 0
                         }
@@ -1044,8 +1063,22 @@ object FirebaseEngine : ChatRepo {
                         // controller — accept() uses the cached copy first.
                         CallController.onIncoming(chatId, callId, kind, person, offerEnc)
                     }
-                    // not inside Tik right now: the call simply never rings;
-                    // it times out and deletes itself on the caller's side.
+                    // ROUND 29: not in front, but the alert service holds
+                    // a live unlocked session — the call alerts instead of
+                    // ringing in-app. OwnerNotify dedupes per call id
+                    // (this watcher re-fires on every ICE write) and the
+                    // alert dies at the ring timeout; if he answers by
+                    // opening the app, the foreground ring takes over,
+                    // and if he never does, the call still lands later
+                    // as a missed-call message for the delta judge.
+                    OwnerNotify.pipelineLive -> {
+                        val person = fetchPerson(caller)
+                        OwnerNotify.onIncomingCall(
+                            appCtx, chatId, callId, kind == "video", person.name)
+                    }
+                    // not inside Tik right now and no alert session: the
+                    // call simply never rings; it times out and deletes
+                    // itself on the caller's side.
                 }
             }
         }
@@ -1074,6 +1107,8 @@ object FirebaseEngine : ChatRepo {
     }
 
     fun stop() {
+        listenersActive = false
+        serviceSession = false
         threadsReg?.remove(); msgsReg?.remove()
         callsRegs.values.forEach { it.remove() }; callsRegs.clear()
         previewRegs.values.forEach { it.remove() }; previewRegs.clear()
@@ -2543,6 +2578,11 @@ object FirebaseEngine : ChatRepo {
     }
 
     fun signOut(ctx: Context) {
+        // ROUND 29: sign-out ends the alert session authoritatively —
+        // the persisted unlocked flag clears and the service stops
+        // (Home's logout also calls NotifyService.stop; both are
+        // idempotent).
+        NotifyGate.sessionEnded(ctx)
         stop()
         auth.signOut()
         myPrivBytes = null

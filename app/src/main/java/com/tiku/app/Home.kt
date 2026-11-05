@@ -832,7 +832,7 @@ private fun SettingsMain(
             // (OFF), same POST_NOTIFICATIONS request on enable.
             ToggleRow(
                 "Notifications",
-                "A quiet “New message” alert on this phone, even when the app isn't open — works while App lock is off",
+                "A quiet “New message” alert on this phone, even when the app isn't open — while your journal is unlocked",
                 OwnerPrefs.notifyOn,
             ) {
                 val on = !OwnerPrefs.notifyOn
@@ -1038,7 +1038,7 @@ fun OwnerSection() {
     Section("Owner")
     ToggleRow(
         "Notifications",
-        "A quiet “New message” alert on this phone when something arrives — even when the app isn't open, while App lock is off — only for your account",
+        "A quiet “New message” alert on this phone when something arrives — even when the app isn't open, while your journal is unlocked — only for your account",
         OwnerPrefs.notifyOn,
     ) {
         val on = !OwnerPrefs.notifyOn

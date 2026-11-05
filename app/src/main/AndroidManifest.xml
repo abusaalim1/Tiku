@@ -9,10 +9,19 @@
     <!-- Notification permission, used ONLY by the opt-in, per-user
          message alerts (OwnerNotify — any account that turns its own
          Notifications toggle on; default OFF). Nothing posts at toggle
-         time and nothing stands persistently: since ROUND 20 there is
-         no foreground service, so a notification exists only while a
-         real event (message / missed call / app update) stands. -->
+         time. ROUND 29 (owner's knowing reversal of Round 20): while —
+         and only while — an unlocked session has the toggle ON, the
+         TikuAlertService foreground service below keeps the alert
+         pipeline alive with ONE small permanent silent shade entry;
+         every other notification still exists only while a real event
+         (message / call / app update) stands. -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- Foreground-service permissions for TikuAlertService (ROUND 29).
+         FOREGROUND_SERVICE_DATA_SYNC is the API-34 typed companion of
+         the dataSync service type declared below; both are inert
+         unless the service actually starts (unlocked + toggle ON). -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <uses-feature android:name="android.hardware.microphone" android:required="false" />
     <uses-feature android:name="android.hardware.camera" android:required="false" />
     <application android:name=".TikuApp" android:label="Tiku" android:theme="@style/Theme.Tiku" android:allowBackup="false"
@@ -49,5 +58,15 @@
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
         </activity>
+        <!-- ROUND 29: the alert service (see NotifyService.kt). Never
+             exported, never started at boot or before an unlock: it
+             runs only inside an unlocked session whose owner turned
+             Notifications on, and stops at lock / toggle-off /
+             sign-out. dataSync is the standard type for an app
+             keeping its own data pipeline in step while closed. -->
+        <service
+            android:name=".TikuAlertService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
     </application>
 </manifest>

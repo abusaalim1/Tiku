@@ -73,11 +73,37 @@ class MainActivity : ComponentActivity() {
         // ROUND 15: app start is one of the notify service's choke points
         // (OwnerPrefs was initialized in TikuApp.onCreate, before this).
         NotifyGate.sync(this)
+        // ROUND 29: a call alert may have launched us — same handling
+        // as a redelivered intent (see onNewIntent).
+        handleCallAlertIntent(intent)
         // ROUND 18: in-app update check (throttled to one fetch per 6h,
         // silent on failure; sets UpdateState + a one-per-build
         // notification when a newer build is published).
         UpdateCheck.maybeCheck(this)
         setContent { TikuRoot(onGoogleClick = ::onGoogleClick) }
+    }
+
+    /** ROUND 29: a tap on an incoming-call alert (OwnerNotify) brings
+     *  the app forward carrying the ringing chat's id. When the
+     *  session is live, re-running the engine start re-attaches the
+     *  call watchers, whose fresh snapshot hands the still-ringing
+     *  call to the in-app ringing flow (the same re-attach the
+     *  engine's own error retries perform). Locked, there is nothing
+     *  to hand over — the tap simply lands on the facade/gate, and
+     *  the unlock's own engine start attaches the watchers to the
+     *  same end. */
+    override fun onNewIntent(intent: android.content.Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleCallAlertIntent(intent)
+    }
+
+    private fun handleCallAlertIntent(intent: android.content.Intent?) {
+        if (intent?.getStringExtra(TikuAlertService.EXTRA_CALL_THREAD) == null) return
+        if (Config.PREVIEW_UI_ONLY) return
+        if (ChatSession.unlocked && FirebaseEngine.signedIn) {
+            FirebaseEngine.start(this)
+        }
     }
 
     override fun onResume() {

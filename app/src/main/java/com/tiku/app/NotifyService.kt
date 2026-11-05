@@ -1,90 +1,301 @@
 package com.tiku.app
 
+import android.app.Notification
+import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.app.PendingIntent
+import android.app.Service
 import android.content.Context
+import android.content.Intent
+import android.os.Build
+import android.os.IBinder
+import androidx.core.content.ContextCompat
 
 /**
- * ROUND 15 → 18 → 19 → ROUND 20 — MESSAGE ALERTS WITHOUT A SERVICE.
+ * ROUND 29 — CLOSED-APP ALERTS VIA A FOREGROUND SERVICE.
  *
- * Rounds 15–19 kept background alerts alive with a foreground service
- * ([NotifyService], dataSync type) that held the engine's preview
- * listeners while the app was closed. Android forces every foreground
- * service to post a PERSISTENT notification — and the owner's build-63
- * verdict on that banner is absolute: "notification bas tab hi ayega
- * jab koi message kare — baki kabhi nahi." A standing "notifications
- * are on" entry on his shade is a bug by definition now, however quiet.
+ * History: Rounds 15–19 ran background alerts from a foreground
+ * service; ROUND 20 removed that service entirely after the owner
+ * rejected its standing shade banner ("notification bas tab hi ayega
+ * jab koi message kare — baki kabhi nahi"), leaving the Round-19 delta
+ * judge ([OwnerNotify]) purely in-process: alerts lived only while the
+ * app process did. The owner's 2026-11-05 verdict reverses that trade
+ * KNOWINGLY: with the chat UNLOCKED and Notifications ON, message,
+ * voice-call and video-call alerts must arrive whether the app is open
+ * or not — and he accepted the price in advance: one small permanent
+ * silent shade entry while that state lasts, and no alerts at all
+ * after a force-stop. (The FCM route was rejected — it needs a billing
+ * account; the server holds ciphertext only, by design.)
  *
- * ROUND 20 therefore removes the service ENTIRELY: no service class,
- * no <service> element, no FOREGROUND_SERVICE permissions. The Round-19
- * delta judge in [OwnerNotify] runs purely IN-PROCESS, fed by the live
- * engine's preview hook ([FirebaseEngine] calls
- * [OwnerNotify.onPreviewMessages] from the same listeners the in-app
- * session already runs). While the app process lives — foreground, or
- * backgrounded and not yet reaped — alerts behave exactly as before:
- * one per genuinely-new message, sender + text, missed calls included,
- * standing alerts cleared when he opens the app.
+ * THE SERVICE'S LIFETIME IS THE UNLOCKED SESSION, exactly:
+ *  - STARTS when the journal is unlocked AND the toggle is ON — at
+ *    gate-unlock success ([NotifyGate.sessionStarted], hooked into
+ *    ChatSession.unlockFlow), or when the toggle flips ON while
+ *    already unlocked (the Settings rows call [NotifyGate.sync]).
+ *  - STOPS on lock — the one-Back re-lock and every other path funnel
+ *    through ChatSession.lock, which calls [NotifyGate.sessionEnded] —
+ *    on toggle OFF ([NotifyGate.sync] sees the toggle down), and on
+ *    sign-out (FirebaseEngine.signOut calls sessionEnded too).
+ *  - NEVER starts at boot, before an unlock, or while locked: locked
+ *    app = no service = no alerts. With the toggle OFF (the default)
+ *    nothing in this file ever runs — no service, no entry, nothing.
  *
- * HONEST LIMIT (stated to the owner): with no service and no push
- * server (the server holds ciphertext only — FCM is impossible by
- * design), a force-stopped or swipe-killed app whose process the
- * system has reaped cannot alert until he next opens it. That is the
- * price of "no standing notification, ever", paid knowingly.
- *
- * This file keeps only the two public faces other files already call:
- *  - [NotifyGate] — the gate decision + lifecycle reconcile hook
- *    (MainActivity calls [NotifyGate.sync] from onCreate/onResume/
- *    onPause; the Settings toggles call it too). sync() starts NOTHING
- *    and posts NOTHING; its only side effect is clearing standing
- *    message alerts when the app is in the foreground (opening the app
- *    means he has seen them — Round 19 behaviour, previously delivered
- *    via the service's onStartCommand).
- *  - [NotifyService] — a compatibility stub: logout (Home.kt) still
- *    calls [NotifyService.stop]; it now just sweeps the LEGACY banner
- *    id a pre-Round-20 install could in principle still show.
+ * OWNERSHIP: while the service is up it owns the alert pipeline —
+ * [OwnerNotify.pipelineLive] is true only under it, and the judge
+ * refuses snapshots otherwise, so the UI path and the service path can
+ * never double-alert (there is only ever one engine and one judge in
+ * the process; the service merely guarantees they stay alive). When
+ * the service cold-restarts into a fresh process (START_STICKY after
+ * the system reaped the app), it re-validates the persisted gate
+ * ([NotifyGate.shouldRunPersisted]: toggle + the persisted
+ * session-unlocked flag + a live Firebase session) and re-bootstraps
+ * the engine from the device-Keystore-wrapped identity — the journal
+ * password is never needed, and never available, here.
  */
 object NotifyGate {
-    /** The alert gate, unchanged since Round 18 made it universal:
-     *  alerts may run only while the Notifications toggle is ON
-     *  ([OwnerPrefs.notifyOn]; default OFF), App lock is OFF
-     *  ([OwnerPrefs.appLockOn] == false; default ON — OwnerPrefs is the
-     *  single source of truth the password gate reads) and no one-shot
-     *  "Lock now" gate is pending ([OwnerPrefs.gateOnce]). Cheap and
-     *  side-effect free; safe to call from any lifecycle point. It now
-     *  describes the IN-PROCESS judge only — there is no service left
-     *  for it to start or stop. */
+    /** The persisted mirror of "a session was unlocked and has not
+     *  been locked / signed out since". The in-process truth is
+     *  [ChatSession.unlocked], but that dies with the process; this
+     *  flag (own prefs file, COMMIT-ted at unlock) is what lets a
+     *  system-restarted service tell a live session from a stale
+     *  START_STICKY redelivery. Cleared ONLY at the authoritative
+     *  ends — ChatSession.lock and FirebaseEngine.signOut — never by
+     *  lifecycle reconciles: an activity relaunch landing on the
+     *  locked facade must not silently kill a background session the
+     *  lock never ended. */
+    private const val SESSION_PREF = "tiku_alert_session"
+    private const val KEY_UNLOCKED = "unlocked"
+
+    fun sessionFlag(ctx: Context): Boolean =
+        ctx.applicationContext.getSharedPreferences(SESSION_PREF, Context.MODE_PRIVATE)
+            .getBoolean(KEY_UNLOCKED, false)
+
+    private fun setSessionFlag(ctx: Context, on: Boolean) {
+        // commit(), not apply(): the flag is written precisely so it
+        // survives the process dying a moment later.
+        runCatching {
+            ctx.applicationContext.getSharedPreferences(SESSION_PREF, Context.MODE_PRIVATE)
+                .edit().putBoolean(KEY_UNLOCKED, on).commit()
+        }
+    }
+
+    /** The in-process gate: alerts may run only inside a live,
+     *  signed-in, unlocked session with the toggle ON. (This replaces
+     *  the Round-18 gate, which keyed on the App-lock toggle instead:
+     *  ROUND 29 law keys on the SESSION — with App lock OFF the
+     *  session survives backgrounding, so the service does too; with
+     *  App lock ON, leaving re-locks, the session ends, and the
+     *  service stops with it.) */
     fun shouldRun(): Boolean =
         !Config.PREVIEW_UI_ONLY &&
             OwnerPrefs.notifyOn &&
-            !OwnerPrefs.appLockOn &&
-            !OwnerPrefs.gateOnce
+            ChatSession.unlocked &&
+            FirebaseEngine.signedIn
 
-    /** Reconcile hook, kept source-compatible with every Round-15+
-     *  call site. Starts no service and posts no notification — ever.
-     *  Its single job: when the app is in the foreground, any standing
-     *  message alerts are seen by definition, so clear them. (On the
-     *  onPause call foreground is already false, so leaving the app
-     *  never clears anything.) */
+    /** The cold-start gate a (re)started service validates itself
+     *  against: the same conditions, read from what survives a
+     *  process death. If any leg is gone, the start was stale and the
+     *  service stops itself immediately. */
+    fun shouldRunPersisted(ctx: Context): Boolean =
+        !Config.PREVIEW_UI_ONLY &&
+            OwnerPrefs.notifyOn &&
+            sessionFlag(ctx) &&
+            FirebaseEngine.signedIn
+
+    /** Gate-unlock success (ChatSession.unlockFlow): record the live
+     *  session durably, then reconcile the service. */
+    fun sessionStarted(ctx: Context) {
+        if (Config.PREVIEW_UI_ONLY) return
+        setSessionFlag(ctx, true)
+        sync(ctx)
+    }
+
+    /** Lock / sign-out: the session is over — forget it durably and
+     *  stop the service (its shade entry dies with it). */
+    fun sessionEnded(ctx: Context) {
+        if (Config.PREVIEW_UI_ONLY) return
+        setSessionFlag(ctx, false)
+        TikuAlertService.stop(ctx)
+    }
+
+    /** Reconcile hook, called from MainActivity's lifecycle and the
+     *  Settings toggles, exactly as before. ROUND 29 semantics:
+     *  starts the service when the gate holds; stops it when the
+     *  toggle is OFF (the unambiguous end the toggle handlers mean);
+     *  otherwise leaves the service exactly as it is — a live
+     *  background session whose flag is set is not a lifecycle
+     *  reconcile's to kill (lock and sign-out end it through
+     *  [sessionEnded]). As since Round 19, a foreground sync also
+     *  clears standing message alerts — opening the app means he has
+     *  seen them. (On the onPause call foreground is already false, so
+     *  leaving the app never clears anything.) */
     fun sync(ctx: Context) {
+        if (Config.PREVIEW_UI_ONLY) return
+        when {
+            shouldRun() -> {
+                setSessionFlag(ctx, true)
+                TikuAlertService.start(ctx)
+            }
+            !OwnerPrefs.notifyOn -> TikuAlertService.stop(ctx)
+        }
         if (ChatSession.foreground) OwnerNotify.clearStandingAlerts(ctx)
     }
 }
 
+/**
+ * The foreground service that keeps the alert pipeline (engine
+ * listeners + the Round-19 delta judge in [OwnerNotify]) alive while
+ * an unlocked, notifications-on session outlives the UI. Main process,
+ * dataSync type. Its ONLY visible trace is the mandated foreground
+ * notification: a LOW-importance, silent, ongoing entry ("Tiku —
+ * Notifications on") on its own channel — the standing entry the owner
+ * explicitly accepted for this state, and the only one: when the
+ * toggle is off or the session is locked, this service does not exist.
+ */
+class TikuAlertService : Service() {
+
+    override fun onCreate() {
+        super.onCreate()
+        // The judge is service-owned from the moment the service
+        // exists (see OwnerNotify.pipelineLive).
+        OwnerNotify.pipelineLive = true
+    }
+
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        // Re-validate against the PERSISTED gate on every start —
+        // including START_STICKY redeliveries (intent == null) after a
+        // process death: if the session was locked, the toggle turned
+        // off or the user signed out while the process was gone, this
+        // start is stale and the service removes itself and its entry.
+        if (!NotifyGate.shouldRunPersisted(this)) {
+            stopForeground(STOP_FOREGROUND_REMOVE)
+            stopSelf()
+            return START_NOT_STICKY
+        }
+        OwnerNotify.pipelineLive = true
+        // Foreground FIRST (the system gives a started-foreground
+        // service only a few seconds to post its entry), engine after.
+        if (Build.VERSION.SDK_INT >= 29) {
+            startForeground(FOREGROUND_ID, persistentNotification(), TYPE_DATA_SYNC)
+        } else {
+            startForeground(FOREGROUND_ID, persistentNotification())
+        }
+        bootstrapEngine()
+        return START_STICKY
+    }
+
+    override fun onDestroy() {
+        // Pipeline ownership ends with the service; the judge goes
+        // silent (the engine itself is the session's to stop — lock
+        // and sign-out already did, on those paths).
+        OwnerNotify.pipelineLive = false
+        super.onDestroy()
+    }
+
+    override fun onBind(intent: Intent?): IBinder? = null
+
+    /** If the UI already started the engine (the normal in-app
+     *  unlock), there is nothing to do — the service's job is only to
+     *  keep that process (and its pipeline) alive. In a cold process
+     *  (system restart after a reap) no UI ever ran: rebuild the
+     *  session's engine side from what the device holds — the
+     *  persisted Firebase Auth session and the Keystore-wrapped local
+     *  identity (loadLocalIdentity needs NO journal password; it is
+     *  the same load the gate-skip path performs). If either is
+     *  missing the full session can't exist here yet (mid-sign-in, or
+     *  a fresh device mid-restore): leave the engine down — the
+     *  unlock flow starts it when it completes, into a pipeline that
+     *  is already live. */
+    private fun bootstrapEngine() {
+        runCatching {
+            if (FirebaseEngine.listenersActive) return
+            val c = applicationContext
+            FirebaseEngine.appCtx = c
+            if (!FirebaseEngine.signedIn) return
+            if (!FirebaseEngine.loadLocalIdentity(c)) return
+            // Lets the engine's listener-error retries re-attach in
+            // this UI-less process exactly as they do while unlocked.
+            FirebaseEngine.serviceSession = true
+            FirebaseEngine.start(c)
+        }
+    }
+
+    /** The mandated standing entry — as quiet as the platform allows:
+     *  LOW importance (no sound, no vibration, no heads-up), the app
+     *  icon, "Tiku / Notifications on", tapping it opens the app. Its
+     *  channel is created HERE, lazily, never at app startup. */
+    private fun persistentNotification(): Notification {
+        val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        if (nm.getNotificationChannel(SERVICE_CHANNEL_ID) == null) {
+            nm.createNotificationChannel(
+                NotificationChannel(SERVICE_CHANNEL_ID, "Reminders", NotificationManager.IMPORTANCE_LOW)
+            )
+        }
+        val intent = Intent(this, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+        }
+        val pi = PendingIntent.getActivity(
+            this, FOREGROUND_ID, intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+        return Notification.Builder(this, SERVICE_CHANNEL_ID)
+            .setSmallIcon(applicationInfo.icon)
+            .setContentTitle("Tiku")
+            .setContentText("Notifications on")
+            .setContentIntent(pi)
+            .setOngoing(true)
+            .setPriority(Notification.PRIORITY_LOW)
+            .setVisibility(Notification.VISIBILITY_PRIVATE)
+            .build()
+    }
+
+    companion object {
+        /** The standing entry's stable notification id. */
+        private const val FOREGROUND_ID = 0x291D
+
+        private const val SERVICE_CHANNEL_ID = "tiku_alert_service"
+
+        /** ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC — the named
+         *  constant is API 34; the VALUE (1) is stable since API 29
+         *  introduced the typed startForeground overload. */
+        private const val TYPE_DATA_SYNC = 1
+
+        /** Intent extra (a ringing call's chat id) on the call-alert
+         *  tap: MainActivity reads it on delivery and re-runs the
+         *  engine start, whose fresh call-watcher snapshot hands the
+         *  still-ringing call to the in-app ringing flow. */
+        const val EXTRA_CALL_THREAD = "tiku_call_thread"
+
+        fun start(ctx: Context) {
+            runCatching {
+                ContextCompat.startForegroundService(
+                    ctx.applicationContext,
+                    Intent(ctx.applicationContext, TikuAlertService::class.java),
+                )
+            }
+        }
+
+        fun stop(ctx: Context) {
+            runCatching {
+                ctx.applicationContext.stopService(
+                    Intent(ctx.applicationContext, TikuAlertService::class.java)
+                )
+            }
+        }
+    }
+}
+
+/** Compatibility face kept from the service era: logout (Home.kt)
+ *  still calls [NotifyService.stop] — it now stops the real Round-29
+ *  service and additionally sweeps the pre-Round-20 banner id a very
+ *  old install could in principle still show. */
 object NotifyService {
-    /** The pre-Round-20 foreground banner's stable id (0x2A15). The
-     *  system removes a foreground-service notification when the
-     *  service dies — an app update kills the old process and with it
-     *  the banner — so this cancel is pure belt-and-braces for the
-     *  logout path Home.kt already wires to [stop]. */
     private const val LEGACY_FOREGROUND_ID = 0x2A15
 
-    /** Nothing to start: there is no service anymore. Kept so any
-     *  lingering call site stays source-compatible. */
-    fun start(ctx: Context) = Unit
+    fun start(ctx: Context) = TikuAlertService.start(ctx)
 
-    /** Logout choke point (Home.kt): sweep the legacy banner id, just
-     *  in case. Message alerts themselves are governed by the toggle /
-     *  sign-out paths ([OwnerNotify.cancelAll], engine lock reset). */
     fun stop(ctx: Context) {
+        TikuAlertService.stop(ctx)
         runCatching {
             (ctx.applicationContext.getSystemService(Context.NOTIFICATION_SERVICE)
                 as? NotificationManager)?.cancel(LEGACY_FOREGROUND_ID)

@@ -221,6 +221,13 @@ object ChatSession {
     /** Drop keys + decrypted state from RAM and snap back to the drama facade. */
     fun lock(ctx: Context) {
         val c = ctx.applicationContext
+        // ROUND 29: this lock() is the choke point EVERY lock path
+        // funnels through (one-Back re-lock, quick exit with App lock
+        // on, backgrounding via MainActivity.onStop, "Lock now") — so
+        // it is also where the alert session ends: the persisted
+        // unlocked flag clears and the foreground service stops.
+        // Locked app = no service = no alerts.
+        NotifyGate.sessionEnded(c)
         // ROUND 10 (Watch lock safety): this lock() is the single choke point
         // every lock path funnels through (quick exit, Back-out, backgrounding
         // via MainActivity.onStop, the explicit "Lock now").
@@ -278,6 +285,10 @@ object ChatSession {
         // restore password, or the App-lock-OFF gate-skip) — consume any
         // pending one-shot gate left by an explicit "Lock now".
         OwnerPrefs.consumeGateOnce()
+        // ROUND 29: an unlock is the alert service's start signal —
+        // record the live session (it can now outlive this process)
+        // and reconcile the service with the Notifications toggle.
+        NotifyGate.sessionStarted(c)
         val onboarded = c.getSharedPreferences("tiku_prefs", Context.MODE_PRIVATE)
             .getBoolean("onboarded", false)
         // from here on the user is inside the gated flow — any exit must re-lock
