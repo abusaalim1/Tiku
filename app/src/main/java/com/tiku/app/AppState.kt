@@ -296,9 +296,39 @@ interface ChatRepo {
     /** Load one VIDEO / AUDIO message's payload on demand (tap-to-load —
      *  these kinds never auto-download). Default no-op. */
     fun fetchMedia(id: String, msgId: String) {}
+    // ---- ROUND 31: view-once / view-twice media ----
+    /** Send a PHOTO the recipient may view only [vo] times (1 or 2;
+     *  null = unlimited, the plain send). The choice rides the additive
+     *  `vo` doc field. Default routes to the plain send and drops the
+     *  allowance, so implementers that predate view-once (test doubles)
+     *  keep compiling and behaving exactly as before; the real engine
+     *  overrides it. */
+    fun sendPhotoVo(id: String, bmp: Bitmap, vo: Int?) {
+        sendPhoto(id, bmp)
+    }
+    /** Send a VIDEO the recipient may view only [vo] times (1 or 2;
+     *  null = unlimited). Same additive-field contract as [sendPhotoVo]. */
+    fun sendVideoVo(id: String, file: java.io.File, mime: String, durSec: Int, vo: Int?) {
+        sendVideo(id, file, mime, durSec)
+    }
+    /** The recipient exhausted a view-once allowance: write the
+     *  additive `voDone=true` on the message doc (a member write, like
+     *  [react]) so the sender's bubble can show "Opened". Default
+     *  no-op keeps test doubles compiling. */
+    fun markVoDone(id: String, msgId: String) {}
     fun react(id: String, msgId: String, emoji: String?)
     fun toggleStar(id: String, msgId: String)
     fun deleteForMe(id: String, msgId: String)
+    /** ROUND 33 (owner): every message I hid with [deleteForMe] that
+     *  this device has decrypted, newest first — the data behind the
+     *  owner's "Hidden by me" recovery page. Default empty: implementers
+     *  that predate the page (test doubles) keep compiling, and the
+     *  page — which only the owner ever sees — lists nothing there. */
+    fun hiddenMessages(): List<HiddenMessage> = emptyList()
+    /** ROUND 33 (owner): undo a delete-for-me hide — removes my uid
+     *  from the message doc's deletedFor array so the message returns
+     *  to the chat. Default no-op keeps test doubles compiling. */
+    fun unhideForMe(id: String, msgId: String) {}
     /** ROUND 18: delete one of MY OWN messages for BOTH sides — the doc is
      *  tombstoned (never removed; chats never disappear) and both clients
      *  render "This message was deleted". Default no-op keeps test doubles

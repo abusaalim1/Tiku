@@ -2,6 +2,7 @@ package com.tiku.app
 
 import android.Manifest
 import android.content.Context
+import android.os.Build
 import android.content.pm.PackageManager
 import android.util.Log
 import android.graphics.BitmapFactory
@@ -89,6 +90,8 @@ import androidx.compose.material.icons.filled.SaveAlt
 import androidx.compose.material.icons.filled.Send
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.Videocam
+import androidx.compose.material.icons.filled.Visibility
+import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -102,6 +105,7 @@ import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
@@ -110,6 +114,7 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.composed
+import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.scale
@@ -150,10 +155,12 @@ import dev.chrisbanes.haze.hazeSource
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import java.io.File
 import kotlin.math.abs
@@ -753,6 +760,283 @@ private fun RdTombstoneRow(m: TikuMessage, person: Person, onMenu: () -> Unit) {
     }
 }
 
+/** ROUND 30 — OWNER-ONLY vault rendering of an incoming tombstone.
+ *  Composed ONLY on the owner's phone and ONLY when the vault holds a copy
+ *  of this message (see OwnerVault): the owner's chat renders the message
+ *  from the local vault instead of the tombstone placeholder. Every other
+ *  device — and any tombstone this phone never loaded — keeps the plain
+ *  RdTombstoneRow. TEXT renders as a normal peer bubble with a small
+ *  "Deleted" marker under it; MEDIA renders blurred behind a
+ *  "Deleted — tap to view" scrim until tapped (the reveal is per-row UI
+ *  state only), then behaves like the real media: image/video open the
+ *  full viewers (whose explicit Save-to-device works off the vault file),
+ *  voice/audio play from the vault file. Long-press opens the tombstone's
+ *  usual menu (Delete-for-me). Reply is deliberately NOT offered here:
+ *  a reply would upload an encrypted quote snapshot of the deleted
+ *  content back to the server. */
+@Composable
+private fun RdVaultDeletedRow(
+    m: TikuMessage,
+    entry: OwnerVault.Entry,
+    person: Person,
+    theme: ChatTheme?,
+    textSp: Float,
+    playing: Boolean,
+    onMenu: () -> Unit,
+    onPlayToggle: (TikuMessage) -> Unit,
+    onOpenImage: (TikuMessage) -> Unit,
+    onOpenVideo: (TikuMessage) -> Unit,
+) {
+    val emojiFont = rememberEmojiFontFamily()
+    val bubbleText = if (theme == null) Color.White else theme.peerText
+    var revealed by remember(m.id) { mutableStateOf(false) }
+    // The synthetic message the viewers / voice player consume: content
+    // from the vault, identity (id / sender / time) from the tombstone.
+    val vm = remember(m.id, entry.mediaFile, entry.text) {
+        m.copy(
+            deletedForEveryone = false,
+            text = entry.text,
+            localPath = OwnerVault.mediaFile(entry)?.absolutePath,
+            voiceDurSec = entry.durSec,
+            amps = entry.amps,
+            mimeType = entry.mime,
+        )
+    }
+    Row(
+        Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.Start,
+        verticalAlignment = Alignment.Bottom,
+    ) {
+        RdAv(person, 28); Spacer(Modifier.width(8.dp))
+        Column {
+            when (entry.kind) {
+                "text" -> Column(
+                    Modifier.widthIn(max = 280.dp).clip(RoundedCornerShape(22.dp))
+                        .background(if (theme != null) SolidColor(theme.peerBubble) else SolidColor(RdCard))
+                        .pointerInput(m.id) {
+                            detectTapGestures(onLongPress = { onMenu() })
+                        }
+                        .padding(horizontal = 16.dp, vertical = 11.dp),
+                ) {
+                    Text(
+                        entry.text, color = bubbleText,
+                        fontSize = textSp.sp, fontFamily = emojiFont,
+                    )
+                }
+                "image" -> VaultImageBox(
+                    entry = entry, revealed = revealed,
+                    onLongPress = onMenu,
+                    onTap = { bmp ->
+                        if (!revealed) revealed = true
+                        else if (bmp != null) onOpenImage(vm.copy(photo = bmp))
+                    },
+                )
+                "video" -> VaultVideoBox(
+                    entry = entry, revealed = revealed,
+                    onLongPress = onMenu,
+                    onTap = {
+                        if (!revealed) revealed = true
+                        else onOpenVideo(vm)
+                    },
+                )
+                else -> {
+                    // voice / audio: no picture to blur — the bubble sits
+                    // under the Deleted scrim until a tap reveals it, and
+                    // only then can it play (from the vault file).
+                    if (!revealed) {
+                        Box(
+                            Modifier.pointerInput(m.id) {
+                                detectTapGestures(
+                                    onLongPress = { onMenu() },
+                                    onTap = { revealed = true },
+                                )
+                            },
+                        ) {
+                            RdVoiceBubble(vm, false, { revealed = true }, tint = bubbleText)
+                            DeletedScrim(compact = true)
+                        }
+                    } else {
+                        Box(
+                            Modifier.pointerInput(m.id) {
+                                detectTapGestures(onLongPress = { onMenu() })
+                            },
+                        ) {
+                            RdVoiceBubble(vm, playing, { onPlayToggle(vm) }, tint = bubbleText)
+                        }
+                    }
+                }
+            }
+            // The small "Deleted" marker — under every vault-rendered row,
+            // so the state stays visible after a media reveal too.
+            Row(
+                Modifier.padding(start = 2.dp, top = 3.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(Icons.Filled.Delete, null, Modifier.size(10.dp), tint = RdSub)
+                Spacer(Modifier.width(4.dp))
+                Text("Deleted", color = RdSub, fontSize = 10.5.sp)
+            }
+        }
+    }
+}
+
+/** The blurred vault image in the photo bubble's fixed frame. Blur is a
+ *  RenderEffect (Modifier.blur) on API 31+, and a cached downscale-blur
+ *  bitmap below that — the fallback is pre-computed off the main thread. */
+@Composable
+private fun VaultImageBox(
+    entry: OwnerVault.Entry,
+    revealed: Boolean,
+    onLongPress: () -> Unit,
+    onTap: (android.graphics.Bitmap?) -> Unit,
+) {
+    val bmp = remember(entry.mediaFile) { OwnerVault.loadBitmap(entry) }
+    val blurred by produceState<android.graphics.Bitmap?>(null, bmp) {
+        val src = bmp
+        value = if (src == null || Build.VERSION.SDK_INT >= 31) null
+            else withContext(Dispatchers.Default) { vaultDownscaleBlur(src) }
+    }
+    Box(
+        Modifier.size(220.dp, 260.dp).background(RdCard)
+            .pointerInput(entry.msgId, revealed) {
+                detectTapGestures(
+                    onLongPress = { onLongPress() },
+                    onTap = { onTap(bmp) },
+                )
+            },
+    ) {
+        if (bmp != null) {
+            when {
+                revealed -> Image(
+                    bmp.asImageBitmap(), null,
+                    Modifier.fillMaxSize(), contentScale = ContentScale.Crop,
+                )
+                Build.VERSION.SDK_INT >= 31 -> Image(
+                    bmp.asImageBitmap(), null,
+                    Modifier.fillMaxSize().blur(24.dp), contentScale = ContentScale.Crop,
+                )
+                blurred != null -> Image(
+                    blurred!!.asImageBitmap(), null,
+                    Modifier.fillMaxSize(), contentScale = ContentScale.Crop,
+                )
+                else -> Box(Modifier.fillMaxSize().background(RdCard))
+            }
+        }
+        if (!revealed) DeletedScrim(compact = false)
+    }
+}
+
+/** The blurred vault video in the video bubble's fixed frame: the poster
+ *  (lifted off the main thread) wears the same blur treatment; revealed,
+ *  the tap hands the vault file to the full video viewer. */
+@Composable
+private fun VaultVideoBox(
+    entry: OwnerVault.Entry,
+    revealed: Boolean,
+    onLongPress: () -> Unit,
+    onTap: () -> Unit,
+) {
+    val path = remember(entry.mediaFile) { OwnerVault.mediaFile(entry)?.absolutePath }
+    val poster by produceState<android.graphics.Bitmap?>(null, path) {
+        value = if (path == null) null else withContext(Dispatchers.IO) {
+            runCatching {
+                val r = android.media.MediaMetadataRetriever()
+                try {
+                    r.setDataSource(path)
+                    r.frameAtTime
+                } finally {
+                    r.release()
+                }
+            }.getOrNull()
+        }
+    }
+    val blurredPoster by produceState<android.graphics.Bitmap?>(null, poster) {
+        value = if (poster == null || Build.VERSION.SDK_INT >= 31) null
+            else withContext(Dispatchers.Default) { vaultDownscaleBlur(poster!!) }
+    }
+    Box(
+        Modifier.size(220.dp, 260.dp).background(RdCard)
+            .pointerInput(entry.msgId, revealed) {
+                detectTapGestures(
+                    onLongPress = { onLongPress() },
+                    onTap = { onTap() },
+                )
+            },
+    ) {
+        if (poster != null) {
+            when {
+                revealed -> Image(
+                    poster!!.asImageBitmap(), null,
+                    Modifier.fillMaxSize(), contentScale = ContentScale.Crop,
+                )
+                Build.VERSION.SDK_INT >= 31 -> Image(
+                    poster!!.asImageBitmap(), null,
+                    Modifier.fillMaxSize().blur(24.dp), contentScale = ContentScale.Crop,
+                )
+                blurredPoster != null -> Image(
+                    blurredPoster!!.asImageBitmap(), null,
+                    Modifier.fillMaxSize(), contentScale = ContentScale.Crop,
+                )
+            }
+            if (revealed) Box(Modifier.fillMaxSize().background(Color.Black.copy(0.18f)))
+        }
+        if (revealed) {
+            Box(
+                Modifier.align(Alignment.Center).size(52.dp).clip(CircleShape)
+                    .background(Color.Black.copy(0.45f)).border(1.dp, Color.White.copy(0.25f), CircleShape),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(Icons.Filled.PlayArrow, null, tint = Color.White, modifier = Modifier.size(30.dp))
+            }
+            Row(
+                Modifier.align(Alignment.BottomStart).fillMaxWidth()
+                    .background(Color.Black.copy(0.45f)).padding(horizontal = 10.dp, vertical = 7.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(Icons.Filled.Videocam, null, tint = Color.White, modifier = Modifier.size(14.dp))
+                Spacer(Modifier.width(6.dp))
+                Text(fmtDurSec(entry.durSec), color = Color.White, fontSize = 12.sp)
+            }
+        }
+        if (!revealed) DeletedScrim(compact = false)
+    }
+}
+
+/** The "Deleted — tap to view" scrim over unrevealed vault media. */
+@Composable
+private fun DeletedScrim(compact: Boolean) {
+    Box(
+        Modifier.fillMaxSize().background(Color.Black.copy(0.35f)),
+        contentAlignment = Alignment.Center,
+    ) {
+        Row(
+            Modifier.clip(RoundedCornerShape(999.dp)).background(Color.Black.copy(0.55f))
+                .padding(horizontal = 12.dp, vertical = 7.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(Icons.Filled.Delete, null, Modifier.size(13.dp), tint = Color.White)
+            Spacer(Modifier.width(6.dp))
+            Text(
+                if (compact) "Deleted — tap to open" else "Deleted — tap to view",
+                color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.SemiBold,
+            )
+        }
+    }
+}
+
+/** Classic downscale-blur for API < 31 (where Modifier.blur has no
+ *  RenderEffect to ride): shrink to a 14-px-wide strip and scale back up
+ *  with filtering, twice — the result reads as a strong gaussian-ish blur
+ *  and is computed once, off the main thread, by the caller. */
+private fun vaultDownscaleBlur(src: android.graphics.Bitmap): android.graphics.Bitmap {
+    val w = 14
+    val h = maxOf(1, (src.height * (w.toFloat() / src.width)).toInt())
+    var cur = android.graphics.Bitmap.createScaledBitmap(src, w, h, true)
+    cur = android.graphics.Bitmap.createScaledBitmap(cur, src.width, src.height, true)
+    val small2 = android.graphics.Bitmap.createScaledBitmap(cur, w, h, true)
+    return android.graphics.Bitmap.createScaledBitmap(small2, src.width, src.height, true)
+}
+
 /** ROUND 19 — the undecryptable placeholder: renders in place of a
  *  message whose ciphertext this phone cannot open (history written
  *  under a retired keypair, e.g. from before a journal reset). ONE
@@ -823,7 +1107,7 @@ private fun RdUnreadDivider(count: Int) {
  * are inherited rather than re-implemented on a dialog window.
  */
 @Composable
-fun ImageViewerOverlay(m: TikuMessage, onClose: () -> Unit) {
+fun ImageViewerOverlay(m: TikuMessage, saveAllowed: Boolean = true, onClose: () -> Unit) {
     val bmp = m.photo
     if (bmp == null) {
         LaunchedEffect(Unit) { onClose() }
@@ -861,6 +1145,10 @@ fun ImageViewerOverlay(m: TikuMessage, onClose: () -> Unit) {
                     .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) { onClose() },
                 contentAlignment = Alignment.Center,
             ) { Icon(Icons.Filled.Close, null, Modifier.size(20.dp), tint = Color.White) }
+            // ROUND 31: the Save chip exists only when saving is
+            // allowed — a partner's view-once photo hides it entirely
+            // (WhatsApp parity), except under the owner's override.
+            if (saveAllowed) {
             Row(
                 Modifier.clip(RoundedCornerShape(18.dp)).background(RdCard)
                     .border(1.dp, Color.White.copy(0.12f), RoundedCornerShape(18.dp))
@@ -880,6 +1168,7 @@ fun ImageViewerOverlay(m: TikuMessage, onClose: () -> Unit) {
                 Spacer(Modifier.width(7.dp))
                 Text("Save to device", fontSize = 13.5.sp, fontWeight = FontWeight.SemiBold, color = Color.White)
             }
+            }
         }
     }
 }
@@ -892,7 +1181,7 @@ fun ImageViewerOverlay(m: TikuMessage, onClose: () -> Unit) {
  * explicit Save-to-device button; opening it writes nothing anywhere.
  */
 @Composable
-fun VideoViewerOverlay(m: TikuMessage, onClose: () -> Unit) {
+fun VideoViewerOverlay(m: TikuMessage, saveAllowed: Boolean = true, onClose: () -> Unit) {
     val path = m.localPath
     if (path == null) {
         LaunchedEffect(Unit) { onClose() }
@@ -928,6 +1217,10 @@ fun VideoViewerOverlay(m: TikuMessage, onClose: () -> Unit) {
                     .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) { onClose() },
                 contentAlignment = Alignment.Center,
             ) { Icon(Icons.Filled.Close, null, Modifier.size(20.dp), tint = Color.White) }
+            // ROUND 31: the Save chip exists only when saving is
+            // allowed — a partner's view-once video hides it entirely
+            // (WhatsApp parity), except under the owner's override.
+            if (saveAllowed) {
             Row(
                 Modifier.clip(RoundedCornerShape(18.dp)).background(RdCard)
                     .border(1.dp, Color.White.copy(0.12f), RoundedCornerShape(18.dp))
@@ -946,6 +1239,7 @@ fun VideoViewerOverlay(m: TikuMessage, onClose: () -> Unit) {
                 Icon(Icons.Filled.SaveAlt, null, Modifier.size(17.dp), tint = Color.White)
                 Spacer(Modifier.width(7.dp))
                 Text("Save to device", fontSize = 13.5.sp, fontWeight = FontWeight.SemiBold, color = Color.White)
+            }
             }
         }
     }
@@ -1299,6 +1593,19 @@ private fun RdBubbleRow(
     var heartKey by remember { mutableIntStateOf(0) }
     LaunchedEffect(heartKey) { if (heartKey > 0) { heart.snapTo(0f); heart.animateTo(1f, tween(800, easing = LinearEasing)) } }
     val media = m.kind == MsgKind.IMAGE || m.kind == MsgKind.VIDEO
+    // ROUND 31 — view-once state for THIS row. The counts live in the
+    // per-account prefs (VoStore); reading its stateVersion here
+    // subscribes the row, so a consume in the tap path re-renders the
+    // bubble (the remaining count, and the flip to "Opened" at zero).
+    // The owner's unlimited override never expires. My own sends are
+    // never gated — they only get the status line below the bubble.
+    val voCtx = LocalContext.current
+    @Suppress("UNUSED_EXPRESSION") VoStore.stateVersion // subscription read
+    val voIncoming = m.vo != null && !m.me
+    val voBypass = voIncoming && VoStore.ownerBypass(voCtx)
+    val voUsed = if (voIncoming) VoStore.opensUsed(voCtx, m.id) else 0
+    val voExpired = voIncoming && !voBypass && voUsed >= (m.vo ?: 0)
+    val voRemaining = if (m.vo != null) (m.vo!! - voUsed).coerceAtLeast(0) else 0
     Column(Modifier.fillMaxWidth()) {
         Row(
             Modifier.fillMaxWidth(),
@@ -1417,8 +1724,12 @@ private fun RdBubbleRow(
                                 .then(if (media || sealedGift) Modifier else Modifier.padding(horizontal = 16.dp, vertical = 11.dp)),
                         ) {
                             when (m.kind) {
-                                MsgKind.IMAGE -> RdImageBubble(m)
-                                MsgKind.VIDEO -> RdVideoBubble(m)
+                                // ROUND 31: an incoming view-once message
+                                // renders the vo pill, never the picture —
+                                // the media shows only inside the viewer,
+                                // and opening it is what consumes a view.
+                                MsgKind.IMAGE -> if (voIncoming) RdVoBubble(m, voRemaining, voExpired, voBypass) else RdImageBubble(m)
+                                MsgKind.VIDEO -> if (voIncoming) RdVoBubble(m, voRemaining, voExpired, voBypass) else RdVideoBubble(m)
                                 MsgKind.VOICE, MsgKind.AUDIO -> RdVoiceBubble(m, playing, onPlayToggle, tint = bubbleText)
                                 else -> {
                                     if (sealedGift) {
@@ -1529,6 +1840,28 @@ private fun RdBubbleRow(
                 )
             }
         }
+        // ROUND 31 — the SENDER's view-once line under his own bubble:
+        // the allowance while views remain ("View once" / "View
+        // twice"), flipping to "Opened" when the recipient's client
+        // reports the allowance exhausted (voDone on the doc, read back
+        // by decryptDoc like every other metadata field).
+        if (m.me && m.vo != null && m.status != SendStatus.FAILED) {
+            Row(
+                Modifier.fillMaxWidth().padding(top = 3.dp, end = 4.dp),
+                horizontalArrangement = Arrangement.End,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(
+                    if (m.voDone) Icons.Filled.VisibilityOff else Icons.Filled.Visibility, null,
+                    tint = RdSub, modifier = Modifier.size(13.dp),
+                )
+                Spacer(Modifier.width(4.dp))
+                Text(
+                    if (m.voDone) "Opened" else if (m.vo == 1) "View once" else "View twice",
+                    color = RdSub, fontSize = 11.5.sp,
+                )
+            }
+        }
     }
 }
 
@@ -1589,6 +1922,92 @@ private fun RdVideoBubble(m: TikuMessage) {
                 },
                 color = Color.White.copy(0.85f), fontSize = 11.5.sp,
             )
+        }
+    }
+}
+
+/** ROUND 31 — the view-once arm row inside the attach sheet and the
+ *  camera chooser: three chips (Always / Once · 1× / Twice · 2×) that
+ *  arm a view allowance for the NEXT photo or video sent from that
+ *  sheet. Sends in this app are instant — there is no preview/confirm
+ *  step to hang a selector on — so the choice lives where the send is
+ *  picked, the fx picker's arm pattern miniaturised. The arm is
+ *  consumed by the next photo/video send only; audio and text ignore
+ *  it, and it survives the sheet closing until a send consumes it. */
+@Composable
+private fun RdVoArmRow(armed: Int?, onPick: (Int?) -> Unit) {
+    Column(Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 4.dp)) {
+        Text("Next photo or video can be viewed", color = RdSub, fontSize = 12.5.sp)
+        Spacer(Modifier.height(9.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            RdVoChip("Always", armed == null) { onPick(null) }
+            RdVoChip("Once · 1×", armed == 1) { onPick(1) }
+            RdVoChip("Twice · 2×", armed == 2) { onPick(2) }
+        }
+    }
+}
+
+@Composable
+private fun RdVoChip(label: String, selected: Boolean, onClick: () -> Unit) {
+    Box(
+        Modifier.clip(RoundedCornerShape(999.dp))
+            .background(if (selected) RdRose else RdCard)
+            .border(1.dp, if (selected) RdRose else Color.White.copy(0.14f), RoundedCornerShape(999.dp))
+            .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) { onClick() }
+            .padding(horizontal = 13.dp, vertical = 7.dp),
+    ) {
+        Text(
+            label, color = Color.White, fontSize = 13.sp,
+            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+        )
+    }
+}
+
+/** ROUND 31 — the RECIPIENT's view-once bubble (WhatsApp shape): an
+ *  eye disc + "Photo" / "Video" + the remaining-views line, inside the
+ *  media bubble's own shell (the caller keeps the RdCard frame — only
+ *  the inner content swaps, exactly like the video bubble's unloaded
+ *  placeholder). The picture itself is NEVER drawn here: opening the
+ *  bubble is what consumes a view (wired by the row's tap → the
+ *  caller's onMediaTap). [expired] renders the spent "Opened" state;
+ *  [bypass] is the owner's unlimited override (his views never run
+ *  out, so his line says so). */
+@Composable
+private fun RdVoBubble(m: TikuMessage, remaining: Int, expired: Boolean, bypass: Boolean) {
+    val isVideo = m.kind == MsgKind.VIDEO
+    Row(
+        Modifier.width(220.dp).padding(horizontal = 16.dp, vertical = 15.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(
+            Modifier.size(40.dp).clip(CircleShape).background(Color.White.copy(0.14f)),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                if (expired) Icons.Filled.VisibilityOff else Icons.Filled.Visibility, null,
+                tint = Color.White.copy(if (expired) 0.55f else 1f), modifier = Modifier.size(20.dp),
+            )
+        }
+        Spacer(Modifier.width(12.dp))
+        Column(Modifier.weight(1f)) {
+            Text(
+                if (isVideo) "Video" else "Photo",
+                color = Color.White.copy(if (expired) 0.55f else 1f),
+                fontSize = 15.5.sp, fontWeight = FontWeight.SemiBold,
+            )
+            Text(
+                when {
+                    expired -> "Opened"
+                    bypass -> "Unlimited views"
+                    isVideo && m.localPath == null -> "Tap to load"
+                    remaining == 1 -> "1 view left"
+                    else -> "$remaining views left"
+                },
+                color = RdSub, fontSize = 12.sp,
+            )
+        }
+        if (!expired) {
+            Text("${m.vo}×", color = RdRose, fontSize = 13.sp, fontWeight = FontWeight.Bold)
         }
     }
 }
@@ -2016,6 +2435,10 @@ private fun RdChatContent(thread: ChatThread) {
     // open chat live. null = Default: every render site below guards on
     // chatTheme != null and the Default path is byte-for-byte today's.
     val chatTheme = ChatThemes.byId(thread.themeId)
+    // ROUND 30: subscribe to the owner vault's mutation tick — a tombstone
+    // landing while this chat is open re-renders its row from the vault.
+    // (For non-owners the vault never mutates; the read is one int.)
+    val vaultTick = OwnerVault.stateVersion
     val haze = LocalHazeState.current
     val blockedUids by AppState.blockedUids.collectAsState()
     val partnerBlocked = person.uid in blockedUids
@@ -2055,6 +2478,11 @@ private fun RdChatContent(thread: ChatThread) {
      *  the picker sheet, shown as the chip above the composer, consumed
      *  by sendCurrent. */
     var armedFx by remember(threadId) { mutableStateOf<String?>(null) }
+    /** ROUND 31: the view-once allowance armed for the NEXT photo/video
+     *  send (1 or 2), or null = unlimited. Chosen in the attach sheet /
+     *  camera chooser (see RdVoArmRow), consumed by whichever media
+     *  launcher fires next — the media twin of [armedFx]. */
+    var armedVo by remember(threadId) { mutableStateOf<Int?>(null) }
     var fxPickerOpen by remember(threadId) { mutableStateOf(false) }
     /** The running overlay playback: fx kind to play key ("<msgId>#<n>").
      *  The counter makes every playback — first play or tap replay — a
@@ -2199,8 +2627,11 @@ private fun RdChatContent(thread: ChatThread) {
     // audio-file pickers live with the round-15 launchers below.)
     val pickMedia = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
         if (uri != null) {
+            // ROUND 31: the armed view-once allowance rides this pick
+            // and is consumed by it (the media twin of the fx arm).
+            val vo = armedVo; armedVo = null
             ctx.contentResolver.openInputStream(uri)?.use { s ->
-                BitmapFactory.decodeStream(s)?.let { AppState.repo.sendPhoto(threadId, it) }
+                BitmapFactory.decodeStream(s)?.let { AppState.repo.sendPhotoVo(threadId, it, vo) }
             }
         }
     }
@@ -2216,7 +2647,9 @@ private fun RdChatContent(thread: ChatThread) {
         if (uri != null) {
             val f = copyUriToCacheFile(ctx, uri, "vid")
             if (f != null) {
-                AppState.repo.sendVideo(threadId, f, ctx.contentResolver.getType(uri) ?: "video/mp4", mediaDurationSec(f))
+                // ROUND 31: the armed view-once allowance rides this pick.
+                val vo = armedVo; armedVo = null
+                AppState.repo.sendVideoVo(threadId, f, ctx.contentResolver.getType(uri) ?: "video/mp4", mediaDurationSec(f), vo)
             } else AppState.toast("Couldn't read that video")
         }
     }
@@ -2240,7 +2673,9 @@ private fun RdChatContent(thread: ChatThread) {
         val f = camPhotoFile
         camPhotoFile = null
         if (ok && f != null && f.exists()) {
-            BitmapFactory.decodeFile(f.absolutePath)?.let { AppState.repo.sendPhoto(threadId, it) }
+            // ROUND 31: the armed view-once allowance rides this capture.
+            val vo = armedVo; armedVo = null
+            BitmapFactory.decodeFile(f.absolutePath)?.let { AppState.repo.sendPhotoVo(threadId, it, vo) }
             runCatching { f.delete() }
         }
     }
@@ -2248,7 +2683,9 @@ private fun RdChatContent(thread: ChatThread) {
         val f = camVideoFile
         camVideoFile = null
         if (ok && f != null && f.exists() && f.length() > 0) {
-            AppState.repo.sendVideo(threadId, f, "video/mp4", mediaDurationSec(f))
+            // ROUND 31: the armed view-once allowance rides this capture.
+            val vo = armedVo; armedVo = null
+            AppState.repo.sendVideoVo(threadId, f, "video/mp4", mediaDurationSec(f), vo)
         } else if (f != null) {
             runCatching { f.delete() }
         }
@@ -2529,6 +2966,13 @@ private fun RdChatContent(thread: ChatThread) {
     val lastOwnId = visible.lastOrNull {
         it.me && it.kind != MsgKind.CALL && !it.deletedForEveryone && !it.undecryptable
     }?.id
+
+    /** ROUND 31: whose Save button the media viewers (and the message
+     *  menu) may offer — my own media and plain media always; a
+     *  partner's view-once message only under the owner's unlimited
+     *  override. Everything else about saving is unchanged. */
+    fun voSaveAllowed(vm: TikuMessage): Boolean =
+        vm.me || vm.vo == null || VoStore.ownerBypass(ctx)
 
     fun sendCurrent() {
         val v = input.trim()
@@ -2854,8 +3298,40 @@ private fun RdChatContent(thread: ChatThread) {
                             m.undecryptable -> RdUndecryptableRow(m, person) {
                                 menuMsg = m
                             }
-                            m.deletedForEveryone -> RdTombstoneRow(m, person) {
-                                menuMsg = m
+                            m.deletedForEveryone -> {
+                                // ROUND 30 — OWNER VAULT: on the owner's
+                                // phone, an incoming tombstone this device
+                                // had loaded renders from the local vault
+                                // (entry() self-gates on isOwner and on a
+                                // copy actually existing). Everyone and
+                                // everything else: the plain tombstone,
+                                // exactly as before.
+                                val ve = if (!m.me) OwnerVault.entry(threadId, m.id) else null
+                                if (ve != null) {
+                                    RdVaultDeletedRow(
+                                        m = m, entry = ve, person = person,
+                                        theme = chatTheme, textSp = textSp,
+                                        playing = playingId == m.id,
+                                        onMenu = { menuMsg = m },
+                                        onPlayToggle = { vm ->
+                                            val path = vm.localPath
+                                            if (path != null) {
+                                                if (playingId == vm.id) {
+                                                    player.stop(); playingId = null
+                                                } else {
+                                                    player.toggle(vm.id, File(path)) { playingId = null }
+                                                    playingId = vm.id
+                                                }
+                                            }
+                                        },
+                                        onOpenImage = { vm -> viewerMsg = vm },
+                                        onOpenVideo = { vm -> videoViewerMsg = vm },
+                                    )
+                                } else {
+                                    RdTombstoneRow(m, person) {
+                                        menuMsg = m
+                                    }
+                                }
                             }
                             m.kind == MsgKind.CALL -> CallEventPill(m)
                             else -> RdBubbleRow(
@@ -2891,11 +3367,38 @@ private fun RdChatContent(thread: ChatThread) {
                                 onReact = { e -> react(m, e) },
                                 onMenu = { menuMsg = m },
                                 onMediaTap = {
+                                    // ROUND 31 — a view-once tap is the
+                                    // ONLY door to the media, so this is
+                                    // where the allowance is spent: the
+                                    // tap that OPENS the viewer consumes
+                                    // one view (a video's load tap does
+                                    // not — the viewing tap after it
+                                    // does). Expired → a plain "Opened"
+                                    // toast, the viewer never opens.
+                                    // The owner's unlimited override
+                                    // skips counting entirely. When the
+                                    // last view is spent, voDone goes to
+                                    // the doc so the sender sees "Opened"
+                                    // (the current viewing still plays
+                                    // out, like WhatsApp).
+                                    val voGated = !m.me && m.vo != null && !VoStore.ownerBypass(ctx)
+                                    fun voConsumeAndOpen(open: () -> Unit) {
+                                        if (!voGated) { open(); return }
+                                        if (VoStore.expired(ctx, m)) {
+                                            AppState.toast("Opened")
+                                            return
+                                        }
+                                        val used = VoStore.consumeOpen(ctx, m.id)
+                                        if (used >= (m.vo ?: 0)) AppState.repo.markVoDone(threadId, m.id)
+                                        open()
+                                    }
                                     when (m.kind) {
-                                        MsgKind.IMAGE -> viewerMsg = m
+                                        MsgKind.IMAGE -> voConsumeAndOpen { viewerMsg = m }
                                         MsgKind.VIDEO -> {
-                                            if (m.localPath != null) videoViewerMsg = m
-                                            else {
+                                            if (m.localPath != null) voConsumeAndOpen { videoViewerMsg = m }
+                                            else if (voGated && VoStore.expired(ctx, m)) {
+                                                AppState.toast("Opened")
+                                            } else {
                                                 AppState.repo.fetchMedia(threadId, m.id)
                                                 AppState.toast("Loading video…")
                                             }
@@ -3304,12 +3807,16 @@ private fun RdChatContent(thread: ChatThread) {
                             // Save is offered for every media kind that
                             // actually holds its payload on this device
                             // (an unloaded video/audio loads via its
-                            // bubble tap first — round 15).
+                            // bubble tap first — round 15). ROUND 31: a
+                            // partner's view-once message is never
+                            // savable here either (the viewer rule, in
+                            // the menu too) — except for the owner
+                            // under his unlimited override.
                             val savable = when (mm.kind) {
                                 MsgKind.IMAGE -> mm.photo != null
                                 MsgKind.VOICE, MsgKind.VIDEO, MsgKind.AUDIO -> mm.localPath != null
                                 else -> false
-                            }
+                            } && (mm.me || mm.vo == null || VoStore.ownerBypass(ctx))
                             if (savable) {
                                 RdDivider1()
                                 RdMenuItem("Save to device", onClick = {
@@ -3370,6 +3877,9 @@ private fun RdChatContent(thread: ChatThread) {
                         exit = slideOutVertically(tween(220, easing = RdEase)) { it } + fadeOut(),
                     ).chatGlass(haze, RoundedCornerShape(28.dp), 0.1f).padding(8.dp),
                 ) {
+                    // ROUND 31: the view-once arm for the next photo/video
+                    // picked from this sheet (see RdVoArmRow).
+                    RdVoArmRow(armedVo) { armedVo = it }
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
                         modifier = Modifier.fillMaxWidth().rdPress {
@@ -3430,6 +3940,9 @@ private fun RdChatContent(thread: ChatThread) {
                         exit = slideOutVertically(tween(220, easing = RdEase)) { it } + fadeOut(),
                     ).chatGlass(haze, RoundedCornerShape(28.dp), 0.1f).padding(8.dp),
                 ) {
+                    // ROUND 31: the view-once arm for the next capture
+                    // from this chooser (see RdVoArmRow).
+                    RdVoArmRow(armedVo) { armedVo = it }
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
                         modifier = Modifier.fillMaxWidth().rdPress {
@@ -3542,12 +4055,12 @@ private fun RdChatContent(thread: ChatThread) {
 
         // ---- full-screen image viewer ----
         viewerMsg?.let { vm ->
-            ImageViewerOverlay(vm) { viewerMsg = null }
+            ImageViewerOverlay(vm, saveAllowed = voSaveAllowed(vm)) { viewerMsg = null }
         }
 
         // ---- full-screen video player ----
         videoViewerMsg?.let { vm ->
-            VideoViewerOverlay(vm) { videoViewerMsg = null }
+            VideoViewerOverlay(vm, saveAllowed = voSaveAllowed(vm)) { videoViewerMsg = null }
         }
 
         // ---- ROUND 22 + 24: effect playback overlay ----

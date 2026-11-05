@@ -116,6 +116,20 @@ data class TikuMessage(
      *  played when the message is sent / arrives in the open chat, and
      *  replayed by tapping the bubble. TEXT messages only. */
     val fx: String? = null,
+    // ---- round 31 (appended last, same discipline) ----
+    /** View-once allowance the SENDER chose for a PHOTO / VIDEO
+     *  (Firestore `vo`): 1 = view once, 2 = view twice, null = unlimited
+     *  (the field is absent — docs from older builds read null and
+     *  render as plain media, and older builds reading a `vo` doc
+     *  ignore the field and show the media normally: the accepted
+     *  cross-version shape of an additive field). Enforcement is
+     *  client-side on the recipient's phone — see VoStore. */
+    val vo: Int? = null,
+    /** The recipient's client exhausted the [vo] allowance and wrote
+     *  the additive `voDone=true` on the doc (member write — the same
+     *  class as `reaction`), so the SENDER's bubble can show "Opened".
+     *  Absent on every doc the recipient hasn't finished viewing. */
+    val voDone: Boolean = false,
 )
 
 /** One 1:1 conversation. */
@@ -317,10 +331,20 @@ object Schema {
             val deletedFor: List<String> = emptyList(),
             /** ROUND 18: sender's delete-for-everyone tombstone flag. */
             val delAll: Boolean = false,
+            /** ROUND 30: server timestamp of the tombstone write, riding
+             *  the same update as [delAll]. Additive — older tombstones
+             *  lack it. Read only by the OWNER's client (vault log). */
+            val delAt: Any? = null,
             /** ROUND 22: Instagram-style send effect ("gift" | "fire" |
              *  "confetti" | "hearts"); absent/null = none. Additive —
              *  see [TikuMessage.fx]. */
             val fx: String? = null,
+            /** ROUND 31: view-once allowance for image/video (1 or 2);
+             *  absent = unlimited. Additive — see [TikuMessage.vo]. */
+            val vo: Int? = null,
+            /** ROUND 31: recipient exhausted the view-once allowance.
+             *  Additive — see [TikuMessage.voDone]. */
+            val voDone: Boolean = false,
             val seenBy: List<String> = emptyList(),
             val durationMs: Int = 0, val amps: List<Int> = emptyList(),
             /** Media kinds (image/voice/video/audio): ciphertext lives in the chunks

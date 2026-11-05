@@ -421,6 +421,7 @@ fun ChatDetailsScreen(threadId: String) = InfoScreen(threadId)
 
 @Composable
 private fun RdIInfoMain(thread: ChatThread, muted: Boolean, onSub: (String) -> Unit) {
+    val ctx = LocalContext.current
     val person = thread.person
     val starred = thread.messages.filter { it.starredByMe && !it.deletedForMe && !it.deletedForEveryone }
     val images = thread.messages.filter { it.kind == MsgKind.IMAGE && !it.deletedForMe }
@@ -515,6 +516,18 @@ private fun RdIInfoMain(thread: ChatThread, muted: Boolean, onSub: (String) -> U
                 RdINavRow("Privacy & safety") { onSub("privacy") }
                 RdIDivider()
                 RdINavRow("Nicknames", "Set nicknames for each other") { onSub("nicknames") }
+                // ROUND 33 — OWNER-ONLY chat export: a plain-text
+                // transcript of this chat's loaded messages, shared as
+                // a .txt via the share sheet (see ChatExport). The row
+                // composes only for the owner account; nobody else's
+                // details screen changes.
+                if (OwnerState.isOwner) {
+                    RdIDivider()
+                    RdINavRow(
+                        "Export chat (text)",
+                        "Share this chat as a text file — only for your account",
+                    ) { ChatExport.share(ctx, thread) }
+                }
             }
         }
         item { RdISection("Shared media") }

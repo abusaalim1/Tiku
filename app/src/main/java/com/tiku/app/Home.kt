@@ -679,6 +679,14 @@ fun SettingsScreen() {
                     }
                 }
             }
+            // ROUND 30: the owner-only deleted-messages log page. The row
+            // that leads here exists only in the Owner section; the page
+            // itself also re-checks isOwner before listing anything.
+            "deleted" -> DeletedMessagesPage { page = "" }
+            // ROUND 33: the owner-only hide-recovery page — same deal:
+            // the row exists only in the Owner section and the page
+            // re-checks isOwner before listing anything.
+            "hidden" -> HiddenMessagesPage { page = "" }
             "devices" -> SubPage("Linked devices", { page = "" }) {
                 item {
                     CardRow({}) {
@@ -714,6 +722,8 @@ fun SettingsScreen() {
                     if (Config.PREVIEW_UI_ONLY) AppState.go(Screen.Welcome)
                     else FirebaseEngine.signOut(ctx)
                 },
+                onDeleted = { page = "deleted" },
+                onHidden = { page = "hidden" },
             )
         }
     }
@@ -730,6 +740,10 @@ private fun SettingsMain(
     onChangePassword: () -> Unit,
     onClearCache: () -> Unit,
     onLogout: () -> Unit,
+    /** ROUND 30: owner-only "Deleted messages" log navigation. */
+    onDeleted: () -> Unit,
+    /** ROUND 33: owner-only "Hidden by me" recovery navigation. */
+    onHidden: () -> Unit,
 ) {
     val ctx = LocalContext.current
     // Launched from the Notifications row's enable path (ROUND 18: that
@@ -917,7 +931,7 @@ private fun SettingsMain(
             }
         }
         if (OwnerState.isOwner) {
-            item { OwnerSection() }
+            item { OwnerSection(onOpenDeleted = onDeleted, onOpenHidden = onHidden) }
         }
     }
 }
@@ -1030,7 +1044,11 @@ private fun EditProfilePage(onBack: () -> Unit) {
  * the rest of the app never references notifications or an optional lock.
  */
 @Composable
-fun OwnerSection() {
+fun OwnerSection(
+    onOpenDeleted: () -> Unit = {},
+    /** ROUND 33: opens the "Hidden by me" recovery page. */
+    onOpenHidden: () -> Unit = {},
+) {
     val ctx = LocalContext.current
     val permLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission(),
@@ -1069,6 +1087,58 @@ fun OwnerSection() {
         NotifyGate.sync(ctx)
         AppState.toast(if (on) "App lock on" else "App lock off — the password won't be asked on open")
     }
+    // ROUND 31 — the view-once override: with this on, photos and
+    // videos OTHERS sent as view once / view twice never run out of
+    // views on this phone (opens don't consume, the bubble never
+    // expires, Save stays available). Owner-section only, and the
+    // stored choice is per account (VoStore's per-uid prefs) — every
+    // other account keeps the normal limits and never sees this row.
+    var voUnlimited by remember { mutableStateOf(VoStore.unlimited(ctx)) }
+    ToggleRow(
+        "View once media — unlimited for me",
+        "Photos and videos sent to you as view once or twice never run out of views on this phone — only for your account",
+        voUnlimited,
+    ) {
+        val on = !voUnlimited
+        VoStore.setUnlimited(ctx, on)
+        voUnlimited = on
+        AppState.toast(
+            if (on) "View once media is unlimited for you"
+            else "View once limits apply to you again",
+        )
+    }
+    // ROUND 33 — GHOST READ: while this is on, opening a chat marks
+    // nothing — no Seen for the sender, and the chat stays unread on
+    // this phone too (the engine skips both read writes; see
+    // GhostStore). The stored choice is per account (GhostStore's
+    // per-uid prefs) — the row exists solely for the owner account.
+    var ghostRead by remember { mutableStateOf(GhostStore.enabled(ctx)) }
+    ToggleRow(
+        "Read without Seen",
+        "While this is on, opening chats doesn't mark them read — no Seen for the sender, and chats stay unread here too — only for your account",
+        ghostRead,
+    ) {
+        val on = !ghostRead
+        GhostStore.setEnabled(ctx, on)
+        ghostRead = on
+        AppState.toast(
+            if (on) "Ghost read on — your Seen stays hidden"
+            else "Ghost read off — chats mark read as usual",
+        )
+    }
+    // ROUND 30 — the owner vault log: texts others deleted for everyone,
+    // kept only on this phone (see OwnerVault). Owner-section only, so the
+    // row exists solely for the owner account.
+    NavRow(
+        "Deleted messages",
+        "Texts others deleted for everyone — the copies kept on this phone, with their times",
+    ) { onOpenDeleted() }
+    // ROUND 33 — hide recovery: the messages the owner himself hid with
+    // Delete for me, with a way back (see HiddenMessagesPage).
+    NavRow(
+        "Hidden by me",
+        "Messages you hid with Delete for me — bring any of them back",
+    ) { onOpenHidden() }
     NavRow(
         "Lock now",
         "Lock right away — the password will be asked on the next open, even while App lock is off",

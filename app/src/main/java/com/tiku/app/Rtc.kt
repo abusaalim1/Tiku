@@ -1,7 +1,9 @@
 package com.tiku.app
 
 import android.content.Context
+import android.content.Intent
 import android.media.AudioManager
+import android.media.projection.MediaProjection
 import android.util.Log
 import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
@@ -31,6 +33,7 @@ import org.webrtc.PeerConnection
 import org.webrtc.PeerConnectionFactory
 import org.webrtc.RtpReceiver
 import org.webrtc.RtpTransceiver
+import org.webrtc.ScreenCapturerAndroid
 import org.webrtc.SdpObserver
 import org.webrtc.SessionDescription
 import org.webrtc.SurfaceTextureHelper
@@ -102,6 +105,20 @@ object CallSignal {
         runCatching { callRef(chatId, callId).update("state", "ended").await() }
     }
 
+    /**
+     * ROUND 32 — screen-share presence, one field per role on the same
+     * ephemeral call doc (deleted whole at call end, like everything
+     * else on it). The peer's listener reads the OTHER role's field to
+     * learn "the stream coming at me is a screen, not a camera" — its
+     * only product use is rendering that stream letterboxed (FIT) and
+     * labelling it; the media itself needs no signaling help, since
+     * the share rides the already-negotiated video track.
+     */
+    suspend fun setSharing(chatId: String, callId: String, role: String, on: Boolean) {
+        val field = if (role == "caller") "sharingCaller" else "sharingCallee"
+        runCatching { callRef(chatId, callId).update(field, on).await() }
+    }
+
     suspend fun pushCandidate(chatId: String, callId: String, role: String, cand: IceCandidate) {
         val field = if (role == "caller") "callerCands" else "calleeCands"
         runCatching { callRef(chatId, callId).update(field, FieldValue.arrayUnion(encodeCandidate(cand))).await() }
@@ -164,6 +181,11 @@ class RtcSession(
         fun onMediaConnected()
         fun onFailed()
         fun onRemoteVideo()
+        /** ROUND 32: the system revoked the screen-share projection
+         *  (the user stopped it from the system share affordance).
+         *  The session has already torn its capture pipeline down by
+         *  the time this fires; the controller syncs UI + signaling. */
+        fun onScreenShareStopped() {}
     }
 
     var events: Events? = null
@@ -177,6 +199,17 @@ class RtcSession(
     private var videoTrack: VideoTrack? = null
     private var videoCapturer: CameraVideoCapturer? = null
     private var captureHelper: SurfaceTextureHelper? = null
+    // ROUND 32 — screen share state. The share feeds the SAME
+    // videoSource from a ScreenCapturerAndroid instead of the camera
+    // capturer: the track, its sender and the negotiated m-line never
+    // change, so starting/stopping a share needs no renegotiation on
+    // this once-negotiated stack. [cameraPref] is the camera on/off
+    // the user asked for, remembered while the screen owns the track
+    // and re-applied when the share ends.
+    private var screenCapturer: ScreenCapturerAndroid? = null
+    private var screenHelper: SurfaceTextureHelper? = null
+    private var sharingScreen = false
+    private var cameraPref = cameraOn
     var remoteVideoTrack: VideoTrack? = null
         private set
     val eglContext: EglBase.Context get() = RtcFactory.egl.eglBaseContext
@@ -244,20 +277,28 @@ class RtcSession(
         audioSource = RtcFactory.factory.createAudioSource(MediaConstraints())
         audioTrack = RtcFactory.factory.createAudioTrack("tiku-audio", audioSource)
         pc?.addTrack(audioTrack, listOf("tiku-stream"))
-        // local video (video calls)
-        if (hasVideo) {
-            val capturer = createCapturer(appCtx)
-            if (capturer != null) {
-                videoCapturer = capturer
-                videoSource = RtcFactory.factory.createVideoSource(capturer.isScreencast)
-                captureHelper = SurfaceTextureHelper.create("tiku-capture", eglContext)
-                capturer.initialize(captureHelper, appCtx, videoSource!!.capturerObserver)
-                runCatching { capturer.startCapture(960, 720, 24) }
-                videoTrack = RtcFactory.factory.createVideoTrack("tiku-video", videoSource)
-                videoTrack?.setEnabled(cameraOn)
-                pc?.addTrack(videoTrack, listOf("tiku-stream"))
-            }
+        // Local video. ROUND 32: the video source + track now exist in
+        // EVERY session — an audio call starts with a blank, disabled
+        // track and no capturer at all. That is what lets screen share
+        // light the track up mid-call on either kind of call: the
+        // negotiated video m-line is already there from the offer, so
+        // feeding the source (camera or screen) is all it takes — no
+        // renegotiation, which this stack does not do. Video calls are
+        // unchanged: the camera capturer feeds the source from the
+        // start, exactly as before.
+        val capturer = if (hasVideo) createCapturer(appCtx) else null
+        videoCapturer = capturer
+        videoSource = RtcFactory.factory.createVideoSource(capturer?.isScreencast ?: false)
+        videoTrack = RtcFactory.factory.createVideoTrack("tiku-video", videoSource)
+        if (capturer != null) {
+            captureHelper = SurfaceTextureHelper.create("tiku-capture", eglContext)
+            capturer.initialize(captureHelper, appCtx, videoSource!!.capturerObserver)
+            runCatching { capturer.startCapture(960, 720, 24) }
+            videoTrack?.setEnabled(cameraOn)
+        } else {
+            videoTrack?.setEnabled(false)
         }
+        pc?.addTrack(videoTrack, listOf("tiku-stream"))
         // audio route for the call
         runCatching {
             audioManager.mode = AudioManager.MODE_IN_COMMUNICATION
@@ -343,8 +384,108 @@ class RtcSession(
         if (applyNow) runCatching { pc?.addIceCandidate(c) }
     }
     fun setMicEnabled(on: Boolean) { runCatching { audioTrack?.setEnabled(on) } }
-    fun setCameraEnabled(on: Boolean) { runCatching { videoTrack?.setEnabled(on) } }
-    fun switchCamera() { runCatching { videoCapturer?.switchCamera(null) } }
+    fun setCameraEnabled(on: Boolean) {
+        // ROUND 32: while the screen owns the track this only records
+        // the preference — the share keeps flowing, and the preference
+        // is applied to the camera the moment the share ends.
+        cameraPref = on
+        if (!sharingScreen) runCatching { videoTrack?.setEnabled(on) }
+    }
+    fun switchCamera() {
+        if (sharingScreen) return // the camera is not the live source right now
+        runCatching { videoCapturer?.switchCamera(null) }
+    }
+
+    /**
+     * ROUND 32 — start feeding the video source from the screen.
+     * [data] is the result intent of the system MediaProjection
+     * consent dialog (fresh every time — a projection grant is
+     * single-use). The caller (CallController) has ALREADY started
+     * [ScreenShareService]: on Android 14+ the mediaProjection
+     * foreground service must be running before the projection is
+     * created, which happens inside the capturer's startCapture.
+     * Returns false (with the camera restored) if anything fails.
+     */
+    fun startScreenShare(data: Intent): Boolean {
+        if (disposed || sharingScreen) return false
+        val source = videoSource ?: return false
+        // The camera steps aside (it restarts when the share ends);
+        // stopping capture also kills the camera indicator honestly —
+        // while sharing, the camera truly sends nothing.
+        runCatching { videoCapturer?.stopCapture() }
+        val helper = SurfaceTextureHelper.create("tiku-screen", eglContext)
+        val capturer = ScreenCapturerAndroid(data, object : MediaProjection.Callback() {
+            override fun onStop() { onProjectionRevoked() }
+        })
+        return try {
+            capturer.initialize(helper, appCtx, source.capturerObserver)
+            // Capture at the display's real size (even dimensions,
+            // long side capped at 1920 — plenty for readable text,
+            // and the encoder adapts from there).
+            val dm = appCtx.resources.displayMetrics
+            var w = dm.widthPixels
+            var h = dm.heightPixels
+            val longest = maxOf(w, h)
+            if (longest > 1920) {
+                val f = 1920f / longest
+                w = (w * f).toInt()
+                h = (h * f).toInt()
+            }
+            capturer.startCapture(w - w % 2, h - h % 2, 24)
+            screenCapturer = capturer
+            screenHelper = helper
+            sharingScreen = true
+            // The track may be disabled (audio call, or camera was
+            // off): the share is an explicit "send video" act.
+            runCatching { videoTrack?.setEnabled(true) }
+            true
+        } catch (e: Exception) {
+            Log.e("TikuCall", "screen share start failed", e)
+            runCatching { capturer.dispose() }
+            runCatching { helper.dispose() }
+            restoreCameraAfterShare()
+            false
+        }
+    }
+
+    /** User-initiated stop (the in-call button / indicator). */
+    fun stopScreenShare() {
+        if (!sharingScreen && screenCapturer == null) return
+        endScreenShare()
+    }
+
+    /** The system revoked the projection (the user stopped it from
+     *  the system share affordance, or the OS did): tear the capture
+     *  down, stop the service, and let the controller sync the rest. */
+    private fun onProjectionRevoked() {
+        if (!sharingScreen) return
+        endScreenShare()
+        ScreenShareService.stop(appCtx)
+        events?.onScreenShareStopped()
+    }
+
+    private fun endScreenShare() {
+        sharingScreen = false
+        runCatching { screenCapturer?.stopCapture() }
+        runCatching { screenCapturer?.dispose() }
+        screenCapturer = null
+        runCatching { screenHelper?.dispose() }
+        screenHelper = null
+        restoreCameraAfterShare()
+    }
+
+    /** After a share: video calls go back to the camera at the
+     *  user's remembered on/off preference; audio calls go back to
+     *  sending nothing. */
+    private fun restoreCameraAfterShare() {
+        if (disposed) return
+        if (hasVideo && videoCapturer != null) {
+            runCatching { videoCapturer?.startCapture(960, 720, 24) }
+            runCatching { videoTrack?.setEnabled(cameraPref) }
+        } else {
+            runCatching { videoTrack?.setEnabled(false) }
+        }
+    }
     fun setSpeaker(on: Boolean) {
         @Suppress("DEPRECATION")
         runCatching { audioManager.isSpeakerphoneOn = on }
@@ -358,6 +499,15 @@ class RtcSession(
     fun dispose() {
         if (disposed) return
         disposed = true
+        // ROUND 32: a live share dies with the session — capture
+        // pipeline and its foreground service both stop here, so no
+        // teardown path (hangup, failure, remote end, session lock)
+        // can leak a projection or a running service. (disposed is
+        // already set, so restoreCameraAfterShare correctly no-ops.)
+        if (sharingScreen || screenCapturer != null) {
+            endScreenShare()
+            ScreenShareService.stop(appCtx)
+        }
         runCatching { videoCapturer?.stopCapture() }
         runCatching { videoCapturer?.dispose() }
         runCatching { captureHelper?.dispose() }
@@ -390,6 +540,9 @@ sealed interface CallUiState {
         val muted: Boolean = false, val speakerOn: Boolean = true, val cameraOn: Boolean = true,
         /** bumped when the remote video track arrives (forces the UI to rebind sinks) */
         val tick: Int = 0,
+        /** ROUND 32: true while MY screen is the thing my video track
+         *  is sending (set only by the share start/stop paths). */
+        val sharingScreen: Boolean = false,
     ) : CallUiState
     /** Round 3: a failed call is a VISIBLE state ("Call failed — <reason>"),
      *  shown before the signaling trace is deleted — never a silent hangup. */
@@ -417,6 +570,22 @@ object CallController {
      *  (event recorded, signaling deleted). Session lock still ends the call
      *  (endSilently), exactly as before. */
     val pipMinimized = MutableStateFlow(false)
+
+    /** ROUND 32 — true while the PEER's video stream is their screen
+     *  (learned from their sharing field on the call doc). The call UI
+     *  uses it to letterbox the remote stream (a screen must never be
+     *  cropped) and to show the remote surface at all on audio calls. */
+    val remoteSharing = MutableStateFlow(false)
+
+    /** My signaling role in the live call ("caller" | "callee"),
+     *  captured where the session events are wired. Screen-share
+     *  writes pick their doc field by it. */
+    private var myRole: String = ""
+
+    /** applicationContext captured when a share starts, so the share
+     *  service can be stopped from teardown paths that hold no
+     *  Context of their own. */
+    private var shareAppCtx: Context? = null
 
     fun minimizeCall() {
         val st = state.value
@@ -527,6 +696,7 @@ object CallController {
         ringJob?.cancel(); ringJob = null
         callDocReg?.remove(); callDocReg = null
         session?.dispose(); session = null
+        clearScreenShareState()
         runCatching { CallFeedbackManager.stopAll() }
         state.value = CallUiState.Idle
         pipMinimized.value = false
@@ -702,6 +872,7 @@ object CallController {
 
     // ---------- shared session plumbing ----------
     private fun wireEvents(s: RtcSession, threadId: String, callId: String, role: String) {
+        myRole = role
         s.events = object : RtcSession.Events {
             override fun onIceCandidate(c: IceCandidate) {
                 val push: suspend () -> Unit = { CallSignal.pushCandidate(threadId, callId, role, c) }
@@ -721,6 +892,13 @@ object CallController {
                 // tick bump forces CallScreen recomposition so it rebinds the remote sink
                 val st = state.value
                 if (st is CallUiState.Connected) state.value = st.copy(tick = st.tick + 1)
+            }
+            override fun onScreenShareStopped() {
+                // The system revoked the projection; the session has
+                // already ended its capture. Run the ordinary stop so
+                // UI state, the signaling field and the service all
+                // settle on "not sharing".
+                scope.launch { stopScreenShare() }
             }
         }
     }
@@ -745,6 +923,16 @@ object CallController {
                 }
                 if (st !is CallUiState.Idle) finish(threadId, deleteDocs = true, quiet = false, remoteEnded = true)
                 return@listen
+            }
+            // ROUND 32: the peer's screen-share flag (their role's
+            // field on this same doc). A flip re-keys the remote
+            // renderer via a tick bump so it re-creates letterboxed
+            // (or back to full-bleed camera framing).
+            val peerSharing = data[if (role == "caller") "sharingCallee" else "sharingCaller"] == true
+            if (peerSharing != remoteSharing.value) {
+                remoteSharing.value = peerSharing
+                val cur = state.value
+                if (cur is CallUiState.Connected) state.value = cur.copy(tick = cur.tick + 1)
             }
             scope.launch {
                 runCatching {
@@ -832,6 +1020,7 @@ object CallController {
         answerApplied = false; processedCallerCands = 0; processedCalleeCands = 0
         pendingOffer = null; pendingOfferCallId = null
         iceGateOpen = false; iceBuffer.clear()
+        clearScreenShareState()
         state.value = CallUiState.Failed(threadId, callId, video, person, reason)
         AppState.go(Screen.Call(threadId, video))
         scope.launch {
@@ -850,6 +1039,7 @@ object CallController {
         ringJob?.cancel(); ringJob = null
         callDocReg?.remove(); callDocReg = null
         session?.dispose(); session = null
+        clearScreenShareState()
         runCatching { CallFeedbackManager.stopAll() }
         state.value = CallUiState.Idle
         pipMinimized.value = false
@@ -890,6 +1080,55 @@ object CallController {
     }
 
     fun switchCamera() { session?.switchCamera() }
+
+    // ---------- ROUND 32: screen sharing ----------
+    /**
+     * Begin sharing my screen. [data] is the fresh result intent of
+     * the system consent dialog (the call screen owns that launcher).
+     * Order matters on Android 14+: the mediaProjection foreground
+     * service goes up FIRST, the projection (created inside the
+     * session's capturer start) second. The mic track is never
+     * touched — the call's audio flows throughout.
+     */
+    fun beginScreenShare(ctx: Context, data: Intent) {
+        val st = state.value as? CallUiState.Connected ?: return
+        if (st.sharingScreen) return
+        val s = session ?: return
+        val appCtx = ctx.applicationContext
+        ScreenShareService.start(appCtx)
+        shareAppCtx = appCtx
+        if (s.startScreenShare(data)) {
+            state.value = st.copy(sharingScreen = true)
+            scope.launch { CallSignal.setSharing(st.threadId, st.callId, myRole, true) }
+        } else {
+            ScreenShareService.stop(appCtx)
+            shareAppCtx = null
+            AppState.toast("Couldn't start screen sharing")
+        }
+    }
+
+    /** Stop sharing (button, indicator, or the session's revocation
+     *  callback). Idempotent: safe from every path, in any order. */
+    fun stopScreenShare() {
+        val st = state.value
+        session?.stopScreenShare()
+        shareAppCtx?.let { ScreenShareService.stop(it) }
+        shareAppCtx = null
+        if (st is CallUiState.Connected && st.sharingScreen) {
+            state.value = st.copy(sharingScreen = false)
+            scope.launch { CallSignal.setSharing(st.threadId, st.callId, myRole, false) }
+        }
+    }
+
+    /** Call teardown bookkeeping for shares: the session's dispose()
+     *  has already stopped the capturer and the service; this drops
+     *  the controller's own share state so nothing outlives the call. */
+    private fun clearScreenShareState() {
+        shareAppCtx?.let { ScreenShareService.stop(it) }
+        shareAppCtx = null
+        remoteSharing.value = false
+        myRole = ""
+    }
 
     /** Access for the call screen's renderers. */
     fun currentSession(): RtcSession? = session

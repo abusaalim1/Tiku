@@ -22,6 +22,10 @@
          unless the service actually starts (unlocked + toggle ON). -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <!-- ROUND 32: the media-projection companion of the screen-share
+         service below. Inert unless a user in a live call taps
+         "Share screen" and grants the system consent dialog. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
     <uses-feature android:name="android.hardware.microphone" android:required="false" />
     <uses-feature android:name="android.hardware.camera" android:required="false" />
     <application android:name=".TikuApp" android:label="Tiku" android:theme="@style/Theme.Tiku" android:allowBackup="false"
@@ -68,5 +72,14 @@
             android:name=".TikuAlertService"
             android:exported="false"
             android:foregroundServiceType="dataSync" />
+        <!-- ROUND 32: screen-share projection service (ScreenShare.kt).
+             Never exported, never started outside a live call: it runs
+             only while a user is actively sharing their screen, which
+             Android 14+ requires a mediaProjection-typed foreground
+             service for. -->
+        <service
+            android:name=".ScreenShareService"
+            android:exported="false"
+            android:foregroundServiceType="mediaProjection" />
     </application>
 </manifest>

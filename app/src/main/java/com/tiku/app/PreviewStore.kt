@@ -213,6 +213,16 @@ object PreviewRepo : ChatRepo {
         simulateReply(id)
     }
 
+    /** ROUND 31: keep the view-once allowance on preview sends too, so
+     *  the harness renders the sender's vo badge. (The preview partner
+     *  never consumes views — markVoDone stays the interface default.) */
+    override fun sendPhotoVo(id: String, bmp: Bitmap, vo: Int?) {
+        push(id, TikuMessage(UUID.randomUUID().toString(), "", MsgKind.IMAGE, "", "now", me = true,
+            amps = List(22) { 8 }, photo = PreviewStore.scaled(bmp),
+            vo = vo?.takeIf { it in 1..2 }))
+        simulateReply(id)
+    }
+
     override fun sendVoice(id: String, audioFile: File?, durSec: Int, amps: List<Int>) {
         push(id, TikuMessage(UUID.randomUUID().toString(), "", MsgKind.VOICE, "", "now", me = true,
             voiceDurSec = durSec, amps = amps.ifEmpty { List(22) { 8 } },
@@ -226,6 +236,15 @@ object PreviewRepo : ChatRepo {
         push(id, TikuMessage(UUID.randomUUID().toString(), "", MsgKind.VIDEO, "", "now", me = true,
             voiceDurSec = durSec, localPath = file.absolutePath,
             mimeType = mime, mediaBytes = if (file.exists()) file.length() else 0L))
+        simulateReply(id)
+    }
+
+    /** ROUND 31: the view-once video send, preview mirror of [sendVideo]. */
+    override fun sendVideoVo(id: String, file: File, mime: String, durSec: Int, vo: Int?) {
+        push(id, TikuMessage(UUID.randomUUID().toString(), "", MsgKind.VIDEO, "", "now", me = true,
+            voiceDurSec = durSec, localPath = file.absolutePath,
+            mimeType = mime, mediaBytes = if (file.exists()) file.length() else 0L,
+            vo = vo?.takeIf { it in 1..2 }))
         simulateReply(id)
     }
 

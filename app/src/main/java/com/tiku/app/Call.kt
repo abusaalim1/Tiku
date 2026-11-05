@@ -1,10 +1,13 @@
 package com.tiku.app
 
 import android.Manifest
+import android.app.Activity
+import android.content.Context
 import android.content.pm.PackageManager
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import android.media.AudioManager
+import android.media.projection.MediaProjectionManager
 import android.media.Ringtone
 import android.media.RingtoneManager
 import android.media.ToneGenerator
@@ -190,16 +193,22 @@ fun rememberCallStarter(): (threadId: String, video: Boolean) -> Unit {
 }
 
 /** WebRTC video surface (local PiP or remote full-screen). Preview mode never
- *  reaches here — org.webrtc classes must not load under Robolectric. */
+ *  reaches here — org.webrtc classes must not load under Robolectric.
+ *  ROUND 32: [fit] letterboxes instead of cropping — used when the
+ *  remote stream is a shared SCREEN, whose edges carry content that
+ *  must never be cut away. Camera streams keep the designed FILL. */
 @Composable
-private fun RtcVideoView(local: Boolean, modifier: Modifier) {
+private fun RtcVideoView(local: Boolean, modifier: Modifier, fit: Boolean = false) {
     val session = CallController.currentSession() ?: return
     AndroidView(
         factory = { c ->
             SurfaceViewRenderer(c).apply {
                 init(session.eglContext, null)
                 setMirror(local)
-                setScalingType(RendererCommon.ScalingType.SCALE_ASPECT_FILL)
+                setScalingType(
+                    if (fit) RendererCommon.ScalingType.SCALE_ASPECT_FIT
+                    else RendererCommon.ScalingType.SCALE_ASPECT_FILL
+                )
                 setEnableHardwareScaler(true)
                 if (local) { setZOrderMediaOverlay(true); session.bindLocalView(this) }
                 else session.bindRemoteView(this)
@@ -261,6 +270,9 @@ fun CallScreen(threadId: String, video: Boolean) {
     val ctx = LocalContext.current
     val callState by CallController.state.collectAsState()
     val rtcSession by CallController.sessionState.collectAsState()
+    // ROUND 32: the peer is sharing their screen (their video stream
+    // is a screen: show it even on voice calls, and letterboxed).
+    val remoteSharingNow by CallController.remoteSharing.collectAsState()
 
     // manage ringtones and vibration feedback
     LaunchedEffect(callState) {
@@ -292,6 +304,27 @@ fun CallScreen(threadId: String, video: Boolean) {
             .filter { ContextCompat.checkSelfPermission(ctx, it) != PackageManager.PERMISSION_GRANTED }
         if (needed.isEmpty()) CallController.accept(ctx)
         else { pendingAccept = inc; acceptLauncher.launch(needed.toTypedArray()) }
+    }
+
+    // ROUND 32 — screen share consent. The system dialog is the ONLY
+    // way to a projection grant, and the grant is single-use: every
+    // share start asks afresh. Grant → the controller starts the
+    // projection service and swaps the session's video source to the
+    // screen; denial simply leaves the call untouched.
+    val shareConsentLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult(),
+    ) { res ->
+        val data = res.data
+        if (res.resultCode == Activity.RESULT_OK && data != null) {
+            CallController.beginScreenShare(ctx, data)
+        }
+    }
+    fun toggleShare() {
+        val c = callState as? CallUiState.Connected ?: return
+        if (c.sharingScreen) { CallController.stopScreenShare(); return }
+        if (Config.PREVIEW_UI_ONLY) return
+        val mpm = ctx.getSystemService(Context.MEDIA_PROJECTION_SERVICE) as? MediaProjectionManager ?: return
+        shareConsentLauncher.launch(mpm.createScreenCaptureIntent())
     }
 
     // ROUND 8: Back during a live call MINIMIZES to the floating window
@@ -374,14 +407,24 @@ fun CallScreen(threadId: String, video: Boolean) {
             },
         contentAlignment = Alignment.Center,
     ) {
-        // remote video (real mode, video call, once media exists)
-        if (isVideo && connected != null && !Config.PREVIEW_UI_ONLY) {
-            key(connected.tick) {
-                RtcVideoView(local = false, modifier = Modifier.fillMaxSize())
+        // Remote video: video calls as before; ROUND 32 also shows
+        // the surface on a VOICE call when the peer starts sharing
+        // their screen (their blank-by-default video track lights
+        // up), or whenever a remote video track actually exists.
+        val showRemoteVideo = connected != null && !Config.PREVIEW_UI_ONLY &&
+            (isVideo || remoteSharingNow || rtcSession?.remoteVideoTrack != null)
+        if (showRemoteVideo) {
+            // re-keyed on the share flag too: FIT vs FILL is chosen
+            // at renderer creation, so a share flip rebuilds the view.
+            key(connected!!.tick to remoteSharingNow) {
+                RtcVideoView(local = false, modifier = Modifier.fillMaxSize(), fit = remoteSharingNow)
             }
         }
-        // self-view PiP (top-end, as designed: 98x138, r24, white .4 edge)
-        if (isVideo) {
+        // self-view PiP (top-end, as designed: 98x138, r24, white .4 edge).
+        // ROUND 32: also composed while I share my screen on a voice
+        // call — the PiP binds the same video track, so it previews
+        // exactly what the peer is seeing.
+        if (isVideo || connected?.sharingScreen == true) {
             Box(Modifier.fillMaxSize().padding(top = 24.dp, end = 20.dp)) {
                 if (!Config.PREVIEW_UI_ONLY && rtcSession != null && (connected != null || callState is CallUiState.Outgoing)) {
                     RtcVideoView(
@@ -420,7 +463,7 @@ fun CallScreen(threadId: String, video: Boolean) {
             verticalArrangement = Arrangement.SpaceBetween,
         ) {
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                if (!(isVideo && connected != null && !Config.PREVIEW_UI_ONLY)) {
+                if (!showRemoteVideo) {
                     Box(
                         Modifier.offset(y = fy.dp),
                         contentAlignment = Alignment.Center,
@@ -460,6 +503,47 @@ fun CallScreen(threadId: String, video: Boolean) {
                         fontSize = 19.sp, color = Color.White)
                     Text(statusText, fontSize = 13.sp, color = Color.White.copy(alpha = 0.8f), fontFamily = InterTight)
                 }
+                // ROUND 32 — screen-share indicator, same glass-pill
+                // language as .cltop. Mine carries the Stop action;
+                // the peer's is a plain label (their stream is already
+                // letterboxed full-screen behind this column).
+                if (connected?.sharingScreen == true) {
+                    Spacer(Modifier.height(10.dp))
+                    Row(
+                        Modifier
+                            .clip(RoundedCornerShape(20.dp))
+                            .background(Color.White.copy(alpha = 0.14f))
+                            .border(1.dp, Color.White.copy(alpha = 0.25f), RoundedCornerShape(20.dp))
+                            .padding(horizontal = 16.dp, vertical = 7.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Box(Modifier.size(8.dp).clip(CircleShape).background(Color(0xFF3DD68C)))
+                        Spacer(Modifier.width(8.dp))
+                        Text("You're sharing your screen", fontSize = 12.5.sp, color = Color.White, fontFamily = InterTight)
+                        Spacer(Modifier.width(12.dp))
+                        Text(
+                            "Stop", fontSize = 12.5.sp, color = Color(0xFFFF8A94), fontFamily = InterTight,
+                            fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
+                            modifier = Modifier.clickable(
+                                interactionSource = remember { MutableInteractionSource() }, indication = null,
+                            ) { CallController.stopScreenShare() },
+                        )
+                    }
+                } else if (remoteSharingNow && connected != null) {
+                    Spacer(Modifier.height(10.dp))
+                    Row(
+                        Modifier
+                            .clip(RoundedCornerShape(20.dp))
+                            .background(Color.White.copy(alpha = 0.14f))
+                            .border(1.dp, Color.White.copy(alpha = 0.25f), RoundedCornerShape(20.dp))
+                            .padding(horizontal = 16.dp, vertical = 7.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Box(Modifier.size(8.dp).clip(CircleShape).background(Color(0xFF3DD68C)))
+                        Spacer(Modifier.width(8.dp))
+                        Text("You're watching their screen", fontSize = 12.5.sp, color = Color.White, fontFamily = InterTight)
+                    }
+                }
             }
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -485,7 +569,14 @@ fun CallScreen(threadId: String, video: Boolean) {
                         if (connected != null) {
                             CallToggle(if (connected.muted) "micOff" else "mic", connected.muted) { CallController.toggleMute() }
                             CallToggle("spk", connected.speakerOn) { CallController.toggleSpeaker() }
-                            if (connected.video) {
+                            // ROUND 32: share screen — on every connected
+                            // call (voice calls included: sharing lights
+                            // up the blank video track). While sharing,
+                            // the camera controls step aside (the camera
+                            // is not the live source; its on/off is kept
+                            // and returns with the camera).
+                            CallToggle("shareScr", connected.sharingScreen) { toggleShare() }
+                            if (connected.video && !connected.sharingScreen) {
                                 CallToggle(if (connected.cameraOn) "vid" else "vidOff", !connected.cameraOn) { CallController.toggleCamera() }
                                 CallToggle("flip", false) { CallController.switchCamera() }
                             }
@@ -534,6 +625,7 @@ fun FloatingCallWindow() {
     val callState by CallController.state.collectAsState()
     val pip by CallController.pipMinimized.collectAsState()
     val rtcSession by CallController.sessionState.collectAsState()
+    val remoteSharingNow by CallController.remoteSharing.collectAsState()
     val connected = callState as? CallUiState.Connected
     // connected-call clock (same cadence as the full call screen)
     var nowMs by remember { mutableLongStateOf(System.currentTimeMillis()) }
@@ -559,7 +651,12 @@ fun FloatingCallWindow() {
         val secs = ((nowMs - connected.atMs) / 1000).coerceAtLeast(0).toInt()
         "%d:%02d".format(secs / 60, secs % 60)
     } else "Calling…"
-    val showVideo = video && connected != null && !Config.PREVIEW_UI_ONLY && rtcSession != null
+    // ROUND 32: the tile also becomes a video tile when a screen is
+    // being shared on a voice call — the peer's shared screen, or (if
+    // the peer sends no video) my own share preview.
+    val tileLocal = connected?.sharingScreen == true && rtcSession?.remoteVideoTrack == null
+    val showVideo = (video || remoteSharingNow || connected?.sharingScreen == true) &&
+        connected != null && !Config.PREVIEW_UI_ONLY && rtcSession != null
     val winW = if (showVideo) 108.dp else 184.dp
     val winH = if (showVideo) 156.dp else 64.dp
     BoxWithConstraints(Modifier.fillMaxSize()) {
@@ -590,8 +687,11 @@ fun FloatingCallWindow() {
                 },
         ) {
             if (showVideo) {
-                key(connected?.tick) {
-                    RtcVideoView(local = false, modifier = Modifier.fillMaxSize())
+                key(connected?.tick to remoteSharingNow) {
+                    RtcVideoView(
+                        local = tileLocal, modifier = Modifier.fillMaxSize(),
+                        fit = remoteSharingNow && !tileLocal,
+                    )
                 }
                 // ROUND 20: his own tiny self-preview rides the tile's
                 // top-end corner — the same local renderer binding the
@@ -599,7 +699,9 @@ fun FloatingCallWindow() {
                 // track, bound and released with this window only).
                 // Hidden while his camera is off: a black inset would
                 // lie about a camera that is not sending anything.
-                if (connected?.cameraOn == true) {
+                // ROUND 32: also skipped when the tile itself is already
+                // showing the local (shared-screen) track.
+                if (connected?.cameraOn == true && !tileLocal) {
                     RtcVideoView(
                         local = true,
                         modifier = Modifier.align(Alignment.TopEnd).padding(6.dp)

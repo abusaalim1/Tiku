@@ -652,6 +652,25 @@ object FirebaseEngine : ChatRepo {
     /** chatId -> my clearedBefore watermark, fed by the threads listener
      *  (the chat doc rides that snapshot — no per-snapshot get() anymore). */
     private val clearedBeforeCache = mutableMapOf<String, Long>()
+    // ================= ROUND 33 — HIDE RECOVERY REGISTRY =================
+    /** Every message this device has decrypted whose doc carries MY uid
+     *  in deletedFor (key "chatId|msgId"), with the decrypted copy.
+     *  decryptDoc is the ONE funnel every loaded message passes through
+     *  (open-chat pages AND the 40-message preview windows), so this map
+     *  is the enumeration of my delete-for-me hides — the data behind
+     *  the owner's "Hidden by me" page (OwnerExtras.kt). Session-scoped:
+     *  cleared in start(), rebuilt by the listeners; entries drop out
+     *  the moment a decrypt shows the doc no longer hides the message. */
+    private val hiddenLock = Any()
+    private val hiddenCopies = LinkedHashMap<String, HiddenMessage>()
+
+    private fun noteHidden(chatId: String, m: TikuMessage) {
+        synchronized(hiddenLock) {
+            val k = "$chatId|${m.id}"
+            if (m.deletedForMe) hiddenCopies[k] = HiddenMessage(chatId, m)
+            else hiddenCopies.remove(k)
+        }
+    }
     // ---- ROUND 14: requests / hide / block / notes ----
     /** chatId -> my acceptedFor / hiddenFor stamps (ms), fed by the threads
      *  listener exactly like clearedBeforeCache. */
@@ -702,6 +721,13 @@ object FirebaseEngine : ChatRepo {
      * the badge on the next launch.
      */
     fun markRead(threadId: String) {
+        // ROUND 33 — GHOST READ (owner-only): while the owner's ghost
+        // toggle is on, the local read watermark must NOT advance
+        // either — his chats keep showing unread to HIM, the honest
+        // twin of not sending Seen (see markIncomingSeen). GhostStore
+        // .enabled self-gates on OwnerState.isOwner, so for every other
+        // account this line never fires.
+        if (GhostStore.enabled(appCtx)) return
         val newest = AppState.thread(threadId)?.messages
             ?.filter { it.status == SendStatus.SENT }
             ?.maxOfOrNull { it.tsMs } ?: 0L
@@ -714,6 +740,12 @@ object FirebaseEngine : ChatRepo {
 
     fun start(ctx: Context) {
         appCtx = ctx.applicationContext
+        // ROUND 30: the owner's local vault index loads with the engine
+        // (its writes stay gated on OwnerState.isOwner at every call site).
+        OwnerVault.init(ctx)
+        // ROUND 33: the hide-recovery registry is session-scoped — a new
+        // sign-in starts empty and the listeners rebuild it.
+        synchronized(hiddenLock) { hiddenCopies.clear() }
         readPrefs = ctx.getSharedPreferences("tiku_read", Context.MODE_PRIVATE)
         pinPrefs = ctx.getSharedPreferences("tiku_pins", Context.MODE_PRIVATE)
         if (uid.isEmpty()) return
@@ -1330,6 +1362,13 @@ object FirebaseEngine : ChatRepo {
      * nothing (no listener write-loop).
      */
     private fun markIncomingSeen(id: String, docs: List<com.google.firebase.firestore.DocumentSnapshot>) {
+        // ROUND 33 — GHOST READ (owner-only): while the owner's ghost
+        // toggle is on, his client writes NO seenBy marks at all — the
+        // sender never sees his Seen. GhostStore.enabled self-gates on
+        // OwnerState.isOwner and the owner's per-account pref, so for
+        // every other account (and the owner with ghost off) the global
+        // and per-chat receipts switches below rule exactly as before.
+        if (GhostStore.enabled(appCtx)) return
         if (!SettingsStore.state.value.readReceipts) return
         // ROUND 10: this chat's own receipts switch wins over the global one —
         // my uid in the chat doc's receiptsOff means my client never writes
@@ -1625,6 +1664,14 @@ object FirebaseEngine : ChatRepo {
         // field → null → plain render; unknown values are dropped here
         // so a future effect kind can never confuse this build.
         val fx = doc.getString("fx")?.takeIf { it in MESSAGE_FX_KINDS }
+        // ROUND 31 — view-once allowance (additive Int, image/video
+        // only — see TikuMessage.vo). Docs from older builds lack the
+        // field → null → unlimited; values outside 1..2 are dropped
+        // here so a future allowance can never confuse this build.
+        val vo = (doc.getLong("vo")?.toInt())?.takeIf {
+            (kindRaw == "image" || kindRaw == "video") && it in 1..2
+        }
+        val voDone = doc.getBoolean("voDone") == true
         val kind = when (kindRaw) {
             "image" -> MsgKind.IMAGE; "voice" -> MsgKind.VOICE; "call" -> MsgKind.CALL
             "video" -> MsgKind.VIDEO; "audio" -> MsgKind.AUDIO
@@ -1638,7 +1685,19 @@ object FirebaseEngine : ChatRepo {
         // deleted" from it. deletedForMe still applies on top (a
         // tombstone I also deleted for me stays hidden for me).
         if (doc.getBoolean("delAll") == true) {
-            return TikuMessage(
+            // ROUND 30 — OWNER VAULT: the owner's client notes the deletion
+            // moment for any copy it kept locally (markDeleted self-gates on
+            // OwnerState.isOwner and no-ops without an entry — content this
+            // phone never loaded stays gone, exactly like every other
+            // device). delAt is the ROUND-30 server timestamp; tombstones
+            // written by older builds lack it → 0 → first-observed fallback.
+            if (!me) {
+                OwnerVault.markDeleted(
+                    appCtx, chatId, doc.id,
+                    doc.getTimestamp("delAt")?.toDate()?.time ?: 0L,
+                )
+            }
+            val tomb = TikuMessage(
                 id = doc.id, senderUid = sender, kind = kind, text = "",
                 time = fmtTime(tsMs), me = me,
                 starredByMe = starredBy.contains(my),
@@ -1646,6 +1705,11 @@ object FirebaseEngine : ChatRepo {
                 tsMs = tsMs, seenByPeer = seenBy.contains(peerUid),
                 deletedForEveryone = true,
             )
+            // ROUND 33: a tombstone I also hid for me still belongs in
+            // the hide-recovery registry (metadata only — its content
+            // is gone by design).
+            noteHidden(chatId, tomb)
+            return tomb
         }
         val replyQuote = doc.getString("rqCt")?.takeIf { it.isNotEmpty() }?.let {
             runCatching { Crypto.decryptText(key, doc.getString("rqIv") ?: "", it) }.getOrNull()
@@ -1658,6 +1722,10 @@ object FirebaseEngine : ChatRepo {
         var mediaChunks = 0
         var mimeType = ""
         var mediaBytes = 0L
+        // ROUND 30 — OWNER VAULT: the decrypted payload of a fresh chunk
+        // download, kept only so the vault stash below can file the exact
+        // bytes this client produced for viewing (never a new download).
+        var vaultPlain: ByteArray? = null
         // round 4 call-event payload (decrypted JSON from the ct field)
         var callCallerUid = ""; var callOutcome = ""; var callDurSec = 0; var callVideo = false
         when (kindRaw) {
@@ -1706,6 +1774,7 @@ object FirebaseEngine : ChatRepo {
                     val chunkCount = mediaChunks
                     val ctBytes = MediaStore.download(db, chatId, doc.id, chunkCount)
                     val plain = Crypto.decrypt(key, doc.getString("iv") ?: "", Crypto.b64(ctBytes))
+                    vaultPlain = plain
                     if (kindRaw == "image") {
                         photo = BitmapFactory.decodeByteArray(plain, 0, plain.size)
                     } else if (kindRaw == "voice") {
@@ -1728,7 +1797,7 @@ object FirebaseEngine : ChatRepo {
                 }
             }
         }
-        return TikuMessage(doc.id, sender, kind, text, fmtTime(tsMs), me, durSec, amps,
+        val built = TikuMessage(doc.id, sender, kind, text, fmtTime(tsMs), me, durSec, amps,
             photo, replyQuote, doc.getString("replyToId"), reactions, starredBy.contains(my), deletedFor.contains(my), tsMs, localPath,
             seenByPeer = seenBy.contains(peerUid),
             callCallerUid = callCallerUid, callOutcome = callOutcome,
@@ -1737,7 +1806,51 @@ object FirebaseEngine : ChatRepo {
             mediaChunks = mediaChunks,
             editedAtMs = doc.getTimestamp("editedAt")?.toDate()?.time ?: 0L,
             mimeType = mimeType, mediaBytes = mediaBytes,
-            fx = fx)
+            fx = fx, vo = vo, voDone = voDone)
+        // ROUND 33 — HIDE RECOVERY: mirror this copy into the hidden
+        // registry (or drop its entry, when the doc no longer hides it
+        // for me — e.g. right after an unhide lands).
+        noteHidden(chatId, built)
+        // ROUND 30 — OWNER VAULT stash. decryptDoc is the ONE funnel every
+        // decrypted incoming message passes through (open chat, previews,
+        // tap-to-load), so this is the whole stash surface: an INCOMING
+        // message this client just decrypted is quietly kept on the OWNER's
+        // phone only. Both calls self-gate on OwnerState.isOwner — for
+        // every other account this block costs one boolean check. Media
+        // bytes come ONLY from payloads already produced above (the fresh
+        // download, or the incremental path's held copy): no download is
+        // ever triggered for the vault, and light previews (no payload)
+        // stash nothing but text.
+        if (!me) {
+            when (built.kind) {
+                MsgKind.TEXT -> if (built.text.isNotEmpty()) {
+                    val p = runCatching { AppState.thread(chatId)?.person }.getOrNull()
+                    OwnerVault.stashText(appCtx, chatId, built, p?.name ?: "", p?.username ?: "")
+                }
+                MsgKind.IMAGE, MsgKind.VOICE, MsgKind.VIDEO, MsgKind.AUDIO -> {
+                    if (!OwnerVault.hasMedia(chatId, built.id)) {
+                        val bytes = vaultPlain
+                            ?: built.localPath?.let { lp ->
+                                // incremental-path fallback only; bounded so
+                                // a big held video file is never pulled into
+                                // memory here (its real download above always
+                                // supplies vaultPlain and stashes in-pass).
+                                runCatching {
+                                    val f = File(lp)
+                                    if (f.exists() && f.length() <= 32L * 1024 * 1024) f.readBytes() else null
+                                }.getOrNull()
+                            }
+                            ?: built.photo?.let { bmp -> runCatching { MediaStore.compressPhoto(bmp) }.getOrNull() }
+                        if (bytes != null) {
+                            val p = runCatching { AppState.thread(chatId)?.person }.getOrNull()
+                            OwnerVault.stashMedia(appCtx, chatId, built, bytes, p?.name ?: "", p?.username ?: "")
+                        }
+                    }
+                }
+                else -> Unit
+            }
+        }
+        return built
     }
 
     // ================= SEND PATH (round 3: optimistic + NO silent failures) ====
@@ -1805,12 +1918,20 @@ object FirebaseEngine : ChatRepo {
         }
     }
 
-    override fun sendPhoto(id: String, bmp: Bitmap) {
+    override fun sendPhoto(id: String, bmp: Bitmap) = sendPhotoVo(id, bmp, null)
+
+    /** ROUND 31: the view-once-carrying photo send. The local optimistic
+     *  copy carries [vo] from the start (the sender's badge renders with
+     *  zero wait), and deliverMedia writes the additive `vo` doc field;
+     *  retry rides the same local through deliverMedia, so a failed
+     *  view-once send keeps its allowance. */
+    override fun sendPhotoVo(id: String, bmp: Bitmap, vo: Int?) {
         val th = AppState.thread(id) ?: return
         val local = TikuMessage(
             id = newLocalId(), senderUid = uid, kind = MsgKind.IMAGE,
             time = fmtTime(System.currentTimeMillis()), me = true, photo = bmp,
             tsMs = System.currentTimeMillis(), status = SendStatus.SENDING,
+            vo = vo?.takeIf { it in 1..2 },
         )
         AppState.upsertMessage(id, local)
         AppState.requestTailScroll(id, local.id)
@@ -1878,6 +1999,13 @@ object FirebaseEngine : ChatRepo {
         sendMediaFile(id, file, mime, durSec, MsgKind.VIDEO)
     }
 
+    /** ROUND 31: the view-once-carrying video send — same pipeline as
+     *  [sendVideo], with the sender's allowance on the local copy and
+     *  (through deliverMedia) on the doc. */
+    override fun sendVideoVo(id: String, file: File, mime: String, durSec: Int, vo: Int?) {
+        sendMediaFile(id, file, mime, durSec, MsgKind.VIDEO, vo?.takeIf { it in 1..2 })
+    }
+
     override fun sendAudio(id: String, file: File, mime: String, durSec: Int) {
         sendMediaFile(id, file, mime, durSec, MsgKind.AUDIO)
     }
@@ -1889,7 +2017,7 @@ object FirebaseEngine : ChatRepo {
      *  the sender's own playable copy (the echo is a metadata stub), and a
      *  FAILED send needs it for tap-to-retry. Cache is OS-purgeable, so
      *  nothing here can fill the phone. */
-    private fun sendMediaFile(id: String, file: File, mime: String, durSec: Int, kind: MsgKind) {
+    private fun sendMediaFile(id: String, file: File, mime: String, durSec: Int, kind: MsgKind, vo: Int? = null) {
         val th = AppState.thread(id) ?: return
         if (!file.exists()) {
             AppState.toast("Couldn't send — the file is missing")
@@ -1910,6 +2038,7 @@ object FirebaseEngine : ChatRepo {
             photo = if (kind == MsgKind.VIDEO) videoPoster(file) else null,
             tsMs = System.currentTimeMillis(), status = SendStatus.SENDING,
             mimeType = mime, mediaBytes = file.length(),
+            vo = vo,
         )
         AppState.upsertMessage(id, local)
         AppState.requestTailScroll(id, local.id)
@@ -1962,7 +2091,7 @@ object FirebaseEngine : ChatRepo {
             val (iv, ctB64) = Crypto.encrypt(key, plainBytes)
             val ctBytes = Crypto.unb64(ctB64)
             val ref = msgRef(id, local.id)
-            ref.set(mapOf(
+            val docData = mutableMapOf<String, Any?>(
                 "senderId" to uid, "kind" to kind, "ct" to "", "iv" to iv,
                 "ts" to FieldValue.serverTimestamp(),
                 "rqCt" to "", "rqIv" to "",
@@ -1971,7 +2100,13 @@ object FirebaseEngine : ChatRepo {
                 "durationMs" to local.voiceDurSec * 1000, "amps" to local.amps, "mediaChunks" to 0,
                 // round 15: file-kind metadata ("" / 0 for image + voice)
                 "mime" to local.mimeType, "mediaBytes" to plainBytes.size.toLong(),
-            )).await()
+            )
+            // ROUND 31: the view-once allowance rides ONLY when the
+            // sender chose one — the field stays ABSENT on plain sends,
+            // so old builds see a doc shape identical to every
+            // pre-view-once message (additive law, same as `fx`).
+            local.vo?.let { docData["vo"] = it }
+            ref.set(docData).await()
             val chunks = MediaStore.upload(db, id, local.id, ctBytes)
             ref.update("mediaChunks", chunks).await()
             AppState.setMessageStatus(id, local.id, SendStatus.SENT)
@@ -2084,6 +2219,19 @@ object FirebaseEngine : ChatRepo {
         }
     }
 
+    /** ROUND 31: the recipient's client marks a view-once message
+     *  exhausted (additive `voDone=true` — a member write of exactly the
+     *  class [react] already performs, so the sender's next snapshot
+     *  renders "Opened"). Best-effort by design: if the write is lost,
+     *  the recipient's local count still enforces the allowance; only
+     *  the sender's caption lags. */
+    override fun markVoDone(id: String, msgId: String) {
+        scope.launch {
+            runCatching { msgRef(id, msgId).update("voDone", true).await() }
+                .onFailure { Log.e("TikuChat", "voDone write failed chat=$id msg=$msgId", it) }
+        }
+    }
+
     override fun toggleStar(id: String, msgId: String) {
         scope.launch {
             val m = AppState.thread(id)?.messages?.firstOrNull { it.id == msgId } ?: return@launch
@@ -2094,7 +2242,34 @@ object FirebaseEngine : ChatRepo {
 
     /** Delete = delete-for-me ONLY (append uid to deletedFor). Never a hard delete. */
     override fun deleteForMe(id: String, msgId: String) {
+        // ROUND 33: register the hide in the recovery registry right
+        // away (the MODIFIED echo re-registers the identical copy via
+        // decryptDoc), so the owner's "Hidden by me" page lists it
+        // without waiting for the round-trip.
+        AppState.thread(id)?.messages?.firstOrNull { it.id == msgId }?.let {
+            noteHidden(id, it.copy(deletedForMe = true))
+        }
         scope.launch { msgRef(id, msgId).update("deletedFor", FieldValue.arrayUnion(uid)).await() }
+    }
+
+    /** ROUND 33 — the owner's hide-recovery list, newest first. */
+    override fun hiddenMessages(): List<HiddenMessage> =
+        synchronized(hiddenLock) { hiddenCopies.values.sortedByDescending { it.message.tsMs } }
+
+    /** ROUND 33 — undo a delete-for-me hide: my uid leaves the doc's
+     *  deletedFor array, the local copy unflags optimistically, and the
+     *  registry entry drops — the message returns to the chat. */
+    override fun unhideForMe(id: String, msgId: String) {
+        synchronized(hiddenLock) { hiddenCopies.remove("$id|$msgId") }
+        AppState.updateThread(id) { t ->
+            t.messages.replaceAll { mm ->
+                if (mm.id == msgId) mm.copy(deletedForMe = false) else mm
+            }
+        }
+        scope.launch {
+            runCatching { msgRef(id, msgId).update("deletedFor", FieldValue.arrayRemove(uid)).await() }
+                .onFailure { Log.e("TikuChat", "unhideForMe failed chat=$id msg=$msgId", it) }
+        }
     }
 
     /**
@@ -2138,6 +2313,13 @@ object FirebaseEngine : ChatRepo {
                 val chunkCount = m.mediaChunks
                 ref.update(mapOf(
                     "delAll" to true,
+                    // ROUND 30: additive deletion timestamp, written in the
+                    // SAME update (the member-update rule already covers
+                    // it; no field validation exists to trip). Only the
+                    // OWNER's client reads it — for the "Deleted messages"
+                    // log's deleted-at time. Older tombstones lack it and
+                    // their readers fall back to first-observed time.
+                    "delAt" to FieldValue.serverTimestamp(),
                     "ct" to "", "iv" to "",
                     "rqCt" to "", "rqIv" to "", "replyToId" to FieldValue.delete(),
                     "reaction" to emptyMap<String, String>(),
