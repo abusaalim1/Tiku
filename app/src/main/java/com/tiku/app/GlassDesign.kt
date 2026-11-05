@@ -678,8 +678,7 @@ fun TikuAvatar(
             text = text.take(1).uppercase(),
             color = Color.White,
             fontSize = (sizeDp.value * 0.38f).sp,
-            fontWeight = FontWeight.SemiBold
-        )
+            fontWeight = FontWeight.SemiBold, fontFamily = InterTight)
     }
 }
 
@@ -839,12 +838,12 @@ fun TikuTextField(
         contentAlignment = Alignment.CenterStart
     ) {
         if (value.isEmpty()) {
-            Text(placeholder, color = p.sub, fontSize = 15.sp)
+            Text(placeholder, color = p.sub, fontSize = 14.sp, fontFamily = PoppinsFamily)
         }
         BasicTextField(
             value = value,
             onValueChange = onValueChange,
-            textStyle = TextStyle(color = p.tx, fontSize = 15.sp),
+            textStyle = TextStyle(fontFamily = PoppinsFamily, color = p.tx, fontSize = 14.sp),
             cursorBrush = SolidColor(p.ac),
             visualTransformation = if (isPassword) PasswordVisualTransformation() else androidx.compose.ui.text.input.VisualTransformation.None,
             modifier = Modifier.fillMaxWidth()
@@ -876,8 +875,7 @@ fun PillActionButton(
             text = text,
             color = if (isOutlineGlass) p.tx else Color.White,
             fontWeight = FontWeight.SemiBold,
-            fontSize = 15.sp
-        )
+            fontSize = 14.sp, fontFamily = PoppinsFamily)
     }
 }
 
@@ -916,9 +914,8 @@ fun ModeSegmentedToggle(
                 Text(
                     text = label,
                     color = if (isSelected) p.tx else p.sub,
-                    fontSize = 13.sp,
-                    fontWeight = FontWeight.Medium
-                )
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Medium, fontFamily = PoppinsFamily)
             }
         }
     }
@@ -938,8 +935,8 @@ fun FontSizeSliderRow(
         verticalAlignment = Alignment.CenterVertically
     ) {
         Column(modifier = Modifier.weight(1f)) {
-            Text("Text size", color = p.tx, fontSize = 15.sp, fontWeight = FontWeight.Medium)
-            Text("Message font size", color = p.sub, fontSize = 12.5.sp)
+            Text("Text size", color = p.tx, fontSize = 14.sp, fontWeight = FontWeight.Medium, fontFamily = PoppinsFamily)
+            Text("Message font size", color = p.sub, fontSize = 12.5.sp, fontFamily = PoppinsFamily)
         }
         Slider(
             value = fontSizeSp,
@@ -986,7 +983,7 @@ fun EmojiPickerSheetContent(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
-            Text("React with any emoji", color = p.tx, fontWeight = FontWeight.SemiBold, fontSize = 17.sp)
+            Text("React with any emoji", color = p.tx, fontWeight = FontWeight.SemiBold, fontSize = 17.sp, fontFamily = InterTight)
             Box(
                 modifier = Modifier
                     .size(34.dp)
@@ -1031,8 +1028,7 @@ fun EmojiPickerSheetContent(
                             text = label,
                             color = if (isSel) p.tx else p.sub,
                             fontWeight = FontWeight.SemiBold,
-                            fontSize = 13.sp
-                        )
+                            fontSize = 12.sp, fontFamily = PoppinsFamily)
                     }
                 }
             }
@@ -1063,7 +1059,7 @@ fun EmojiPickerSheetContent(
                     .padding(vertical = 28.dp),
                 contentAlignment = Alignment.Center
             ) {
-                Text("No emoji found", color = p.sub, fontSize = 13.5.sp)
+                Text("No emoji found", color = p.sub, fontSize = 12.5.sp, fontFamily = PoppinsFamily)
             }
         } else {
             LazyVerticalGrid(
@@ -1116,7 +1112,7 @@ fun EmojiGridCategoryHeader(title: String) {
         fontWeight = FontWeight.SemiBold,
         // ROUND 23: headers lead with a category emoji ("😀 Smileys") —
         // the chained iOS family draws the emoji, Latin falls back.
-        fontFamily = rememberEmojiFontFamily(),
+        fontFamily = rememberTightEmojiFontFamily(),
         modifier = Modifier
             .fillMaxWidth()
             .padding(top = 14.dp, bottom = 4.dp, start = 4.dp)
@@ -1281,7 +1277,7 @@ fun TikPrimaryButton(
                 .padding(vertical = 13.dp),
             contentAlignment = Alignment.Center,
         ) {
-            Text(text, fontFamily = InterTight, fontWeight = FontWeight.SemiBold, fontSize = 15.sp,
+            Text(text, fontFamily = PoppinsFamily, fontWeight = FontWeight.SemiBold, fontSize = 14.sp,
                 color = if (enabled) pal.danger else pal.sub)
         }
         outline -> Box(
@@ -1291,7 +1287,7 @@ fun TikPrimaryButton(
                 .padding(vertical = 14.dp),
             contentAlignment = Alignment.Center,
         ) {
-            Text(text, fontFamily = InterTight, fontWeight = FontWeight.SemiBold, fontSize = 15.sp,
+            Text(text, fontFamily = PoppinsFamily, fontWeight = FontWeight.SemiBold, fontSize = 14.sp,
                 color = if (enabled) pal.tx else pal.sub)
         }
         else -> Box(
@@ -1301,7 +1297,7 @@ fun TikPrimaryButton(
                 .padding(vertical = 15.dp),
             contentAlignment = Alignment.Center,
         ) {
-            Text(text, fontFamily = InterTight, fontWeight = FontWeight.SemiBold, fontSize = 15.sp,
+            Text(text, fontFamily = PoppinsFamily, fontWeight = FontWeight.SemiBold, fontSize = 14.sp,
                 color = if (enabled) Color.White else Color.White.copy(alpha = 0.55f))
         }
     }
@@ -1325,7 +1321,7 @@ fun TikField(
         enabled = enabled,
         singleLine = singleLine,
         textStyle = androidx.compose.ui.text.TextStyle(
-            fontFamily = InterTight, fontWeight = FontWeight.Normal, fontSize = 15.sp, color = pal.tx,
+            fontFamily = PoppinsFamily, fontWeight = FontWeight.Normal, fontSize = 14.sp, color = pal.tx,
         ),
         cursorBrush = androidx.compose.ui.graphics.SolidColor(pal.ac),
         modifier = modifier.fillMaxWidth().padding(horizontal = 18.dp)
@@ -1334,7 +1330,7 @@ fun TikField(
         decorationBox = { inner ->
             Box {
                 if (value.isEmpty()) {
-                    Text(placeholder, fontFamily = InterTight, fontSize = 15.sp, color = pal.sub)
+                    Text(placeholder, fontFamily = PoppinsFamily, fontSize = 14.sp, color = pal.sub)
                 }
                 inner()
             }
@@ -1387,10 +1383,10 @@ fun TikInfoRow(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Column(Modifier.weight(1f)) {
-                Text(title, fontFamily = InterTight, fontWeight = FontWeight.Medium, fontSize = 15.sp,
+                Text(title, fontFamily = PoppinsFamily, fontWeight = FontWeight.Medium, fontSize = 14.sp,
                     color = if (danger) pal.danger else pal.tx)
                 if (sub != null) {
-                    Text(sub, fontFamily = InterTight, fontSize = 12.5.sp, color = pal.sub,
+                    Text(sub, fontFamily = PoppinsFamily, fontSize = 12.5.sp, color = pal.sub,
                         modifier = Modifier.padding(top = 2.dp))
                 }
             }
@@ -1409,7 +1405,7 @@ fun TikEmpty(title: String, sub: String, modifier: Modifier = Modifier) {
     ) {
         Text(title, fontFamily = InterTight, fontWeight = FontWeight.SemiBold, fontSize = 16.sp,
             color = pal.tx, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
-        Text(sub, fontFamily = InterTight, fontSize = 13.5.sp, color = pal.sub,
+        Text(sub, fontFamily = PoppinsFamily, fontSize = 12.5.sp, color = pal.sub,
             textAlign = androidx.compose.ui.text.style.TextAlign.Center,
             modifier = Modifier.padding(top = 4.dp))
     }

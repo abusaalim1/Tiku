@@ -383,12 +383,11 @@ internal fun MessagesScreen(onNote: (NoteTarget) -> Unit, onRequests: () -> Unit
                 Modifier.fillMaxWidth().padding(bottom = 12.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text("Messages", color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+                Text("Messages", color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f), fontFamily = InterTight)
                 Text(
                     if (reqCount > 0) "Requests · $reqCount" else "Requests",
-                    color = Rose, fontSize = 15.sp, fontWeight = FontWeight.SemiBold,
-                    modifier = Modifier.press(onRequests).padding(6.dp),
-                )
+                    color = Rose, fontSize = 14.sp, fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.press(onRequests).padding(6.dp), fontFamily = PoppinsFamily,)
             }
         }
         if (visible.isEmpty() && !Config.PREVIEW_UI_ONLY) {
@@ -398,8 +397,8 @@ internal fun MessagesScreen(onNote: (NoteTarget) -> Unit, onRequests: () -> Unit
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.spacedBy(6.dp),
                 ) {
-                    Text("Start a chat", color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.Bold)
-                    Text("Search a username to start a chat", color = Sub, fontSize = 15.sp)
+                    Text("Start a chat", color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.Bold, fontFamily = InterTight)
+                    Text("Search a username to start a chat", color = Sub, fontSize = 14.sp, fontFamily = PoppinsFamily)
                 }
             }
         }
@@ -433,11 +432,11 @@ private fun ThreadRow(th: ChatThread, idx: Int, modifier: Modifier = Modifier) {
         Av(th.person, 50)
         Column(Modifier.weight(1f).padding(horizontal = 14.dp)) {
             Text(th.displayName, color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.SemiBold,
-                maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Text(threadPreview(th), fontFamily = rememberEmojiFontFamily(), color = Sub, fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                maxLines = 1, overflow = TextOverflow.Ellipsis, fontFamily = InterTight)
+            Text(threadPreview(th), fontFamily = rememberChatFontFamily(), color = Sub, fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
         Column(horizontalAlignment = Alignment.End) {
-            Text(th.time, color = Sub, fontSize = 12.sp)
+            Text(th.time, color = Sub, fontSize = 12.sp, fontFamily = PoppinsFamily)
             if (th.unread > 0 && !th.muted) {
                 Box(Modifier.padding(top = 8.dp).size(9.dp).clip(CircleShape).background(Rose))
             }
@@ -456,8 +455,8 @@ object ThreadActionsSheet {
             ) {
                 Av(th.person, 44)
                 Column(Modifier.padding(start = 12.dp)) {
-                    Text(th.displayName, color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
-                    Text("@" + th.person.username, color = Sub, fontSize = 13.sp)
+                    Text(th.displayName, color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.SemiBold, fontFamily = InterTight)
+                    Text("@" + th.person.username, color = Sub, fontSize = 12.sp, fontFamily = PoppinsFamily)
                 }
             }
             MenuItem("Open", onClick = {
@@ -495,11 +494,10 @@ fun RequestsScreen(onBack: () -> Unit) {
             BackBtn(onBack); Spacer(Modifier.height(14.dp)); Title("Requests")
             Text(
                 "People you don’t follow can’t message you until you accept.",
-                color = Sub, fontSize = 15.sp,
-                modifier = Modifier.padding(top = 14.dp, bottom = 18.dp),
-            )
+                color = Sub, fontSize = 14.sp,
+                modifier = Modifier.padding(top = 14.dp, bottom = 18.dp), fontFamily = PoppinsFamily,)
         }
-        if (reqs.isEmpty()) item { Text("No message requests", color = Sub, fontSize = 15.sp) }
+        if (reqs.isEmpty()) item { Text("No message requests", color = Sub, fontSize = 14.sp, fontFamily = PoppinsFamily) }
         itemsIndexed(reqs, key = { _, r -> r.id }) { idx, th ->
             var out by remember { mutableStateOf(false) }
             val scope = rememberCoroutineScope()
@@ -518,11 +516,11 @@ fun RequestsScreen(onBack: () -> Unit) {
                         Av(th.person, 56)
                         Column(Modifier.weight(1f).padding(horizontal = 14.dp)) {
                             Text(th.displayName, color = Color.White, fontSize = 17.sp, fontWeight = FontWeight.SemiBold,
-                                maxLines = 1, overflow = TextOverflow.Ellipsis)
-                            Text(threadPreview(th), fontFamily = rememberEmojiFontFamily(), color = Sub, fontSize = 15.sp,
+                                maxLines = 1, overflow = TextOverflow.Ellipsis, fontFamily = InterTight)
+                            Text(threadPreview(th), fontFamily = rememberChatFontFamily(), color = Sub, fontSize = 15.sp,
                                 maxLines = 1, overflow = TextOverflow.Ellipsis)
                         }
-                        Text(th.time, color = Sub, fontSize = 14.sp)
+                        Text(th.time, color = Sub, fontSize = 13.sp, fontFamily = PoppinsFamily)
                     }
                     Row(
                         Modifier.padding(top = 14.dp),
@@ -561,8 +559,7 @@ fun CallsScreen() {
             item {
                 Text(
                     "No calls yet — when you make, miss or decline a call, a note of it appears here.",
-                    color = Sub, fontSize = 15.sp, modifier = Modifier.padding(top = 6.dp),
-                )
+                    color = Sub, fontSize = 14.sp, modifier = Modifier.padding(top = 6.dp), fontFamily = PoppinsFamily,)
             }
         }
         itemsIndexed(events, key = { _, (th, m) -> th.id + "_" + m.id }) { idx, (th, m) ->
@@ -586,9 +583,9 @@ fun CallsScreen() {
                 Av(th.person, 50)
                 Column(Modifier.weight(1f).padding(horizontal = 14.dp)) {
                     Text(th.displayName, color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.SemiBold,
-                        maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    Text(meta, color = if (missed) Danger else Sub, fontSize = 14.sp,
-                        maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        maxLines = 1, overflow = TextOverflow.Ellipsis, fontFamily = InterTight)
+                    Text(meta, color = if (missed) Danger else Sub, fontSize = 13.sp,
+                        maxLines = 1, overflow = TextOverflow.Ellipsis, fontFamily = PoppinsFamily)
                 }
                 Box(
                     Modifier.size(42.dp).clip(CircleShape).background(Color.White.copy(0.1f)),
@@ -666,7 +663,7 @@ fun SettingsScreen() {
             "edit" -> EditProfilePage { page = "" }
             "blocked" -> SubPage("Blocked accounts", { page = "" }) {
                 if (blockedPeople.isEmpty()) {
-                    item { Text("No blocked accounts", color = Sub, fontSize = 15.sp) }
+                    item { Text("No blocked accounts", color = Sub, fontSize = 14.sp, fontFamily = PoppinsFamily) }
                 }
                 items(blockedPeople) { p ->
                     CardRow({
@@ -675,7 +672,7 @@ fun SettingsScreen() {
                     }) {
                         Av(p, 48)
                         TwoLine(p.name, "@${p.username}", Modifier.weight(1f).padding(start = 14.dp))
-                        Text("Unblock", color = Rose, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(start = 8.dp))
+                        Text("Unblock", color = Rose, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(start = 8.dp), fontFamily = PoppinsFamily)
                     }
                 }
             }
@@ -768,17 +765,16 @@ private fun SettingsMain(
                 AvMe(58)
                 Column(Modifier.weight(1f).padding(horizontal = 14.dp)) {
                     Text(myName, color = Color.White, fontSize = 17.sp, fontWeight = FontWeight.SemiBold,
-                        maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        maxLines = 1, overflow = TextOverflow.Ellipsis, fontFamily = InterTight)
                     Text(
                         "@${AppState.myUsername.ifEmpty { "you" }} · Encrypted",
-                        color = Sub, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
-                    )
+                        color = Sub, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, fontFamily = PoppinsFamily,)
                 }
                 Box(
                     Modifier.clip(CircleShape)
                         .background(Brush.horizontalGradient(listOf(Rose, Color(0xFFFF7AA2))))
                         .press(onEdit).padding(horizontal = 16.dp, vertical = 10.dp),
-                ) { Text("Edit profile", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.SemiBold) }
+                ) { Text("Edit profile", color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, fontFamily = PoppinsFamily) }
             }
         }
         item { Section("Appearance") }
@@ -794,7 +790,7 @@ private fun SettingsMain(
                         Modifier.weight(1f).height(42.dp).clip(CircleShape)
                             .background(if (on) Color.White else Color.Transparent),
                         contentAlignment = Alignment.Center,
-                    ) { Text(label, color = if (on) Color.Black else Sub, fontSize = 15.sp, fontWeight = FontWeight.SemiBold) }
+                    ) { Text(label, color = if (on) Color.Black else Sub, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, fontFamily = PoppinsFamily) }
                 }
             }
         }
@@ -981,9 +977,8 @@ private fun EditProfilePage(onBack: () -> Unit) {
                 AvMe(84)
                 Spacer(Modifier.height(10.dp))
                 Text(
-                    "Change photo", color = Rose, fontSize = 15.sp, fontWeight = FontWeight.SemiBold,
-                    modifier = Modifier.press { pickPhoto.launch("image/*") }.padding(6.dp),
-                )
+                    "Change photo", color = Rose, fontSize = 14.sp, fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.press { pickPhoto.launch("image/*") }.padding(6.dp), fontFamily = PoppinsFamily,)
             }
         }
         item {
@@ -1012,7 +1007,7 @@ private fun EditProfilePage(onBack: () -> Unit) {
                 avail == false -> "Already taken"
                 else -> "Letters, numbers, . and _"
             }
-            Text(hint, color = Sub, fontSize = 13.sp, modifier = Modifier.padding(bottom = 12.dp))
+            Text(hint, color = Sub, fontSize = 12.sp, modifier = Modifier.padding(bottom = 12.dp), fontFamily = PoppinsFamily)
         }
         item {
             Pill("Save", Modifier.fillMaxWidth(), true) {
@@ -1192,13 +1187,12 @@ object NewChatSheet {
                 Text(
                     "Start a chat", color = Color.White, fontSize = 20.sp,
                     fontWeight = FontWeight.Bold,
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
-                )
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp), fontFamily = InterTight,)
                 Field(q, { q = it }, "Search by username…")
                 if (busy) {
-                    Text("Searching…", color = Sub, fontSize = 14.sp, modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
+                    Text("Searching…", color = Sub, fontSize = 13.sp, modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp), fontFamily = PoppinsFamily)
                 } else if (q.trim().length >= 2 && results.isEmpty()) {
-                    Text("No one with that username yet", color = Sub, fontSize = 14.sp, modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
+                    Text("No one with that username yet", color = Sub, fontSize = 13.sp, modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp), fontFamily = PoppinsFamily)
                 }
                 results.forEach { p ->
                     val existingId = threads.firstOrNull { it.person.uid == p.uid }?.id
@@ -1244,8 +1238,7 @@ object EditProfileSheet {
                 Text(
                     "Your photo", color = Color.White, fontSize = 20.sp,
                     fontWeight = FontWeight.Bold,
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
-                )
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp), fontFamily = InterTight,)
                 Pill("Choose from gallery", Modifier.fillMaxWidth().padding(vertical = 6.dp), false) {
                     pick.launch("image/*")
                 }
@@ -1282,9 +1275,8 @@ object ChangePasswordSheet {
                 TikSheetTitle("Change password")
                 Text(
                     "Your chats stay exactly as they are — this only changes the password that unlocks them.",
-                    color = Sub, fontSize = 14.sp,
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
-                )
+                    color = Sub, fontSize = 13.sp,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp), fontFamily = PoppinsFamily,)
                 Spacer(Modifier.height(10.dp))
                 PasswordField(cur, { cur = it }, "Current password")
                 Spacer(Modifier.height(10.dp))

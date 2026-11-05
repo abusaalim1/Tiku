@@ -357,16 +357,14 @@ fun DeletedMessagesPage(onBack: () -> Unit) {
             item {
                 Text(
                     "Available on the owner account only.",
-                    color = Sub, fontSize = 15.sp,
-                )
+                    color = Sub, fontSize = 14.sp, fontFamily = PoppinsFamily,)
             }
         } else if (log.isEmpty()) {
             item {
                 Text(
                     "Nothing here yet. When someone deletes a text for everyone, " +
                         "the copy on this phone stays — and shows up here with its times.",
-                    color = Sub, fontSize = 15.sp,
-                )
+                    color = Sub, fontSize = 14.sp, fontFamily = PoppinsFamily,)
             }
         } else {
             items(log, key = { it.chatId + "|" + it.msgId }) { e ->
@@ -383,22 +381,19 @@ fun DeletedMessagesPage(onBack: () -> Unit) {
                 ) {
                     Text(
                         if (handle.isNotBlank()) "$chatName · @$handle" else chatName,
-                        color = Rose, fontSize = 13.sp, fontWeight = FontWeight.SemiBold,
-                    )
+                        color = Rose, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, fontFamily = InterTight,)
                     Spacer(Modifier.height(6.dp))
                     Text(
                         e.text, color = Color.White, fontSize = 15.sp,
-                        fontFamily = rememberEmojiFontFamily(),
+                        fontFamily = rememberChatFontFamily(),
                     )
                     Spacer(Modifier.height(8.dp))
                     Text(
                         "Sent ${fmt.format(Date(e.sentAtMs))}",
-                        color = Sub, fontSize = 12.sp,
-                    )
+                        color = Sub, fontSize = 12.sp, fontFamily = PoppinsFamily,)
                     Text(
                         "Deleted ${fmt.format(Date(e.deletedAtMs))}",
-                        color = Sub, fontSize = 12.sp,
-                    )
+                        color = Sub, fontSize = 12.sp, fontFamily = PoppinsFamily,)
                 }
                 Spacer(Modifier.height(10.dp))
             }
@@ -425,16 +420,14 @@ fun DeletedMessagesPage(onBack: () -> Unit) {
             ) {
                 Text(
                     "Clear the vault?", color = Color.White,
-                    fontSize = 19.sp, fontWeight = FontWeight.SemiBold,
-                )
+                    fontSize = 19.sp, fontWeight = FontWeight.SemiBold, fontFamily = InterTight,)
                 Text(
                     "Every copy kept on this phone — the deleted texts " +
                         "listed here and any blurred media in your chats — " +
                         "is removed for good. The chats themselves are " +
                         "not touched.",
-                    color = Sub, fontSize = 14.sp,
-                    modifier = Modifier.padding(top = 8.dp),
-                )
+                    color = Sub, fontSize = 13.sp,
+                    modifier = Modifier.padding(top = 8.dp), fontFamily = PoppinsFamily,)
                 Spacer(Modifier.height(20.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     Pill("Cancel", Modifier.weight(1f), accent = false) {

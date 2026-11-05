@@ -838,7 +838,7 @@ fun WatchPane(chromeInsets: Boolean = true, boundedAboveNav: Boolean = false) {
                 TikIcon("play", Modifier.size(44.dp), tint = pal.sub)
                 Text(
                     "YouTube opens here on your phone",
-                    fontFamily = InterTight, fontSize = 14.sp, color = pal.sub,
+                    fontFamily = PoppinsFamily, fontSize = 13.sp, color = pal.sub,
                     modifier = Modifier.padding(top = 12.dp),
                 )
             }

@@ -659,8 +659,7 @@ private fun RdAv(person: Person, size: Int) {
             EmojiArt.assetName(person.emoji) != null -> EmojiArt(person.emoji, (size * 0.62f).dp)
             else -> Text(
                 person.name.take(1).uppercase(), color = Color.White,
-                fontSize = (size * 0.38f).sp, fontWeight = FontWeight.SemiBold,
-            )
+                fontSize = (size * 0.38f).sp, fontWeight = FontWeight.SemiBold, fontFamily = InterTight,)
         }
     }
 }
@@ -729,8 +728,7 @@ fun CallEventPill(m: TikuMessage) {
             Spacer(Modifier.width(6.dp))
             Text(
                 "${callEventLabel(m, iAmCaller)} · ${m.time}",
-                fontSize = 12.sp, color = RdSub,
-            )
+                fontSize = 12.sp, color = RdSub, fontFamily = PoppinsFamily,)
         }
     }
 }
@@ -762,8 +760,7 @@ private fun RdTombstoneRow(m: TikuMessage, person: Person, onMenu: () -> Unit) {
             Spacer(Modifier.width(7.dp))
             Text(
                 "This message was deleted",
-                color = RdSub, fontSize = 13.5.sp, fontStyle = FontStyle.Italic,
-            )
+                color = RdSub, fontSize = 13.5.sp, fontStyle = FontStyle.Italic, fontFamily = InterFamily,)
         }
     }
 }
@@ -795,7 +792,7 @@ private fun RdVaultDeletedRow(
     onOpenImage: (TikuMessage) -> Unit,
     onOpenVideo: (TikuMessage) -> Unit,
 ) {
-    val emojiFont = rememberEmojiFontFamily()
+    val emojiFont = rememberChatFontFamily() // ROUND 48: Inter + iOS-emoji chain (see EmojiArt)
     val bubbleText = if (theme == null) Color.White else theme.peerText
     var revealed by remember(m.id) { mutableStateOf(false) }
     // The synthetic message the viewers / voice player consume: content
@@ -882,7 +879,7 @@ private fun RdVaultDeletedRow(
             ) {
                 Icon(Icons.Filled.Delete, null, Modifier.size(10.dp), tint = RdSub)
                 Spacer(Modifier.width(4.dp))
-                Text("Deleted", color = RdSub, fontSize = 10.5.sp)
+                Text("Deleted", color = RdSub, fontSize = 10.5.sp, fontFamily = PoppinsFamily)
             }
         }
     }
@@ -1003,7 +1000,7 @@ private fun VaultVideoBox(
             ) {
                 Icon(Icons.Filled.Videocam, null, tint = Color.White, modifier = Modifier.size(14.dp))
                 Spacer(Modifier.width(6.dp))
-                Text(fmtDurSec(entry.durSec), color = Color.White, fontSize = 12.sp)
+                Text(fmtDurSec(entry.durSec), color = Color.White, fontSize = 12.sp, fontFamily = PoppinsFamily)
             }
         }
         if (!revealed) DeletedScrim(compact = false)
@@ -1026,8 +1023,7 @@ private fun DeletedScrim(compact: Boolean) {
             Spacer(Modifier.width(6.dp))
             Text(
                 if (compact) "Deleted — tap to open" else "Deleted — tap to view",
-                color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.SemiBold,
-            )
+                color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, fontFamily = PoppinsFamily,)
         }
     }
 }
@@ -1071,8 +1067,7 @@ private fun RdUndecryptableRow(m: TikuMessage, person: Person, onMenu: () -> Uni
         ) {
             Text(
                 "This message can't be opened on this phone",
-                color = RdSub, fontSize = 13.5.sp, fontStyle = FontStyle.Italic,
-            )
+                color = RdSub, fontSize = 13.5.sp, fontStyle = FontStyle.Italic, fontFamily = InterFamily,)
         }
     }
 }
@@ -1098,8 +1093,7 @@ private fun RdUnreadDivider(count: Int) {
                     count == 1 -> "1 new message"
                     else -> "$count new messages"
                 },
-                fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = RdRose,
-            )
+                fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = RdRose, fontFamily = InterTight,)
         }
     }
 }
@@ -1174,7 +1168,7 @@ fun ImageViewerOverlay(m: TikuMessage, saveAllowed: Boolean = true, onClose: () 
             ) {
                 Icon(Icons.Filled.SaveAlt, null, Modifier.size(17.dp), tint = Color.White)
                 Spacer(Modifier.width(7.dp))
-                Text("Save to device", fontSize = 13.5.sp, fontWeight = FontWeight.SemiBold, color = Color.White)
+                Text("Save to device", fontSize = 12.5.sp, fontWeight = FontWeight.SemiBold, color = Color.White, fontFamily = PoppinsFamily)
             }
             }
         }
@@ -1261,7 +1255,7 @@ fun VideoViewerOverlay(m: TikuMessage, saveAllowed: Boolean = true, onUnavailabl
             ) {
                 Icon(Icons.Filled.SaveAlt, null, Modifier.size(17.dp), tint = Color.White)
                 Spacer(Modifier.width(7.dp))
-                Text("Save to device", fontSize = 13.5.sp, fontWeight = FontWeight.SemiBold, color = Color.White)
+                Text("Save to device", fontSize = 12.5.sp, fontWeight = FontWeight.SemiBold, color = Color.White, fontFamily = PoppinsFamily)
             }
             }
         }
@@ -1512,8 +1506,7 @@ private fun RdFxMiniPreview(kind: String, text: String, acc: Pair<Color, Color>)
             ) {
                 Text(
                     text, color = Color.White, fontSize = 11.5.sp, maxLines = 1,
-                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
-                )
+                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis, fontFamily = rememberChatFontFamily(),)
             }
             when (kind) {
                 "hearts" -> {
@@ -1661,7 +1654,7 @@ private fun RdBubbleRow(
     // ROUND 22: mixed text renders through the owner's iOS emoji font
     // (emoji draw as iOS bitmaps, Latin falls back to the platform
     // fonts — see EmojiArt.kt / worker A's report §5).
-    val emojiFont = rememberEmojiFontFamily()
+    val emojiFont = rememberChatFontFamily() // ROUND 48: Inter + iOS-emoji chain (see EmojiArt)
     var heartKey by remember { mutableIntStateOf(0) }
     LaunchedEffect(heartKey) { if (heartKey > 0) { heart.snapTo(0f); heart.animateTo(1f, tween(800, easing = LinearEasing)) } }
     val media = m.kind == MsgKind.IMAGE || m.kind == MsgKind.VIDEO
@@ -1962,8 +1955,7 @@ private fun RdBubbleRow(
                     fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = RdDanger,
                     modifier = Modifier.clickable(
                         interactionSource = remember { MutableInteractionSource() }, indication = null,
-                    ) { onRetry() },
-                )
+                    ) { onRetry() }, fontFamily = PoppinsFamily,)
             }
         }
         // ROUND 31 — the SENDER's view-once line under his own bubble:
@@ -1984,8 +1976,7 @@ private fun RdBubbleRow(
                 Spacer(Modifier.width(4.dp))
                 Text(
                     if (m.voDone) "Opened" else if (m.vo == 1) "View once" else "View twice",
-                    color = RdSub, fontSize = 11.5.sp,
-                )
+                    color = RdSub, fontSize = 11.5.sp, fontFamily = PoppinsFamily,)
             }
         }
     }
@@ -2002,8 +1993,7 @@ private fun RdImageBubble(m: TikuMessage) {
         if (m.text.isNotEmpty()) {
             Text(
                 m.text, color = Color.White, fontSize = 13.sp,
-                modifier = Modifier.align(Alignment.BottomStart).padding(12.dp),
-            )
+                modifier = Modifier.align(Alignment.BottomStart).padding(12.dp), fontFamily = emojiFont,)
         }
     }
 }
@@ -2037,7 +2027,7 @@ private fun RdVideoBubble(m: TikuMessage) {
         ) {
             Icon(Icons.Filled.Videocam, null, tint = Color.White, modifier = Modifier.size(14.dp))
             Spacer(Modifier.width(6.dp))
-            Text(fmtDurSec(m.voiceDurSec), color = Color.White, fontSize = 12.sp)
+            Text(fmtDurSec(m.voiceDurSec), color = Color.White, fontSize = 12.sp, fontFamily = PoppinsFamily)
             Spacer(Modifier.weight(1f))
             Text(
                 when {
@@ -2046,8 +2036,7 @@ private fun RdVideoBubble(m: TikuMessage) {
                     m.mediaBytes > 0 -> fmtMediaSize(m.mediaBytes)
                     else -> ""
                 },
-                color = Color.White.copy(0.85f), fontSize = 11.5.sp,
-            )
+                color = Color.White.copy(0.85f), fontSize = 11.5.sp, fontFamily = PoppinsFamily,)
         }
     }
 }
@@ -2063,7 +2052,7 @@ private fun RdVideoBubble(m: TikuMessage) {
 @Composable
 private fun RdVoArmRow(armed: Int?, onPick: (Int?) -> Unit) {
     Column(Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 4.dp)) {
-        Text("Next photo or video can be viewed", color = RdSub, fontSize = 12.5.sp)
+        Text("Next photo or video can be viewed", color = RdSub, fontSize = 12.5.sp, fontFamily = PoppinsFamily)
         Spacer(Modifier.height(9.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             RdVoChip("Always", armed == null) { onPick(null) }
@@ -2083,9 +2072,8 @@ private fun RdVoChip(label: String, selected: Boolean, onClick: () -> Unit) {
             .padding(horizontal = 13.dp, vertical = 7.dp),
     ) {
         Text(
-            label, color = Color.White, fontSize = 13.sp,
-            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
-        )
+            label, color = Color.White, fontSize = 12.sp,
+            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal, fontFamily = PoppinsFamily,)
     }
 }
 
@@ -2119,8 +2107,7 @@ private fun RdVoBubble(m: TikuMessage, remaining: Int, expired: Boolean, bypass:
             Text(
                 if (isVideo) "Video" else "Photo",
                 color = Color.White.copy(if (expired) 0.55f else 1f),
-                fontSize = 15.5.sp, fontWeight = FontWeight.SemiBold,
-            )
+                fontSize = 15.5.sp, fontWeight = FontWeight.SemiBold, fontFamily = InterTight,)
             Text(
                 when {
                     expired -> "Opened"
@@ -2129,11 +2116,10 @@ private fun RdVoBubble(m: TikuMessage, remaining: Int, expired: Boolean, bypass:
                     remaining == 1 -> "1 view left"
                     else -> "$remaining views left"
                 },
-                color = RdSub, fontSize = 12.sp,
-            )
+                color = RdSub, fontSize = 12.sp, fontFamily = PoppinsFamily,)
         }
         if (!expired) {
-            Text("${m.vo}×", color = RdRose, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+            Text("${m.vo}×", color = RdRose, fontSize = 13.sp, fontWeight = FontWeight.Bold, fontFamily = InterTight)
         }
     }
 }
@@ -2186,8 +2172,7 @@ private fun RdVoiceBubble(
         }
         Text(
             "${m.voiceDurSec / 60}:${(m.voiceDurSec % 60).toString().padStart(2, '0')}",
-            color = tint, fontSize = 12.sp,
-        )
+            color = tint, fontSize = 12.sp, fontFamily = PoppinsFamily,)
     }
 }
 
@@ -2269,8 +2254,7 @@ private fun RdAiBubbleRow(
             Spacer(Modifier.width(5.dp))
             Text(
                 "Tika AI", color = RdRose, fontSize = 11.5.sp,
-                fontWeight = FontWeight.SemiBold,
-            )
+                fontWeight = FontWeight.SemiBold, fontFamily = PoppinsFamily,)
         }
         Spacer(Modifier.height(4.dp))
         val bmp = m.photo
@@ -2307,7 +2291,7 @@ private fun RdAiBubbleRow(
             ) {
                 RdLinkedText(
                     text = aiText, color = aiInk, linkColor = RdRose,
-                    fontSize = textSp.sp, fontFamily = rememberEmojiFontFamily(),
+                    fontSize = textSp.sp, fontFamily = rememberChatFontFamily(),
                 )
                 if (aiLink != null) {
                     Spacer(Modifier.height(8.dp))
@@ -2386,12 +2370,10 @@ private fun RdGameCard(
                             m.gameTitle.ifBlank { "Game" },
                             color = GameCardInk, fontSize = 14.5.sp,
                             fontWeight = FontWeight.SemiBold,
-                            maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
-                        )
+                            maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis, fontFamily = InterTight,)
                         Text(
                             "2-player · tap to play",
-                            color = GameCardInk.copy(alpha = 0.55f), fontSize = 11.5.sp,
-                        )
+                            color = GameCardInk.copy(alpha = 0.55f), fontSize = 11.5.sp, fontFamily = PoppinsFamily,)
                     }
                 }
                 Spacer(Modifier.height(10.dp))
@@ -2404,9 +2386,9 @@ private fun RdGameCard(
                     when {
                         failed -> Column(horizontalAlignment = Alignment.CenterHorizontally) {
                             Text("Couldn't send", color = Color(0xFFB3261E),
-                                fontSize = 13.5.sp, fontWeight = FontWeight.SemiBold)
+                                fontSize = 12.5.sp, fontWeight = FontWeight.SemiBold, fontFamily = PoppinsFamily)
                             Text("Tap to retry", color = GameCardInk.copy(alpha = 0.55f),
-                                fontSize = 12.sp)
+                                fontSize = 12.sp, fontFamily = PoppinsFamily)
                         }
                         !loaded -> Column(horizontalAlignment = Alignment.CenterHorizontally) {
                             EmojiGlyph("🎮", 30.dp)
@@ -2414,9 +2396,8 @@ private fun RdGameCard(
                             Text(
                                 if (m.mediaBytes > 0) "Tap to load game · ${fmtMediaSize(m.mediaBytes)}"
                                 else "Tap to load game",
-                                color = GameCardInk.copy(alpha = 0.7f), fontSize = 13.sp,
-                                fontWeight = FontWeight.SemiBold,
-                            )
+                                color = GameCardInk.copy(alpha = 0.7f), fontSize = 12.sp,
+                                fontWeight = FontWeight.SemiBold, fontFamily = PoppinsFamily,)
                         }
                         Config.PREVIEW_UI_ONLY -> Column(
                             horizontalAlignment = Alignment.CenterHorizontally,
@@ -2429,8 +2410,7 @@ private fun RdGameCard(
                             Text(
                                 m.gameTitle.ifBlank { "Game" },
                                 color = GameCardInk, fontSize = 14.sp,
-                                fontWeight = FontWeight.SemiBold,
-                            )
+                                fontWeight = FontWeight.SemiBold, fontFamily = InterTight,)
                         }
                         else -> RdGamePreview(m = m, path = loadedPath, peerName = person.name)
                     }
@@ -2439,8 +2419,7 @@ private fun RdGameCard(
                     Spacer(Modifier.height(8.dp))
                     Text(
                         "Sending…", color = GameCardInk.copy(alpha = 0.5f),
-                        fontSize = 11.5.sp,
-                    )
+                        fontSize = 11.5.sp, fontFamily = PoppinsFamily,)
                 }
             }
         }
@@ -2511,8 +2490,7 @@ private fun RdAiThinkingBubble(label: String, theme: ChatTheme? = null) {
         ) {
             Text(
                 label, color = theme?.peerText ?: Color.White,
-                fontSize = 13.5.sp, fontStyle = FontStyle.Italic,
-            )
+                fontSize = 12.5.sp, fontStyle = FontStyle.Italic, fontFamily = PoppinsFamily,)
             Spacer(Modifier.width(9.dp))
             val t = rememberInfiniteTransition(label = "aiTyping")
             repeat(3) { k ->
@@ -2566,9 +2544,8 @@ private fun RdChatTopBar(
             Column {
                 Text(
                     title, color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.SemiBold,
-                    maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
-                )
-                Text(status, color = RdSub, fontSize = 12.sp)
+                    maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis, fontFamily = InterTight,)
+                Text(status, color = RdSub, fontSize = 12.sp, fontFamily = PoppinsFamily)
             }
         }
         // ROUND 15: video call sits next to audio call (owner's device
@@ -2670,7 +2647,7 @@ fun RdChatInput(
     var fieldFocused by remember { mutableStateOf(false) }
     // ROUND 22: typed emoji render as iOS glyphs while typing (the
     // same font the bubbles use — EmojiArt.kt, worker A §5).
-    val emojiFont = rememberEmojiFontFamily()
+    val emojiFont = rememberChatFontFamily() // ROUND 48: Inter + iOS-emoji chain (see EmojiArt)
     val showCamera = value.isEmpty() && !fieldFocused
     Column(Modifier.padding(horizontal = 14.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         AnimatedVisibility(
@@ -2684,7 +2661,7 @@ fun RdChatInput(
             ) {
                 Box(Modifier.width(3.dp).height(28.dp).clip(RoundedCornerShape(2.dp)).background(accent))
                 Column(Modifier.weight(1f).padding(horizontal = 10.dp)) {
-                    Text("Replying", color = accent, fontSize = 11.sp)
+                    Text("Replying", color = accent, fontSize = 11.sp, fontFamily = PoppinsFamily)
                     Text(replyText ?: "", color = subCol, fontSize = 13.sp, maxLines = 1, fontFamily = emojiFont)
                 }
                 Text("✕", color = contentCol, fontSize = 16.sp, modifier = Modifier.rdPress(onClearReply).padding(6.dp))
@@ -2708,7 +2685,7 @@ fun RdChatInput(
                 ) {
                     EmojiGlyph(def.glyph, 16.dp)
                     Spacer(Modifier.width(7.dp))
-                    Text(def.name, color = contentCol, fontSize = 12.5.sp, fontWeight = FontWeight.Medium)
+                    Text(def.name, color = contentCol, fontSize = 12.5.sp, fontWeight = FontWeight.Medium, fontFamily = PoppinsFamily)
                     Text(
                         "✕", color = subCol, fontSize = 13.sp,
                         modifier = Modifier.rdPress(onFxDisarm).padding(start = 8.dp, end = 2.dp, top = 2.dp, bottom = 2.dp),
@@ -2755,8 +2732,8 @@ fun RdChatInput(
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
                             Column(Modifier.weight(1f)) {
-                                Text(cmd.name, color = contentCol, fontSize = 15.sp, fontWeight = FontWeight.Bold)
-                                Text(cmd.desc, color = subCol, fontSize = 12.5.sp)
+                                Text(cmd.name, color = contentCol, fontSize = 15.sp, fontWeight = FontWeight.Bold, fontFamily = InterTight)
+                                Text(cmd.desc, color = subCol, fontSize = 12.5.sp, fontFamily = PoppinsFamily)
                             }
                             Text("›", color = subCol, fontSize = 18.sp)
                         }
@@ -2776,9 +2753,8 @@ fun RdChatInput(
                 Text(
                     "${recSecs / 60}:${(recSecs % 60).toString().padStart(2, '0')}",
                     color = contentCol, fontWeight = FontWeight.SemiBold,
-                    modifier = Modifier.weight(1f).padding(start = 12.dp),
-                )
-                Text("Cancel", color = subCol, modifier = Modifier.rdPress(onRecCancel).padding(10.dp))
+                    modifier = Modifier.weight(1f).padding(start = 12.dp), fontFamily = PoppinsFamily,)
+                Text("Cancel", color = subCol, modifier = Modifier.rdPress(onRecCancel).padding(10.dp), fontFamily = PoppinsFamily)
                 Box(Modifier.size(42.dp).clip(CircleShape).background(accent).rdPress(onRecSend), contentAlignment = Alignment.Center) {
                     Icon(Icons.Filled.Send, null, tint = Color.White, modifier = Modifier.size(20.dp))
                 }
@@ -2818,7 +2794,7 @@ fun RdChatInput(
                     Text("+", color = contentCol, fontSize = 24.sp)
                 }
                 Box(Modifier.weight(1f).padding(horizontal = 12.dp)) {
-                    if (value.isEmpty()) Text("Message…", color = subCol, fontSize = 15.sp)
+                    if (value.isEmpty()) Text("Message…", color = subCol, fontSize = 15.sp, fontFamily = emojiFont)
                     BasicTextField(
                         value, onChange,
                         textStyle = TextStyle(color = contentCol, fontSize = 15.sp, fontFamily = emojiFont),
@@ -2867,7 +2843,7 @@ private fun RdMenuItem(label: String, danger: Boolean = false, onClick: () -> Un
         Modifier.fillMaxWidth().rdPress(onClick).padding(horizontal = 22.dp, vertical = 17.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(label, color = if (danger) RdDanger else Color.White, fontSize = 17.sp, modifier = Modifier.weight(1f))
+        Text(label, color = if (danger) RdDanger else Color.White, fontSize = 16.sp, modifier = Modifier.weight(1f), fontFamily = PoppinsFamily)
         trailing()
     }
 }
@@ -2942,7 +2918,7 @@ fun ChatScreen(threadId: String) {
     val thread = threads.firstOrNull { it.id == threadId }
     if (thread == null) {
         Box(Modifier.fillMaxSize().background(Color.Black), contentAlignment = Alignment.Center) {
-            Text("Chat unavailable", color = RdSub, fontSize = 14.sp)
+            Text("Chat unavailable", color = RdSub, fontSize = 13.sp, fontFamily = PoppinsFamily)
         }
         return
     }
@@ -4311,7 +4287,7 @@ private fun RdChatContent(thread: ChatThread) {
                                     // ROUND 26: on a theme the caption sits
                                     // on the wallpaper — each theme carries
                                     // a shade picked for it (Themes.kt).
-                                    Text(caption, fontSize = 11.5.sp, color = chatTheme?.caption ?: RdSub)
+                                    Text(caption, fontSize = 11.5.sp, color = chatTheme?.caption ?: RdSub, fontFamily = PoppinsFamily)
                                 }
                             }
                         }
@@ -4399,12 +4375,12 @@ private fun RdChatContent(thread: ChatThread) {
                     Spacer(Modifier.width(6.dp))
                     Text(
                         "Pinned · $pinPreview",
-                        fontSize = 12.5.sp, color = Color.White, fontFamily = rememberEmojiFontFamily(),
+                        fontSize = 12.5.sp, color = Color.White, fontFamily = rememberChatFontFamily(),
                         maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
                         modifier = Modifier.weight(1f),
                     )
                     if (thread.pinnedMsgIds.size > 1) {
-                        Text("${thread.pinnedMsgIds.size} pinned", fontSize = 11.5.sp, color = RdSub)
+                        Text("${thread.pinnedMsgIds.size} pinned", fontSize = 11.5.sp, color = RdSub, fontFamily = PoppinsFamily)
                     }
                 }
             }
@@ -4433,13 +4409,11 @@ private fun RdChatContent(thread: ChatThread) {
                 ) {
                     Text(
                         "You blocked this person",
-                        color = chatTheme?.composerText ?: Color.White, fontSize = 15.sp,
-                        modifier = Modifier.weight(1f),
-                    )
+                        color = chatTheme?.composerText ?: Color.White, fontSize = 14.sp,
+                        modifier = Modifier.weight(1f), fontFamily = PoppinsFamily,)
                     Text(
-                        "Unblock", color = RdRose, fontSize = 15.sp, fontWeight = FontWeight.SemiBold,
-                        modifier = Modifier.rdPress { AppState.repo.unblockUser(person.uid) }.padding(6.dp),
-                    )
+                        "Unblock", color = RdRose, fontSize = 14.sp, fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier.rdPress { AppState.repo.unblockUser(person.uid) }.padding(6.dp), fontFamily = PoppinsFamily,)
                 }
             } else {
                 RdChatInput(
@@ -4581,8 +4555,7 @@ private fun RdChatContent(thread: ChatThread) {
                             ) {
                                 Text(
                                     "This message can't be opened on this phone",
-                                    color = RdSub, fontSize = 13.5.sp, fontStyle = FontStyle.Italic,
-                                )
+                                    color = RdSub, fontSize = 13.5.sp, fontStyle = FontStyle.Italic, fontFamily = InterFamily,)
                             }
                         } else if (mm.deletedForEveryone) {
                             // Preview = the tombstone itself, exactly as
@@ -4597,8 +4570,7 @@ private fun RdChatContent(thread: ChatThread) {
                                 Spacer(Modifier.width(7.dp))
                                 Text(
                                     "This message was deleted",
-                                    color = RdSub, fontSize = 13.5.sp, fontStyle = FontStyle.Italic,
-                                )
+                                    color = RdSub, fontSize = 13.5.sp, fontStyle = FontStyle.Italic, fontFamily = InterFamily,)
                             }
                         } else if (mm.kind == MsgKind.IMAGE && mm.photo != null) {
                             Image(
@@ -4619,7 +4591,7 @@ private fun RdChatContent(thread: ChatThread) {
                                 // it wears the theme colours too.
                                 color = if (chatTheme == null) Color.White
                                     else if (mm.me) chatTheme.ownText else chatTheme.peerText,
-                                fontSize = textSp.sp, fontFamily = rememberEmojiFontFamily(),
+                                fontSize = textSp.sp, fontFamily = rememberChatFontFamily(),
                                 modifier = Modifier.widthIn(max = 280.dp).clip(RoundedCornerShape(22.dp))
                                     .background(
                                         if (chatTheme != null) SolidColor(if (mm.me) chatTheme.ownBubble else chatTheme.peerBubble)
@@ -4757,7 +4729,7 @@ private fun RdChatContent(thread: ChatThread) {
                     ) {
                         Icon(Icons.Filled.Image, null, tint = Color.White, modifier = Modifier.size(21.dp))
                         Spacer(Modifier.width(12.dp))
-                        Text("Photo", color = Color.White, fontSize = 16.sp)
+                        Text("Photo", color = Color.White, fontSize = 15.sp, fontFamily = PoppinsFamily)
                     }
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
@@ -4769,7 +4741,7 @@ private fun RdChatContent(thread: ChatThread) {
                     ) {
                         Icon(Icons.Filled.Videocam, null, tint = Color.White, modifier = Modifier.size(21.dp))
                         Spacer(Modifier.width(12.dp))
-                        Text("Video", color = Color.White, fontSize = 16.sp)
+                        Text("Video", color = Color.White, fontSize = 15.sp, fontFamily = PoppinsFamily)
                     }
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
@@ -4781,7 +4753,7 @@ private fun RdChatContent(thread: ChatThread) {
                     ) {
                         Icon(Icons.Filled.Audiotrack, null, tint = Color.White, modifier = Modifier.size(21.dp))
                         Spacer(Modifier.width(12.dp))
-                        Text("Audio file", color = Color.White, fontSize = 16.sp)
+                        Text("Audio file", color = Color.White, fontSize = 15.sp, fontFamily = PoppinsFamily)
                     }
                 }
             }
@@ -4819,7 +4791,7 @@ private fun RdChatContent(thread: ChatThread) {
                     ) {
                         Icon(Icons.Filled.PhotoCamera, null, tint = Color.White, modifier = Modifier.size(21.dp))
                         Spacer(Modifier.width(12.dp))
-                        Text("Take photo", color = Color.White, fontSize = 16.sp)
+                        Text("Take photo", color = Color.White, fontSize = 15.sp, fontFamily = PoppinsFamily)
                     }
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
@@ -4830,7 +4802,7 @@ private fun RdChatContent(thread: ChatThread) {
                     ) {
                         Icon(Icons.Filled.Videocam, null, tint = Color.White, modifier = Modifier.size(21.dp))
                         Spacer(Modifier.width(12.dp))
-                        Text("Record video", color = Color.White, fontSize = 16.sp)
+                        Text("Record video", color = Color.White, fontSize = 15.sp, fontFamily = PoppinsFamily)
                     }
                 }
             }
@@ -4860,8 +4832,7 @@ private fun RdChatContent(thread: ChatThread) {
                 ) {
                     Text(
                         "Send with effect", color = RdSub, fontSize = 12.5.sp,
-                        modifier = Modifier.padding(start = 16.dp, top = 12.dp, bottom = 4.dp),
-                    )
+                        modifier = Modifier.padding(start = 16.dp, top = 12.dp, bottom = 4.dp), fontFamily = InterTight,)
                     // ROUND 24: every row previews the CURRENT typed
                     // text rendered inside the effect — a mini dressed
                     // bubble (gift: the sealed mini wrap, text hidden),
@@ -4891,8 +4862,8 @@ private fun RdChatContent(thread: ChatThread) {
                             }
                             Spacer(Modifier.width(12.dp))
                             Column(Modifier.weight(1f)) {
-                                Text(def.name, color = Color.White, fontSize = 16.sp)
-                                Text(def.blurb, color = RdSub, fontSize = 12.sp)
+                                Text(def.name, color = Color.White, fontSize = 15.sp, fontFamily = PoppinsFamily)
+                                Text(def.blurb, color = RdSub, fontSize = 12.sp, fontFamily = PoppinsFamily)
                             }
                             if (armedFx == def.kind) {
                                 Text("✓", color = RdRose, fontSize = 16.sp, fontWeight = FontWeight.Bold)
@@ -4909,8 +4880,8 @@ private fun RdChatContent(thread: ChatThread) {
                         Icon(Icons.Filled.Block, null, tint = RdSub, modifier = Modifier.size(24.dp))
                         Spacer(Modifier.width(12.dp))
                         Column(Modifier.weight(1f)) {
-                            Text("No effect", color = Color.White, fontSize = 16.sp)
-                            Text("Send it plain", color = RdSub, fontSize = 12.sp)
+                            Text("No effect", color = Color.White, fontSize = 15.sp, fontFamily = PoppinsFamily)
+                            Text("Send it plain", color = RdSub, fontSize = 12.sp, fontFamily = PoppinsFamily)
                         }
                         if (armedFx == null) {
                             Text("✓", color = RdRose, fontSize = 16.sp, fontWeight = FontWeight.Bold)

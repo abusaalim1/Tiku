@@ -200,8 +200,7 @@ private fun RdInfoAv(person: Person, size: Int) {
             EmojiArt.assetName(person.emoji) != null -> EmojiArt(person.emoji, (size * 0.62f).dp)
             else -> Text(
                 person.name.take(1).uppercase(), color = Color.White,
-                fontSize = (size * 0.38f).sp, fontWeight = FontWeight.SemiBold,
-            )
+                fontSize = (size * 0.38f).sp, fontWeight = FontWeight.SemiBold, fontFamily = InterTight,)
         }
     }
 }
@@ -237,8 +236,8 @@ private fun RdITwoLine(
     val mod = if (onClick != null) Modifier.fillMaxWidth().rdIPress(onClick) else Modifier.fillMaxWidth()
     Row(mod.padding(horizontal = 16.dp, vertical = 14.dp), verticalAlignment = Alignment.CenterVertically) {
         Column(Modifier.weight(1f)) {
-            Text(t, color = if (danger) RdIDanger else Color.White, fontSize = 16.sp)
-            if (s != null) Text(s, color = RdISub, fontSize = 13.sp)
+            Text(t, color = if (danger) RdIDanger else Color.White, fontSize = 15.sp, fontFamily = PoppinsFamily)
+            if (s != null) Text(s, color = RdISub, fontSize = 12.sp, fontFamily = PoppinsFamily)
         }
         if (chevron) Icon(Icons.Filled.KeyboardArrowRight, null, tint = RdISub, modifier = Modifier.size(20.dp))
     }
@@ -275,8 +274,8 @@ private fun RdIToggleRow(t: String, s: String?, on: Boolean, onChange: (Boolean)
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Column(Modifier.weight(1f)) {
-            Text(t, color = Color.White, fontSize = 16.sp)
-            if (s != null) Text(s, color = RdISub, fontSize = 13.sp)
+            Text(t, color = Color.White, fontSize = 15.sp, fontFamily = PoppinsFamily)
+            if (s != null) Text(s, color = RdISub, fontSize = 12.sp, fontFamily = PoppinsFamily)
         }
         RdIToggle(on)
     }
@@ -292,19 +291,19 @@ private fun RdIField(
 ) {
     Column {
         if (label != null) {
-            Text(label, color = RdISub, fontSize = 13.sp, modifier = Modifier.padding(start = 4.dp, bottom = 6.dp))
+            Text(label, color = RdISub, fontSize = 13.sp, modifier = Modifier.padding(start = 4.dp, bottom = 6.dp), fontFamily = InterTight)
         }
         Box(
             Modifier.fillMaxWidth().clip(RoundedCornerShape(18.dp)).background(RdICard)
                 .padding(horizontal = 16.dp, vertical = 14.dp),
         ) {
             if (value.isEmpty() && placeholder.isNotEmpty()) {
-                Text(placeholder, color = RdISub, fontSize = 16.sp)
+                Text(placeholder, color = RdISub, fontSize = 15.sp, fontFamily = PoppinsFamily)
             }
             BasicTextField(
                 value, onChange,
                 enabled = enabled,
-                textStyle = TextStyle(color = if (enabled) Color.White else RdISub, fontSize = 16.sp),
+                textStyle = TextStyle(fontFamily = PoppinsFamily, color = if (enabled) Color.White else RdISub, fontSize = 15.sp),
                 cursorBrush = SolidColor(RdIRose),
                 modifier = Modifier.fillMaxWidth(),
             )
@@ -321,13 +320,13 @@ private fun RdIPill(text: String, filled: Boolean, onClick: () -> Unit) {
             .padding(horizontal = 18.dp, vertical = 10.dp),
         contentAlignment = Alignment.Center,
     ) {
-        Text(text, color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+        Text(text, color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, fontFamily = PoppinsFamily)
     }
 }
 
 @Composable
 private fun RdISection(t: String) {
-    Text(t, color = RdISub, fontSize = 13.sp, modifier = Modifier.padding(start = 4.dp))
+    Text(t, color = RdISub, fontSize = 13.sp, modifier = Modifier.padding(start = 4.dp), fontFamily = InterTight)
 }
 
 @Composable
@@ -347,7 +346,7 @@ private fun RdIRoundAction(icon: ImageVector, label: String, active: Boolean = f
         ) {
             Icon(icon, null, tint = Color.White, modifier = Modifier.size(24.dp))
         }
-        Text(label, color = RdISub, fontSize = 12.sp, modifier = Modifier.padding(top = 6.dp))
+        Text(label, color = RdISub, fontSize = 12.sp, modifier = Modifier.padding(top = 6.dp), fontFamily = PoppinsFamily)
     }
 }
 
@@ -367,7 +366,7 @@ private fun RdISubHeader(title: String, onBack: () -> Unit) {
     Row(verticalAlignment = Alignment.CenterVertically) {
         RdIBackBtn(onBack)
         Spacer(Modifier.width(14.dp))
-        Text(title, color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
+        Text(title, color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.SemiBold, fontFamily = InterTight)
     }
 }
 
@@ -382,7 +381,7 @@ fun InfoScreen(threadId: String) {
     }
     if (thread == null) {
         Box(Modifier.fillMaxSize().background(Color.Black), contentAlignment = Alignment.Center) {
-            Text("Chat unavailable", color = RdISub, fontSize = 14.sp)
+            Text("Chat unavailable", color = RdISub, fontSize = 13.sp, fontFamily = PoppinsFamily)
         }
         return
     }
@@ -456,10 +455,9 @@ private fun RdIInfoMain(thread: ChatThread, muted: Boolean, onSub: (String) -> U
                 Spacer(Modifier.height(14.dp))
                 Text(
                     thread.displayName, color = Color.White, fontSize = 32.sp,
-                    fontWeight = FontWeight.Bold, textAlign = TextAlign.Center,
-                )
+                    fontWeight = FontWeight.Bold, textAlign = TextAlign.Center, fontFamily = InterTight,)
                 if (person.username.isNotEmpty()) {
-                    Text("@${person.username}", color = RdISub, fontSize = 18.sp)
+                    Text("@${person.username}", color = RdISub, fontSize = 17.sp, fontFamily = PoppinsFamily)
                 }
                 if (days >= 1) {
                     Spacer(Modifier.height(10.dp))
@@ -470,7 +468,7 @@ private fun RdIInfoMain(thread: ChatThread, muted: Boolean, onSub: (String) -> U
                     ) {
                         Icon(Icons.Filled.Favorite, null, tint = RdIRose, modifier = Modifier.size(16.dp))
                         Spacer(Modifier.width(6.dp))
-                        Text("Day $days together", color = Color.White, fontSize = 14.sp)
+                        Text("Day $days together", color = Color.White, fontSize = 14.sp, fontFamily = InterTight)
                     }
                 }
             }
@@ -506,7 +504,7 @@ private fun RdIInfoMain(thread: ChatThread, muted: Boolean, onSub: (String) -> U
                                 modifier = Modifier.size(24.dp).graphicsLayer { rotationZ = 90f },
                             )
                         }
-                        Text("Options", color = RdISub, fontSize = 12.sp, modifier = Modifier.padding(top = 6.dp))
+                        Text("Options", color = RdISub, fontSize = 12.sp, modifier = Modifier.padding(top = 6.dp), fontFamily = InterTight)
                     }
                 }
             }
@@ -540,9 +538,8 @@ private fun RdIInfoMain(thread: ChatThread, muted: Boolean, onSub: (String) -> U
                 if (images.isEmpty()) {
                     Text(
                         "Photos and videos shared in this chat will appear here.",
-                        color = RdISub, fontSize = 14.sp,
-                        modifier = Modifier.padding(16.dp),
-                    )
+                        color = RdISub, fontSize = 13.sp,
+                        modifier = Modifier.padding(16.dp), fontFamily = PoppinsFamily,)
                 } else {
                     LazyRow(
                         Modifier.padding(10.dp),
@@ -580,10 +577,9 @@ private fun RdIProfilePage(thread: ChatThread, onBack: () -> Unit) {
                 Spacer(Modifier.height(12.dp))
                 Text(
                     thread.displayName, color = Color.White, fontSize = 24.sp,
-                    fontWeight = FontWeight.SemiBold, textAlign = TextAlign.Center,
-                )
+                    fontWeight = FontWeight.SemiBold, textAlign = TextAlign.Center, fontFamily = InterTight,)
                 if (thread.person.username.isNotEmpty()) {
-                    Text("@${thread.person.username}", color = RdISub, fontSize = 15.sp)
+                    Text("@${thread.person.username}", color = RdISub, fontSize = 14.sp, fontFamily = PoppinsFamily)
                 }
             }
         }
@@ -629,10 +625,9 @@ private fun RdISearchPage(thread: ChatThread, onBack: () -> Unit) {
             if (results.isEmpty()) {
                 item {
                     Text(
-                        "No messages found", color = RdISub, fontSize = 14.sp,
+                        "No messages found", color = RdISub, fontSize = 13.sp,
                         textAlign = TextAlign.Center,
-                        modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
-                    )
+                        modifier = Modifier.fillMaxWidth().padding(top = 8.dp), fontFamily = PoppinsFamily,)
                 }
             } else {
                 item {
@@ -695,9 +690,8 @@ private fun RdICustomizePage(thread: ChatThread, onBack: () -> Unit) {
             RdICardRow {
                 Column(Modifier.padding(horizontal = 4.dp, vertical = 8.dp)) {
                     Text(
-                        "Applies to both of you", color = RdISub, fontSize = 13.sp,
-                        modifier = Modifier.padding(horizontal = 10.dp),
-                    )
+                        "Applies to both of you", color = RdISub, fontSize = 12.sp,
+                        modifier = Modifier.padding(horizontal = 10.dp), fontFamily = PoppinsFamily,)
                     Spacer(Modifier.height(12.dp))
                     RdThemeGrid(thread) {
                         pickLauncher.launch(
@@ -715,10 +709,9 @@ private fun RdICustomizePage(thread: ChatThread, onBack: () -> Unit) {
                 Column(Modifier.padding(16.dp)) {
                     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                         Text(
-                            "Text size", color = Color.White, fontSize = 16.sp,
-                            modifier = Modifier.weight(1f),
-                        )
-                        Text("${globalSettings.textSizeSp.toInt()} sp", color = RdISub, fontSize = 13.sp)
+                            "Text size", color = Color.White, fontSize = 15.sp,
+                            modifier = Modifier.weight(1f), fontFamily = PoppinsFamily,)
+                        Text("${globalSettings.textSizeSp.toInt()} sp", color = RdISub, fontSize = 12.sp, fontFamily = PoppinsFamily)
                     }
                     Slider(
                         value = globalSettings.textSizeSp,
@@ -829,7 +822,7 @@ private fun RdCustomThemeTile(
             } else {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     Text("＋", color = Color.White, fontSize = 24.sp, fontWeight = FontWeight.Bold)
-                    Text("Photo", color = RdISub, fontSize = 11.sp)
+                    Text("Photo", color = RdISub, fontSize = 11.sp, fontFamily = PoppinsFamily)
                 }
             }
             if (selected) {
@@ -847,8 +840,7 @@ private fun RdCustomThemeTile(
             "Custom photo",
             color = if (selected) Color.White else RdISub,
             fontSize = 12.5.sp, textAlign = TextAlign.Center,
-            modifier = Modifier.fillMaxWidth(),
-        )
+            modifier = Modifier.fillMaxWidth(), fontFamily = PoppinsFamily,)
     }
 }
 
@@ -869,13 +861,11 @@ private fun openRdCustomThemeConfirm(thread: ChatThread, bmp: Bitmap, jpeg: Byte
             Text(
                 "Custom photo", color = Color.White, fontSize = 20.sp,
                 fontWeight = FontWeight.Bold,
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
-            )
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp), fontFamily = InterTight,)
             Text(
                 "This photo becomes the chat wallpaper for both of you",
-                color = RdISub, fontSize = 13.sp,
-                modifier = Modifier.padding(horizontal = 16.dp),
-            )
+                color = RdISub, fontSize = 12.sp,
+                modifier = Modifier.padding(horizontal = 16.dp), fontFamily = PoppinsFamily,)
             Spacer(Modifier.height(12.dp))
             Image(
                 bmp.asImageBitmap(), null,
@@ -886,8 +876,7 @@ private fun openRdCustomThemeConfirm(thread: ChatThread, bmp: Bitmap, jpeg: Byte
             Spacer(Modifier.height(14.dp))
             Text(
                 "Message colours", color = RdISub, fontSize = 13.sp,
-                modifier = Modifier.padding(horizontal = 16.dp),
-            )
+                modifier = Modifier.padding(horizontal = 16.dp), fontFamily = InterTight,)
             Spacer(Modifier.height(8.dp))
             Row(
                 Modifier.fillMaxWidth().padding(horizontal = 16.dp),
@@ -902,9 +891,8 @@ private fun openRdCustomThemeConfirm(thread: ChatThread, bmp: Bitmap, jpeg: Byte
             Spacer(Modifier.height(8.dp))
             Text(
                 "Colours: ${ChatThemes.byId(paletteId)?.name ?: "Default"}",
-                color = Color.White, fontSize = 13.5.sp,
-                modifier = Modifier.padding(horizontal = 16.dp),
-            )
+                color = Color.White, fontSize = 12.5.sp,
+                modifier = Modifier.padding(horizontal = 16.dp), fontFamily = PoppinsFamily,)
             Spacer(Modifier.height(16.dp))
             Row(
                 Modifier.fillMaxWidth().padding(horizontal = 10.dp),
@@ -996,8 +984,7 @@ private fun RdThemeTile(
             theme?.name ?: "Default",
             color = if (selected) Color.White else RdISub,
             fontSize = 12.5.sp, textAlign = TextAlign.Center,
-            modifier = Modifier.fillMaxWidth(),
-        )
+            modifier = Modifier.fillMaxWidth(), fontFamily = PoppinsFamily,)
     }
 }
 
@@ -1010,9 +997,8 @@ private fun RdIStarredPage(thread: ChatThread, onBack: () -> Unit) {
             item {
                 Text(
                     "No starred messages yet. Hold a message and tap Star.",
-                    color = RdISub, fontSize = 14.sp, textAlign = TextAlign.Center,
-                    modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
-                )
+                    color = RdISub, fontSize = 13.sp, textAlign = TextAlign.Center,
+                    modifier = Modifier.fillMaxWidth().padding(top = 8.dp), fontFamily = PoppinsFamily,)
             }
         } else {
             item {
@@ -1079,8 +1065,7 @@ private fun RdINicknamesPage(thread: ChatThread, onBack: () -> Unit) {
             Text(
                 "Only ${thread.person.name} can set your nickname.",
                 color = RdISub, fontSize = 12.5.sp,
-                modifier = Modifier.padding(start = 4.dp),
-            )
+                modifier = Modifier.padding(start = 4.dp), fontFamily = PoppinsFamily,)
         }
     }
 }

@@ -410,13 +410,11 @@ fun GamePlayerOverlay(
                 Text(
                     m.gameTitle.ifBlank { "Game" },
                     color = GameInk, fontSize = 17.sp, fontWeight = FontWeight.SemiBold,
-                    maxLines = 1, overflow = TextOverflow.Ellipsis,
-                )
+                    maxLines = 1, overflow = TextOverflow.Ellipsis, fontFamily = InterTight,)
                 Text(
                     if (role == "host") "You created this game · 2-player"
                     else "2-player game · you joined",
-                    color = GameInk.copy(alpha = 0.55f), fontSize = 12.sp,
-                )
+                    color = GameInk.copy(alpha = 0.55f), fontSize = 12.sp, fontFamily = PoppinsFamily,)
             }
             Box(
                 Modifier.size(38.dp).clip(CircleShape)
@@ -443,12 +441,10 @@ fun GamePlayerOverlay(
                         Spacer(Modifier.size(12.dp))
                         Text(
                             "Game preview",
-                            color = GameInk, fontSize = 16.sp, fontWeight = FontWeight.SemiBold,
-                        )
+                            color = GameInk, fontSize = 16.sp, fontWeight = FontWeight.SemiBold, fontFamily = InterTight,)
                         Text(
                             "Asli app me yahan game chalega — dono player apne phone se khelenge.",
-                            color = GameInk.copy(alpha = 0.55f), fontSize = 13.sp,
-                        )
+                            color = GameInk.copy(alpha = 0.55f), fontSize = 12.sp, fontFamily = PoppinsFamily,)
                     }
                 }
                 html != null -> GameWebViewHost(
@@ -457,14 +453,12 @@ fun GamePlayerOverlay(
                 )
                 loadFailed -> Text(
                     "Game load nahi ho paya — band karke card pe dobara tap karo.",
-                    color = GameInk.copy(alpha = 0.6f), fontSize = 14.sp,
-                    modifier = Modifier.align(Alignment.Center).padding(32.dp),
-                )
+                    color = GameInk.copy(alpha = 0.6f), fontSize = 13.sp,
+                    modifier = Modifier.align(Alignment.Center).padding(32.dp), fontFamily = PoppinsFamily,)
                 else -> Text(
                     "Game load ho raha hai…",
-                    color = GameInk.copy(alpha = 0.6f), fontSize = 14.sp,
-                    modifier = Modifier.align(Alignment.Center).padding(32.dp),
-                )
+                    color = GameInk.copy(alpha = 0.6f), fontSize = 13.sp,
+                    modifier = Modifier.align(Alignment.Center).padding(32.dp), fontFamily = PoppinsFamily,)
             }
         }
     }

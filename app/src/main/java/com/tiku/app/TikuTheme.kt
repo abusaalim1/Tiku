@@ -200,6 +200,24 @@ val Bricolage = FontFamily(
 val SerifRegular = FontFamily(Font(R.font.instrument_serif_regular))
 val SerifItalic = FontFamily(Font(R.font.instrument_serif_italic))
 
+/** ROUND 48: the chat face — Inter (the Apple-Music-like minimal sans the
+ *  owner picked). Plain family, no emoji chain: for app-generated strings
+ *  in the message area (tombstones, placeholders). Surfaces that can carry
+ *  USER text use the chained family instead
+ *  ([rememberChatFontFamily] in EmojiArt.kt) so emoji stay iOS. */
+val InterFamily = FontFamily(
+    Font(R.font.inter_regular, FontWeight.Normal),
+    Font(R.font.inter_medium, FontWeight.Medium),
+)
+
+/** ROUND 48: the normal-text face everywhere outside chat — Poppins Bold.
+ *  A single weight ON PURPOSE: the owner's rule is that ordinary labels,
+ *  rows and body text render IN Poppins Bold, so the family holds exactly
+ *  that one font and every weight request resolves to it. */
+val PoppinsFamily = FontFamily(
+    Font(R.font.poppins_bold, FontWeight.Bold),
+)
+
 val TikuEase = androidx.compose.animation.core.CubicBezierEasing(0.32f, 0.72f, 0f, 1f)
 
 /** ROUND 8: the gentle spring ease of the owner's reference chat UI

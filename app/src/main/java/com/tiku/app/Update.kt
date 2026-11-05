@@ -249,18 +249,15 @@ fun UpdatePromptDialog() {
         ) {
             Text(
                 "Update available", color = Color.White,
-                fontSize = 19.sp, fontWeight = FontWeight.SemiBold,
-            )
+                fontSize = 19.sp, fontWeight = FontWeight.SemiBold, fontFamily = InterTight,)
             Text(
                 "Version ${info.build} is ready", color = Rose,
-                fontSize = 14.sp, fontWeight = FontWeight.SemiBold,
-                modifier = Modifier.padding(top = 6.dp),
-            )
+                fontSize = 13.sp, fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.padding(top = 6.dp), fontFamily = PoppinsFamily,)
             if (info.notes.isNotBlank()) {
                 Text(
-                    info.notes, color = Sub, fontSize = 14.sp,
-                    modifier = Modifier.padding(top = 8.dp),
-                )
+                    info.notes, color = Sub, fontSize = 13.sp,
+                    modifier = Modifier.padding(top = 8.dp), fontFamily = PoppinsFamily,)
             }
             Spacer(Modifier.height(20.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {

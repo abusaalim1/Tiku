@@ -306,8 +306,8 @@ private fun Poster(img: String?, res: Int, g: List<Color>, modifier: Modifier, a
 @Composable
 private fun Header(title: String, sub: String) {
     Column(Modifier.padding(horizontal = 20.dp).rise()) {
-        Text(title, color = Ink, fontSize = 44.sp, fontWeight = FontWeight.Bold, letterSpacing = (-1).sp)
-        Text(sub, color = Sub, fontSize = 18.sp, modifier = Modifier.padding(top = 2.dp))
+        Text(title, color = Ink, fontSize = 44.sp, fontWeight = FontWeight.Bold, letterSpacing = (-1).sp, fontFamily = InterTight)
+        Text(sub, color = Sub, fontSize = 17.sp, modifier = Modifier.padding(top = 2.dp), fontFamily = PoppinsFamily)
     }
 }
 
@@ -315,8 +315,7 @@ private fun Header(title: String, sub: String) {
 private fun SectionTitle(t: String, idx: Int) {
     Text(
         t, color = Ink, fontSize = 24.sp, fontWeight = FontWeight.Bold, letterSpacing = (-0.4).sp,
-        modifier = Modifier.padding(start = 20.dp, top = 28.dp, bottom = 12.dp).rise(idx)
-    )
+        modifier = Modifier.padding(start = 20.dp, top = 28.dp, bottom = 12.dp).rise(idx), fontFamily = InterTight)
 }
 
 @Composable
@@ -345,13 +344,12 @@ private fun Hero(s: Show, onPlay: () -> Unit) {
         ) {
             Column(Modifier.weight(1f)) {
                 Box(Modifier.clip(CircleShape).background(Rose).padding(horizontal = 11.dp, vertical = 4.dp)) {
-                    Text(s.lang, color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                    Text(s.lang, color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, fontFamily = PoppinsFamily)
                 }
                 Text(
                     s.title, color = Color.White, fontSize = 24.sp, fontWeight = FontWeight.Bold,
-                    modifier = Modifier.padding(top = 5.dp)
-                )
-                Text(s.sub, color = Color(0xFFC9C8D4), fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    modifier = Modifier.padding(top = 5.dp), fontFamily = InterTight)
+                Text(s.sub, color = Color(0xFFC9C8D4), fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, fontFamily = PoppinsFamily)
             }
             Box(
                 Modifier.padding(start = 10.dp).size(44.dp).clip(CircleShape)
@@ -370,7 +368,7 @@ private fun ShowCard(s: Show, liked: Boolean, idx: Int, onLike: () -> Unit, onCl
             Box(
                 Modifier.align(Alignment.BottomStart).padding(8.dp).clip(RoundedCornerShape(10.dp))
                     .background(Color.Black.copy(0.42f)).padding(horizontal = 8.dp, vertical = 3.dp)
-            ) { Text(s.lang, color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Medium) }
+            ) { Text(s.lang, color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Medium, fontFamily = PoppinsFamily) }
 
             val pop by animateFloatAsState(if (liked) 1.12f else 1f, spring(0.4f, 420f), label = "heart")
             Box(
@@ -386,9 +384,8 @@ private fun ShowCard(s: Show, liked: Boolean, idx: Int, onLike: () -> Unit, onCl
         }
         Text(
             s.title, color = Ink, fontSize = 17.sp, fontWeight = FontWeight.Medium, maxLines = 1,
-            overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 8.dp)
-        )
-        Text(s.sub, color = Sub, fontSize = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 8.dp), fontFamily = InterTight)
+        Text(s.sub, color = Sub, fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, fontFamily = PoppinsFamily)
     }
 }
 
@@ -473,16 +470,15 @@ private fun StoryCard(s: Story, idx: Int, onClick: () -> Unit, onDoubleTap: (() 
         Modifier.fillMaxWidth().padding(horizontal = 20.dp).padding(bottom = 13.dp).rise(idx)
             .clip(RoundedCornerShape(28.dp)).background(CardC).then(tap).padding(18.dp)
     ) {
-        Text(s.title, color = Ink, fontSize = 21.sp, fontWeight = FontWeight.SemiBold, letterSpacing = (-0.3).sp)
+        Text(s.title, color = Ink, fontSize = 21.sp, fontWeight = FontWeight.SemiBold, letterSpacing = (-0.3).sp, fontFamily = InterTight)
         Text(
-            s.excerpt, color = Sub, fontSize = 17.sp, lineHeight = 24.sp, maxLines = 2,
-            overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 8.dp)
-        )
+            s.excerpt, color = Sub, fontSize = 16.sp, lineHeight = 24.sp, maxLines = 2,
+            overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 8.dp), fontFamily = PoppinsFamily)
         Row(Modifier.padding(top = 14.dp), verticalAlignment = Alignment.CenterVertically) {
             Box(Modifier.clip(CircleShape).background(RoseSoft).padding(horizontal = 12.dp, vertical = 5.dp)) {
-                Text(s.tag, color = Rose, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+                Text(s.tag, color = Rose, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, fontFamily = PoppinsFamily)
             }
-            Text("${s.mins} min read", color = Sub, fontSize = 15.sp, modifier = Modifier.padding(start = 12.dp))
+            Text("${s.mins} min read", color = Sub, fontSize = 14.sp, modifier = Modifier.padding(start = 12.dp), fontFamily = PoppinsFamily)
         }
     }
 }
@@ -523,8 +519,7 @@ private fun MomentCard(m: Moment, idx: Int, modifier: Modifier, onClick: () -> U
         )
         Text(
             m.title, color = Ink, fontSize = 19.sp, fontWeight = FontWeight.Medium,
-            maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 8.dp, start = 2.dp)
-        )
+            maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 8.dp, start = 2.dp), fontFamily = InterTight)
     }
 }
 
@@ -634,7 +629,7 @@ private fun NavPill(h: HazeState?, selected: Int, onSelect: (Int) -> Unit) {
                         )
                         Box(Modifier.scale(sc)) { TabIcon(i, if (on) Rose else Sub, on) }
                     }
-                    Text(label, color = col, fontSize = 12.sp, fontWeight = if (on) FontWeight.SemiBold else FontWeight.Medium)
+                    Text(label, color = col, fontSize = 12.sp, fontWeight = if (on) FontWeight.SemiBold else FontWeight.Medium, fontFamily = PoppinsFamily)
                 }
             }
         }

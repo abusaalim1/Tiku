@@ -433,22 +433,19 @@ internal fun RdLinkPreviewCard(
                 Text(
                     it, color = titleColor, fontSize = 13.sp,
                     fontWeight = FontWeight.SemiBold,
-                    maxLines = 2, overflow = TextOverflow.Ellipsis,
-                )
+                    maxLines = 2, overflow = TextOverflow.Ellipsis, fontFamily = rememberChatFontFamily(),)
             }
             data.description?.let {
                 if (data.title != null) Spacer(Modifier.height(2.dp))
                 Text(
                     it, color = descColor, fontSize = 12.sp,
-                    maxLines = 2, overflow = TextOverflow.Ellipsis,
-                )
+                    maxLines = 2, overflow = TextOverflow.Ellipsis, fontFamily = rememberChatFontFamily(),)
             }
             Spacer(Modifier.height(3.dp))
             Text(
                 data.host.uppercase(), color = hostColor, fontSize = 10.sp,
                 fontWeight = FontWeight.Medium, letterSpacing = 0.6.sp,
-                maxLines = 1, overflow = TextOverflow.Ellipsis,
-            )
+                maxLines = 1, overflow = TextOverflow.Ellipsis, fontFamily = rememberChatFontFamily(),)
         }
     }
 }

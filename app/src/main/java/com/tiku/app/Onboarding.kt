@@ -92,7 +92,7 @@ fun FormScaffold(title: String, sub: String, content: @Composable ColumnScope.()
             Text(title, color = pal.tx, fontSize = 32.sp, fontFamily = InterTight,
                 fontWeight = FontWeight.SemiBold, letterSpacing = (-0.3).sp)
             Spacer(Modifier.height(8.dp))
-            Text(sub, color = pal.sub, fontSize = 15.sp, fontFamily = InterTight, lineHeight = 21.sp)
+            Text(sub, color = pal.sub, fontSize = 14.sp, fontFamily = PoppinsFamily, lineHeight = 21.sp)
             Spacer(Modifier.height(24.dp))
             content()
         }
@@ -122,7 +122,7 @@ fun PasswordField(value: String, onValue: (String) -> Unit, placeholder: String,
     ) {
         BasicTextField(
             value = value, onValueChange = onValue,
-            textStyle = TextStyle(fontSize = 16.sp, fontFamily = InterTight, color = ink),
+            textStyle = TextStyle(fontSize = 15.sp, fontFamily = PoppinsFamily, color = ink),
             cursorBrush = SolidColor(ink),
             visualTransformation = if (shown) VisualTransformation.None else PasswordVisualTransformation(),
             // OWNER BUG 0: a password field MUST present a password IME — plain-text
@@ -137,7 +137,7 @@ fun PasswordField(value: String, onValue: (String) -> Unit, placeholder: String,
             modifier = Modifier.fillMaxWidth().align(Alignment.CenterStart)
                 .padding(start = 18.dp, end = 56.dp),
             decorationBox = { inner ->
-                if (value.isEmpty()) Text(placeholder, fontSize = 16.sp, fontFamily = InterTight, color = muted)
+                if (value.isEmpty()) Text(placeholder, fontSize = 15.sp, fontFamily = PoppinsFamily, color = muted)
                 inner()
             },
         )
@@ -182,14 +182,14 @@ fun CreatePasswordScreen() {
             }
         }
         Spacer(Modifier.height(6.dp))
-        Text("Use 8+ characters with a number and a symbol.", fontSize = 13.sp, color = pal.sub, fontFamily = InterTight)
+        Text("Use 8+ characters with a number and a symbol.", fontSize = 12.sp, color = pal.sub, fontFamily = PoppinsFamily)
         Spacer(Modifier.height(14.dp))
         PasswordField(p2, { p2 = it }, "Confirm password")
         Spacer(Modifier.height(6.dp))
         val mText = if (p2.isEmpty()) "" else if (match) "✓ Passwords match" else "Passwords don’t match yet"
-        Text(mText, fontSize = 13.sp, color = if (match) pal.ac else pal.sub, fontFamily = InterTight)
+        Text(mText, fontSize = 12.sp, color = if (match) pal.ac else pal.sub, fontFamily = PoppinsFamily)
         if (saveError.isNotEmpty()) {
-            Text(saveError, fontSize = 13.sp, color = pal.danger, fontFamily = InterTight)
+            Text(saveError, fontSize = 12.sp, color = pal.danger, fontFamily = PoppinsFamily)
             Spacer(Modifier.height(8.dp))
         }
         Spacer(Modifier.weight(1f))
@@ -244,7 +244,7 @@ fun RestorePasswordScreen() {
                 error.isNotEmpty() -> error
                 else -> "Only this password opens this journal — there is no starting over with a new one. A wrong try changes nothing and deletes nothing."
             },
-            fontSize = 13.sp, color = if (error.isNotEmpty() || lockRemainingMs > 0) pal.danger else pal.sub, fontFamily = InterTight,
+            fontSize = 13.sp, color = if (error.isNotEmpty() || lockRemainingMs > 0) pal.danger else pal.sub, fontFamily = PoppinsFamily,
         )
         Spacer(Modifier.weight(1f))
         PrimaryButton(if (busy) "Restoring…" else "Restore my journal", enabled = pw.isNotEmpty() && !busy && lockRemainingMs <= 0, modifier = Modifier.fillMaxWidth()) {
@@ -286,7 +286,7 @@ fun RestorePasswordScreen() {
         if (!Config.PREVIEW_UI_ONLY) {
             Spacer(Modifier.height(14.dp))
             Text("Forgot your password?",
-                fontSize = 14.sp, fontFamily = InterTight, fontWeight = FontWeight.SemiBold,
+                fontSize = 13.sp, fontFamily = PoppinsFamily, fontWeight = FontWeight.SemiBold,
                 color = pal.ac,
                 modifier = Modifier.fillMaxWidth()
                     .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {
@@ -346,10 +346,10 @@ private fun ResetPasswordRewrap() {
         "Your journal key is still safe on this phone. Confirm your Google account, then choose a new password.") {
         if (stage == 0) {
             Text("Sign in with the same Google account this journal was created with. Your phone plus your Google account together unlock this reset — without them it can't happen.",
-                fontSize = 14.sp, fontFamily = InterTight, color = pal.sub)
+                fontSize = 13.sp, fontFamily = PoppinsFamily, color = pal.sub)
             if (note.isNotEmpty()) {
                 Spacer(Modifier.height(10.dp))
-                Text(note, fontSize = 13.sp, color = pal.danger, fontFamily = InterTight)
+                Text(note, fontSize = 12.sp, color = pal.danger, fontFamily = PoppinsFamily)
             }
             Spacer(Modifier.weight(1f))
             PrimaryButton(if (busy) "Checking…" else "Verify with Google", enabled = !busy, modifier = Modifier.fillMaxWidth()) {
@@ -385,8 +385,8 @@ private fun ResetPasswordRewrap() {
                 match -> "✓ Passwords match"
                 else -> "Passwords don’t match yet"
             }
-            Text(mText, fontSize = 13.sp,
-                color = if (note.isNotEmpty()) pal.danger else pal.sub, fontFamily = InterTight)
+            Text(mText, fontSize = 12.sp,
+                color = if (note.isNotEmpty()) pal.danger else pal.sub, fontFamily = PoppinsFamily)
             Spacer(Modifier.weight(1f))
             PrimaryButton(if (busy) "Resetting…" else "Set new password",
                 enabled = p1.length >= 8 && match && !busy, modifier = Modifier.fillMaxWidth()) {
@@ -434,10 +434,10 @@ private fun ResetPasswordFreshStart() {
         FormScaffold("Reset your password",
             "This phone no longer holds your journal key. Confirm your Google account to continue.") {
             Text("Sign in with the same Google account this journal was created with. Your phone plus your Google account together unlock this reset — without them it can't happen.",
-                fontSize = 14.sp, fontFamily = InterTight, color = pal.sub)
+                fontSize = 13.sp, fontFamily = PoppinsFamily, color = pal.sub)
             if (note.isNotEmpty()) {
                 Spacer(Modifier.height(10.dp))
-                Text(note, fontSize = 13.sp, color = pal.danger, fontFamily = InterTight)
+                Text(note, fontSize = 12.sp, color = pal.danger, fontFamily = PoppinsFamily)
             }
             Spacer(Modifier.weight(1f))
             PrimaryButton(if (busy) "Checking…" else "Verify with Google", enabled = !busy, modifier = Modifier.fillMaxWidth()) {
@@ -463,13 +463,13 @@ private fun ResetPasswordFreshStart() {
         FormScaffold("Start a fresh journal",
             "Read this once — there is no undo.") {
             Text("Your old password is gone and this phone doesn't hold your journal key, so your existing chats can never be opened again — by anyone, on any phone. They stay locked away exactly as they are.",
-                fontSize = 14.sp, fontFamily = InterTight, color = pal.tx)
+                fontSize = 13.sp, fontFamily = PoppinsFamily, color = pal.tx)
             Spacer(Modifier.height(10.dp))
             Text("Starting fresh keeps the same account and the same username. You will set a new password and get a brand-new journal — new chats work exactly as before.",
-                fontSize = 14.sp, fontFamily = InterTight, color = pal.sub)
+                fontSize = 13.sp, fontFamily = PoppinsFamily, color = pal.sub)
             if (note.isNotEmpty()) {
                 Spacer(Modifier.height(10.dp))
-                Text(note, fontSize = 13.sp, color = pal.danger, fontFamily = InterTight)
+                Text(note, fontSize = 12.sp, color = pal.danger, fontFamily = PoppinsFamily)
             }
             Spacer(Modifier.weight(1f))
             PrimaryButton(if (busy) "Starting…" else "Start fresh with a new journal", enabled = !busy, modifier = Modifier.fillMaxWidth()) {
@@ -590,27 +590,27 @@ fun ProfileSetupScreen() {
                 .border(1.dp, pal.ln, RoundedCornerShape(16.dp)),
             contentAlignment = Alignment.CenterStart,
         ) {
-            Text("@", color = pal.sub, fontSize = 16.sp, fontFamily = InterTight,
+            Text("@", color = pal.sub, fontSize = 15.sp, fontFamily = PoppinsFamily,
                 modifier = Modifier.padding(start = 18.dp))
             BasicTextField(
                 value = username,
                 onValueChange = { raw ->
                     username = raw.lowercase().filter { it.isLetterOrDigit() || it == '.' || it == '_' }.take(20)
                 },
-                textStyle = TextStyle(fontSize = 16.sp, fontFamily = InterTight, color = pal.tx),
+                textStyle = TextStyle(fontSize = 15.sp, fontFamily = PoppinsFamily, color = pal.tx),
                 cursorBrush = SolidColor(pal.tx),
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth().padding(start = 36.dp, end = 18.dp),
                 decorationBox = { inner ->
-                    if (username.isEmpty()) Text("username", fontSize = 16.sp, fontFamily = InterTight, color = pal.sub)
+                    if (username.isEmpty()) Text("username", fontSize = 15.sp, fontFamily = PoppinsFamily, color = pal.sub)
                     inner()
                 },
             )
         }
         Spacer(Modifier.height(6.dp))
-        Text(hint, fontSize = 13.sp, color = if (available) pal.ac else pal.sub, fontFamily = InterTight)
+        Text(hint, fontSize = 12.sp, color = if (available) pal.ac else pal.sub, fontFamily = PoppinsFamily)
         Spacer(Modifier.height(4.dp))
-        Text("Friends use your Tiku ID to find you.", fontSize = 13.sp, color = pal.sub, fontFamily = InterTight)
+        Text("Friends use your Tiku ID to find you.", fontSize = 12.sp, color = pal.sub, fontFamily = PoppinsFamily)
         Spacer(Modifier.weight(1f))
         PrimaryButton(if (busy) "Setting up…" else "Continue",
             enabled = available && !busy, modifier = Modifier.fillMaxWidth()) {

@@ -251,8 +251,7 @@ fun MomentsScreen() {
             BackBtn { closeMoments() }
             Text(
                 "Memories", color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold,
-                modifier = Modifier.weight(1f).padding(start = 12.dp),
-            )
+                modifier = Modifier.weight(1f).padding(start = 12.dp), fontFamily = InterTight,)
             Box(
                 Modifier.size(46.dp).clip(CircleShape).background(CardC)
                     .border(1.dp, Color.White.copy(0.1f), CircleShape)
@@ -286,12 +285,10 @@ fun MomentsScreen() {
                     Text(
                         "Couldn't load Memories", color = Color.White, fontSize = 19.sp,
                         fontWeight = FontWeight.Bold,
-                        modifier = Modifier.padding(top = 18.dp),
-                    )
+                        modifier = Modifier.padding(top = 18.dp), fontFamily = InterTight,)
                     Text(
-                        "Check your connection and try again.", color = Sub, fontSize = 14.5.sp,
-                        modifier = Modifier.padding(top = 6.dp),
-                    )
+                        "Check your connection and try again.", color = Sub, fontSize = 13.5.sp,
+                        modifier = Modifier.padding(top = 6.dp), fontFamily = PoppinsFamily,)
                     Box(
                         Modifier.padding(top = 20.dp).clip(CircleShape)
                             .background(Rose).press {
@@ -302,7 +299,7 @@ fun MomentsScreen() {
                             .padding(horizontal = 26.dp, vertical = 12.dp),
                         contentAlignment = Alignment.Center,
                     ) {
-                        Text("Retry", color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+                        Text("Retry", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, fontFamily = PoppinsFamily)
                     }
                 }
             }
@@ -322,8 +319,7 @@ private fun MomentsPlaceholder() {
             BackBtn { closeMoments() }
             Text(
                 "Memories", color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold,
-                modifier = Modifier.weight(1f).padding(start = 12.dp),
-            )
+                modifier = Modifier.weight(1f).padding(start = 12.dp), fontFamily = InterTight,)
             Box(
                 Modifier.size(46.dp).clip(CircleShape).background(CardC)
                     .border(1.dp, Color.White.copy(0.1f), CircleShape),
@@ -338,12 +334,10 @@ private fun MomentsPlaceholder() {
                 ) { TikIcon("heartFill", Modifier.size(34.dp), tint = Rose) }
                 Text(
                     "Memories", color = Color.White, fontSize = 24.sp, fontWeight = FontWeight.Bold,
-                    modifier = Modifier.padding(top = 16.dp),
-                )
+                    modifier = Modifier.padding(top = 16.dp), fontFamily = InterTight,)
                 Text(
-                    "Your private place, together", color = Sub, fontSize = 15.sp,
-                    modifier = Modifier.padding(top = 6.dp),
-                )
+                    "Your private place, together", color = Sub, fontSize = 14.sp,
+                    modifier = Modifier.padding(top = 6.dp), fontFamily = PoppinsFamily,)
             }
         }
     }

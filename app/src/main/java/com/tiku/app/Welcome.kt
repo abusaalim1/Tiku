@@ -259,8 +259,8 @@ fun WelcomeScreen(onGoogleClick: () -> Unit) {
                     Text(
                         text = Scenes[sceneIdx].second,
                         color = pal.sub,
-                        fontSize = 14.sp,
-                        fontFamily = InterTight,
+                        fontSize = 13.sp,
+                        fontFamily = PoppinsFamily,
                         lineHeight = 21.sp,
                         textAlign = TextAlign.Center,
                         modifier = Modifier
@@ -340,8 +340,8 @@ fun WelcomeScreen(onGoogleClick: () -> Unit) {
                             Text(
                                 text = "Connecting with Google...",
                                 fontWeight = FontWeight.Medium,
-                                fontSize = 15.sp,
-                                fontFamily = InterTight,
+                                fontSize = 14.sp,
+                                fontFamily = PoppinsFamily,
                                 color = pal.sub
                             )
                         }
@@ -360,8 +360,8 @@ fun WelcomeScreen(onGoogleClick: () -> Unit) {
                             Text(
                                 text = "Continue with Google",
                                 fontWeight = FontWeight.SemiBold,
-                                fontSize = 15.sp,
-                                fontFamily = InterTight,
+                                fontSize = 14.sp,
+                                fontFamily = PoppinsFamily,
                                 color = pal.tx
                             )
                         }
@@ -374,7 +374,7 @@ fun WelcomeScreen(onGoogleClick: () -> Unit) {
                     text = "Continue with Google to sync your journal, favourites & progress securely.",
                     fontSize = 12.sp,
                     color = pal.sub,
-                    fontFamily = InterTight,
+                    fontFamily = PoppinsFamily,
                     textAlign = TextAlign.Center,
                     lineHeight = 16.sp,
                     modifier = Modifier.fillMaxWidth(0.9f)

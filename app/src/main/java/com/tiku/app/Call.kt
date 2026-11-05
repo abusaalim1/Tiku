@@ -565,7 +565,7 @@ fun CallScreen(threadId: String, video: Boolean) {
                 ) {
                     Text(person.name, fontFamily = InterTight, fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
                         fontSize = 19.sp, color = pal.tx)
-                    Text(statusText, fontSize = 13.sp, color = pal.tx.copy(alpha = 0.78f), fontFamily = InterTight)
+                    Text(statusText, fontSize = 12.sp, color = pal.tx.copy(alpha = 0.78f), fontFamily = PoppinsFamily)
                 }
                 // ROUND 32 — screen-share indicator, same glass-pill
                 // language as .cltop. Mine carries the Stop action;
@@ -581,10 +581,10 @@ fun CallScreen(threadId: String, video: Boolean) {
                     ) {
                         Box(Modifier.size(8.dp).clip(CircleShape).background(Color(0xFF3ED97E)))
                         Spacer(Modifier.width(8.dp))
-                        Text("You're sharing your screen", fontSize = 12.5.sp, color = Color.White, fontFamily = InterTight)
+                        Text("You're sharing your screen", fontSize = 12.5.sp, color = Color.White, fontFamily = PoppinsFamily)
                         Spacer(Modifier.width(12.dp))
                         Text(
-                            "Stop", fontSize = 12.5.sp, color = pal.danger, fontFamily = InterTight,
+                            "Stop", fontSize = 12.5.sp, color = pal.danger, fontFamily = PoppinsFamily,
                             fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
                             modifier = Modifier.clickable(
                                 interactionSource = remember { MutableInteractionSource() }, indication = null,
@@ -601,7 +601,7 @@ fun CallScreen(threadId: String, video: Boolean) {
                     ) {
                         Box(Modifier.size(8.dp).clip(CircleShape).background(Color(0xFF3ED97E)))
                         Spacer(Modifier.width(8.dp))
-                        Text("You're watching their screen", fontSize = 12.5.sp, color = Color.White, fontFamily = InterTight)
+                        Text("You're watching their screen", fontSize = 12.5.sp, color = Color.White, fontFamily = PoppinsFamily)
                     }
                 }
             }
@@ -609,7 +609,7 @@ fun CallScreen(threadId: String, video: Boolean) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     TikuLockIcon(Modifier.size(12.dp), tint = pal.tx.copy(alpha = 0.6f))
                     Spacer(Modifier.width(5.dp))
-                    Text("End-to-end encrypted", fontSize = 13.sp, color = pal.tx.copy(alpha = 0.6f), fontFamily = InterTight)
+                    Text("End-to-end encrypted", fontSize = 12.sp, color = pal.tx.copy(alpha = 0.6f), fontFamily = PoppinsFamily)
                 }
                 Spacer(Modifier.height(18.dp))
                 if (incoming != null) {
@@ -788,7 +788,7 @@ fun FloatingCallWindow() {
                     Text(person.name, fontSize = 11.sp, color = Color.White, fontFamily = InterTight,
                         fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold)
                     Spacer(Modifier.width(6.dp))
-                    Text(statusText, fontSize = 11.sp, color = Color.White.copy(alpha = 0.75f), fontFamily = InterTight)
+                    Text(statusText, fontSize = 11.sp, color = Color.White.copy(alpha = 0.75f), fontFamily = PoppinsFamily)
                 }
             } else {
                 Row(
@@ -801,7 +801,7 @@ fun FloatingCallWindow() {
                         Text(person.name, fontSize = 13.sp, color = pal.tx, fontFamily = InterTight,
                             fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
                             maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
-                        Text(statusText, fontSize = 11.5.sp, color = pal.tx.copy(alpha = 0.75f), fontFamily = InterTight)
+                        Text(statusText, fontSize = 11.5.sp, color = pal.tx.copy(alpha = 0.75f), fontFamily = PoppinsFamily)
                     }
                 }
             }
@@ -883,17 +883,17 @@ fun StoryScreen() {
                 Spacer(Modifier.width(12.dp))
                 Column {
                     Text(content.person.name, fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
-                        fontSize = 16.sp, color = Color.White, fontFamily = Manrope)
-                    Text("2h ago", fontSize = 13.sp, color = Color.White.copy(alpha = 0.8f), fontFamily = Manrope)
+                        fontSize = 16.sp, color = Color.White, fontFamily = InterTight)
+                    Text("2h ago", fontSize = 12.sp, color = Color.White.copy(alpha = 0.8f), fontFamily = PoppinsFamily)
                 }
             }
             Spacer(Modifier.weight(1f))
             SerifTitle(quote, 52.sp, Color.White)
             Spacer(Modifier.weight(1f))
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
-                Text("Tap to continue · ", fontSize = 13.sp, color = Color.White.copy(alpha = 0.8f), fontFamily = Manrope)
+                Text("Tap to continue · ", fontSize = 12.sp, color = Color.White.copy(alpha = 0.8f), fontFamily = PoppinsFamily)
                 TikuLockIcon(Modifier.size(12.dp), tint = Color.White.copy(alpha = 0.8f))
-                Text(" Encrypted", fontSize = 13.sp, color = Color.White.copy(alpha = 0.8f), fontFamily = Manrope)
+                Text(" Encrypted", fontSize = 12.sp, color = Color.White.copy(alpha = 0.8f), fontFamily = PoppinsFamily)
             }
         }
     }

@@ -213,7 +213,7 @@ fun Av(person: Person, size: Int) {
             bmp != null -> Image(bmp.asImageBitmap(), null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
             person.photoUrl.isNotEmpty() -> coil.compose.AsyncImage(person.photoUrl, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
             EmojiArt.assetName(person.emoji) != null -> EmojiArt(person.emoji, (size * 0.62f).dp)
-            else -> Text(person.name.take(1).uppercase(), color = Color.White, fontSize = (size * 0.38f).sp, fontWeight = FontWeight.SemiBold)
+            else -> Text(person.name.take(1).uppercase(), color = Color.White, fontSize = (size * 0.38f).sp, fontWeight = FontWeight.SemiBold, fontFamily = InterTight)
         }
     }
 }
@@ -226,16 +226,16 @@ fun AvMe(size: Int) {
         when {
             bmp != null -> Image(bmp.asImageBitmap(), null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
             EmojiArt.assetName(AppState.myAvatarEmoji) != null -> EmojiArt(AppState.myAvatarEmoji, (size * 0.62f).dp)
-            else -> Text(AppState.myUsername.ifEmpty { "Y" }.take(1).uppercase(), color = Color.White, fontSize = (size * 0.38f).sp, fontWeight = FontWeight.SemiBold)
+            else -> Text(AppState.myUsername.ifEmpty { "Y" }.take(1).uppercase(), color = Color.White, fontSize = (size * 0.38f).sp, fontWeight = FontWeight.SemiBold, fontFamily = InterTight)
         }
     }
 }
 
 @Composable
-fun Title(t: String) = Text(t, color = Color.White, fontSize = 40.sp, fontWeight = FontWeight.Bold, modifier = Modifier.rise())
+fun Title(t: String) = Text(t, color = Color.White, fontSize = 40.sp, fontWeight = FontWeight.Bold, modifier = Modifier.rise(), fontFamily = InterTight)
 
 @Composable
-fun Section(t: String) = Text(t.uppercase(), color = Sub, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = 22.dp, bottom = 10.dp))
+fun Section(t: String) = Text(t.uppercase(), color = Sub, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = 22.dp, bottom = 10.dp), fontFamily = InterTight)
 
 @Composable
 fun CardRow(onClick: () -> Unit, idx: Int = 0, content: @Composable RowScope.() -> Unit) {
@@ -265,8 +265,8 @@ fun Toggle(on: Boolean) {
 @Composable
 fun TwoLine(title: String, sub: String?, modifier: Modifier, danger: Boolean = false) {
     Column(modifier) {
-        Text(title, color = if (danger) Danger else Color.White, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
-        if (!sub.isNullOrEmpty()) Text(sub, color = Sub, fontSize = 14.sp, modifier = Modifier.padding(top = 2.dp))
+        Text(title, color = if (danger) Danger else Color.White, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, fontFamily = PoppinsFamily)
+        if (!sub.isNullOrEmpty()) Text(sub, color = Sub, fontSize = 13.sp, modifier = Modifier.padding(top = 2.dp), fontFamily = PoppinsFamily)
     }
 }
 
@@ -288,15 +288,15 @@ fun Pill(t: String, modifier: Modifier, accent: Boolean, onClick: () -> Unit) {
             .background(if (accent) Brush.horizontalGradient(listOf(Rose, Color(0xFFFF7AA2))) else SolidColor(Color.White.copy(0.12f)))
             .press(onClick),
         contentAlignment = Alignment.Center
-    ) { Text(t, color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.SemiBold) }
+    ) { Text(t, color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, fontFamily = PoppinsFamily) }
 }
 
 @Composable
 fun Field(value: String, onChange: (String) -> Unit, hint: String, secret: Boolean = false) {
     Box(Modifier.fillMaxWidth().padding(bottom = 10.dp).clip(RoundedCornerShape(20.dp)).background(CardC).padding(16.dp)) {
-        if (value.isEmpty()) Text(hint, color = Sub, fontSize = 16.sp)
+        if (value.isEmpty()) Text(hint, color = Sub, fontSize = 15.sp, fontFamily = PoppinsFamily)
         BasicTextField(
-            value, onChange, singleLine = true, textStyle = TextStyle(color = Color.White, fontSize = 16.sp), cursorBrush = SolidColor(Rose),
+            value, onChange, singleLine = true, textStyle = TextStyle(fontFamily = PoppinsFamily, color = Color.White, fontSize = 15.sp), cursorBrush = SolidColor(Rose),
             visualTransformation = if (secret) PasswordVisualTransformation() else VisualTransformation.None,
             modifier = Modifier.fillMaxWidth()
         )
@@ -314,7 +314,7 @@ fun SubPage(title: String, onBack: () -> Unit, bottom: androidx.compose.ui.unit.
 @Composable
 fun MenuItem(label: String, danger: Boolean = false, onClick: () -> Unit, trailing: @Composable () -> Unit) {
     Row(Modifier.fillMaxWidth().press(onClick).padding(horizontal = 22.dp, vertical = 17.dp), verticalAlignment = Alignment.CenterVertically) {
-        Text(label, color = if (danger) Danger else Color.White, fontSize = 17.sp, modifier = Modifier.weight(1f))
+        Text(label, color = if (danger) Danger else Color.White, fontSize = 16.sp, modifier = Modifier.weight(1f), fontFamily = PoppinsFamily)
         trailing()
     }
 }
@@ -332,7 +332,7 @@ fun NoteItem(label: String, note: String, placeholder: Boolean, heart: Boolean, 
                 Modifier.bob(idx).widthIn(max = 76.dp).clip(RoundedCornerShape(16.dp)).background(CardC).border(1.dp, Color.White.copy(0.1f), RoundedCornerShape(16.dp))
                     .padding(horizontal = 8.dp, vertical = 5.dp),
                 contentAlignment = Alignment.Center
-            ) { Text(note, color = if (placeholder) Sub else Color.White, fontSize = 11.sp, lineHeight = 13.sp, textAlign = TextAlign.Center, maxLines = 2) }
+            ) { Text(note, color = if (placeholder) Sub else Color.White, fontSize = 11.sp, lineHeight = 13.sp, textAlign = TextAlign.Center, maxLines = 2, fontFamily = PoppinsFamily) }
             if (heart) Box(
                 Modifier.align(Alignment.BottomEnd).offset(x = 2.dp, y = 10.dp).graphicsLayer { scaleX = hp; scaleY = hp }.size(24.dp).clip(CircleShape).background(CardC).border(1.dp, Color.White.copy(0.15f), CircleShape),
                 contentAlignment = Alignment.Center
@@ -341,7 +341,7 @@ fun NoteItem(label: String, note: String, placeholder: Boolean, heart: Boolean, 
         Box(
             Modifier.padding(top = 4.dp).size(66.dp).border(2.dp, Brush.linearGradient(listOf(Rose, Color(0xFFFFB347))), CircleShape).padding(4.dp),
         ) { avatar() }
-        Text(label, color = Sub, fontSize = 12.sp, modifier = Modifier.padding(top = 6.dp))
+        Text(label, color = Sub, fontSize = 12.sp, modifier = Modifier.padding(top = 6.dp), fontFamily = InterTight)
     }
 }
 
@@ -358,12 +358,12 @@ fun NoteSheet(
         verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(14.dp)
     ) {
         if (mine) {
-            Text("Share a thought", color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold)
+            Text("Share a thought", color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold, fontFamily = InterTight)
             Box(Modifier.fillMaxWidth().clip(RoundedCornerShape(20.dp)).background(CardC).padding(16.dp)) {
-                if (text.isEmpty()) Text("What's on your mind?", color = Sub, fontSize = 16.sp)
-                BasicTextField(text, { if (it.length <= 60) text = it }, textStyle = TextStyle(color = Color.White, fontSize = 16.sp), cursorBrush = SolidColor(Rose), modifier = Modifier.fillMaxWidth())
+                if (text.isEmpty()) Text("What's on your mind?", color = Sub, fontSize = 15.sp, fontFamily = PoppinsFamily)
+                BasicTextField(text, { if (it.length <= 60) text = it }, textStyle = TextStyle(fontFamily = PoppinsFamily, color = Color.White, fontSize = 15.sp), cursorBrush = SolidColor(Rose), modifier = Modifier.fillMaxWidth())
             }
-            Text("${text.length}/60 · Visible to friends for 24 hours", color = Sub, fontSize = 13.sp)
+            Text("${text.length}/60 · Visible to friends for 24 hours", color = Sub, fontSize = 12.sp, fontFamily = PoppinsFamily)
             Row(horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(10.dp)) {
                 if (note.isNotEmpty()) Pill("Delete", Modifier.weight(1f), false, onDelete)
                 Pill("Share", Modifier.weight(1f), true) { onShare(text) }
@@ -371,9 +371,9 @@ fun NoteSheet(
         } else {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 headerAvatar()
-                Text(headerName, color = Color.White, fontSize = 17.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(start = 12.dp))
+                Text(headerName, color = Color.White, fontSize = 17.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(start = 12.dp), fontFamily = InterTight)
             }
-            Text(note, color = Color.White, fontSize = 17.sp, modifier = Modifier.clip(RoundedCornerShape(20.dp)).background(CardC).padding(horizontal = 16.dp, vertical = 12.dp))
+            Text(note, color = Color.White, fontSize = 17.sp, modifier = Modifier.clip(RoundedCornerShape(20.dp)).background(CardC).padding(horizontal = 16.dp, vertical = 12.dp), fontFamily = rememberChatFontFamily())
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Box(Modifier.size(46.dp).clip(CircleShape).background(Color.White.copy(0.12f)).press(onHeart), contentAlignment = Alignment.Center) {
                     Icon(
@@ -382,8 +382,8 @@ fun NoteSheet(
                     )
                 }
                 Box(Modifier.weight(1f).padding(horizontal = 10.dp).clip(RoundedCornerShape(999.dp)).background(CardC).padding(horizontal = 16.dp, vertical = 13.dp)) {
-                    if (text.isEmpty()) Text("Reply to note…", color = Sub, fontSize = 15.sp)
-                    BasicTextField(text, { text = it }, singleLine = true, textStyle = TextStyle(color = Color.White, fontSize = 15.sp), cursorBrush = SolidColor(Rose), modifier = Modifier.fillMaxWidth())
+                    if (text.isEmpty()) Text("Reply to note…", color = Sub, fontSize = 14.sp, fontFamily = PoppinsFamily)
+                    BasicTextField(text, { text = it }, singleLine = true, textStyle = TextStyle(fontFamily = PoppinsFamily, color = Color.White, fontSize = 14.sp), cursorBrush = SolidColor(Rose), modifier = Modifier.fillMaxWidth())
                 }
                 Box(Modifier.size(46.dp).clip(CircleShape).background(Rose).press { onReply(text) }, contentAlignment = Alignment.Center) {
                     Icon(Icons.Filled.Send, null, tint = Color.White, modifier = Modifier.size(20.dp))
@@ -402,8 +402,8 @@ fun CallPill(h: HazeState?, person: Person, kindLabel: String, secs: Int, onTap:
     ) {
         Av(person, 42)
         Column(Modifier.weight(1f).padding(horizontal = 12.dp)) {
-            Text(person.name, color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
-            Text("$kindLabel · ${secs / 60}:${(secs % 60).toString().padStart(2, '0')}", color = Sub, fontSize = 13.sp)
+            Text(person.name, color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, fontFamily = InterTight)
+            Text("$kindLabel · ${secs / 60}:${(secs % 60).toString().padStart(2, '0')}", color = Sub, fontSize = 12.sp, fontFamily = PoppinsFamily)
         }
         Box(Modifier.size(38.dp).clip(CircleShape).background(Danger).press(onEnd), contentAlignment = Alignment.Center) {
             Icon(Icons.Filled.Close, null, tint = Color.White, modifier = Modifier.size(18.dp))
@@ -438,7 +438,7 @@ fun NavPill(h: HazeState?, selected: Int, hasUnread: Boolean, onSelect: (Int) ->
                         Icon(icon, null, tint = ic, modifier = Modifier.size(23.dp).scale(sc))
                         if (i == 0 && hasUnread) Box(Modifier.align(Alignment.TopEnd).offset(x = 4.dp, y = (-2).dp).size(9.dp).clip(CircleShape).background(Rose))
                     }
-                    Text(label, color = c, fontSize = 11.sp, fontWeight = FontWeight.Medium, modifier = Modifier.padding(top = 3.dp))
+                    Text(label, color = c, fontSize = 11.sp, fontWeight = FontWeight.Medium, modifier = Modifier.padding(top = 3.dp), fontFamily = PoppinsFamily)
                 }
             }
         }

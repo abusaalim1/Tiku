@@ -11,6 +11,7 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -174,6 +175,56 @@ fun rememberEmojiFontFamily(): FontFamily {
     val ctx = LocalContext.current
     return remember {
         FontFamily(EmojiArt.FONT_ASSET_PATHS.map { Font(it, ctx.assets) })
+    }
+}
+
+/**
+ * ROUND 48: THE CHAT FAMILY — the iOS emoji subsets chained FIRST, Inter
+ * (Regular + Medium) behind them. This is the family chat message text
+ * (bubbles, composer, reply quotes, thread previews, vault copies) renders
+ * in, per the owner's typography order: message text in Inter, emoji as
+ * iOS emoji.
+ *
+ * Why the emoji parts stay first: the subsets contain ZERO ASCII glyphs
+ * (verified against their cmaps — no letters, digits or punctuation), so
+ * they can never steal ordinary text; every letter, digit and mark falls
+ * through to Inter. And every codepoint the subsets DO cover (hearts,
+ * arrows, symbols, all emoji) keeps resolving from the subsets exactly
+ * as it did with [rememberEmojiFontFamily] — including sequences, whose
+ * clusters the platform itemiser keeps inside one font. Inter itself has
+ * no emoji glyphs, so nothing emoji-shaped can be pulled out of the
+ * subsets by the Inter entries behind them.
+ */
+@Composable
+fun rememberChatFontFamily(): FontFamily {
+    val ctx = LocalContext.current
+    return remember {
+        FontFamily(
+            EmojiArt.FONT_ASSET_PATHS.map { Font(it, ctx.assets) } + listOf(
+                Font(R.font.inter_regular, FontWeight.Normal),
+                Font(R.font.inter_medium, FontWeight.Medium),
+            )
+        )
+    }
+}
+
+/**
+ * ROUND 48: the same chain trick for Inter Tight — for the rare header
+ * that LEADS with an emoji (the emoji picker's category titles): glyphs
+ * resolve from the iOS subsets, the Latin from Inter Tight, exactly the
+ * fallback the surface had before, with a named face behind it now.
+ */
+@Composable
+fun rememberTightEmojiFontFamily(): FontFamily {
+    val ctx = LocalContext.current
+    return remember {
+        FontFamily(
+            EmojiArt.FONT_ASSET_PATHS.map { Font(it, ctx.assets) } + listOf(
+                Font(R.font.inter_tight_regular, FontWeight.Normal),
+                Font(R.font.inter_tight_medium, FontWeight.Medium),
+                Font(R.font.inter_tight_semibold, FontWeight.SemiBold),
+            )
+        )
     }
 }
 

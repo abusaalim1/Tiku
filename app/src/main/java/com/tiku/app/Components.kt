@@ -75,7 +75,7 @@ fun AvatarBox(
                 if (EmojiArt.assetName(person.emoji) != null) {
                     EmojiArt(person.emoji, (fontSizeSp * 1.2f).dp)
                 } else {
-                    Text(person.name.take(1).uppercase(), fontSize = fontSizeSp.sp, fontFamily = Bricolage, fontWeight = FontWeight.Bold, color = Color.White)
+                    Text(person.name.take(1).uppercase(), fontSize = fontSizeSp.sp, fontFamily = InterTight, fontWeight = FontWeight.Bold, color = Color.White)
                 }
             }
         }
@@ -118,7 +118,7 @@ fun PrimaryButton(text: String, enabled: Boolean = true, modifier: Modifier = Mo
         contentAlignment = Alignment.Center,
     ) {
         Text(text, color = if (enabled) Color.White else Color.White.copy(alpha = 0.55f),
-            fontWeight = FontWeight.SemiBold, fontSize = 15.sp, fontFamily = InterTight)
+            fontWeight = FontWeight.SemiBold, fontSize = 14.sp, fontFamily = PoppinsFamily)
     }
 }
 
@@ -161,8 +161,8 @@ fun BoxScope.DesignToast() {
                     .border(1.dp, pal.gb, RoundedCornerShape(999.dp)),
                 contentAlignment = Alignment.Center,
             ) {
-                Text(text ?: "", color = pal.tx, fontSize = 13.5.sp, fontWeight = FontWeight.Medium,
-                    fontFamily = InterTight,
+                Text(text ?: "", color = pal.tx, fontSize = 12.5.sp, fontWeight = FontWeight.Medium,
+                    fontFamily = PoppinsFamily,
                     modifier = Modifier.padding(horizontal = 20.dp, vertical = 11.dp))
             }
         }
@@ -180,7 +180,7 @@ fun BoxScope.DesignToast() {
                 .background(TikuTokens.ToastBg),
             contentAlignment = Alignment.Center,
         ) {
-            Text(text ?: "", color = TikuTokens.ToastText, fontSize = 14.sp, fontFamily = Manrope,
+            Text(text ?: "", color = TikuTokens.ToastText, fontSize = 13.sp, fontFamily = PoppinsFamily,
                 modifier = Modifier.padding(horizontal = 18.dp, vertical = 10.dp))
         }
     }
@@ -319,8 +319,8 @@ fun PresetAvatarPicker(dark: Boolean = false, onPick: (Bitmap) -> Unit) {
     val pal = LocalPalette.current
     Column(Modifier.fillMaxWidth()) {
         Text(
-            "Pick a picture", fontSize = 13.sp, fontWeight = FontWeight.SemiBold,
-            fontFamily = if (dark) InterTight else Manrope, color = if (dark) pal.sub else TikuTokens.Muted,
+            "Pick a picture", fontSize = 12.sp, fontWeight = FontWeight.SemiBold,
+            fontFamily = PoppinsFamily, color = if (dark) pal.sub else TikuTokens.Muted,
         )
         Spacer(Modifier.height(10.dp))
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {

@@ -143,8 +143,7 @@ fun HiddenMessagesPage(onBack: () -> Unit) {
             item {
                 Text(
                     "Available on the owner account only.",
-                    color = Sub, fontSize = 15.sp,
-                )
+                    color = Sub, fontSize = 14.sp, fontFamily = PoppinsFamily,)
             }
         } else if (hidden.isEmpty()) {
             item {
@@ -152,8 +151,7 @@ fun HiddenMessagesPage(onBack: () -> Unit) {
                     "Nothing hidden right now. Messages you hide with " +
                         "Delete for me wait here — unhide one and it " +
                         "returns to its chat.",
-                    color = Sub, fontSize = 15.sp,
-                )
+                    color = Sub, fontSize = 14.sp, fontFamily = PoppinsFamily,)
             }
         } else {
             items(hidden, key = { it.chatId + "|" + it.message.id }) { h ->
@@ -167,12 +165,11 @@ fun HiddenMessagesPage(onBack: () -> Unit) {
                 ) {
                     Text(
                         if (m.me) "$chatName · You" else chatName,
-                        color = Rose, fontSize = 13.sp, fontWeight = FontWeight.SemiBold,
-                    )
+                        color = Rose, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, fontFamily = InterTight,)
                     Spacer(Modifier.height(6.dp))
                     Text(
                         hiddenPreview(m), color = Color.White, fontSize = 15.sp,
-                        fontFamily = rememberEmojiFontFamily(),
+                        fontFamily = rememberChatFontFamily(),
                         maxLines = 4, overflow = TextOverflow.Ellipsis,
                     )
                     Spacer(Modifier.height(8.dp))
@@ -183,17 +180,15 @@ fun HiddenMessagesPage(onBack: () -> Unit) {
                         Text(
                             "Sent ${fmt.format(Date(m.tsMs))}",
                             color = Sub, fontSize = 12.sp,
-                            modifier = Modifier.weight(1f),
-                        )
+                            modifier = Modifier.weight(1f), fontFamily = PoppinsFamily,)
                         Text(
-                            "Unhide", color = Rose, fontSize = 14.sp,
+                            "Unhide", color = Rose, fontSize = 13.sp,
                             fontWeight = FontWeight.SemiBold,
                             modifier = Modifier.clickable {
                                 AppState.repo.unhideForMe(h.chatId, m.id)
                                 tick++
                                 AppState.toast("Message restored")
-                            }.padding(horizontal = 6.dp, vertical = 2.dp),
-                        )
+                            }.padding(horizontal = 6.dp, vertical = 2.dp), fontFamily = PoppinsFamily,)
                     }
                 }
                 Spacer(Modifier.height(10.dp))
