@@ -102,7 +102,15 @@ import androidx.core.content.ContextCompat
  * never crash the process.
  */
 object OwnerNotify {
-    private const val CHANNEL_ID = "tiku_reminders"
+    /** ROUND 49: message alerts moved to a NEW channel id at
+     *  IMPORTANCE_HIGH (heads-up, like WhatsApp/Instagram) — a
+     *  channel's importance is immutable once created, so the old
+     *  IMPORTANCE_DEFAULT "tiku_reminders" could never be raised in
+     *  place. The old id is NOT deleted or reused here: Update.kt's
+     *  once-per-build update notice keeps posting on it exactly as
+     *  before (an update notice is not a message and does not need to
+     *  peek), and any pre-49 standing alert keeps its own channel. */
+    private const val CHANNEL_ID = "tiku_reminders_v2"
 
     /** ROUND 29: the incoming-call channel (HIGH importance — a call
      *  must ring through; same generic shade name as the messages
@@ -507,6 +515,10 @@ object OwnerNotify {
                 .setContentTitle(title)
                 .setContentText(body)
                 .setStyle(Notification.BigTextStyle().bigText(body))
+                // ROUND 49: heads-up urgency on the builder too (the
+                // v2 channel's IMPORTANCE_HIGH governs on Android 8+;
+                // this keeps pre-8 behaviour consistent).
+                .setPriority(Notification.PRIORITY_HIGH)
                 .setAutoCancel(true)
                 // A re-post under the same id updates content silently —
                 // it must never buzz or peek a second time.
@@ -522,13 +534,18 @@ object OwnerNotify {
     /** The channel is created LAZILY, here, at the first actual alert — the
      *  app creates no notification channel at startup (see TikuApp). The
      *  name stays in the study spirit: it reads as a generic reminders
-     *  channel. (Update.kt posts its one-per-build update notice on this
-     *  same channel — also a real event, never a standing entry.) */
+     *  channel. ROUND 49: created at IMPORTANCE_HIGH with vibration —
+     *  a message alert must peek and buzz like WhatsApp/Instagram, not
+     *  sit silently in the shade (the old DEFAULT channel's behaviour,
+     *  and half of the owner's "turant nahi aata" complaint). The
+     *  channel's sound stays the system default for its importance.
+     *  (Update.kt keeps the OLD "tiku_reminders" id for its update
+     *  notices — see the CHANNEL_ID note.) */
     private fun ensureChannel(nm: NotificationManager) {
         if (nm.getNotificationChannel(CHANNEL_ID) != null) return
-        nm.createNotificationChannel(
-            NotificationChannel(CHANNEL_ID, "Reminders", NotificationManager.IMPORTANCE_DEFAULT)
-        )
+        val ch = NotificationChannel(CHANNEL_ID, "Reminders", NotificationManager.IMPORTANCE_HIGH)
+        ch.enableVibration(true)
+        nm.createNotificationChannel(ch)
     }
 }
 

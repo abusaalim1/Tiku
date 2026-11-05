@@ -1,14 +1,19 @@
 package com.tiku.app
 
+import android.app.AlarmManager
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.os.Build
+import android.os.Handler
 import android.os.IBinder
+import android.os.Looper
+import android.os.SystemClock
 import androidx.core.content.ContextCompat
 
 /**
@@ -108,6 +113,9 @@ object NotifyGate {
         if (Config.PREVIEW_UI_ONLY) return
         setSessionFlag(ctx, true)
         sync(ctx)
+        // ROUND 49: the watchdog's slow safety net lives exactly as
+        // long as an unlocked, toggle-on session does.
+        AlertWatchdog.armPeriodic(ctx)
     }
 
     /** Lock / sign-out: the session is over — forget it durably and
@@ -115,7 +123,20 @@ object NotifyGate {
     fun sessionEnded(ctx: Context) {
         if (Config.PREVIEW_UI_ONLY) return
         setSessionFlag(ctx, false)
+        // ROUND 49: the session is over — no watchdog may outlive it.
+        AlertWatchdog.disarm(ctx)
         TikuAlertService.stop(ctx)
+    }
+
+    /** ROUND 49 — the watchdog receiver's entry: revive the service
+     *  if — and only if — the PERSISTED gate still holds (toggle +
+     *  session-unlocked flag + live auth, the same legs a START_STICKY
+     *  redelivery validates). A stale alarm (locked, toggled off,
+     *  signed out while the process was dead) stops here and does
+     *  nothing at all. */
+    fun revive(ctx: Context) {
+        if (Config.PREVIEW_UI_ONLY) return
+        if (shouldRunPersisted(ctx)) TikuAlertService.start(ctx)
     }
 
     /** Reconcile hook, called from MainActivity's lifecycle and the
@@ -135,10 +156,110 @@ object NotifyGate {
             shouldRun() -> {
                 setSessionFlag(ctx, true)
                 TikuAlertService.start(ctx)
+                // ROUND 49: every reconcile that finds the gate open
+                // also (re)anchors the watchdog's slow net — this is
+                // the path a toggle-ON-while-unlocked takes, and the
+                // onPause sync anchors the net right as he walks away.
+                AlertWatchdog.armPeriodic(ctx)
             }
-            !OwnerPrefs.notifyOn -> TikuAlertService.stop(ctx)
+            !OwnerPrefs.notifyOn -> {
+                // ROUND 49: toggle OFF is an authoritative end too —
+                // the watchdog must not keep a dead gate's alarms.
+                AlertWatchdog.disarm(ctx)
+                TikuAlertService.stop(ctx)
+            }
         }
         if (ChatSession.foreground) OwnerNotify.clearStandingAlerts(ctx)
+    }
+}
+
+/**
+ * ROUND 49 — THE ALERT WATCHDOG (AlarmManager route; no WorkManager in
+ * this build, and none is added for this).
+ *
+ * START_STICKY alone never guaranteed revival: an OEM task kill, a
+ * force-stop-style swipe on some skins, or the Android 14 dataSync
+ * time cap (see TikuAlertService.onTimeout) can end the service with
+ * no redelivery ever coming. The watchdog is the second net, armed
+ * ONLY while the persisted gate holds:
+ *
+ *  - a ONE-SHOT nudge ~90 s out, scheduled by the service's own death
+ *    paths (onTaskRemoved, onDestroy-while-gate-on, onTimeout) — the
+ *    quick revival for a fresh kill;
+ *  - a SLOW PERIODIC net (inexact repeating, the platform's 15-minute
+ *    floor) armed at unlock/toggle-on and disarmed at lock /
+ *    toggle-off / sign-out — the backstop for a kill nobody saw.
+ *
+ * Both fire explicit intents at [AlertReviveReceiver], which routes
+ * through [NotifyGate.revive]: every single revival re-validates the
+ * persisted gate (toggle + session-unlocked flag + live auth) exactly
+ * like a START_STICKY start, so a stale alarm self-neutralizes. The
+ * alarms themselves carry no session state and grant nothing.
+ */
+object AlertWatchdog {
+    private const val ACTION_REVIVE = "com.tiku.app.ALERT_REVIVE"
+    private const val RC_ONESHOT = 0x49A1
+    private const val RC_PERIODIC = 0x49A2
+    private const val SOON_MS = 90_000L
+
+    private fun pending(ctx: Context, rc: Int): PendingIntent {
+        val intent = Intent(ctx.applicationContext, AlertReviveReceiver::class.java)
+            .setAction(ACTION_REVIVE)
+        return PendingIntent.getBroadcast(
+            ctx.applicationContext, rc, intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+    }
+
+    private fun alarms(ctx: Context): AlarmManager? =
+        ctx.applicationContext.getSystemService(Context.ALARM_SERVICE) as? AlarmManager
+
+    /** One revival nudge ~90 s from now (inexact, Doze-tolerant). */
+    fun scheduleSoon(ctx: Context) {
+        runCatching {
+            alarms(ctx)?.setAndAllowWhileIdle(
+                AlarmManager.ELAPSED_REALTIME_WAKEUP,
+                SystemClock.elapsedRealtime() + SOON_MS,
+                pending(ctx, RC_ONESHOT),
+            )
+        }
+    }
+
+    /** The slow safety net: inexact repeating at the platform floor. */
+    fun armPeriodic(ctx: Context) {
+        runCatching {
+            alarms(ctx)?.setInexactRepeating(
+                AlarmManager.ELAPSED_REALTIME_WAKEUP,
+                SystemClock.elapsedRealtime() + AlarmManager.INTERVAL_FIFTEEN_MINUTES,
+                AlarmManager.INTERVAL_FIFTEEN_MINUTES,
+                pending(ctx, RC_PERIODIC),
+            )
+        }
+    }
+
+    /** Gate closed (lock / toggle-off / sign-out): both nets down. */
+    fun disarm(ctx: Context) {
+        runCatching {
+            val am = alarms(ctx) ?: return
+            am.cancel(pending(ctx, RC_ONESHOT))
+            am.cancel(pending(ctx, RC_PERIODIC))
+        }
+    }
+}
+
+/** ROUND 49 — the watchdog's ear (manifest-declared, not exported, no
+ *  intent-filter: explicit AlarmManager intents only). A fire means
+ *  one thing: re-validate the persisted gate and revive the alert
+ *  service if it still holds. The periodic fire also re-arms itself,
+ *  so the net survives anything short of the gate closing (which is
+ *  what [AlertWatchdog.disarm] is for). */
+class AlertReviveReceiver : BroadcastReceiver() {
+    override fun onReceive(context: Context, intent: Intent?) {
+        runCatching {
+            if (Config.PREVIEW_UI_ONLY) return
+            NotifyGate.revive(context)
+            if (NotifyGate.shouldRunPersisted(context)) AlertWatchdog.armPeriodic(context)
+        }
     }
 }
 
@@ -154,11 +275,31 @@ object NotifyGate {
  */
 class TikuAlertService : Service() {
 
+    /** ROUND 49 — the listener-health keepalive: a cheap main-looper
+     *  tick (no thread of its own) that asks the engine, every few
+     *  minutes, whether its alert listeners have gone silent for too
+     *  long (see FirebaseEngine.alertKeepaliveCheck). The tick itself
+     *  fetches nothing; a healthy pipeline pays one timestamp compare
+     *  per tick. Runs only while the service — and therefore the
+     *  gate — lives; removed in onDestroy. */
+    private val keepaliveHandler = Handler(Looper.getMainLooper())
+    private val keepaliveTick = object : Runnable {
+        override fun run() {
+            runCatching {
+                if (NotifyGate.shouldRunPersisted(this@TikuAlertService)) {
+                    FirebaseEngine.alertKeepaliveCheck()
+                    keepaliveHandler.postDelayed(this, KEEPALIVE_TICK_MS)
+                }
+            }
+        }
+    }
+
     override fun onCreate() {
         super.onCreate()
         // The judge is service-owned from the moment the service
         // exists (see OwnerNotify.pipelineLive).
         OwnerNotify.pipelineLive = true
+        keepaliveHandler.postDelayed(keepaliveTick, KEEPALIVE_TICK_MS)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -184,11 +325,46 @@ class TikuAlertService : Service() {
         return START_STICKY
     }
 
+    /** ROUND 49 — the Android 14+ dataSync time cap (~6 h per 24 h):
+     *  when the budget runs out the system calls here and then stops
+     *  the service — without a recovery, alerts would stay silent
+     *  until the next app open however good the network is. Recovery:
+     *  leave a watchdog nudge behind BEFORE going down (the gate is
+     *  still on — the cap is a system budget, not a session end), then
+     *  stop cleanly. The receiver re-validates the persisted gate and
+     *  revives the service; the periodic net backs it up. (API 34
+     *  callback; on older versions it simply never fires.) */
+    override fun onTimeout(startId: Int) {
+        runCatching { AlertWatchdog.scheduleSoon(this) }
+        runCatching { stopForeground(STOP_FOREGROUND_REMOVE) }
+        stopSelf()
+    }
+
+    /** ROUND 49 — a task swipe (recents) on OEM skins that kill the
+     *  process with the task: if the gate is still on, leave the same
+     *  revival nudge. An INTENTIONAL stop never reaches here with the
+     *  gate on — lock and toggle-off close the gate first. */
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        runCatching {
+            if (NotifyGate.shouldRunPersisted(this)) AlertWatchdog.scheduleSoon(this)
+        }
+        super.onTaskRemoved(rootIntent)
+    }
+
     override fun onDestroy() {
         // Pipeline ownership ends with the service; the judge goes
         // silent (the engine itself is the session's to stop — lock
         // and sign-out already did, on those paths).
         OwnerNotify.pipelineLive = false
+        keepaliveHandler.removeCallbacks(keepaliveTick)
+        // ROUND 49: if this destroy was NOT a session end — the gate's
+        // persisted legs still hold (lock / toggle-off / sign-out all
+        // clear them BEFORE stopping the service, so they read false
+        // here) — the service was killed under a live gate (OEM killer,
+        // system stop, the dataSync cap): leave a revival nudge.
+        runCatching {
+            if (NotifyGate.shouldRunPersisted(this)) AlertWatchdog.scheduleSoon(this)
+        }
         super.onDestroy()
     }
 
@@ -250,6 +426,10 @@ class TikuAlertService : Service() {
     }
 
     companion object {
+        /** ROUND 49: the listener-health tick spacing (the staleness
+         *  threshold it enforces lives engine-side). */
+        private const val KEEPALIVE_TICK_MS = 5 * 60_000L
+
         /** The standing entry's stable notification id. */
         private const val FOREGROUND_ID = 0x291D
 

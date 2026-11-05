@@ -22,6 +22,14 @@
          unless the service actually starts (unlocked + toggle ON). -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <!-- ROUND 49: lets Settings offer the battery-optimization exemption
+         for THIS package only (ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+         fired from the Settings "Turant notifications" row — never from a
+         popup, never automatically). Without the exemption, Doze defers
+         the alert service's network and message alerts arrive late even
+         on a perfect connection. The permission alone changes nothing;
+         only the user's own tap in Settings asks. -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
     <!-- ROUND 32: the media-projection companion of the screen-share
          service below. Inert unless a user in a live call taps
          "Share screen" and grants the system consent dialog. -->
@@ -72,6 +80,18 @@
             android:name=".TikuAlertService"
             android:exported="false"
             android:foregroundServiceType="dataSync" />
+        <!-- ROUND 49: the alert watchdog's ear. Explicit intents ONLY
+             (no intent-filter, never exported): AlarmManager nudges from
+             AlertWatchdog (NotifyService.kt) land here when the alert
+             service has died while its gate is still on — OEM task
+             kills, the dataSync time cap, system stops. The receiver
+             re-validates the persisted gate before reviving anything,
+             so a stale alarm after lock / toggle-off / sign-out is a
+             no-op. Never a boot receiver: the unlock-only lifetime law
+             is untouched. -->
+        <receiver
+            android:name=".AlertReviveReceiver"
+            android:exported="false" />
         <!-- ROUND 32: screen-share projection service (ScreenShare.kt).
              Never exported, never started outside a live call: it runs
              only while a user is actively sharing their screen, which

@@ -115,6 +115,18 @@ object FirebaseEngine : ChatRepo {
 
     private fun sessionLive(): Boolean = ChatSession.unlocked || serviceSession
 
+    /** ROUND 49 (this engine hook exists ONLY for the alert service's
+     *  keepalive — see TikuAlertService / alertKeepaliveCheck): the
+     *  wall-clock time of the last alert-relevant snapshot activity
+     *  (threads or any per-chat preview listener). Stamped by [start]
+     *  on attach and by both listeners on every successful snapshot.
+     *  Firestore gives app code no heartbeat, so a LONG silence is the
+     *  only stall signal available; the threads listener's own error
+     *  retries and the preview listeners' error self-heal below cover
+     *  the known-error cases, and this stamp covers the silent ones. */
+    @Volatile var lastAlertActivityAt: Long = 0L
+        private set
+
     // ---------- identity ----------
     private var myPrivBytes: ByteArray? = null
     private val convKeyCache = mutableMapOf<String, SecretKey>()
@@ -758,6 +770,9 @@ object FirebaseEngine : ChatRepo {
         pinPrefs = ctx.getSharedPreferences("tiku_pins", Context.MODE_PRIVATE)
         if (uid.isEmpty()) return
         listenersActive = true
+        // ROUND 49: attaching (or re-attaching) is itself activity —
+        // the keepalive's staleness clock starts from here.
+        lastAlertActivityAt = System.currentTimeMillis()
         threadsReg?.remove()
         // ROUND 6 — BUGS 2+3 SHARED ROOT CAUSE (proven server-side before this
         // round): this query used to add .orderBy("updatedAt", DESCENDING).
@@ -791,6 +806,7 @@ object FirebaseEngine : ChatRepo {
                     return@addSnapshotListener
                 }
                 threadsErrorRetries = 0
+                lastAlertActivityAt = System.currentTimeMillis()
                 scope.launch {
                     runCatching {
                         var skipped = 0
@@ -937,8 +953,28 @@ object FirebaseEngine : ChatRepo {
                     .addSnapshotListener { snap, err ->
                         if (err != null) {
                             Log.e("TikuChat", "preview listener error for chat $tid", err)
+                            // ROUND 49: an errored listener is REMOVED by
+                            // Firestore — and until this round the dead
+                            // registration STAYED in previewRegs, whose
+                            // containsKey gate then never re-registered
+                            // it: that chat's alerts silently died until
+                            // the next engine restart (a real "message
+                            // aaya hi nahi" stall on a good network).
+                            // Drop the corpse and re-register shortly;
+                            // syncPreviewListeners rebuilds from the
+                            // live thread set.
+                            previewRegs.remove(tid)?.remove()
+                            scope.launch {
+                                delay(5000)
+                                if (sessionLive() && listenersActive) {
+                                    syncPreviewListeners(
+                                        AppState.threads.value.map { it.id }.toSet()
+                                    )
+                                }
+                            }
                             return@addSnapshotListener
                         }
+                        lastAlertActivityAt = System.currentTimeMillis()
                         val docs = snap?.documents ?: return@addSnapshotListener
                         scope.launch { runCatching { applyPreviewSnapshot(tid, docs) } }
                     }
@@ -1168,6 +1204,45 @@ object FirebaseEngine : ChatRepo {
         myDocReg?.remove(); myDocReg = null
         noteRegs.values.forEach { it?.remove() }; noteRegs.clear()
     }
+
+    /** ROUND 49 — listener-health keepalive, called ONLY by
+     *  [TikuAlertService]'s 5-minute tick while the alert gate holds.
+     *  If no alert-relevant snapshot (threads or any preview listener)
+     *  has landed for over [ALERT_STALE_MS], the listeners are assumed
+     *  silently stalled (the failure mode the error callbacks cannot
+     *  see: a wedged sync stream after a network switch or a long
+     *  Doze) and are force-rebuilt — preview registrations dropped and
+     *  the proven full re-attach ([start], the same path the threads
+     *  error retries use) re-run, whose first snapshot re-syncs every
+     *  preview listener. The stamp is reset BEFORE the rebuild so a
+     *  slow re-attach cannot retrigger on the next tick. The delta
+     *  judge makes the rebuild safe: its per-thread baselines and
+     *  prev-id sets survive in-process, so a rebuilt listener's first
+     *  snapshot diffs against the pre-stall window — a message that
+     *  arrived DURING the stall is a genuine delta and alerts (that is
+     *  the point), and nothing already seen can re-alert.
+     *
+     *  Honest cost: on a genuinely quiet account this rebuild also
+     *  fires (silence is indistinguishable from a stall without a
+     *  heartbeat) — bounded to at most once per [ALERT_STALE_MS] while
+     *  the gate is on, and a re-attach's initial snapshots are served
+     *  from the local cache the listeners already maintain. No message
+     *  data is polled: between rebuilds this is one timestamp compare
+     *  per service tick. */
+    fun alertKeepaliveCheck() {
+        runCatching {
+            if (!listenersActive || !sessionLive()) return
+            val now = System.currentTimeMillis()
+            if (now - lastAlertActivityAt <= ALERT_STALE_MS) return
+            lastAlertActivityAt = now
+            previewRegs.values.forEach { it.remove() }; previewRegs.clear()
+            if (::appCtx.isInitialized) start(appCtx)
+        }
+    }
+
+    /** ROUND 49: silence longer than this (with the gate on) reads as
+     *  a stalled listener rather than a quiet account. */
+    private const val ALERT_STALE_MS = 10 * 60_000L
 
     // ================= ROUND 14: MY DOC (block list + my note) =================
     /** One listener on users/{me}: feeds AppState.blockedUids (+ the resolved
@@ -1458,6 +1533,11 @@ object FirebaseEngine : ChatRepo {
             .orderBy("ts", Query.Direction.DESCENDING).limit(PAGE_SIZE)
             .addSnapshotListener { snap, _ ->
                 if (snap == null) return@addSnapshotListener
+                // ROUND 49: an open chat's traffic is listener activity
+                // too (its preview listener stands down while open) —
+                // without this stamp a long open chat would read as a
+                // stall to the alert keepalive.
+                lastAlertActivityAt = System.currentTimeMillis()
                 // round 4: while this chat is OPEN on screen, incoming messages
                 // are marked seen as they land (drives the sender's "Seen").
                 if (openChatIds.contains(id)) markIncomingSeen(id, snap.documents)

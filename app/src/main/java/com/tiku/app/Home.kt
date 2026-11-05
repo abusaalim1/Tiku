@@ -1,9 +1,13 @@
 package com.tiku.app
 
 import android.Manifest
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.BitmapFactory
+import android.net.Uri
 import android.os.Build
+import android.os.PowerManager
+import android.provider.Settings
 import androidx.core.content.ContextCompat
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -55,6 +59,7 @@ import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -860,6 +865,72 @@ private fun SettingsMain(
                     NotifyGate.sync(ctx)
                     OwnerNotify.cancelAll(ctx)
                     AppState.toast("Notifications off")
+                }
+            }
+        }
+        item {
+            // ROUND 49 (owner's device complaint: "notification turant
+            // aata hi nahi hai" on a good network): while Notifications
+            // are ON, show this phone's battery-optimization status
+            // right under the toggle. Without the exemption Doze defers
+            // the alert service's network, so alerts land late however
+            // good the connection is. Settings row ONLY — no popup, no
+            // nagging: not exempt → the row + its button fire the
+            // system's own per-app exemption dialog; exempt → a calm
+            // confirmation line. The state re-reads on every ON_RESUME
+            // so returning from the system dialog updates the row.
+            if (OwnerPrefs.notifyOn) {
+                val pm = ctx.getSystemService(android.content.Context.POWER_SERVICE) as? PowerManager
+                var batteryExempt by remember {
+                    mutableStateOf(pm?.isIgnoringBatteryOptimizations(ctx.packageName) ?: false)
+                }
+                val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
+                DisposableEffect(lifecycleOwner) {
+                    val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+                        if (event == androidx.lifecycle.Lifecycle.Event.ON_RESUME) {
+                            batteryExempt =
+                                pm?.isIgnoringBatteryOptimizations(ctx.packageName) ?: batteryExempt
+                        }
+                    }
+                    lifecycleOwner.lifecycle.addObserver(observer)
+                    onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+                }
+                val askExemption = {
+                    runCatching {
+                        ctx.startActivity(
+                            Intent(
+                                Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+                                Uri.parse("package:" + ctx.packageName),
+                            ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        )
+                    }.onFailure {
+                        // OEM without the per-app dialog: the system
+                        // battery-optimization list is the fallback.
+                        runCatching {
+                            ctx.startActivity(
+                                Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)
+                                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                            )
+                        }
+                    }
+                }
+                if (batteryExempt) {
+                    CardRow({}, idx = 0) {
+                        TwoLine(
+                            "Turant notifications",
+                            "Battery bandish hati hui hai ✓",
+                            Modifier.weight(1f),
+                        )
+                    }
+                } else {
+                    CardRow(askExemption, idx = 0) {
+                        TwoLine(
+                            "Turant notifications",
+                            "Turant notification ke liye battery bandish hatao — bandish lagi ho toh message alerts der se aate hain",
+                            Modifier.weight(1f),
+                        )
+                        Pill("Hatao", Modifier.padding(start = 10.dp), true, askExemption)
+                    }
                 }
             }
         }
