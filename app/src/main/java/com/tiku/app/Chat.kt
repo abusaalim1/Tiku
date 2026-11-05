@@ -1985,6 +1985,7 @@ private fun RdBubbleRow(
 /** The file's fixed 220×260 image box, fed by the real decrypted bitmap. */
 @Composable
 private fun RdImageBubble(m: TikuMessage) {
+    val emojiFont = rememberChatFontFamily() // ROUND 48 fix: caption text uses the chat chain
     val bmp = m.photo
     Box(Modifier.size(220.dp, 260.dp).background(RdCard)) {
         if (bmp != null) {
