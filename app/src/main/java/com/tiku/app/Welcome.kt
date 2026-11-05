@@ -41,12 +41,14 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -67,6 +69,11 @@ private const val RND_CHARS = "▓▒░#@%&*ø§¤"
 fun WelcomeScreen(onGoogleClick: () -> Unit) {
     androidx.activity.compose.BackHandler { AppState.go(Screen.Facade) }
     val settings = tikuSettings().value
+    // ROUND 36: premium-dark stage + liquid glass, the current app's
+    // language (palette + InterTight) — scenes, timing and the sign-in
+    // contract below are unchanged; visuals only.
+    val pal = LocalPalette.current
+    val density = LocalDensity.current
     var sceneIdx by remember { mutableStateOf(0) }
     var visible by remember { mutableStateOf(true) }
     var cipherText by remember { mutableStateOf(PLAIN_LINE) }
@@ -117,7 +124,12 @@ fun WelcomeScreen(onGoogleClick: () -> Unit) {
 
     val scrollState = rememberScrollState()
 
-    Box(Modifier.fillMaxSize()) {
+    Box(
+        Modifier.fillMaxSize().background(pal.bg)
+            .drawBehind {
+                with(density) { drawThemePattern(pal.pat, pal.ac, pal.isDark, 160.dp.toPx()) }
+            },
+    ) {
         // Soft ambient radial background glow
         Box(
             Modifier
@@ -125,7 +137,7 @@ fun WelcomeScreen(onGoogleClick: () -> Unit) {
                 .offset((-80).dp, 20.dp)
                 .background(
                     Brush.radialGradient(
-                        listOf(settings.accent.copy(alpha = 0.22f), Color.Transparent)
+                        listOf(pal.ac.copy(alpha = 0.26f), Color.Transparent)
                     ),
                     CircleShape
                 )
@@ -168,7 +180,7 @@ fun WelcomeScreen(onGoogleClick: () -> Unit) {
                                 .size(140.dp)
                                 .scale(0.55f + phase * 0.95f)
                                 .alpha(0.6f * (1f - phase))
-                                .border(1.5.dp, settings.accent.copy(alpha = 0.5f), CircleShape)
+                                .border(1.5.dp, pal.ac.copy(alpha = 0.5f), CircleShape)
                         )
                     }
 
@@ -178,9 +190,9 @@ fun WelcomeScreen(onGoogleClick: () -> Unit) {
                             .size(80.dp)
                             .offset(y = fy.dp)
                             .rotate(fr)
-                            .shadow(16.dp, RoundedCornerShape(24.dp), spotColor = settings.gradBottom)
+                            .shadow(16.dp, RoundedCornerShape(24.dp), spotColor = pal.ac2)
                             .clip(RoundedCornerShape(24.dp))
-                            .border(1.5.dp, Color.White.copy(alpha = 0.8f), RoundedCornerShape(24.dp)),
+                            .border(1.5.dp, Color.White.copy(alpha = 0.25f), RoundedCornerShape(24.dp)),
                         contentAlignment = Alignment.Center
                     ) {
                         Image(
@@ -197,10 +209,8 @@ fun WelcomeScreen(onGoogleClick: () -> Unit) {
                 // Feature Chip / Cipher capsule
                 Box(
                     modifier = Modifier
-                        .shadow(4.dp, RoundedCornerShape(20.dp), spotColor = Color(0x10000000))
-                        .clip(RoundedCornerShape(20.dp))
-                        .background(TikuTokens.Bubble)
-                        .border(1.dp, TikuTokens.Line.copy(alpha = 0.7f), RoundedCornerShape(20.dp))
+                        .shadow(4.dp, RoundedCornerShape(20.dp), spotColor = Color(0x4D000000))
+                        .glassSurface(RoundedCornerShape(20.dp))
                         .padding(horizontal = 16.dp, vertical = 8.dp)
                         .alpha(txtAlpha)
                         .offset(y = txtOff.dp),
@@ -217,9 +227,9 @@ fun WelcomeScreen(onGoogleClick: () -> Unit) {
                                 1 -> cipherText
                                 else -> "love · fate · first snow"
                             },
-                            fontFamily = SerifItalic,
+                            fontFamily = InterTight,
                             fontSize = 17.sp,
-                            color = TikuTokens.Ink
+                            color = pal.tx
                         )
                     }
                 }
@@ -235,18 +245,22 @@ fun WelcomeScreen(onGoogleClick: () -> Unit) {
                         .offset(y = txtOff.dp),
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
-                    SerifTitle(
+                    Text(
                         text = Scenes[sceneIdx].first,
                         fontSize = 30.sp,
+                        fontFamily = InterTight,
+                        fontWeight = FontWeight.SemiBold,
+                        letterSpacing = (-0.3).sp,
+                        color = pal.tx,
                         textAlign = TextAlign.Center,
                         modifier = Modifier.fillMaxWidth()
                     )
                     Spacer(Modifier.height(8.dp))
                     Text(
                         text = Scenes[sceneIdx].second,
-                        color = TikuTokens.Muted,
+                        color = pal.sub,
                         fontSize = 14.sp,
-                        fontFamily = Manrope,
+                        fontFamily = InterTight,
                         lineHeight = 21.sp,
                         textAlign = TextAlign.Center,
                         modifier = Modifier
@@ -276,8 +290,8 @@ fun WelcomeScreen(onGoogleClick: () -> Unit) {
                                 .width(dotWidth.dp)
                                 .clip(RoundedCornerShape(6.dp))
                                 .background(
-                                    if (isCurrent) settings.accent
-                                    else TikuTokens.Line.copy(alpha = 0.8f)
+                                    if (isCurrent) pal.ac
+                                    else Color.White.copy(alpha = 0.14f)
                                 )
                         )
                     }
@@ -293,7 +307,8 @@ fun WelcomeScreen(onGoogleClick: () -> Unit) {
                     .padding(bottom = 12.dp, top = 4.dp),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                SerifTitle("Tiku", 32.sp)
+                Text("Tiku", fontSize = 32.sp, fontFamily = InterTight,
+                    fontWeight = FontWeight.SemiBold, letterSpacing = (-0.3).sp, color = pal.tx)
                 Spacer(Modifier.height(12.dp))
 
                 // Modern Instagram-styled Google Sign-In button with elevation & click feedback
@@ -301,10 +316,8 @@ fun WelcomeScreen(onGoogleClick: () -> Unit) {
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(52.dp)
-                        .shadow(6.dp, RoundedCornerShape(16.dp), spotColor = Color(0x18000000))
-                        .clip(RoundedCornerShape(16.dp))
-                        .background(TikuTokens.Card)
-                        .border(1.dp, TikuTokens.Line, RoundedCornerShape(16.dp))
+                        .shadow(6.dp, RoundedCornerShape(16.dp), spotColor = Color(0x4D000000))
+                        .glassSurface(RoundedCornerShape(16.dp))
                         .clickable(enabled = !AppState.authBusy) {
                             if (!AppState.authBusy) {
                                 AppState.authBusy = true
@@ -320,7 +333,7 @@ fun WelcomeScreen(onGoogleClick: () -> Unit) {
                         ) {
                             CircularProgressIndicator(
                                 modifier = Modifier.size(20.dp),
-                                color = settings.accent,
+                                color = pal.ac,
                                 strokeWidth = 2.dp
                             )
                             Spacer(Modifier.width(12.dp))
@@ -328,8 +341,8 @@ fun WelcomeScreen(onGoogleClick: () -> Unit) {
                                 text = "Connecting with Google...",
                                 fontWeight = FontWeight.Medium,
                                 fontSize = 15.sp,
-                                fontFamily = Manrope,
-                                color = TikuTokens.Muted
+                                fontFamily = InterTight,
+                                color = pal.sub
                             )
                         }
                     } else {
@@ -348,8 +361,8 @@ fun WelcomeScreen(onGoogleClick: () -> Unit) {
                                 text = "Continue with Google",
                                 fontWeight = FontWeight.SemiBold,
                                 fontSize = 15.sp,
-                                fontFamily = Manrope,
-                                color = TikuTokens.Ink
+                                fontFamily = InterTight,
+                                color = pal.tx
                             )
                         }
                     }
@@ -360,8 +373,8 @@ fun WelcomeScreen(onGoogleClick: () -> Unit) {
                 Text(
                     text = "Continue with Google to sync your journal, favourites & progress securely.",
                     fontSize = 12.sp,
-                    color = TikuTokens.Muted,
-                    fontFamily = Manrope,
+                    color = pal.sub,
+                    fontFamily = InterTight,
                     textAlign = TextAlign.Center,
                     lineHeight = 16.sp,
                     modifier = Modifier.fillMaxWidth(0.9f)

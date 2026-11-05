@@ -1,9 +1,13 @@
 package com.tiku.app
 
 import android.content.Context
+import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import androidx.compose.ui.platform.LocalContext
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.CubicBezierEasing
@@ -647,44 +651,28 @@ private fun RdISearchPage(thread: ChatThread, onBack: () -> Unit) {
 @Composable
 private fun RdICustomizePage(thread: ChatThread, onBack: () -> Unit) {
     val globalSettings by SettingsStore.state.collectAsState()
-    val themeIdx = thread.effectiveSettings(globalSettings).accentIdx
     RdISubPage(bottom = 40.dp) {
         item { RdISubHeader("Customize chat", onBack) }
         // ROUND 26 — the shared wallpaper themes (the owner's six):
         // picking one re-skins BOTH phones (chats/{id}.theme).
+        // ROUND 35: this picker is now the ONLY theme control here —
+        // the legacy accent-swatch row ("Chat theme": five gradient
+        // circles writing the old themeAccent index) was removed on
+        // the owner's order. The accent DATA path itself is untouched:
+        // effectiveSettings / ThemeCodec still resolve whatever accent
+        // a chat already carries, exactly as before; there is simply
+        // no UI left that changes it.
         item { RdISection("Theme") }
         item {
             RdICardRow {
                 val current = ChatThemes.byId(thread.themeId)
-                RdINavRow("Theme", current?.name ?: "Default") {
-                    openRdThemePicker(thread)
+                val currentName = when {
+                    ChatThemes.isCustom(thread.themeId) -> "Custom photo"
+                    current != null -> current.name
+                    else -> "Default"
                 }
-            }
-        }
-        item { RdISection("Chat theme") }
-        item {
-            RdICardRow {
-                Row(
-                    Modifier.fillMaxWidth().padding(16.dp),
-                    horizontalArrangement = Arrangement.SpaceEvenly,
-                ) {
-                    RdIThemes.forEachIndexed { i, pair ->
-                        val sel = themeIdx == i
-                        val sc by animateFloatAsState(
-                            if (sel) 1.1f else 1f, spring(0.5f, 400f), label = "sw$i",
-                        )
-                        Box(
-                            Modifier.size(52.dp).scale(sc).clip(CircleShape)
-                                .background(Brush.linearGradient(listOf(pair.first, pair.second)))
-                                .then(
-                                    if (sel) Modifier.border(2.5.dp, Color.White, CircleShape)
-                                    else Modifier,
-                                )
-                                .rdIPress {
-                                    AppState.repo.setTheme(thread.id, ThemeCodec.toStored(i), null)
-                                },
-                        )
-                    }
+                RdINavRow("Theme", currentName) {
+                    openRdThemePicker(thread)
                 }
             }
         }
@@ -715,15 +703,49 @@ private fun RdICustomizePage(thread: ChatThread, onBack: () -> Unit) {
     }
 }
 
+/** The picker's tile set: the built-ins (Default first) plus, since
+ *  ROUND 35, one Custom tile for a gallery photo. */
+private sealed interface RdThemeTileSpec {
+    data class Builtin(val theme: ChatTheme?) : RdThemeTileSpec
+    data object Custom : RdThemeTileSpec
+}
+
 /** ROUND 26 — the theme picker, opened from Customize chat ▸ Theme.
  *  AppState.sheet is the house pattern; the sheet host renders it in
  *  the Tik sheet skin over this screen. A Default tile + the six
  *  wallpaper tiles (the owner's images, decoded from assets exactly
  *  as supplied). Tapping one writes the SHARED chats/{id}.theme via
  *  the repo and closes — both phones re-skin live through the
- *  threads listener, the open chat included. */
+ *  threads listener, the open chat included.
+ *
+ *  ROUND 35 adds the eighth tile, "Custom photo": it launches the
+ *  system photo picker; the chosen image (downscaled to a ≤1080px
+ *  JPEG) goes to a confirm sheet where a colour palette is picked
+ *  with it, and only then is anything written — the photo uploads
+ *  ENCRYPTED as the chat's theme asset and the field becomes
+ *  "custom:<palette>" (see FirebaseEngine.setCustomTheme). */
 private fun openRdThemePicker(thread: ChatThread) {
     AppState.sheet {
+        val ctx = LocalContext.current
+        val pickLauncher = rememberLauncherForActivityResult(
+            ActivityResultContracts.PickVisualMedia(),
+        ) { uri ->
+            if (uri != null) {
+                val picked = runCatching {
+                    val raw = ctx.contentResolver.openInputStream(uri)
+                        ?.use { BitmapFactory.decodeStream(it) }
+                    raw?.let {
+                        val jpeg = MediaStore.compressPhoto(it, maxSide = 1080, quality = 82)
+                        BitmapFactory.decodeByteArray(jpeg, 0, jpeg.size)?.let { small -> small to jpeg }
+                    }
+                }.getOrNull()
+                if (picked != null) {
+                    openRdCustomThemeConfirm(thread, picked.first, picked.second)
+                } else {
+                    AppState.toast("Couldn't read that photo")
+                }
+            }
+        }
         Column(Modifier.padding(horizontal = 6.dp)) {
             Text(
                 "Theme", color = Color.White, fontSize = 20.sp,
@@ -735,20 +757,35 @@ private fun openRdThemePicker(thread: ChatThread) {
                 modifier = Modifier.padding(horizontal = 16.dp),
             )
             Spacer(Modifier.height(12.dp))
-            val tiles: List<ChatTheme?> = listOf(null) + ChatThemes.all
-            tiles.chunked(3).forEach { rowTiles ->
+            val specs: List<RdThemeTileSpec> =
+                (listOf<ChatTheme?>(null) + ChatThemes.all).map { RdThemeTileSpec.Builtin(it) } +
+                    RdThemeTileSpec.Custom
+            specs.chunked(3).forEach { rowTiles ->
                 Row(
                     Modifier.fillMaxWidth().padding(horizontal = 10.dp),
                     horizontalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
-                    rowTiles.forEach { t ->
-                        RdThemeTile(
-                            theme = t,
-                            selected = (t?.id ?: "") == thread.themeId,
-                            modifier = Modifier.weight(1f),
-                        ) {
-                            AppState.repo.setTheme(thread.id, t?.id ?: "")
-                            AppState.closeSheet()
+                    rowTiles.forEach { spec ->
+                        when (spec) {
+                            is RdThemeTileSpec.Builtin -> RdThemeTile(
+                                theme = spec.theme,
+                                selected = (spec.theme?.id ?: "") == thread.themeId,
+                                modifier = Modifier.weight(1f),
+                            ) {
+                                AppState.repo.setTheme(thread.id, spec.theme?.id ?: "")
+                                AppState.closeSheet()
+                            }
+                            RdThemeTileSpec.Custom -> RdCustomThemeTile(
+                                thread = thread,
+                                selected = ChatThemes.isCustom(thread.themeId),
+                                modifier = Modifier.weight(1f),
+                            ) {
+                                pickLauncher.launch(
+                                    PickVisualMediaRequest(
+                                        ActivityResultContracts.PickVisualMedia.ImageOnly,
+                                    ),
+                                )
+                            }
                         }
                     }
                     repeat(3 - rowTiles.size) { Spacer(Modifier.weight(1f)) }
@@ -757,6 +794,155 @@ private fun openRdThemePicker(thread: ChatThread) {
             }
         }
     }
+}
+
+/** ROUND 35 — the picker's Custom tile: this chat's current custom
+ *  wallpaper when one is cached on this phone, else a plain photo
+ *  placeholder. The rose ring + ✓ mark it exactly like a built-in
+ *  tile while a custom theme is live on the chat. */
+@Composable
+private fun RdCustomThemeTile(
+    thread: ChatThread,
+    selected: Boolean,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit,
+) {
+    val customBmps by CustomThemeStore.bitmaps.collectAsState()
+    val bmp = customBmps[thread.id]
+    Column(modifier) {
+        Box(
+            Modifier.fillMaxWidth().aspectRatio(0.66f)
+                .clip(RoundedCornerShape(14.dp))
+                .background(Color(0xFF26232B))
+                .then(
+                    if (selected) Modifier.border(2.5.dp, RdIRose, RoundedCornerShape(14.dp))
+                    else Modifier.border(1.dp, Color.White.copy(0.14f), RoundedCornerShape(14.dp)),
+                )
+                .rdIPress(onClick),
+            contentAlignment = Alignment.Center,
+        ) {
+            if (bmp != null) {
+                Image(
+                    bmp.asImageBitmap(), null, Modifier.fillMaxSize(),
+                    contentScale = ContentScale.Crop,
+                )
+            } else {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text("＋", color = Color.White, fontSize = 24.sp, fontWeight = FontWeight.Bold)
+                    Text("Photo", color = RdISub, fontSize = 11.sp)
+                }
+            }
+            if (selected) {
+                Box(
+                    Modifier.align(Alignment.TopEnd).padding(6.dp).size(20.dp)
+                        .clip(CircleShape).background(RdIRose),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text("✓", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                }
+            }
+        }
+        Spacer(Modifier.height(6.dp))
+        Text(
+            "Custom photo",
+            color = if (selected) Color.White else RdISub,
+            fontSize = 12.5.sp, textAlign = TextAlign.Center,
+            modifier = Modifier.fillMaxWidth(),
+        )
+    }
+}
+
+/** ROUND 35 — the custom-theme confirm sheet: the picked photo, the
+ *  palette its bubbles + composer will wear (a photo carries no
+ *  colours of its own), and the apply action. The dots start on the
+ *  palette already in force — a custom theme keeps its palette, a
+ *  built-in theme lends its colours to the new photo, Default starts
+ *  on Default. */
+private fun openRdCustomThemeConfirm(thread: ChatThread, bmp: Bitmap, jpeg: ByteArray) {
+    val initialPalette = when {
+        ChatThemes.isCustom(thread.themeId) -> ChatThemes.customPaletteId(thread.themeId)
+        else -> thread.themeId
+    }
+    AppState.sheet {
+        var paletteId by remember { mutableStateOf(initialPalette) }
+        Column(Modifier.padding(horizontal = 6.dp)) {
+            Text(
+                "Custom photo", color = Color.White, fontSize = 20.sp,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+            )
+            Text(
+                "This photo becomes the chat wallpaper for both of you",
+                color = RdISub, fontSize = 13.sp,
+                modifier = Modifier.padding(horizontal = 16.dp),
+            )
+            Spacer(Modifier.height(12.dp))
+            Image(
+                bmp.asImageBitmap(), null,
+                Modifier.fillMaxWidth().padding(horizontal = 10.dp).aspectRatio(1.6f)
+                    .clip(RoundedCornerShape(14.dp)),
+                contentScale = ContentScale.Crop,
+            )
+            Spacer(Modifier.height(14.dp))
+            Text(
+                "Message colours", color = RdISub, fontSize = 13.sp,
+                modifier = Modifier.padding(horizontal = 16.dp),
+            )
+            Spacer(Modifier.height(8.dp))
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                RdPaletteDot(theme = null, selected = paletteId.isEmpty()) { paletteId = "" }
+                ChatThemes.all.forEach { t ->
+                    RdPaletteDot(theme = t, selected = paletteId == t.id) { paletteId = t.id }
+                }
+            }
+            Spacer(Modifier.height(8.dp))
+            Text(
+                "Colours: ${ChatThemes.byId(paletteId)?.name ?: "Default"}",
+                color = Color.White, fontSize = 13.5.sp,
+                modifier = Modifier.padding(horizontal = 16.dp),
+            )
+            Spacer(Modifier.height(16.dp))
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = 10.dp),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                RdIPill("Cancel", filled = false) { AppState.closeSheet() }
+                RdIPill("Use this theme", filled = true) {
+                    if (Config.PREVIEW_UI_ONLY) {
+                        // Harness: no engine, no upload — the local
+                        // store + the repo's theme write are the whole
+                        // visible behaviour.
+                        CustomThemeStore.publish(thread.id, bmp)
+                        AppState.repo.setTheme(thread.id, ChatThemes.customValue(paletteId))
+                    } else {
+                        FirebaseEngine.setCustomTheme(thread.id, thread.person.uid, paletteId, jpeg)
+                    }
+                    AppState.closeSheet()
+                }
+            }
+            Spacer(Modifier.height(6.dp))
+        }
+    }
+}
+
+/** ROUND 35 — one palette dot in the custom-theme confirm sheet:
+ *  a built-in theme's own-bubble colour, or the neutral dot for the
+ *  Default palette. White ring on the live choice. */
+@Composable
+private fun RdPaletteDot(theme: ChatTheme?, selected: Boolean, onClick: () -> Unit) {
+    Box(
+        Modifier.size(34.dp).clip(CircleShape)
+            .background(theme?.ownBubble ?: Color(0xFF3A3A40))
+            .then(
+                if (selected) Modifier.border(2.5.dp, Color.White, CircleShape)
+                else Modifier.border(1.dp, Color.White.copy(0.18f), CircleShape),
+            )
+            .rdIPress(onClick),
+    )
 }
 
 /** One picker tile: the wallpaper itself (Default = the plain black

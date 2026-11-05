@@ -12,6 +12,7 @@ import com.google.android.libraries.identity.googleid.GetSignInWithGoogleOption
 import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.auth.GoogleAuthProvider
+import com.google.firebase.firestore.DocumentReference
 import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.ListenerRegistration
@@ -860,6 +861,9 @@ object FirebaseEngine : ChatRepo {
                                 // ROUND 26: the shared wallpaper theme
                                 // (missing field = Default, "").
                                 themeId = doc.getString("theme") ?: "",
+                                // ROUND 35: the custom-theme asset
+                                // version (missing = no asset, 0).
+                                themeAssetAt = doc.getTimestamp("themeAssetAt")?.toDate()?.time ?: 0L,
                                 receiptsOffMine = uid in receiptsOffList,
                                 pinnedMsgIds = pinnedMsgsList,
                                 isRequest = deriveIsRequest(knownMsgs, accMs > 0L),
@@ -875,6 +879,11 @@ object FirebaseEngine : ChatRepo {
                         val list = built.sortedByDescending { it.first }.map { it.second }
                             .filter { it.person.uid !in blockedCache }
                         AppState.threads.value = list
+                        // ROUND 35: custom gallery themes — make sure
+                        // every custom chat's encrypted photo asset is
+                        // cached + published (no-ops for built-ins and
+                        // for already-current caches).
+                        ensureCustomThemeAssets(list)
                         // ROUND 5: a chat skipped over a transient profile-fetch
                         // failure must not stay invisible until some unrelated
                         // write re-fires this listener — on a quiet account that
@@ -1557,6 +1566,30 @@ object FirebaseEngine : ChatRepo {
                     deletedForEveryone = true, text = "", photo = null,
                     localPath = null, replyQuote = null, reactions = emptyMap(),
                 )
+            } else if (lm != null && lm.me && !sm.deletedForEveryone && !sm.undecryptable &&
+                lm.kind == sm.kind && sm.editedAtMs == lm.editedAtMs &&
+                (lm.text.isNotEmpty() || lm.photo != null || lm.localPath != null)) {
+                // ROUND 34 — SEND-BOUNCE ROOT FIX: my own message's server
+                // echo used to REPLACE the optimistic local with the cache
+                // copy (a different instance: status, sort key and content
+                // references all swapped in one rebuild, and the "Sent"
+                // caption then grew the item — the visible hop at send).
+                // Now the echo is an IN-PLACE state transition of the very
+                // copy the sender has been looking at: its content (text /
+                // photo / local file), its device tsMs (so the stable sort
+                // can never re-seat it) and its formatted time are kept
+                // verbatim; only server metadata (seen, reactions, star,
+                // voDone, edit stamp) and the send state move. FAILED
+                // stays FAILED (a doc can exist while its payload upload
+                // failed — the failure signal is the sender's to clear
+                // via retry, which flips it through setMessageStatus).
+                lm.copy(
+                    status = if (lm.status == SendStatus.FAILED) SendStatus.FAILED else SendStatus.SENT,
+                    seenByPeer = sm.seenByPeer, reactions = sm.reactions,
+                    starredByMe = sm.starredByMe, deletedForMe = sm.deletedForMe,
+                    voDone = sm.voDone, editedAtMs = sm.editedAtMs,
+                    mediaChunks = sm.mediaChunks,
+                )
             } else if (lm != null && sm.localPath == null && lm.localPath != null) {
                 // A sender's own VIDEO/AUDIO echo arrives as a metadata stub
                 // (those kinds never auto-download) — inherit the local copy's
@@ -1672,6 +1705,10 @@ object FirebaseEngine : ChatRepo {
             (kindRaw == "image" || kindRaw == "video") && it in 1..2
         }
         val voDone = doc.getBoolean("voDone") == true
+        // ROUND 37 — in-chat AI authorship (additive Boolean, like
+        // voDone). Docs from older builds lack the field → false →
+        // ordinary message; the flag only steers rendering.
+        val ai = doc.getBoolean("ai") == true
         val kind = when (kindRaw) {
             "image" -> MsgKind.IMAGE; "voice" -> MsgKind.VOICE; "call" -> MsgKind.CALL
             "video" -> MsgKind.VIDEO; "audio" -> MsgKind.AUDIO
@@ -1755,11 +1792,20 @@ object FirebaseEngine : ChatRepo {
                         }
                     }
                 } else if (cached != null && mediaChunks > 0 && mediaChunks == cached.mediaChunks &&
-                    ((kindRaw == "image" && cached.photo != null) || (kindRaw != "image" && cached.localPath != null))) {
+                    ((kindRaw == "image" && cached.photo != null) || (kindRaw != "image" && cached.localPath != null &&
+                        File(cached.localPath).exists()))) {
                     // ROUND 8 — INCREMENTAL: only metadata changed on a media
                     // message whose payload this device already holds. Reuse
                     // the payload; download NOTHING. (Round 15: for a loaded
                     // VIDEO, `photo` is the poster frame and rides along.)
+                    // ROUND 34: the reuse now also requires the held cache
+                    // FILE to still exist — dl_* payloads live in cacheDir,
+                    // which the OS purges under storage pressure. A held
+                    // path whose file is gone is NOT a loaded message:
+                    // falling through to the download branch re-fetches it
+                    // (before this, the dead path was reused forever and
+                    // the player hung on a missing file — the owner's
+                    // "processing, never opens" for video/audio).
                     photo = cached.photo
                     localPath = cached.localPath
                     durSec = cached.voiceDurSec
@@ -1782,7 +1828,12 @@ object FirebaseEngine : ChatRepo {
                         @Suppress("UNCHECKED_CAST")
                         amps = (doc.get("amps") as? List<Long>)?.map { it.toInt() } ?: emptyList()
                         val f = File(appCtx.cacheDir, "dl_${doc.id}.m4a")
-                        if (!f.exists()) f.writeBytes(plain)
+                        // ROUND 34: write UNCONDITIONALLY — a husk left by
+                        // a process that died mid-write must never be
+                        // mistaken for the payload (exists() used to bless
+                        // a truncated file forever; the bytes are already
+                        // in memory here, rewriting costs nothing).
+                        f.writeBytes(plain)
                         localPath = f.absolutePath
                     } else {
                         // video / audio — reachable ONLY via fetchMedia
@@ -1790,7 +1841,9 @@ object FirebaseEngine : ChatRepo {
                         // and, for video, lift a poster frame into `photo`.
                         durSec = ((doc.getLong("durationMs") ?: 0L) / 1000).toInt()
                         val f = File(appCtx.cacheDir, "dl_${doc.id}.${mediaFileExt(mimeType, kindRaw)}")
-                        if (!f.exists()) f.writeBytes(plain)
+                        // ROUND 34: unconditional write — see the voice
+                        // branch above (a truncated husk must never stick).
+                        f.writeBytes(plain)
                         localPath = f.absolutePath
                         if (kindRaw == "video") photo = videoPoster(f)
                     }
@@ -1806,7 +1859,7 @@ object FirebaseEngine : ChatRepo {
             mediaChunks = mediaChunks,
             editedAtMs = doc.getTimestamp("editedAt")?.toDate()?.time ?: 0L,
             mimeType = mimeType, mediaBytes = mediaBytes,
-            fx = fx, vo = vo, voDone = voDone)
+            fx = fx, vo = vo, voDone = voDone, ai = ai)
         // ROUND 33 — HIDE RECOVERY: mirror this copy into the hidden
         // registry (or drop its entry, when the doc no longer hides it
         // for me — e.g. right after an unhide lands).
@@ -1888,6 +1941,25 @@ object FirebaseEngine : ChatRepo {
         scope.launch { deliverText(id, th.person.uid, local) }
     }
 
+    /** ROUND 37: the AI (Tika) text send — the asking client posts
+     *  Gemini's answer as its own encrypted message with the additive
+     *  `ai=true` flag (see TikuMessage.ai). Identical optimistic shape
+     *  to sendTextFx — the local carries the flag from the start, the
+     *  echo reads it back 1:1, and a FAILED answer retries through
+     *  deliverText with the flag intact. */
+    override fun sendTextAi(id: String, text: String) {
+        val th = AppState.thread(id) ?: return
+        val local = TikuMessage(
+            id = newLocalId(), senderUid = uid, kind = MsgKind.TEXT, text = text,
+            time = fmtTime(System.currentTimeMillis()), me = true,
+            tsMs = System.currentTimeMillis(), status = SendStatus.SENDING,
+            ai = true,
+        )
+        AppState.upsertMessage(id, local)
+        AppState.requestTailScroll(id, local.id)
+        scope.launch { deliverText(id, th.person.uid, local) }
+    }
+
     private suspend fun deliverText(id: String, peerUid: String, local: TikuMessage) {
         try {
             ensureChatDoc(id, peerUid)
@@ -1908,6 +1980,9 @@ object FirebaseEngine : ChatRepo {
             // stays ABSENT on plain sends, so old builds see a doc shape
             // identical to every pre-effects message (additive law).
             local.fx?.let { docData["fx"] = it }
+            // ROUND 37: same additive discipline for AI authorship —
+            // `ai` is written only on Tika's own messages.
+            if (local.ai) docData["ai"] = true
             msgRef(id, local.id).set(docData).await()
             AppState.setMessageStatus(id, local.id, SendStatus.SENT)
             touchChat(id)
@@ -1932,6 +2007,23 @@ object FirebaseEngine : ChatRepo {
             time = fmtTime(System.currentTimeMillis()), me = true, photo = bmp,
             tsMs = System.currentTimeMillis(), status = SendStatus.SENDING,
             vo = vo?.takeIf { it in 1..2 },
+        )
+        AppState.upsertMessage(id, local)
+        AppState.requestTailScroll(id, local.id)
+        scope.launch { deliverMedia(id, th.person.uid, local, MediaStore.compressPhoto(bmp)) }
+    }
+
+    /** ROUND 37: the AI (Tika) image send — Gemini's generated bitmap
+     *  rides the exact photo pipeline (compress → encrypt → chunks)
+     *  with the additive `ai=true` flag on the local copy and, through
+     *  deliverMedia, on the doc. */
+    override fun sendPhotoAi(id: String, bmp: Bitmap) {
+        val th = AppState.thread(id) ?: return
+        val local = TikuMessage(
+            id = newLocalId(), senderUid = uid, kind = MsgKind.IMAGE,
+            time = fmtTime(System.currentTimeMillis()), me = true, photo = bmp,
+            tsMs = System.currentTimeMillis(), status = SendStatus.SENDING,
+            ai = true,
         )
         AppState.upsertMessage(id, local)
         AppState.requestTailScroll(id, local.id)
@@ -2060,21 +2152,49 @@ object FirebaseEngine : ChatRepo {
      *  the loaded copy into the cache so the thread rebuild picks it up. */
     override fun fetchMedia(id: String, msgId: String) {
         scope.launch {
-            runCatching {
-                val peerUid = AppState.thread(id)?.person?.uid ?: return@runCatching
-                val key = convKeyOrNull(id, peerUid) ?: return@runCatching
-                val doc = msgRef(id, msgId).get().await()
-                if (!doc.exists()) return@runCatching
-                val cache = msgCache.getOrPut(id) { LinkedHashMap() }
-                val loaded = decryptDoc(id, doc, key, peerUid, cached = cache[msgId], forceLoad = true)
-                if (loaded.localPath != null) {
+            // ROUND 34: NO silent exits. The old body returned quietly on
+            // a missing peer/key/doc and — worst — when the decrypt came
+            // back without a localPath, so a stuck tap looked exactly like
+            // eternal "Processing": the bubble kept saying "Tap to load"
+            // (or the player opened a dead file) with no error and no way
+            // forward. Now every outcome is spoken: not-ready-yet (the
+            // sender's chunk count hasn't landed — the doc is written
+            // BEFORE its chunks finish uploading), one automatic full
+            // re-fetch on failure, then a plain error the user can retry
+            // by tapping again.
+            var lastError: Throwable? = null
+            for (attempt in 0..1) {
+                val outcome = runCatching {
+                    val peerUid = AppState.thread(id)?.person?.uid
+                        ?: throw IllegalStateException("chat not ready")
+                    val key = convKeyOrNull(id, peerUid)
+                        ?: throw IllegalStateException("encryption key not ready")
+                    val doc = msgRef(id, msgId).get().await()
+                    if (!doc.exists()) throw IllegalStateException("message not found")
+                    val chunks = (doc.getLong("mediaChunks") ?: 0L).toInt()
+                    if (chunks <= 0 && doc.getString("kind") != "image") {
+                        // The doc exists but carries no payload yet: the
+                        // sender is still uploading (deliverMedia writes
+                        // the doc first, the chunk count last). Retrying
+                        // in a moment is the honest answer — decrypting
+                        // emptiness here used to be the dead end.
+                        AppState.toast("Still uploading — try again in a moment")
+                        return@launch
+                    }
+                    val cache = msgCache.getOrPut(id) { LinkedHashMap() }
+                    val loaded = decryptDoc(id, doc, key, peerUid, cached = cache[msgId], forceLoad = true)
+                    val lp = loaded.localPath
+                        ?: throw IllegalStateException("media didn't load")
+                    if (!File(lp).exists()) throw IllegalStateException("media file missing")
                     cache[msgId] = loaded
                     applyCacheToThread(id)
                 }
-            }.onFailure {
-                Log.e("TikuChat", "fetchMedia failed chat=$id msg=$msgId", it)
-                AppState.toast("Couldn't load the media")
+                if (outcome.isSuccess) return@launch
+                lastError = outcome.exceptionOrNull()
+                Log.e("TikuChat", "fetchMedia attempt $attempt failed chat=$id msg=$msgId", lastError)
+                if (attempt == 0) delay(800) // one full re-fetch before giving up
             }
+            AppState.toast("Couldn't load the media — tap to try again")
         }
     }
 
@@ -2106,6 +2226,8 @@ object FirebaseEngine : ChatRepo {
             // so old builds see a doc shape identical to every
             // pre-view-once message (additive law, same as `fx`).
             local.vo?.let { docData["vo"] = it }
+            // ROUND 37: same additive discipline for AI authorship.
+            if (local.ai) docData["ai"] = true
             ref.set(docData).await()
             val chunks = MediaStore.upload(db, id, local.id, ctBytes)
             ref.update("mediaChunks", chunks).await()
@@ -2459,17 +2581,234 @@ object FirebaseEngine : ChatRepo {
      *  Default ("") DELETES the field, keeping "absent = Default" the
      *  one true representation; old builds ignore the field entirely. */
     override fun setTheme(id: String, themeId: String) {
+        // ROUND 35: leaving a custom gallery theme retires its shared
+        // encrypted asset (the photo belongs to the theme, not to the
+        // chat's history). Read the outgoing value BEFORE the optimistic
+        // update below overwrites it.
+        val previous = AppState.threads.value.firstOrNull { it.id == id }?.themeId ?: ""
+        val leavingCustom = ChatThemes.isCustom(previous) && !ChatThemes.isCustom(themeId)
+        if (leavingCustom) CustomThemeStore.evict(id)
         AppState.threads.value = AppState.threads.value.map {
             if (it.id == id) it.copy(themeId = themeId) else it
         }
         scope.launch {
-            runCatching {
+            val wrote = runCatching {
                 val ref = db.collection(Schema.Chats.COLL).document(id)
                 if (themeId.isBlank()) ref.update("theme", FieldValue.delete()).await()
                 else ref.update("theme", themeId).await()
                 Log.d("TikuChat", "chat theme -> '$themeId' in chat $id")
-            }.onFailure { Log.e("TikuChat", "setTheme(id) failed for chat $id", it) }
+            }.onFailure { Log.e("TikuChat", "setTheme(id) failed for chat $id", it) }.isSuccess
+            // Only retire the asset once the theme field really moved —
+            // if the write failed (offline), the custom theme is still
+            // live on the server and its photo must stay put.
+            if (leavingCustom && wrote) deleteThemeAsset(id)
         }
+    }
+
+    // ================= ROUND 35: custom gallery theme asset =================
+    // The photo behind a "custom[:palette]" theme value is an ENCRYPTED
+    // blob stored against the chat, in the exact shape of a media
+    // message's payload but parented on the chat instead of a message:
+    //   chats/{chatId}/themeasset/main        {iv, mime, mediaBytes,
+    //                                          mediaChunks, ts}
+    //   chats/{chatId}/themeasset/main/chunks/{i}  {d: base64 chunk}
+    // Encryption is the conversation key (Crypto.encrypt), so only the
+    // two members can ever read the photo — the server holds ciphertext,
+    // same as every photo message. The chat doc carries the theme value
+    // plus `themeAssetAt` (server ts) as the asset's version.
+    //
+    // On-device, the DECRYPTED jpeg is cached at filesDir/theme_custom/
+    // {chatId}.jpg with its version in prefs "tiku_theme_custom", and the
+    // decoded bitmap is published to CustomThemeStore for the render
+    // side. A strictly newer themeAssetAt in a threads snapshot means
+    // the partner replaced the photo -> re-fetch; an equal version is
+    // served from the cache file with no network at all. (This download
+    // is the one functional exception to the no-auto-download media
+    // law: without it the chosen theme could never be shown. Nothing
+    // here ever touches the gallery or leaves app-private storage.)
+
+    private fun themeAssetRef(chatId: String): DocumentReference =
+        db.collection(Schema.Chats.COLL).document(chatId)
+            .collection("themeasset").document("main")
+
+    /** Chunk writers mirroring MediaStore's message pipeline, but
+     *  parented on an arbitrary doc (the theme asset). */
+    private suspend fun uploadChunksTo(parent: DocumentReference, ciphertext: ByteArray): Int {
+        val chunksRef = parent.collection("chunks")
+        val count = (ciphertext.size + MediaStore.CHUNK_BYTES - 1) / MediaStore.CHUNK_BYTES
+        var batch = db.batch()
+        var inBatch = 0
+        for (i in 0 until count) {
+            val from = i * MediaStore.CHUNK_BYTES
+            val slice = ciphertext.copyOfRange(from, minOf(from + MediaStore.CHUNK_BYTES, ciphertext.size))
+            batch.set(chunksRef.document(i.toString()), mapOf("d" to Crypto.b64(slice)))
+            if (++inBatch >= 400) { batch.commit().await(); batch = db.batch(); inBatch = 0 }
+        }
+        if (inBatch > 0) batch.commit().await()
+        return count
+    }
+
+    private suspend fun downloadChunksFrom(parent: DocumentReference, chunkCount: Int): ByteArray {
+        val snap = parent.collection("chunks")
+            .orderBy(com.google.firebase.firestore.FieldPath.documentId(), Query.Direction.ASCENDING)
+            .get().await()
+        val out = java.io.ByteArrayOutputStream()
+        val byIndex = snap.documents.associate { (it.id.toIntOrNull() ?: -1) to (it.getString("d") ?: "") }
+        for (i in 0 until chunkCount) {
+            val d = byIndex[i] ?: continue
+            out.write(Crypto.unb64(d))
+        }
+        return out.toByteArray()
+    }
+
+    // ---- on-device cache (decrypted jpeg + its version) ----
+    private fun themeCacheDir(): File = File(appCtx.filesDir, "theme_custom").apply { mkdirs() }
+    private fun themeCacheFile(chatId: String): File = File(themeCacheDir(), "$chatId.jpg")
+    private fun themeCacheVersion(chatId: String): Long =
+        appCtx.getSharedPreferences("tiku_theme_custom", Context.MODE_PRIVATE).getLong(chatId, 0L)
+
+    private fun themeCachePut(chatId: String, jpeg: ByteArray, version: Long) {
+        runCatching { themeCacheFile(chatId).writeBytes(jpeg) }
+        appCtx.getSharedPreferences("tiku_theme_custom", Context.MODE_PRIVATE)
+            .edit().putLong(chatId, version).apply()
+    }
+
+    private fun themeCacheDrop(chatId: String) {
+        runCatching { themeCacheFile(chatId).delete() }
+        appCtx.getSharedPreferences("tiku_theme_custom", Context.MODE_PRIVATE)
+            .edit().remove(chatId).apply()
+    }
+
+    /** Chats with a theme-asset load (cache read or network fetch)
+     *  currently in flight — the threads listener fires often and must
+     *  never stack duplicate downloads of the same photo. */
+    private val themeAssetBusy = mutableSetOf<String>()
+
+    /**
+     * Set THIS chat's theme to the custom [jpeg] photo (already
+     * downscaled by the caller) with the palette [paletteId] ("" =
+     * Default colours). Applies locally at once — cache file, version,
+     * published bitmap, optimistic thread — then uploads the encrypted
+     * asset and stamps the chat doc (theme + themeAssetAt in one
+     * update, so the partner's listener always sees a consistent pair).
+     * Called from the Customize picker on the real engine only; the
+     * harness takes the PreviewStore path instead.
+     */
+    fun setCustomTheme(id: String, peerUid: String, paletteId: String, jpeg: ByteArray) {
+        val value = ChatThemes.customValue(paletteId)
+        val localVersion = System.currentTimeMillis()
+        if (::appCtx.isInitialized) {
+            themeCachePut(id, jpeg, localVersion)
+            BitmapFactory.decodeByteArray(jpeg, 0, jpeg.size)?.let { CustomThemeStore.publish(id, it) }
+        }
+        AppState.threads.value = AppState.threads.value.map {
+            if (it.id == id) it.copy(themeId = value, themeAssetAt = localVersion) else it
+        }
+        scope.launch {
+            runCatching {
+                val key = convKeyOrNull(id, peerUid)
+                    ?: throw IllegalStateException("encryption key not ready — the other person may not have finished setting up")
+                val (iv, ctB64) = Crypto.encrypt(key, jpeg)
+                val ctBytes = Crypto.unb64(ctB64)
+                val asset = themeAssetRef(id)
+                asset.set(mapOf(
+                    "iv" to iv, "mime" to "image/jpeg",
+                    "mediaBytes" to jpeg.size.toLong(), "mediaChunks" to 0,
+                    "ts" to FieldValue.serverTimestamp(),
+                )).await()
+                val chunks = uploadChunksTo(asset, ctBytes)
+                asset.update("mediaChunks", chunks).await()
+                val chatRef = db.collection(Schema.Chats.COLL).document(id)
+                chatRef.update(mapOf(
+                    "theme" to value,
+                    "themeAssetAt" to FieldValue.serverTimestamp(),
+                )).await()
+                // Pin the cache version to the EXACT server stamp so
+                // this phone never re-downloads its own upload when
+                // the listener echo lands. If the read-back fails, the
+                // local version stands and the worst case is one
+                // redundant (identical) fetch.
+                val serverAt = chatRef.get().await().getTimestamp("themeAssetAt")?.toDate()?.time
+                if (serverAt != null && ::appCtx.isInitialized) {
+                    appCtx.getSharedPreferences("tiku_theme_custom", Context.MODE_PRIVATE)
+                        .edit().putLong(id, serverAt).apply()
+                }
+                Log.d("TikuChat", "custom theme set in chat $id ('$value', $chunks chunks)")
+            }.onFailure {
+                Log.e("TikuChat", "setCustomTheme failed for chat $id", it)
+                AppState.toast("Couldn't set the custom theme — ${sendFailureReason(it)}")
+            }
+        }
+    }
+
+    /** Threads-listener hook (called on every snapshot): for each
+     *  custom-themed chat, publish the cached photo if we hold it, and
+     *  fetch the encrypted asset when the snapshot's version is newer
+     *  than the cache's. No-ops for everything else. */
+    private fun ensureCustomThemeAssets(threads: List<ChatThread>) {
+        if (!::appCtx.isInitialized) return
+        for (t in threads) {
+            if (!ChatThemes.isCustom(t.themeId)) continue
+            val stale = t.themeAssetAt > themeCacheVersion(t.id)
+            val unpublished = CustomThemeStore.bitmap(t.id) == null && themeCacheFile(t.id).exists()
+            if (!stale && !unpublished) continue
+            val go = synchronized(themeAssetBusy) { themeAssetBusy.add(t.id) }
+            if (!go) continue
+            if (stale) {
+                fetchCustomThemeAsset(t)
+            } else {
+                scope.launch {
+                    runCatching {
+                        val bytes = themeCacheFile(t.id).readBytes()
+                        BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+                            ?.let { CustomThemeStore.publish(t.id, it) }
+                    }
+                    synchronized(themeAssetBusy) { themeAssetBusy.remove(t.id) }
+                }
+            }
+        }
+    }
+
+    private fun fetchCustomThemeAsset(thread: ChatThread) {
+        val chatId = thread.id
+        scope.launch {
+            try {
+                runCatching {
+                    val doc = themeAssetRef(chatId).get().await()
+                    val chunks = (doc.getLong("mediaChunks") ?: 0L).toInt()
+                    val iv = doc.getString("iv") ?: ""
+                    if (chunks <= 0 || iv.isEmpty()) return@runCatching
+                    val key = convKeyOrNull(chatId, thread.person.uid) ?: return@runCatching
+                    val ctBytes = downloadChunksFrom(themeAssetRef(chatId), chunks)
+                    val plain = Crypto.decrypt(key, iv, Crypto.b64(ctBytes))
+                    themeCachePut(chatId, plain, thread.themeAssetAt)
+                    BitmapFactory.decodeByteArray(plain, 0, plain.size)
+                        ?.let { CustomThemeStore.publish(chatId, it) }
+                    Log.d("TikuChat", "custom theme asset fetched for chat $chatId (v${thread.themeAssetAt})")
+                }.onFailure { Log.e("TikuChat", "custom theme fetch failed for chat $chatId", it) }
+            } finally {
+                synchronized(themeAssetBusy) { themeAssetBusy.remove(chatId) }
+            }
+        }
+    }
+
+    /** Retire a chat's custom-theme asset (switching to a built-in
+     *  theme or Default): chunk docs + asset doc + the chat doc's
+     *  version stamp + the local cache all go. Best-effort — a failure
+     *  leaves an orphaned asset that nothing references. */
+    private suspend fun deleteThemeAsset(chatId: String) {
+        if (::appCtx.isInitialized) themeCacheDrop(chatId)
+        runCatching {
+            val asset = themeAssetRef(chatId)
+            val chunks = asset.collection("chunks").get().await()
+            val batch = db.batch()
+            chunks.documents.forEach { batch.delete(it.reference) }
+            batch.delete(asset)
+            batch.commit().await()
+            db.collection(Schema.Chats.COLL).document(chatId)
+                .update("themeAssetAt", FieldValue.delete()).await()
+            Log.d("TikuChat", "custom theme asset deleted for chat $chatId")
+        }.onFailure { Log.e("TikuChat", "deleteThemeAsset failed for chat $chatId", it) }
     }
 
     /** MY READ RECEIPTS IN THIS CHAT: receiptsOff on the chat doc carries

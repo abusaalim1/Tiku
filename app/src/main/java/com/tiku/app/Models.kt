@@ -130,6 +130,16 @@ data class TikuMessage(
      *  class as `reaction`), so the SENDER's bubble can show "Opened".
      *  Absent on every doc the recipient hasn't finished viewing. */
     val voDone: Boolean = false,
+    // ---- round 37 (appended last, same discipline) ----
+    /** Authored by the in-chat AI (Tika) on behalf of the sender
+     *  (Firestore `ai=true`): a `/tiku` text answer or a `/tika`
+     *  generated image, written by the ASKING client through the
+     *  ordinary encrypted send path after the Gemini call returned.
+     *  The doc's senderId is still the asking user — the flag only
+     *  drives rendering (left-aligned "✨ Tika AI" bubble). Additive:
+     *  older builds lack it, read false, and render the message as a
+     *  normal message from the sender. */
+    val ai: Boolean = false,
 )
 
 /** One 1:1 conversation. */
@@ -197,6 +207,13 @@ data class ChatThread(
     // ROUND 26 — the shared chat theme (chats/{id}.theme): "" = Default.
     // Additive + a plain string, so old builds ignore the field entirely.
     val themeId: String = "",
+    // ROUND 35 — when [themeId] is a custom gallery theme
+    // ("custom" / "custom:<paletteId>"), this is the server timestamp
+    // (ms) of the encrypted theme asset at chats/{id}/themeasset/main
+    // (chat doc field themeAssetAt). It versions the on-device cache:
+    // a strictly newer value means the photo was replaced and must be
+    // re-fetched. 0 = no asset known. Old builds ignore the field.
+    val themeAssetAt: Long = 0L,
 ) {
     /** What every surface renders as this chat's title: nickname first,
      *  profile name otherwise. Real name + @username stay visible in the
@@ -345,6 +362,9 @@ object Schema {
             /** ROUND 31: recipient exhausted the view-once allowance.
              *  Additive — see [TikuMessage.voDone]. */
             val voDone: Boolean = false,
+            /** ROUND 37: authored by the in-chat AI (Tika). Additive —
+             *  see [TikuMessage.ai]. */
+            val ai: Boolean = false,
             val seenBy: List<String> = emptyList(),
             val durationMs: Int = 0, val amps: List<Int> = emptyList(),
             /** Media kinds (image/voice/video/audio): ciphertext lives in the chunks

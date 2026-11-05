@@ -223,6 +223,22 @@ object PreviewRepo : ChatRepo {
         simulateReply(id)
     }
 
+    /** ROUND 37: the AI (Tika) sends, preview mirrors — the pushed
+     *  copy carries the ai flag so the harness renders the "✨ Tika AI"
+     *  bubble. No simulated partner reply: the AI message IS the
+     *  reply. (GeminiClient answers canned text / a drawn bitmap in
+     *  preview mode, so the whole command flow works in the harness.) */
+    override fun sendTextAi(id: String, text: String) {
+        push(id, TikuMessage(UUID.randomUUID().toString(), "", MsgKind.TEXT, text, "now", me = true,
+            amps = List(22) { 8 }, tsMs = System.currentTimeMillis(), ai = true))
+    }
+
+    override fun sendPhotoAi(id: String, bmp: Bitmap) {
+        push(id, TikuMessage(UUID.randomUUID().toString(), "", MsgKind.IMAGE, "", "now", me = true,
+            amps = List(22) { 8 }, photo = PreviewStore.scaled(bmp),
+            tsMs = System.currentTimeMillis(), ai = true))
+    }
+
     override fun sendVoice(id: String, audioFile: File?, durSec: Int, amps: List<Int>) {
         push(id, TikuMessage(UUID.randomUUID().toString(), "", MsgKind.VOICE, "", "now", me = true,
             voiceDurSec = durSec, amps = amps.ifEmpty { List(22) { 8 } },

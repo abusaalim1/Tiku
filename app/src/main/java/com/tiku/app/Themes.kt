@@ -1,6 +1,9 @@
 package com.tiku.app
 
+import android.graphics.Bitmap
 import androidx.compose.ui.graphics.Color
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 
 /** ROUND 26 — the owner's six chat THEMES.
  *
@@ -103,4 +106,59 @@ object ChatThemes {
      *  unknown ids all fall back to Default, so a theme set by a newer
      *  build can never break an older one). */
     fun byId(id: String): ChatTheme? = all.firstOrNull { it.id == id }
+
+    // ---- ROUND 35: custom gallery themes ----
+    // A custom theme stores its value in the SAME chats/{id}.theme
+    // field, encoded as "custom" or "custom:<paletteId>", where
+    // <paletteId> is one of the built-in ids above (t1..t6) whose
+    // bubble/composer colours the custom photo borrows; "" after the
+    // colon (or a bare "custom") means the Default palette. The photo
+    // itself is NOT in the field: it rides as an encrypted asset at
+    // chats/{id}/themeasset/main (see FirebaseEngine), versioned by
+    // the chat doc's themeAssetAt timestamp, and the decoded bitmap
+    // reaches the UI through [CustomThemeStore].
+
+    /** True when [id] selects a custom gallery theme. */
+    fun isCustom(id: String): Boolean = id == "custom" || id.startsWith("custom:")
+
+    /** The palette half of a custom value: "custom:t3" -> "t3",
+     *  "custom" -> "". Non-custom ids are returned unchanged. */
+    fun customPaletteId(id: String): String =
+        if (isCustom(id)) id.removePrefix("custom").removePrefix(":") else id
+
+    /** The stored theme value for a custom photo with palette
+     *  [paletteId] ("" = Default colours). */
+    fun customValue(paletteId: String): String =
+        if (paletteId.isBlank()) "custom" else "custom:$paletteId"
+
+    /** The COLOUR source for any stored theme value: a built-in id
+     *  resolves to itself; a custom value resolves to its palette
+     *  theme (null = Default colours, the photo still applies). Every
+     *  colour consumer should read through here; the wallpaper source
+     *  is chosen separately (asset vs [CustomThemeStore]). */
+    fun paletteFor(id: String): ChatTheme? =
+        if (isCustom(id)) byId(customPaletteId(id)) else byId(id)
+}
+
+/** ROUND 35 — decoded custom-theme wallpapers, keyed by chat id.
+ *
+ *  The engine owns the bytes (cache file in app files + the encrypted
+ *  Firestore asset) and publishes the decoded bitmap here; the chat
+ *  render side simply observes [bitmaps] and draws the entry for a
+ *  chat whose theme is custom. An absent entry means "not downloaded
+ *  yet" — the render side draws no wallpaper until it lands, exactly
+ *  like a built-in theme whose asset failed to decode. */
+object CustomThemeStore {
+    private val _bitmaps = MutableStateFlow<Map<String, Bitmap>>(emptyMap())
+    val bitmaps: StateFlow<Map<String, Bitmap>> = _bitmaps
+
+    fun bitmap(chatId: String): Bitmap? = _bitmaps.value[chatId]
+
+    fun publish(chatId: String, bmp: Bitmap) {
+        _bitmaps.value = _bitmaps.value + (chatId to bmp)
+    }
+
+    fun evict(chatId: String) {
+        _bitmaps.value = _bitmaps.value - chatId
+    }
 }

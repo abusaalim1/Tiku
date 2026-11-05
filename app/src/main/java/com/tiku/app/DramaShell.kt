@@ -68,7 +68,7 @@ import kotlinx.coroutines.withContext
  * ROUND 14 ADDENDUM — the old "For You" page (with its discreet entry
  * card) is REMOVED; the bottom nav is Home / Stories / Photos. The ONE
  * discreet door to the password gate is now the LAST story on the
- * Stories shelf ("2023,05"): a single tap reads it like any other
+ * Stories shelf ("First romance of them"): a single tap reads it like any other
  * story, a double tap routes through SecretEntry to the gate (the gate
  * itself lives at the bottom of this file, moved here unchanged from
  * the old facade).
@@ -513,13 +513,17 @@ private fun PhotoViewer(index: Int, onBack: () -> Unit) {
 }
 
 // ---------- PASSWORD GATE (reached ONLY via SecretEntry, from the
-// double tap on the last story — "2023,05" — on the Stories shelf) ----------
+// double tap on the last story — "First romance of them" — on the Stories shelf) ----------
 
 @Composable
 fun TikGateScreen() {
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
     val settings = tikuSettings().value
+    // ROUND 36: helper texts take the palette too, so the gate reads in
+    // the same premium-dark language as the rest of the auth family
+    // (the scaffold/field/button restyle lives in Onboarding/Components).
+    val pal = LocalPalette.current
     var pw by remember { mutableStateOf("") }
     var error by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
@@ -556,9 +560,9 @@ fun TikGateScreen() {
                 Spacer(Modifier.height(6.dp))
                 if (lockRemainingMs > 0) {
                     Text("Too many tries in a row — take a short break and try again in ${(lockRemainingMs + 999) / 1000}s.",
-                        fontSize = 13.sp, color = TikuTokens.Red, fontFamily = Manrope)
+                        fontSize = 13.sp, color = pal.danger, fontFamily = InterTight)
                 } else {
-                    Text(error, fontSize = 13.sp, color = TikuTokens.Red, fontFamily = Manrope)
+                    Text(error, fontSize = 13.sp, color = pal.danger, fontFamily = InterTight)
                 }
                 if (signedInUser) {
                     // ROUND 3.1 widened this link to every key-holder; ROUND 10
@@ -570,8 +574,8 @@ fun TikGateScreen() {
                     // ResetPasswordScreen; Mode F adds the one-way warning).
                     Spacer(Modifier.height(10.dp))
                     Text("Forgot password? Reset with Google",
-                        fontSize = 14.sp, fontFamily = Manrope, fontWeight = FontWeight.SemiBold,
-                        color = settings.accent,
+                        fontSize = 14.sp, fontFamily = InterTight, fontWeight = FontWeight.SemiBold,
+                        color = pal.ac,
                         modifier = Modifier.clickable(
                             interactionSource = remember { MutableInteractionSource() }, indication = null,
                         ) { AppState.go(Screen.PasswordReset) })
@@ -613,10 +617,10 @@ fun TikGateScreen() {
                 Text(
                     if (hashDamaged) "Your saved lock data on this phone looks damaged, so your password can't be checked here."
                     else "This phone still holds your journal key, but its password record is missing.",
-                    fontSize = 14.sp, color = TikuTokens.Muted, fontFamily = Manrope)
+                    fontSize = 14.sp, color = pal.sub, fontFamily = InterTight)
                 Spacer(Modifier.height(8.dp))
                 Text("You can reset the password with the Google account this journal was created with — your notes and chats stay intact.",
-                    fontSize = 14.sp, color = TikuTokens.Muted, fontFamily = Manrope)
+                    fontSize = 14.sp, color = pal.sub, fontFamily = InterTight)
                 Spacer(Modifier.weight(1f))
                 PrimaryButton("Reset password with Google", modifier = Modifier.fillMaxWidth()) {
                     AppState.go(Screen.PasswordReset)
@@ -624,18 +628,18 @@ fun TikGateScreen() {
             }
             else -> {
                 Text("Set up your journal in a minute — your private corner, all yours.",
-                    fontSize = 14.sp, color = TikuTokens.Muted, fontFamily = Manrope)
+                    fontSize = 14.sp, color = pal.sub, fontFamily = InterTight)
                 Spacer(Modifier.height(8.dp))
                 Text("Used your journal on another phone before? Tap Get started, sign in with the same Google account, and your password brings everything back on this phone.",
-                    fontSize = 14.sp, color = TikuTokens.Muted, fontFamily = Manrope)
+                    fontSize = 14.sp, color = pal.sub, fontFamily = InterTight)
                 if (signedInUser) {
                     // ROUND 10 PARITY: signed in but nothing set up on THIS
                     // phone (e.g. after a reinstall) — the forgot-password
                     // link lives here too, not only behind a saved verifier.
                     Spacer(Modifier.height(10.dp))
                     Text("Forgot password? Reset with Google",
-                        fontSize = 14.sp, fontFamily = Manrope, fontWeight = FontWeight.SemiBold,
-                        color = settings.accent,
+                        fontSize = 14.sp, fontFamily = InterTight, fontWeight = FontWeight.SemiBold,
+                        color = pal.ac,
                         modifier = Modifier.clickable(
                             interactionSource = remember { MutableInteractionSource() }, indication = null,
                         ) { AppState.go(Screen.PasswordReset) })

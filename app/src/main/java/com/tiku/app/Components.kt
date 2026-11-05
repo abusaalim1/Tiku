@@ -98,20 +98,27 @@ fun GlassIconButton(icon: ImageVector, size: Dp = 42.dp, iconSize: Dp = 20.dp, l
     }
 }
 
-/** .pri primary button: 54dp tall, radius 18, ink bg, 600 weight. */
+/** .pri primary button: 54dp tall.
+ *  ROUND 36: restyled to the current Tik action language — the filled
+ *  variant of TikPrimaryButton: full pill, palette button gradient,
+ *  InterTight, white text dimmed when disabled. Only the auth family
+ *  and the journal gate call this (Tik surfaces use TikPrimaryButton),
+ *  so the restyle touches no Tik surface. Height and contract unchanged. */
 @Composable
 fun PrimaryButton(text: String, enabled: Boolean = true, modifier: Modifier = Modifier, onClick: () -> Unit) {
+    val pal = LocalPalette.current
     val scale by animateFloatAsState(if (enabled) 1f else 1f, tween(300, easing = TikuEase), label = "pri")
     Box(
         modifier = modifier
             .height(54.dp).scale(scale)
-            .clip(RoundedCornerShape(18.dp))
-            .background(if (enabled) TikuTokens.Button else TikuTokens.Button.copy(alpha = 0.35f))
+            .clip(RoundedCornerShape(999.dp))
+            .background(pal.buttonGradient)
             .clickable(enabled = enabled, interactionSource = remember { MutableInteractionSource() },
                 indication = null, onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {
-        Text(text, color = TikuTokens.ButtonText, fontWeight = FontWeight.SemiBold, fontSize = 16.sp, fontFamily = Manrope)
+        Text(text, color = if (enabled) Color.White else Color.White.copy(alpha = 0.55f),
+            fontWeight = FontWeight.SemiBold, fontSize = 15.sp, fontFamily = InterTight)
     }
 }
 

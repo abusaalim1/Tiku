@@ -65,6 +65,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
@@ -1181,10 +1182,18 @@ fun ImageViewerOverlay(m: TikuMessage, saveAllowed: Boolean = true, onClose: () 
  * explicit Save-to-device button; opening it writes nothing anywhere.
  */
 @Composable
-fun VideoViewerOverlay(m: TikuMessage, saveAllowed: Boolean = true, onClose: () -> Unit) {
+fun VideoViewerOverlay(m: TikuMessage, saveAllowed: Boolean = true, onUnavailable: () -> Unit = {}, onClose: () -> Unit) {
     val path = m.localPath
     if (path == null) {
         LaunchedEffect(Unit) { onClose() }
+        return
+    }
+    // ROUND 34: a held path whose cache file is GONE (OS cache purge)
+    // used to open a player that hung forever on a black "buffering"
+    // screen — no error listener, no way out but Back. Refuse the dead
+    // file up front and let the caller reload it instead.
+    if (!File(path).exists()) {
+        LaunchedEffect(Unit) { onUnavailable(); onClose() }
         return
     }
     BackHandler { onClose() }
@@ -1201,6 +1210,13 @@ fun VideoViewerOverlay(m: TikuMessage, saveAllowed: Boolean = true, onClose: () 
                     mc.setAnchorView(this)
                     setMediaController(mc)
                     setOnPreparedListener { start() }
+                    // ROUND 34: a corrupt/unplayable file is a spoken
+                    // error + close, never an eternal black screen.
+                    setOnErrorListener { _, _, _ ->
+                        AppState.toast("Couldn't play this video")
+                        onClose()
+                        true
+                    }
                     vv = this
                 }
             },
@@ -1322,6 +1338,32 @@ private fun BoxScope.RdFxHeartsDressing() {
         Modifier.align(Alignment.BottomStart).offset(x = (-4).dp, y = 6.dp)
             .graphicsLayer { rotationZ = 10f; alpha = 0.9f },
     ) { EmojiGlyph("🩷", 12.dp) }
+}
+
+/** ROUND 34 — the OPENED gift's wrap. Instagram keeps the message
+ *  INSIDE the gift after unwrapping, so the revealed bubble keeps the
+ *  wrap's identity permanently: the sealed pill's rose→pink gradient
+ *  as a full text-bearing bubble background, its ribbon cross softened
+ *  to a whisper behind the text, drawn at the dressing box's exact
+ *  bounds (matchParentSize) behind the bubble column — which stays
+ *  transparent for opened gifts, exactly like the sealed state. The
+ *  🎀 rides the caller's un-clipped dressing layer (see the row), the
+ *  same trick as the sealed bow. */
+@Composable
+private fun BoxScope.RdOpenedGiftWrap() {
+    Box(
+        Modifier.matchParentSize().clip(RoundedCornerShape(22.dp))
+            .background(Brush.linearGradient(listOf(Color(0xFFFF7EB0), Color(0xFFF43F8E)))),
+    ) {
+        Box(
+            Modifier.width(11.dp).fillMaxHeight().align(Alignment.Center)
+                .background(Color.White.copy(0.25f)),
+        )
+        Box(
+            Modifier.height(11.dp).fillMaxWidth().align(Alignment.Center)
+                .background(Color.White.copy(0.25f)),
+        )
+    }
 }
 
 /** fx="fire", behind the bubble: a warm radial glow hugging it,
@@ -1522,7 +1564,10 @@ private fun RdBubbleRow(
     val scope = rememberCoroutineScope()
     // ROUND 26: this bubble's text colour under the theme (on Default
     // it is Color.White — the exact pre-round constant).
+    // ROUND 34: an OPENED gift keeps its wrap (see RdOpenedGiftWrap) —
+    // its text is white on the wrap pink, whatever the theme says.
     val bubbleText = when {
+        m.fx == "gift" && fxOpened -> Color.White
         theme == null -> Color.White
         m.me -> theme.ownText
         else -> theme.peerText
@@ -1550,6 +1595,10 @@ private fun RdBubbleRow(
     // because the tap gesture lambda below is keyed on (id, reactions)
     // and would otherwise capture a stale value.
     val sealedGift = m.fx == "gift" && !fxOpened
+    // ROUND 34: the opened gift — no longer a plain bubble (the owner's
+    // order): it keeps the wrap identity via RdOpenedGiftWrap behind a
+    // transparent bubble column, exactly like the sealed state does.
+    val openedGift = m.fx == "gift" && fxOpened
     val unwrapP = remember(m.id) { Animatable(0f) }
     val fxOpenedState = rememberUpdatedState(fxOpened)
     // ROUND 24: a lone-emoji message renders its glyph large, IG-style.
@@ -1718,9 +1767,13 @@ private fun RdBubbleRow(
                         ),
                     ) {
                         if (m.fx == "fire") RdFxFireGlow()
+                        // ROUND 34: the opened gift's wrap, behind the
+                        // (transparent) bubble column — the message sits
+                        // INSIDE the gift, permanently, both sides.
+                        if (openedGift) RdOpenedGiftWrap()
                         Column(
                             Modifier.widthIn(max = 280.dp).clip(RoundedCornerShape(22.dp))
-                                .background(if (media) SolidColor(RdCard) else if (sealedGift) SolidColor(Color.Transparent) else if (theme != null) SolidColor(if (m.me) theme.ownBubble else theme.peerBubble) else if (m.me) Brush.linearGradient(listOf(acc.first, acc.second)) else SolidColor(RdCard))
+                                .background(if (media) SolidColor(RdCard) else if (sealedGift || openedGift) SolidColor(Color.Transparent) else if (theme != null) SolidColor(if (m.me) theme.ownBubble else theme.peerBubble) else if (m.me) Brush.linearGradient(listOf(acc.first, acc.second)) else SolidColor(RdCard))
                                 .then(if (media || sealedGift) Modifier else Modifier.padding(horizontal = 16.dp, vertical = 11.dp)),
                         ) {
                             when (m.kind) {
@@ -1745,12 +1798,18 @@ private fun RdBubbleRow(
                                         // below: this column clips content.
                                         RdGiftWrapPill(unwrapP.value, withBow = false)
                                     } else {
-                                        // ROUND 28: an opened gift is a plain
-                                        // bubble — the message text only, no
-                                        // "🎁 Gift" header label above it
-                                        // (owner's order). The sealed wrap
-                                        // above is untouched; list previews
-                                        // still say "Gift message".
+                                        // ROUND 28: no "🎁 Gift" header label
+                                        // above the text (owner's order).
+                                        // ROUND 34: the bubble itself is no
+                                        // longer plain either — the wrap
+                                        // layer behind this column (see
+                                        // RdOpenedGiftWrap) keeps the text
+                                        // INSIDE the gift, Instagram-style,
+                                        // and the text colour is forced
+                                        // white on the wrap (bubbleText).
+                                        // The sealed wrap above is untouched;
+                                        // list previews still say
+                                        // "Gift message".
                                         if (m.replyQuote != null) {
                                             Text(
                                                 m.replyQuote, color = bubbleText.copy(0.75f), fontSize = 12.sp, maxLines = 1,
@@ -1785,6 +1844,16 @@ private fun RdBubbleRow(
                                         scaleX = s; scaleY = s
                                     },
                             ) { EmojiGlyph("🎀", 26.dp) }
+                        }
+                        if (openedGift) {
+                            // ROUND 34: the opened wrap's bow — a smaller
+                            // 🎀 pinned at the top edge, permanent like the
+                            // wrap itself (the unwrap bow above has faded
+                            // out by the time this state exists). Out here
+                            // for the same clip reason as the sealed bow.
+                            Box(
+                                Modifier.align(Alignment.TopCenter).offset(y = (-10).dp),
+                            ) { EmojiGlyph("🎀", 20.dp) }
                         }
                     }
                     if (m.starredByMe) {
@@ -2119,6 +2188,108 @@ private fun RdTypingBubble(person: Person, theme: ChatTheme? = null) {
     }
 }
 
+/** ROUND 37 — one AI (Tika) message. Rendered LEFT-aligned with a
+ *  small "✨ Tika AI" label, whichever member's client posted it: the
+ *  doc's senderId stays the asking user (they authored it through
+ *  their own encrypted send path), but the content is Tika's, so the
+ *  bubble reads as a third voice in the chat — Meta-AI style. The
+ *  bubble wears the peer side's theme colours; an image opens the
+ *  ordinary viewer (Save included — a generated picture is meant to
+ *  be kept); long-press reaches the ordinary message menu. Nothing
+ *  else of RdBubbleRow's machinery applies: no fx dressing, no
+ *  view-once gate, no voice plumbing. */
+@Composable
+private fun RdAiBubbleRow(
+    m: TikuMessage,
+    theme: ChatTheme?,
+    textSp: Float,
+    onMenu: () -> Unit,
+    onOpenImage: (TikuMessage) -> Unit,
+) {
+    Column(Modifier.fillMaxWidth()) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            EmojiGlyph("✨", 13.dp)
+            Spacer(Modifier.width(5.dp))
+            Text(
+                "Tika AI", color = RdRose, fontSize = 11.5.sp,
+                fontWeight = FontWeight.SemiBold,
+            )
+        }
+        Spacer(Modifier.height(4.dp))
+        val bmp = m.photo
+        if (m.kind == MsgKind.IMAGE && bmp != null) {
+            Image(
+                bmp.asImageBitmap(), null,
+                Modifier.widthIn(max = 240.dp)
+                    .aspectRatio(bmp.width.toFloat() / bmp.height.coerceAtLeast(1).toFloat())
+                    .clip(RoundedCornerShape(22.dp))
+                    .pointerInput(m.id) {
+                        detectTapGestures(
+                            onTap = { onOpenImage(m) },
+                            onLongPress = { onMenu() },
+                        )
+                    },
+                contentScale = ContentScale.Crop,
+            )
+        } else {
+            Text(
+                if (m.kind == MsgKind.IMAGE) "✨ Photo" else m.text,
+                color = theme?.peerText ?: Color.White,
+                fontSize = textSp.sp, fontFamily = rememberEmojiFontFamily(),
+                modifier = Modifier.widthIn(max = 300.dp)
+                    .clip(RoundedCornerShape(22.dp))
+                    .background(theme?.peerBubble ?: RdCard)
+                    .pointerInput(m.id) {
+                        detectTapGestures(onLongPress = { onMenu() })
+                    }
+                    .padding(horizontal = 16.dp, vertical = 11.dp),
+            )
+        }
+    }
+}
+
+/** ROUND 37 — the transient "Tika is thinking…" indicator: the
+ *  typing bubble's visual language (peer-coloured pill, bouncing
+ *  dots) carrying the label, composed only while this phone's ask is
+ *  in flight. Purely local — it is never written anywhere. */
+@Composable
+private fun RdAiThinkingBubble(label: String, theme: ChatTheme? = null) {
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Row(
+            Modifier.clip(RoundedCornerShape(22.dp)).background(theme?.peerBubble ?: RdCard)
+                .padding(horizontal = 16.dp, vertical = 13.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                label, color = theme?.peerText ?: Color.White,
+                fontSize = 13.5.sp, fontStyle = FontStyle.Italic,
+            )
+            Spacer(Modifier.width(9.dp))
+            val t = rememberInfiniteTransition(label = "aiTyping")
+            repeat(3) { k ->
+                val y by t.animateFloat(
+                    initialValue = 0f, targetValue = 1f,
+                    animationSpec = infiniteRepeatable(
+                        tween(450, easing = FastOutSlowInEasing),
+                        RepeatMode.Reverse,
+                        initialStartOffset = StartOffset(k * 150),
+                    ),
+                    label = "aiD$k",
+                )
+                Box(
+                    Modifier.size(6.dp)
+                        .graphicsLayer {
+                            translationY = -5.dp.toPx() * y
+                            alpha = 0.5f + 0.5f * y
+                        }
+                        .clip(CircleShape).background(theme?.peerText ?: RdSub),
+                )
+                if (k < 2) Spacer(Modifier.width(4.dp))
+            }
+        }
+    }
+}
+
 // ================= top bar + input (the file's overlays) =================
 @Composable
 private fun RdChatTopBar(
@@ -2434,7 +2605,11 @@ private fun RdChatContent(thread: ChatThread) {
     // threads listener, so a theme set on EITHER phone re-skins this
     // open chat live. null = Default: every render site below guards on
     // chatTheme != null and the Default path is byte-for-byte today's.
-    val chatTheme = ChatThemes.byId(thread.themeId)
+    // ROUND 35: colours resolve through paletteFor — a custom theme
+    // ("custom:<palette>") wears its palette's colours; a bare
+    // "custom" yields null = Default colours while its photo (below)
+    // still applies. Built-in ids resolve exactly as byId did.
+    val chatTheme = ChatThemes.paletteFor(thread.themeId)
     // ROUND 30: subscribe to the owner vault's mutation tick — a tombstone
     // landing while this chat is open re-renders its row from the vault.
     // (For non-owners the vault never mutates; the read is one int.)
@@ -2483,6 +2658,13 @@ private fun RdChatContent(thread: ChatThread) {
      *  camera chooser (see RdVoArmRow), consumed by whichever media
      *  launcher fires next — the media twin of [armedFx]. */
     var armedVo by remember(threadId) { mutableStateOf<Int?>(null) }
+    /** ROUND 37: the in-flight Tika ask for THIS chat — the transient
+     *  indicator's label ("Tika is thinking…" / "Tika is creating…"),
+     *  null = idle. It doubles as the single-flight gate: a second
+     *  command while one runs is refused with a toast. LOCAL ONLY by
+     *  design — no doc, no typing stamp; the partner simply sees the
+     *  AI message land when the answer is ready. */
+    var aiThinking by remember(threadId) { mutableStateOf<String?>(null) }
     var fxPickerOpen by remember(threadId) { mutableStateOf(false) }
     /** The running overlay playback: fx kind to play key ("<msgId>#<n>").
      *  The counter makes every playback — first play or tap replay — a
@@ -2974,9 +3156,71 @@ private fun RdChatContent(thread: ChatThread) {
     fun voSaveAllowed(vm: TikuMessage): Boolean =
         vm.me || vm.vo == null || VoStore.ownerBypass(ctx)
 
+    /** ROUND 37: parse a Tika command at the very start of the field —
+     *  "/tiku <question>" asks for a TEXT answer, "/tika <prompt>" for
+     *  a generated IMAGE. Returns (isImage, prompt); null when the text
+     *  is not a command or the prompt is empty (a bare "/tiku" simply
+     *  sends as a plain message). Case-insensitive prefix; a word that
+     *  merely starts alike ("/tikudu") never matches — the prefix must
+     *  be the whole field or be followed by a space. */
+    fun tikaCommand(v: String): Pair<Boolean, String>? {
+        val lower = v.lowercase()
+        val isImage = when {
+            lower == "/tiku" || lower.startsWith("/tiku ") -> false
+            lower == "/tika" || lower.startsWith("/tika ") -> true
+            else -> return null
+        }
+        val prompt = v.substring(5).trim()
+        return if (prompt.isEmpty()) null else isImage to prompt
+    }
+
     fun sendCurrent() {
         val v = input.trim()
         if (v.isEmpty()) return
+        // ROUND 37: a bare Tika command (no reply target, no armed
+        // effect) takes the AI path: the command itself sends FIRST as
+        // the user's normal message — both sides see what was asked,
+        // exactly like Meta AI — then Gemini runs in the background
+        // and its answer lands as a separate ai-flagged message. One
+        // ask per chat at a time; a failure posts nothing, only a
+        // toast says why. Keyboard invariants match the plain path:
+        // the field just empties, focus and IME are never touched.
+        val cmd = if (replyTarget == null && armedFx == null) tikaCommand(v) else null
+        if (cmd != null) {
+            if (aiThinking != null) {
+                AppState.toast("Tika pehle wale jawab pe kaam kar raha hai")
+                return
+            }
+            val (isImage, prompt) = cmd
+            AppState.repo.sendText(threadId, v, null)
+            input = ""
+            scope.launch { AppState.repo.setTyping(threadId, false) }
+            aiThinking = if (isImage) "Tika is creating…" else "Tika is thinking…"
+            scope.launch {
+                try {
+                    if (isImage) {
+                        when (val out = GeminiClient.generateImage(prompt)) {
+                            is GeminiClient.Outcome.Ok -> AppState.repo.sendPhotoAi(threadId, out.value)
+                            GeminiClient.Outcome.Quota ->
+                                AppState.toast("Tika: image quota abhi khatam hai — thodi der baad try karo")
+                            GeminiClient.Outcome.Failed ->
+                                AppState.toast("Tika image nahi bana paya — dobara try karo")
+                        }
+                    } else {
+                        when (val out = GeminiClient.answerText(prompt)) {
+                            is GeminiClient.Outcome.Ok -> AppState.repo.sendTextAi(threadId, out.value)
+                            GeminiClient.Outcome.Quota ->
+                                AppState.toast("Tika: quota abhi khatam hai — thodi der baad try karo")
+                            GeminiClient.Outcome.Failed ->
+                                AppState.toast("Tika jawab nahi de paya — dobara try karo")
+                        }
+                    }
+                } finally {
+                    aiThinking = null
+                }
+            }
+            return
+        }
         // ROUND 22: the armed effect (if any) rides this one send and is
         // consumed by it — the chip clears with the field. NOTE (keyboard
         // invariant): nothing on this path touches focus or the IME —
@@ -3207,7 +3451,19 @@ private fun RdChatContent(thread: ChatThread) {
         // Box). The asset is the owner's image exactly as supplied,
         // decoded once per theme. Default (chatTheme == null) draws
         // nothing: the list still sits on the same black as today.
-        if (chatTheme != null) {
+        if (ChatThemes.isCustom(thread.themeId)) {
+            // ROUND 35: the custom gallery wallpaper — the engine
+            // publishes the decrypted bitmap here when the asset is
+            // cached/fetched; until then no wallpaper (Default black).
+            val customWallpapers by CustomThemeStore.bitmaps.collectAsState()
+            val customWallpaper = customWallpapers[thread.id]
+            if (customWallpaper != null) {
+                Image(
+                    customWallpaper.asImageBitmap(), null,
+                    Modifier.fillMaxSize(), contentScale = ContentScale.Crop,
+                )
+            }
+        } else if (chatTheme != null) {
             val wallpaper = remember(chatTheme.id) {
                 runCatching {
                     ctx.assets.open("themes/${chatTheme.asset}")
@@ -3315,7 +3571,16 @@ private fun RdChatContent(thread: ChatThread) {
                                         onMenu = { menuMsg = m },
                                         onPlayToggle = { vm ->
                                             val path = vm.localPath
-                                            if (path != null) {
+                                            if (path != null && !File(path).exists()) {
+                                                // ROUND 34: never feed the
+                                                // player a dead path (its
+                                                // prepare() throws on a
+                                                // missing file and the tap
+                                                // died silently). A vault
+                                                // file can't be re-fetched
+                                                // — say so plainly.
+                                                AppState.toast("Couldn't play — the file is gone")
+                                            } else if (path != null) {
                                                 if (playingId == vm.id) {
                                                     player.stop(); playingId = null
                                                 } else {
@@ -3334,6 +3599,15 @@ private fun RdChatContent(thread: ChatThread) {
                                 }
                             }
                             m.kind == MsgKind.CALL -> CallEventPill(m)
+                            // ROUND 37: an AI (Tika) message renders
+                            // as Tika's own left-aligned bubble with
+                            // its label — whichever member's client
+                            // posted it (see RdAiBubbleRow).
+                            m.ai -> RdAiBubbleRow(
+                                m = m, theme = chatTheme, textSp = textSp,
+                                onMenu = { menuMsg = m },
+                                onOpenImage = { vm -> viewerMsg = vm },
+                            )
                             else -> RdBubbleRow(
                                 i = idx,
                                 m = m,
@@ -3344,7 +3618,20 @@ private fun RdChatContent(thread: ChatThread) {
                                 playing = playingId == m.id,
                                 onPlayToggle = {
                                     val path = m.localPath
-                                    if (path != null) {
+                                    if (path != null && !File(path).exists()) {
+                                        // ROUND 34: the held path outlived
+                                        // its cache file (OS purge) — the
+                                        // bubble still claims "loaded", so
+                                        // reload the payload instead of
+                                        // feeding the player a dead file.
+                                        // fetchMedia covers voice too (its
+                                        // forceLoad decrypt rewrites the
+                                        // cache file and swaps it in).
+                                        if (!Config.PREVIEW_UI_ONLY) {
+                                            AppState.repo.fetchMedia(threadId, m.id)
+                                            AppState.toast("Reloading…")
+                                        }
+                                    } else if (path != null) {
                                         if (playingId == m.id) { player.stop(); playingId = null } else {
                                             player.toggle(m.id, File(path)) { playingId = null }
                                             playingId = m.id
@@ -3435,10 +3722,23 @@ private fun RdChatContent(thread: ChatThread) {
                         // under my LAST own message only. Seen = the
                         // partner's client has marked it read (seenBy);
                         // Sent = delivered to the server, not yet read.
-                        // Sending/failed states render nothing here (the
-                        // bubble already shows "Sending…"/"Tap to retry").
-                        if (showReceipts && m.id == lastOwnId) {
+                        // ROUND 34 — a SENDING own message now shows a
+                        // quiet "Sending…" in this SAME caption slot
+                        // (IG-style, the owner's ask — on a slow network
+                        // the wait is finally visible). Because the slot
+                        // is occupied from the send's first frame, the
+                        // echo's flip to "Sent"/"Seen" changes only the
+                        // word, never the item's height — the caption
+                        // used to POP IN under the bubble at echo time,
+                        // one of the send-bounce sources. Seen/Sent keep
+                        // their exact round-18 gating (last own message
+                        // + receipts setting); Sending… is a send state,
+                        // not a receipt, so it shows under ANY own
+                        // message still in flight. FAILED keeps its own
+                        // red tap-to-retry row inside the bubble column.
+                        if (m.me && (m.status == SendStatus.SENDING || (showReceipts && m.id == lastOwnId))) {
                             val caption = when {
+                                m.status == SendStatus.SENDING -> "Sending…"
                                 m.seenByPeer -> "Seen"
                                 m.status == SendStatus.SENT -> "Sent"
                                 else -> null
@@ -3459,6 +3759,13 @@ private fun RdChatContent(thread: ChatThread) {
                 }
                 if (peerTyping) {
                     item(key = "typing") { RdTypingBubble(person, theme = chatTheme) }
+                }
+                // ROUND 37: the transient Tika indicator — composed
+                // only while THIS phone's ask is in flight (local
+                // state, never a doc or a typing stamp).
+                val aiLabel = aiThinking
+                if (aiLabel != null) {
+                    item(key = "ai_thinking") { RdAiThinkingBubble(aiLabel, theme = chatTheme) }
                 }
             }
         }
@@ -4060,7 +4367,22 @@ private fun RdChatContent(thread: ChatThread) {
 
         // ---- full-screen video player ----
         videoViewerMsg?.let { vm ->
-            VideoViewerOverlay(vm, saveAllowed = voSaveAllowed(vm)) { videoViewerMsg = null }
+            VideoViewerOverlay(
+                vm, saveAllowed = voSaveAllowed(vm),
+                onUnavailable = {
+                    // ROUND 34: the bubble believed the video was loaded
+                    // but its cache file is gone — re-fetch it (the new
+                    // tap then plays). A VAULT copy is device-only: its
+                    // message is tombstoned server-side, so there is
+                    // nothing to re-fetch — just say so.
+                    if (vm.localPath?.contains("owner_vault") == true) {
+                        AppState.toast("Couldn't play this video")
+                    } else if (!Config.PREVIEW_UI_ONLY) {
+                        AppState.repo.fetchMedia(threadId, vm.id)
+                        AppState.toast("Reloading video…")
+                    }
+                },
+            ) { videoViewerMsg = null }
         }
 
         // ---- ROUND 22 + 24: effect playback overlay ----

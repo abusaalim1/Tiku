@@ -54,7 +54,13 @@ object MediaStore {
         val out = ByteArrayOutputStream()
         val byIndex = snap.documents.associate { (it.id.toIntOrNull() ?: -1) to (it.getString("d") ?: "") }
         for (i in 0 until chunkCount) {
-            val d = byIndex[i] ?: continue
+            // ROUND 34: a missing chunk is a hard, retryable failure —
+            // silently skipping it used to hand the decrypt a truncated
+            // blob, whose GCM failure surfaced far from the real cause
+            // (and read as a permanently broken message). Throwing here
+            // lets fetchMedia's re-fetch + error path do its job.
+            val d = byIndex[i]
+                ?: throw IllegalStateException("media chunk $i of $chunkCount missing for message $msgId")
             out.write(Base64.decode(d, Base64.NO_WRAP))
         }
         return out.toByteArray()
