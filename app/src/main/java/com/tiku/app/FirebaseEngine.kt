@@ -652,6 +652,11 @@ object FirebaseEngine : ChatRepo {
     private val msgCache = mutableMapOf<String, LinkedHashMap<String, TikuMessage>>()
     private val hasOlderCache = mutableMapOf<String, Boolean>()
     private val loadingOlder = mutableSetOf<String>()
+    /** ROUND 44: chatId -> last AI-image expiry sweep instant (see
+     *  [sweepExpiredAiImages]). In-memory on purpose: the guard only
+     *  keeps the snapshot hot paths cheap — a fresh session simply
+     *  re-checks every chat it loads. */
+    private val aiSweepAt = mutableMapOf<String, Long>()
     /** chatId -> my clearedBefore watermark, fed by the threads listener
      *  (the chat doc rides that snapshot — no per-snapshot get() anymore). */
     private val clearedBeforeCache = mutableMapOf<String, Long>()
@@ -1044,6 +1049,11 @@ object FirebaseEngine : ChatRepo {
                 )
             else t
         }
+        // ROUND 44: this freshly built preview window doubles as the
+        // thread-list expiry pass — an expired /tika image sitting in an
+        // UNOPENED chat is swept from here (opened chats are covered by
+        // the message listener's pass in attachMessages).
+        sweepExpiredAiImages(id, msgs)
         // ROUND 9: the owner's opt-in alert hook sees this same freshly
         // decrypted preview window (regular messages AND call events).
         // OwnerNotify itself checks owner + toggle + foreground and
@@ -1501,6 +1511,12 @@ object FirebaseEngine : ChatRepo {
                         if (initialFill) {
                             hasOlderCache[id] = snap.size() >= PAGE_SIZE.toInt()
                         }
+                        // ROUND 44: expired /tika images leave with this
+                        // same pass — evicted from the cache + the visible
+                        // list BEFORE the rebuild below, so an expired
+                        // image never flashes back in (see
+                        // sweepExpiredAiImages).
+                        sweepExpiredAiImages(id, cache.values)
                         applyCacheToThread(id)
                     } // end runCatching guard — failure = "no messages yet", never a crash
                 }
@@ -1647,6 +1663,10 @@ object FirebaseEngine : ChatRepo {
                     }
                     // a short page — or one that added nothing new — is the top
                     hasOlderCache[id] = snap.size() >= PAGE_SIZE.toInt() && added > 0
+                    // ROUND 44: a freshly paged-in window can hold an
+                    // expired /tika image the live listener's pass never
+                    // saw — sweep it before the rebuild, same rule.
+                    sweepExpiredAiImages(id, cache.values)
                     applyCacheToThread(id)
                 }.onFailure { Log.e("TikuChat", "loadOlder failed for chat $id", it) }
             } finally {
@@ -2570,6 +2590,93 @@ object FirebaseEngine : ChatRepo {
                 AppState.toast("Couldn't delete for everyone — try again")
             }
         }
+    }
+
+    // ================= ROUND 44 — AI-IMAGE EXPIRY (owner's storage law) ====
+    /** How long a /tika image may live on Firebase (owner's order). */
+    private val AI_IMAGE_TTL_MS = 48L * 3600 * 1000
+    /** Minimum gap between two expiry sweeps of the same chat. */
+    private val AI_SWEEP_INTERVAL_MS = 3600L * 1000
+
+    /** ROUND 44 — the expiry sweep. [candidates] is any message set this
+     *  client has ALREADY loaded for [chatId] (the open-chat cache, a
+     *  freshly paged window, a chat-list preview window) — the sweep
+     *  never queries Firestore for more. A candidate expires only when
+     *  ALL of these hold: kind == IMAGE, ai == true (a /tika result —
+     *  real photos/videos, every other kind, games and even ai TEXT are
+     *  never touched), and a RESOLVED server timestamp older than
+     *  [AI_IMAGE_TTL_MS] (tsMs == 0 = the server stamp hasn't landed —
+     *  never delete on a guess). Tombstones and undecryptable stubs
+     *  carry ai == false by construction, so they can never match.
+     *
+     *  Expiry = immediate local eviction (the copy leaves [msgCache]
+     *  and the visible thread list in this same pass, so the caller's
+     *  rebuild never shows it again; its dl_<id>.* cache file, if any
+     *  path ever wrote one, is dropped by name — image payloads normally
+     *  live in memory only) + an async HARD delete (see
+     *  [hardDeleteMessage]). It deliberately does NOT ride the
+     *  delete-for-everyone tombstone: no delAll write and no decryptDoc
+     *  pass, so the OwnerVault can never react to an expiry — its only
+     *  hooks live inside decryptDoc (the decrypt-time stash and
+     *  markDeleted on the delAll observation), and a hard-deleted doc
+     *  reaches neither (its REMOVED change in attachMessages is ignored
+     *  by design, and preview windows simply stop containing it).
+     *
+     *  Both clients run the sweep over their own loaded windows; the
+     *  deletes are idempotent, so a race is harmless. Guarded to one
+     *  run per chat per hour per session (see [aiSweepAt]); failures
+     *  are silent — the doc is still on the server, still loaded by
+     *  later windows, and a later pass retries. */
+    private fun sweepExpiredAiImages(chatId: String, candidates: Collection<TikuMessage>) {
+        val now = System.currentTimeMillis()
+        synchronized(aiSweepAt) {
+            if (now - (aiSweepAt[chatId] ?: 0L) < AI_SWEEP_INTERVAL_MS) return
+            aiSweepAt[chatId] = now
+        }
+        val cutoff = now - AI_IMAGE_TTL_MS
+        val expired = candidates.filter {
+            it.kind == MsgKind.IMAGE && it.ai && it.tsMs > 0L && it.tsMs < cutoff
+        }
+        if (expired.isEmpty()) return
+        val ids = expired.mapTo(HashSet()) { it.id }
+        msgCache[chatId]?.keys?.removeAll(ids)
+        AppState.updateThread(chatId) { t -> t.messages.removeAll { m -> m.id in ids } }
+        runCatching {
+            appCtx.cacheDir.listFiles()?.forEach { f ->
+                if (f.name.startsWith("dl_") && ids.any { id -> f.name.startsWith("dl_$id.") }) f.delete()
+            }
+        }
+        scope.launch {
+            for (m in expired) {
+                runCatching { hardDeleteMessage(chatId, m) }
+                    .onFailure { Log.e("TikuChat", "ai image expiry failed chat=$chatId msg=${m.id}", it) }
+            }
+        }
+    }
+
+    /** ROUND 44: hard-delete ONE message doc + its media chunks. The
+     *  chunk half mirrors deleteForEveryone's proven batch loop exactly
+     *  (read the chunks subcollection, batch-delete in 400s); the doc
+     *  itself is then DELETED, not tombstoned — "chats never disappear"
+     *  yields to the owner's explicit AI-image expiry law for this one
+     *  message class. If the chunk pass throws, the doc delete is
+     *  skipped with it (the caller's runCatching), so the next sweep
+     *  retries from a consistent state; a doc left behind with its
+     *  chunks gone renders through the existing missing-media path
+     *  until then. */
+    private suspend fun hardDeleteMessage(chatId: String, m: TikuMessage) {
+        val ref = msgRef(chatId, m.id)
+        if (m.mediaChunks > 0) {
+            val chunks = ref.collection("chunks").get().await()
+            var batch = db.batch()
+            var n = 0
+            for (d in chunks.documents) {
+                batch.delete(d.reference)
+                if (++n >= 400) { batch.commit().await(); batch = db.batch(); n = 0 }
+            }
+            if (n > 0) batch.commit().await()
+        }
+        ref.delete().await()
     }
 
     /** Clear chat = per-user clearedBefore timestamp; older messages hide locally only. */

@@ -52,6 +52,10 @@ import java.net.URLEncoder
  * only a complete HTML game is ever posted); a Cloudflare FLUX image
  * step between the Gemini image cascade and Pollinations (skipped
  * while its config is blank); and 180 s reads on game calls.
+ *
+ * ROUND 43 adds [answerImage]: a /tiku question about ONE photo the
+ * user explicitly replied to (vision). The image reaches Gemini only
+ * through that deliberate attach — never from chat history.
  */
 object GeminiClient {
 
@@ -97,6 +101,46 @@ object GeminiClient {
                 put("parts", JSONArray().put(JSONObject().put("text", prompt)))
             }))
         }
+        return cascadeTextAnswer(body)
+    }
+
+    /** ROUND 43: a /tiku question ABOUT one photo — the vision path.
+     *  The caller (RdChatContent) invokes this ONLY when the user has
+     *  explicitly replied to a photo message with a /tiku command:
+     *  that deliberate attach is the single way an image ever reaches
+     *  the AI (the owner's privacy law — chat history, other messages
+     *  and other images are NEVER sent). The request carries the
+     *  question text plus [jpeg] as an inline_data part, under the
+     *  same IDENTITY system instruction and the same TEXT_MODELS
+     *  cascade as [answerText]. [jpeg] must already be downscaled by
+     *  the caller (≤1024 px on the long edge). */
+    suspend fun answerImage(question: String, jpeg: ByteArray): Outcome<String> {
+        if (Config.PREVIEW_UI_ONLY) {
+            return Outcome.Ok("(preview) Photo mil gayi — yahi iska jawab hai.")
+        }
+        val body = JSONObject().apply {
+            put("system_instruction", JSONObject().apply {
+                put("parts", JSONArray().put(JSONObject().put("text", IDENTITY)))
+            })
+            put("contents", JSONArray().put(JSONObject().apply {
+                put("parts", JSONArray()
+                    .put(JSONObject().put("text", question))
+                    .put(JSONObject().apply {
+                        put("inline_data", JSONObject().apply {
+                            put("mime_type", "image/jpeg")
+                            put("data", Base64.encodeToString(jpeg, Base64.NO_WRAP))
+                        })
+                    }))
+            }))
+        }
+        return cascadeTextAnswer(body)
+    }
+
+    /** The TEXT_MODELS cascade shared by [answerText] and
+     *  [answerImage]: each model gets the same prepared body; a 429
+     *  anywhere is remembered so the final error can say "quota"
+     *  honestly, and an empty answer falls through like a failure. */
+    private suspend fun cascadeTextAnswer(body: JSONObject): Outcome<String> {
         var sawQuota = false
         for (model in GeminiConfig.TEXT_MODELS) {
             when (val r = post(model, body)) {

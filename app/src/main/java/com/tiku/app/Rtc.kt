@@ -119,6 +119,21 @@ object CallSignal {
         runCatching { callRef(chatId, callId).update(field, on).await() }
     }
 
+    /**
+     * ROUND 47 — camera on/off presence, one field per role on the
+     * same ephemeral call doc (the Round-32 sharing pattern). A
+     * disabled video track gives the receiving side NO usable signal
+     * on this stack — the remote renderer just freezes on its last
+     * frame — so the toggle is published explicitly: the peer's
+     * listener reads the OTHER role's field and swaps its frozen
+     * surface for the avatar/placeholder, Instagram-style. The field
+     * stores camera ON; absent means on (every pre-47 call).
+     */
+    suspend fun setCameraOn(chatId: String, callId: String, role: String, on: Boolean) {
+        val field = if (role == "caller") "cameraCaller" else "cameraCallee"
+        runCatching { callRef(chatId, callId).update(field, on).await() }
+    }
+
     suspend fun pushCandidate(chatId: String, callId: String, role: String, cand: IceCandidate) {
         val field = if (role == "caller") "callerCands" else "calleeCands"
         runCatching { callRef(chatId, callId).update(field, FieldValue.arrayUnion(encodeCandidate(cand))).await() }
@@ -210,6 +225,12 @@ class RtcSession(
     private var screenHelper: SurfaceTextureHelper? = null
     private var sharingScreen = false
     private var cameraPref = cameraOn
+    /** ROUND 47: the camera on/off the video track currently obeys
+     *  (the user's preference — while a screen share owns the track
+     *  this is what the camera returns to when the share ends). The
+     *  call UI reads it to keep the self-view PiP honest: camera off
+     *  must show the placeholder, never a stale frozen frame. */
+    val cameraEnabled: Boolean get() = cameraPref
     var remoteVideoTrack: VideoTrack? = null
         private set
     val eglContext: EglBase.Context get() = RtcFactory.egl.eglBaseContext
@@ -577,6 +598,12 @@ object CallController {
      *  cropped) and to show the remote surface at all on audio calls. */
     val remoteSharing = MutableStateFlow(false)
 
+    /** ROUND 47 — true while the PEER's camera is off (learned from
+     *  their camera field on the call doc, see CallSignal.setCameraOn).
+     *  The call UI and the floating window read it to swap the peer's
+     *  (otherwise merely frozen) video surface for the avatar tile. */
+    val remoteCameraOff = MutableStateFlow(false)
+
     /** My signaling role in the live call ("caller" | "callee"),
      *  captured where the session events are wired. Screen-share
      *  writes pick their doc field by it. */
@@ -837,6 +864,7 @@ object CallController {
                         System.currentTimeMillis(), speakerOn = settings.speakerDefaultOn,
                         cameraOn = settings.cameraDefaultOn)
                     ringJob?.cancel(); ringJob = null
+                    (state.value as? CallUiState.Connected)?.let { publishInitialCameraOff(it) }
                 }
             } catch (e: Exception) {
                 Log.e("TikuCall", "accept failed for call ${st.callId}", e)
@@ -934,6 +962,12 @@ object CallController {
                 val cur = state.value
                 if (cur is CallUiState.Connected) state.value = cur.copy(tick = cur.tick + 1)
             }
+            // ROUND 47: the peer's camera on/off (their role's field;
+            // absent = on). No tick bump: the surfaces collect
+            // remoteCameraOff directly and re-derive from it.
+            val peerCameraOff = (data[if (role == "caller") "cameraCallee" else "cameraCaller"] as? Boolean) == false &&
+                data.containsKey(if (role == "caller") "cameraCallee" else "cameraCaller")
+            if (peerCameraOff != remoteCameraOff.value) remoteCameraOff.value = peerCameraOff
             scope.launch {
                 runCatching {
                     if (role == "caller") {
@@ -949,6 +983,7 @@ object CallController {
                                     cameraOn = SettingsStore.state.value.cameraDefaultOn,
                                 )
                                 ringJob?.cancel(); ringJob = null
+                                (state.value as? CallUiState.Connected)?.let { publishInitialCameraOff(it) }
                             }
                         }
                         @Suppress("UNCHECKED_CAST")
@@ -1077,6 +1112,20 @@ object CallController {
         val next = !st.cameraOn
         session?.setCameraEnabled(next)
         state.value = st.copy(cameraOn = next)
+        // ROUND 47: publish the toggle so the peer swaps its frozen
+        // surface for the avatar (and back) — see setCameraOn.
+        if (realMode && myRole.isNotEmpty()) {
+            scope.launch { CallSignal.setCameraOn(st.threadId, st.callId, myRole, next) }
+        }
+    }
+
+    /** ROUND 47: when a call connects with the camera already off
+     *  (the camera-default setting), the absent doc field would read
+     *  as "on" on the peer's side — publish the off state once, at
+     *  Connected entry, from both roles' connect paths. */
+    private fun publishInitialCameraOff(st: CallUiState.Connected) {
+        if (!realMode || st.cameraOn || myRole.isEmpty()) return
+        scope.launch { CallSignal.setCameraOn(st.threadId, st.callId, myRole, false) }
     }
 
     fun switchCamera() { session?.switchCamera() }
@@ -1127,6 +1176,9 @@ object CallController {
         shareAppCtx?.let { ScreenShareService.stop(it) }
         shareAppCtx = null
         remoteSharing.value = false
+        // ROUND 47: the peer-camera flag dies with the call too (same
+        // teardown pass as remoteSharing; the doc itself is deleted).
+        remoteCameraOff.value = false
         myRole = ""
     }
 

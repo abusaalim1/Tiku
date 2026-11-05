@@ -27,6 +27,7 @@ import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -79,6 +80,7 @@ import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -222,18 +224,26 @@ private fun RtcVideoView(local: Boolean, modifier: Modifier, fit: Boolean = fals
     )
 }
 
-/** Design call-dock button: 58dp glass disc (white .14 + white .2 edge);
- *  the ACTIVE state flips to near-white with a dark glyph. Icons are the
- *  owner design's drawn set (TikuIcon names). */
+/** Call-dock button (ROUND 45 reskin): the inactive state is the app's
+ *  real liquid glass — [glassSurface] on a circle, the same brush, sheen
+ *  and edge light the gate/Settings surfaces use; the ACTIVE state flips
+ *  to a near-white gradient disc with a dark glyph. Icons are the owner
+ *  design's drawn set (TikuIcon names). Skin only — same size, same
+ *  click target, same states. */
 @Composable
 private fun CallToggle(icon: String, active: Boolean, onClick: () -> Unit) {
     Box(
-        Modifier.size(58.dp).clip(CircleShape)
-            .background(if (active) Color.White.copy(alpha = 0.94f) else Color.White.copy(alpha = 0.14f))
-            .then(
-                if (active) Modifier
-                else Modifier.border(1.dp, Color.White.copy(alpha = 0.2f), CircleShape),
-            )
+        (if (active) {
+            Modifier.size(58.dp).clip(CircleShape)
+                .background(
+                    Brush.verticalGradient(
+                        listOf(Color.White.copy(alpha = 0.98f), Color.White.copy(alpha = 0.84f)),
+                    ),
+                )
+                .border(1.dp, Color.White.copy(alpha = 0.65f), CircleShape)
+        } else {
+            Modifier.size(58.dp).glassSurface(CircleShape)
+        })
             .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null, onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {
@@ -241,18 +251,44 @@ private fun CallToggle(icon: String, active: Boolean, onClick: () -> Unit) {
     }
 }
 
-/** End call: the design's red-gradient disc with the phone glyph rotated
- *  135° (the classic hang-up pose). */
+/** ROUND 45: the call action discs (end / accept / floating end) share
+ *  one glass finish — a vertical colour gradient (the function colour:
+ *  red stays red, accept stays green), a bright glass edge and a soft
+ *  white gloss pooled across the top half, clipped by the disc itself.
+ *  Pure skin: geometry and clicks are the call sites' own. */
 @Composable
-private fun CallEndButton(onClick: () -> Unit) {
+private fun CallGlassDisc(
+    sizeDp: Dp,
+    gradient: List<Color>,
+    onClick: () -> Unit,
+    content: @Composable BoxScope.() -> Unit,
+) {
     Box(
-        Modifier.size(58.dp).clip(CircleShape)
-            .background(
-                Brush.verticalGradient(listOf(Color(0xFFFF6A77), Color(0xEE3148))),
-            )
+        Modifier.size(sizeDp)
+            .shadow(12.dp, CircleShape)
+            .clip(CircleShape)
+            .background(Brush.verticalGradient(gradient))
+            .border(1.dp, Color.White.copy(alpha = 0.38f), CircleShape)
             .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null, onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {
+        Box(
+            Modifier.align(Alignment.TopCenter).fillMaxWidth().height(sizeDp / 2)
+                .background(
+                    Brush.verticalGradient(
+                        listOf(Color.White.copy(alpha = 0.30f), Color.Transparent),
+                    ),
+                ),
+        )
+        content()
+    }
+}
+
+/** End call: the red glass disc with the phone glyph rotated 135°
+ *  (the classic hang-up pose). Red stays unmistakably red. */
+@Composable
+private fun CallEndButton(onClick: () -> Unit) {
+    CallGlassDisc(58.dp, listOf(Color(0xFFFF7A85), Color(0xFFE5313F)), onClick) {
         TikuIcon(
             "call", size = 24.dp, tint = Color.White,
             modifier = Modifier.graphicsLayer { rotationZ = 135f },
@@ -273,6 +309,9 @@ fun CallScreen(threadId: String, video: Boolean) {
     // ROUND 32: the peer is sharing their screen (their video stream
     // is a screen: show it even on voice calls, and letterboxed).
     val remoteSharingNow by CallController.remoteSharing.collectAsState()
+    // ROUND 47: the peer's camera is off (their doc field) — their
+    // surface steps aside for the avatar instead of freezing.
+    val remoteCameraOffNow by CallController.remoteCameraOff.collectAsState()
 
     // manage ringtones and vibration feedback
     LaunchedEffect(callState) {
@@ -380,14 +419,15 @@ fun CallScreen(threadId: String, video: Boolean) {
     val pScale2 by inf.animateFloat(1f, 1.72f, infiniteRepeatable(tween(1800, delayMillis = 450, easing = FastOutSlowInEasing), RepeatMode.Restart), label = "ps2")
     val pAlpha2 by inf.animateFloat(0.4f, 0f, infiniteRepeatable(tween(1800, delayMillis = 450, easing = FastOutSlowInEasing), RepeatMode.Restart), label = "pa2")
 
-    // ROUND 13 skin: the design's call stage — near-black #0B0B0F with the
-    // theme pattern and accent glows pooled top/bottom (audio stage; the
-    // remote video, when live, covers it as before).
+    // Call stage (ROUND 13 skin, ROUND 45 token pass): the palette's own
+    // premium-dark bg as the single source (was a hardcoded near-black),
+    // with the theme pattern and accent glows pooled top/bottom (audio
+    // stage; the remote video, when live, covers it as before).
     val pal = LocalPalette.current
     val density = LocalDensity.current
     Box(
         Modifier.fillMaxSize()
-            .background(Color(0xFF0B0B0F))
+            .background(pal.bg)
             .drawBehind {
                 drawRect(
                     brush = Brush.radialGradient(
@@ -411,14 +451,35 @@ fun CallScreen(threadId: String, video: Boolean) {
         // the surface on a VOICE call when the peer starts sharing
         // their screen (their blank-by-default video track lights
         // up), or whenever a remote video track actually exists.
+        // ROUND 47: a peer whose camera is OFF loses the surface to
+        // the avatar presentation below (their disabled track would
+        // only freeze on its last frame) — unless they are sharing
+        // their screen, which rides the same track and stays king.
         val showRemoteVideo = connected != null && !Config.PREVIEW_UI_ONLY &&
-            (isVideo || remoteSharingNow || rtcSession?.remoteVideoTrack != null)
+            (isVideo || remoteSharingNow || rtcSession?.remoteVideoTrack != null) &&
+            !(remoteCameraOffNow && !remoteSharingNow)
         if (showRemoteVideo) {
             // re-keyed on the share flag too: FIT vs FILL is chosen
             // at renderer creation, so a share flip rebuilds the view.
             key(connected!!.tick to remoteSharingNow) {
                 RtcVideoView(local = false, modifier = Modifier.fillMaxSize(), fit = remoteSharingNow)
             }
+            // ROUND 45: video-stage scrims in the new language — soft
+            // dark pools top and bottom so the glass chrome (minimize,
+            // identity pill, dock) stays legible over any camera feed.
+            // Pure overlay: the renderer beneath is untouched.
+            Box(
+                Modifier.fillMaxSize().background(
+                    Brush.verticalGradient(
+                        colorStops = arrayOf(
+                            0f to Color.Black.copy(alpha = 0.36f),
+                            0.22f to Color.Transparent,
+                            0.60f to Color.Transparent,
+                            1f to Color.Black.copy(alpha = 0.55f),
+                        ),
+                    ),
+                ),
+            )
         }
         // self-view PiP (top-end, as designed: 98x138, r24, white .4 edge).
         // ROUND 32: also composed while I share my screen on a voice
@@ -426,19 +487,25 @@ fun CallScreen(threadId: String, video: Boolean) {
         // exactly what the peer is seeing.
         if (isVideo || connected?.sharingScreen == true) {
             Box(Modifier.fillMaxSize().padding(top = 24.dp, end = 20.dp)) {
-                if (!Config.PREVIEW_UI_ONLY && rtcSession != null && (connected != null || callState is CallUiState.Outgoing)) {
+                // ROUND 47: the live self-view only while the camera
+                // is actually sending (or the screen is — the PiP then
+                // previews the share). Camera off falls through to the
+                // "You" glass placeholder: the disabled track's stale
+                // last frame must never pose as a live camera.
+                if (!Config.PREVIEW_UI_ONLY && rtcSession != null && (connected != null || callState is CallUiState.Outgoing) &&
+                    (connected?.sharingScreen == true || rtcSession?.cameraEnabled == true)) {
                     RtcVideoView(
                         local = true,
                         modifier = Modifier.size(98.dp, 138.dp).align(Alignment.TopEnd)
+                            .shadow(12.dp, RoundedCornerShape(24.dp))
                             .clip(RoundedCornerShape(24.dp))
-                            .border(1.5.dp, Color.White.copy(alpha = 0.4f), RoundedCornerShape(24.dp)),
+                            .border(1.5.dp, Color.White.copy(alpha = 0.45f), RoundedCornerShape(24.dp)),
                     )
                 } else {
                     Box(
                         Modifier.size(98.dp, 138.dp).align(Alignment.TopEnd)
-                            .clip(RoundedCornerShape(24.dp))
-                            .background(Color(0x1FFFFFFF))
-                            .border(1.5.dp, Color.White.copy(alpha = 0.4f), RoundedCornerShape(24.dp)),
+                            .shadow(12.dp, RoundedCornerShape(24.dp))
+                            .glassSurface(RoundedCornerShape(24.dp)),
                         contentAlignment = Alignment.Center,
                     ) { Text("You", fontSize = 12.sp, color = Color.White, fontFamily = InterTight) }
                 }
@@ -449,8 +516,7 @@ fun CallScreen(threadId: String, video: Boolean) {
         if (connected != null || callState is CallUiState.Outgoing) {
             Box(
                 Modifier.align(Alignment.TopStart).padding(16.dp).size(40.dp)
-                    .clip(CircleShape).background(Color.White.copy(alpha = 0.14f))
-                    .border(1.dp, Color.White.copy(alpha = 0.2f), CircleShape)
+                    .glassSurface(CircleShape)
                     .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {
                         CallController.minimizeCall()
                     },
@@ -486,22 +552,20 @@ fun CallScreen(threadId: String, video: Boolean) {
                     }
                     Spacer(Modifier.height(18.dp))
                 }
-                // .cltop — the design's glass identity pill (name + status)
+                // .cltop — the identity pill (name + status). ROUND 45:
+                // the hand-rolled white-alpha gradient is now the app's
+                // large liquid glass (glassSurface useLargeGlass), the
+                // same card skin as the rest of the app; text rides the
+                // palette's tx token.
                 Column(
                     Modifier
-                        .clip(RoundedCornerShape(26.dp))
-                        .background(
-                            Brush.linearGradient(
-                                listOf(Color.White.copy(alpha = 0.24f), Color.White.copy(alpha = 0.07f)),
-                            ),
-                        )
-                        .border(1.dp, Color.White.copy(alpha = 0.35f), RoundedCornerShape(26.dp))
+                        .glassSurface(RoundedCornerShape(26.dp), useLargeGlass = true)
                         .padding(horizontal = 26.dp, vertical = 10.dp),
                     horizontalAlignment = Alignment.CenterHorizontally,
                 ) {
                     Text(person.name, fontFamily = InterTight, fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
-                        fontSize = 19.sp, color = Color.White)
-                    Text(statusText, fontSize = 13.sp, color = Color.White.copy(alpha = 0.8f), fontFamily = InterTight)
+                        fontSize = 19.sp, color = pal.tx)
+                    Text(statusText, fontSize = 13.sp, color = pal.tx.copy(alpha = 0.78f), fontFamily = InterTight)
                 }
                 // ROUND 32 — screen-share indicator, same glass-pill
                 // language as .cltop. Mine carries the Stop action;
@@ -511,18 +575,16 @@ fun CallScreen(threadId: String, video: Boolean) {
                     Spacer(Modifier.height(10.dp))
                     Row(
                         Modifier
-                            .clip(RoundedCornerShape(20.dp))
-                            .background(Color.White.copy(alpha = 0.14f))
-                            .border(1.dp, Color.White.copy(alpha = 0.25f), RoundedCornerShape(20.dp))
+                            .glassSurface(RoundedCornerShape(20.dp))
                             .padding(horizontal = 16.dp, vertical = 7.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        Box(Modifier.size(8.dp).clip(CircleShape).background(Color(0xFF3DD68C)))
+                        Box(Modifier.size(8.dp).clip(CircleShape).background(Color(0xFF3ED97E)))
                         Spacer(Modifier.width(8.dp))
                         Text("You're sharing your screen", fontSize = 12.5.sp, color = Color.White, fontFamily = InterTight)
                         Spacer(Modifier.width(12.dp))
                         Text(
-                            "Stop", fontSize = 12.5.sp, color = Color(0xFFFF8A94), fontFamily = InterTight,
+                            "Stop", fontSize = 12.5.sp, color = pal.danger, fontFamily = InterTight,
                             fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
                             modifier = Modifier.clickable(
                                 interactionSource = remember { MutableInteractionSource() }, indication = null,
@@ -533,13 +595,11 @@ fun CallScreen(threadId: String, video: Boolean) {
                     Spacer(Modifier.height(10.dp))
                     Row(
                         Modifier
-                            .clip(RoundedCornerShape(20.dp))
-                            .background(Color.White.copy(alpha = 0.14f))
-                            .border(1.dp, Color.White.copy(alpha = 0.25f), RoundedCornerShape(20.dp))
+                            .glassSurface(RoundedCornerShape(20.dp))
                             .padding(horizontal = 16.dp, vertical = 7.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        Box(Modifier.size(8.dp).clip(CircleShape).background(Color(0xFF3DD68C)))
+                        Box(Modifier.size(8.dp).clip(CircleShape).background(Color(0xFF3ED97E)))
                         Spacer(Modifier.width(8.dp))
                         Text("You're watching their screen", fontSize = 12.5.sp, color = Color.White, fontFamily = InterTight)
                     }
@@ -547,19 +607,20 @@ fun CallScreen(threadId: String, video: Boolean) {
             }
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    TikuLockIcon(Modifier.size(12.dp), tint = Color.White.copy(alpha = 0.6f))
+                    TikuLockIcon(Modifier.size(12.dp), tint = pal.tx.copy(alpha = 0.6f))
                     Spacer(Modifier.width(5.dp))
-                    Text("End-to-end encrypted", fontSize = 13.sp, color = Color.White.copy(alpha = 0.6f), fontFamily = InterTight)
+                    Text("End-to-end encrypted", fontSize = 13.sp, color = pal.tx.copy(alpha = 0.6f), fontFamily = InterTight)
                 }
                 Spacer(Modifier.height(18.dp))
                 if (incoming != null) {
                     // ringing: accept / reject — rejecting deletes the call record entirely
                     Row(horizontalArrangement = Arrangement.spacedBy(28.dp)) {
                         CallEndButton { CallController.reject() }
-                        Box(
-                            Modifier.size(58.dp).clip(CircleShape).background(Color(0xFF2E9E5B))
-                                .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) { acceptWithPerms() },
-                            contentAlignment = Alignment.Center,
+                        // accept: green stays green, finished as glass
+                        // (ROUND 45 CallGlassDisc, same skin as End).
+                        CallGlassDisc(
+                            58.dp, listOf(Color(0xFF3ED97E), Color(0xFF1F9D55)),
+                            onClick = { acceptWithPerms() },
                         ) {
                             TikuIcon("call", size = 24.dp, tint = Color.White)
                         }
@@ -626,6 +687,9 @@ fun FloatingCallWindow() {
     val pip by CallController.pipMinimized.collectAsState()
     val rtcSession by CallController.sessionState.collectAsState()
     val remoteSharingNow by CallController.remoteSharing.collectAsState()
+    // ROUND 47: the peer's camera-off flag — the tile falls back to
+    // the avatar row instead of a frozen last frame.
+    val remoteCameraOffNow by CallController.remoteCameraOff.collectAsState()
     val connected = callState as? CallUiState.Connected
     // connected-call clock (same cadence as the full call screen)
     var nowMs by remember { mutableLongStateOf(System.currentTimeMillis()) }
@@ -655,10 +719,15 @@ fun FloatingCallWindow() {
     // being shared on a voice call — the peer's shared screen, or (if
     // the peer sends no video) my own share preview.
     val tileLocal = connected?.sharingScreen == true && rtcSession?.remoteVideoTrack == null
+    // ROUND 47: peer camera off collapses the video tile to the
+    // avatar row — except while a screen share (theirs, or mine as
+    // the tile's local source) is the thing the track is carrying.
     val showVideo = (video || remoteSharingNow || connected?.sharingScreen == true) &&
-        connected != null && !Config.PREVIEW_UI_ONLY && rtcSession != null
+        connected != null && !Config.PREVIEW_UI_ONLY && rtcSession != null &&
+        (!remoteCameraOffNow || remoteSharingNow || tileLocal)
     val winW = if (showVideo) 108.dp else 184.dp
     val winH = if (showVideo) 156.dp else 64.dp
+    val pal = LocalPalette.current
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val density = LocalDensity.current
         var offX by remember { mutableStateOf(maxWidth - winW - 14.dp) }
@@ -671,8 +740,11 @@ fun FloatingCallWindow() {
             Modifier.offset(x = offX, y = offY).size(winW, winH)
                 .shadow(16.dp, RoundedCornerShape(20.dp))
                 .clip(RoundedCornerShape(20.dp))
-                .background(Brush.linearGradient(listOf(Color(0xFF1C1C1F), Color(0xFF000000))))
-                .border(1.dp, Color(0x33FFFFFF), RoundedCornerShape(20.dp))
+                // ROUND 45: tile skin rides the palette (sheet → bg
+                // premium-dark gradient, hi edge) instead of the old
+                // hardcoded near-blacks.
+                .background(Brush.verticalGradient(listOf(pal.sheet.copy(alpha = 0.92f), pal.bg)))
+                .border(1.dp, pal.hi, RoundedCornerShape(20.dp))
                 .pointerInput(Unit) {
                     detectDragGestures { change, drag ->
                         change.consume()
@@ -726,28 +798,26 @@ fun FloatingCallWindow() {
                     AvatarBox(person, 40.dp, 14.dp, 16f)
                     Spacer(Modifier.width(9.dp))
                     Column(Modifier.weight(1f)) {
-                        Text(person.name, fontSize = 13.sp, color = Color.White, fontFamily = InterTight,
+                        Text(person.name, fontSize = 13.sp, color = pal.tx, fontFamily = InterTight,
                             fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
                             maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
-                        Text(statusText, fontSize = 11.5.sp, color = Color.White.copy(alpha = 0.75f), fontFamily = InterTight)
+                        Text(statusText, fontSize = 11.5.sp, color = pal.tx.copy(alpha = 0.75f), fontFamily = InterTight)
                     }
                 }
             }
             // end call — a real hangup (event recorded + signaling deleted),
-            // never a mere dismiss of the window.
-            Box(
-                Modifier.align(Alignment.BottomEnd).padding(8.dp).size(30.dp)
-                    .clip(CircleShape)
-                    .background(Brush.verticalGradient(listOf(Color(0xFFFF6A77), Color(0xEE3148))))
-                    .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {
-                        CallController.hangup()
-                    },
-                contentAlignment = Alignment.Center,
-            ) {
-                TikuIcon(
-                    "call", size = 15.dp, tint = Color.White,
-                    modifier = Modifier.graphicsLayer { rotationZ = 135f },
-                )
+            // never a mere dismiss of the window. ROUND 45: same red
+            // glass-disc finish as the full screen's End button.
+            Box(Modifier.align(Alignment.BottomEnd).padding(8.dp)) {
+                CallGlassDisc(
+                    30.dp, listOf(Color(0xFFFF7A85), Color(0xFFE5313F)),
+                    onClick = { CallController.hangup() },
+                ) {
+                    TikuIcon(
+                        "call", size = 15.dp, tint = Color.White,
+                        modifier = Modifier.graphicsLayer { rotationZ = 135f },
+                    )
+                }
             }
         }
     }

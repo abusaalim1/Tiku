@@ -112,6 +112,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.composed
@@ -140,9 +141,14 @@ import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.OffsetMapping
+import androidx.compose.ui.text.input.TransformedText
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -1842,11 +1848,33 @@ private fun RdBubbleRow(
                                                 modifier = Modifier.padding(bottom = 6.dp).rdDrawLeftBar().padding(start = 8.dp),
                                             )
                                         }
-                                        Text(
-                                            m.text, color = bubbleText,
+                                        // ROUND 46: links inside the text
+                                        // are detected + styled, and the
+                                        // first one grows an IG-style
+                                        // preview card under the text (see
+                                        // LinkPreview.kt). The sealed gift
+                                        // never reaches this branch — its
+                                        // text is not composed at all, so
+                                        // nothing can be fetched for it.
+                                        val msgLink = remember(m.text) { firstLinkIn(m.text) }
+                                        RdLinkedText(
+                                            text = m.text, color = bubbleText,
+                                            linkColor = if (m.me || openedGift) Color.White else RdRose,
                                             fontSize = if (loneEmoji != null) 34.sp else textSp.sp,
                                             fontFamily = emojiFont,
                                         )
+                                        if (msgLink != null) {
+                                            Spacer(Modifier.height(8.dp))
+                                            RdLinkPreviewCard(
+                                                url = msgLink,
+                                                cardBg = bubbleText.copy(alpha = 0.08f),
+                                                borderColor = bubbleText.copy(alpha = 0.14f),
+                                                titleColor = bubbleText,
+                                                descColor = bubbleText.copy(alpha = 0.72f),
+                                                hostColor = bubbleText.copy(alpha = 0.55f),
+                                                onLongPress = onMenu,
+                                            )
+                                        }
                                     }
                                 }
                             }
@@ -2260,18 +2288,39 @@ private fun RdAiBubbleRow(
                 contentScale = ContentScale.Crop,
             )
         } else {
-            Text(
-                if (m.kind == MsgKind.IMAGE) "✨ Photo" else m.text,
-                color = theme?.peerText ?: Color.White,
-                fontSize = textSp.sp, fontFamily = rememberEmojiFontFamily(),
-                modifier = Modifier.widthIn(max = 300.dp)
+            // ROUND 46: AI text wears the same bubble skin as before,
+            // now as a Column so a detected link can carry its styled
+            // spans + preview card (see LinkPreview.kt). The long-press
+            // menu detector rides the Column, so it covers the card too.
+            val aiText = if (m.kind == MsgKind.IMAGE) "✨ Photo" else m.text
+            val aiLink = remember(aiText) { firstLinkIn(aiText) }
+            val aiInk = theme?.peerText ?: Color.White
+            Column(
+                Modifier.widthIn(max = 300.dp)
                     .clip(RoundedCornerShape(22.dp))
                     .background(theme?.peerBubble ?: RdCard)
                     .pointerInput(m.id) {
                         detectTapGestures(onLongPress = { onMenu() })
                     }
                     .padding(horizontal = 16.dp, vertical = 11.dp),
-            )
+            ) {
+                RdLinkedText(
+                    text = aiText, color = aiInk, linkColor = RdRose,
+                    fontSize = textSp.sp, fontFamily = rememberEmojiFontFamily(),
+                )
+                if (aiLink != null) {
+                    Spacer(Modifier.height(8.dp))
+                    RdLinkPreviewCard(
+                        url = aiLink,
+                        cardBg = aiInk.copy(alpha = 0.08f),
+                        borderColor = aiInk.copy(alpha = 0.14f),
+                        titleColor = aiInk,
+                        descColor = aiInk.copy(alpha = 0.72f),
+                        hostColor = aiInk.copy(alpha = 0.55f),
+                        onLongPress = onMenu,
+                    )
+                }
+            }
         }
     }
 }
@@ -2545,6 +2594,33 @@ private val SlashCommands = listOf(
     SlashCommand("/babeg", "AI game banayega"),
 )
 
+/** ROUND 44: the composer's command-bold transformation (owner's ask:
+ *  a typed command must LOOK like a command in the box, not like normal
+ *  text). While the field starts with "/", the leading token — index 0
+ *  through the first space, or the whole field while the command is
+ *  still being typed — renders [FontWeight.Bold] over the field's
+ *  normal weight; everything after the first space stays plain. The
+ *  rule is deliberately dumb (no command-table lookup): a half-typed
+ *  "/ti" bolds too, which is exactly the feedback wanted mid-typing.
+ *  Pure [VisualTransformation]: the output is the SAME string with one
+ *  span added, so [OffsetMapping.Identity] is exact — caret, selection
+ *  and IME composition offsets are untouched, the stored String never
+ *  changes, and the Round-42 slash sheet (which watches the raw value)
+ *  is unaffected. Non-"/" text passes through unstyled. */
+private object CommandBoldTransformation : VisualTransformation {
+    override fun filter(text: AnnotatedString): TransformedText {
+        val raw = text.text
+        if (!raw.startsWith("/")) return TransformedText(text, OffsetMapping.Identity)
+        val end = raw.indexOf(' ').let { if (it < 0) raw.length else it }
+        if (end <= 1) return TransformedText(text, OffsetMapping.Identity)
+        val styled = buildAnnotatedString {
+            append(raw)
+            addStyle(SpanStyle(fontWeight = FontWeight.Bold), 0, end)
+        }
+        return TransformedText(styled, OffsetMapping.Identity)
+    }
+}
+
 @Composable
 fun RdChatInput(
     h: HazeState?,
@@ -2746,6 +2822,9 @@ fun RdChatInput(
                         value, onChange,
                         textStyle = TextStyle(color = contentCol, fontSize = 15.sp, fontFamily = emojiFont),
                         cursorBrush = SolidColor(accent),
+                        // ROUND 44: a leading "/" command token renders
+                        // Bold while typing (see CommandBoldTransformation).
+                        visualTransformation = CommandBoldTransformation,
                         modifier = Modifier.fillMaxWidth().onFocusChanged { fieldFocused = it.isFocused },
                     )
                 }
@@ -2816,6 +2895,27 @@ private fun copyUriToCacheFile(ctx: android.content.Context, uri: android.net.Ur
     val input = ctx.contentResolver.openInputStream(uri) ?: return null
     input.use { inp -> f.outputStream().use { out -> inp.copyTo(out) } }
     f
+}.getOrNull()
+
+/** ROUND 43: decode a camera capture with bounds — sample down so
+ *  the long edge lands at or under ~2560 px BEFORE the full decode.
+ *  The send pipeline compresses to 1280 anyway (MediaStore), so the
+ *  lost pixels cost nothing; what it buys is survival: a naive
+ *  decodeFile of a 50–200 MP OEM capture can OOM inside the activity
+ *  -result callback and take the send (or the app) down with it.
+ *  Null when the file is missing or undecodable. */
+private fun decodeCaptureBounded(f: File): Bitmap? = runCatching {
+    if (!f.exists()) return null
+    val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+    BitmapFactory.decodeFile(f.absolutePath, bounds)
+    val longest = maxOf(bounds.outWidth, bounds.outHeight)
+    if (longest <= 0) return null
+    var sample = 1
+    while (longest / sample > 2560) sample *= 2
+    BitmapFactory.decodeFile(
+        f.absolutePath,
+        BitmapFactory.Options().apply { inSampleSize = sample },
+    )
 }.getOrNull()
 
 /** ROUND 15: duration (seconds) of a media file, 0 when unreadable. */
@@ -3113,38 +3213,88 @@ private fun RdChatContent(thread: ChatThread) {
     // to the gallery: the photo is decoded -> sent -> the cache file is
     // deleted; the video file stays in cache as the sender's playable
     // copy (the engine's rule for captured/picked media files).
-    var camPhotoFile by remember { mutableStateOf<File?>(null) }
-    var camVideoFile by remember { mutableStateOf<File?>(null) }
+    //
+    // ROUND 43 — WHY CAMERA + VIEW-ONCE SILENTLY NEVER SENT (owner
+    // bug, build 74): the pending capture (file) and the armed
+    // allowance were read at RESULT time from plain `remember` state.
+    // MainActivity declares NO android:configChanges, so a rotation
+    // while the camera app is open — or an OEM teardown of the
+    // stopped activity under memory pressure from the camera app —
+    // destroys and recreates this composition mid-capture. The
+    // ActivityResultRegistry still redelivers the result to the
+    // re-registered launcher, but the fresh callback found
+    // camPhotoFile == null (and armedVo == null) and the guard
+    // swallowed the capture whole: no send, no error, nothing. The
+    // gallery path never depended on remembered state — its result
+    // carries the Uri, and its allowance degrades at worst to Always
+    // — which is why ONLY the camera path vanished. The fix is
+    // structural: the pending capture path AND the allowance are
+    // snapshotted at LAUNCH into rememberSaveable state (which rides
+    // the activity's saved-instance state across recreation), the
+    // decode is bounds-limited (a full-res OEM capture decodeFile
+    // could OOM the callback), and every failure on the result path
+    // is SPOKEN with a toast instead of swallowed.
+    var camPhotoPath by rememberSaveable { mutableStateOf<String?>(null) }
+    var camVideoPath by rememberSaveable { mutableStateOf<String?>(null) }
+    /** The view-once arm as it stood when the pending capture was
+     *  LAUNCHED (-1 = Always / unarmed, 1 / 2 = the allowance). A
+     *  plain MutableState<Int> on purpose: it is the state shape
+     *  rememberSaveable's default saver is guaranteed to carry. */
+    var camVoCode by rememberSaveable { mutableStateOf(-1) }
     val takePhoto = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { ok ->
-        val f = camPhotoFile
-        camPhotoFile = null
-        if (ok && f != null && f.exists()) {
-            // ROUND 31: the armed view-once allowance rides this capture.
-            val vo = armedVo; armedVo = null
-            BitmapFactory.decodeFile(f.absolutePath)?.let { AppState.repo.sendPhotoVo(threadId, it, vo) }
-            runCatching { f.delete() }
+        val path = camPhotoPath
+        val vo = camVoCode.takeIf { it in 1..2 }
+        camPhotoPath = null
+        camVoCode = -1
+        val f = path?.let { File(it) }
+        if (!ok) {
+            // user cancelled the camera — not a failure; the live arm
+            // survives for the next pick, as before.
+            if (f != null) runCatching { f.delete() }
+            return@rememberLauncherForActivityResult
         }
+        val bmp = f?.let { decodeCaptureBounded(it) }
+        if (f == null || bmp == null) {
+            // ROUND 43: never silent again — a capture that cannot be
+            // read says so (the arm stays armed for the retry).
+            AppState.toast("Couldn't send that photo — please try again")
+            if (f != null) runCatching { f.delete() }
+            return@rememberLauncherForActivityResult
+        }
+        // ROUND 31 + 43: the allowance snapshotted at launch rides
+        // this capture; the send consumes the live arm too.
+        armedVo = null
+        AppState.repo.sendPhotoVo(threadId, bmp, vo)
+        runCatching { f.delete() }
     }
     val recordVideoCapture = rememberLauncherForActivityResult(ActivityResultContracts.CaptureVideo()) { ok ->
-        val f = camVideoFile
-        camVideoFile = null
+        val path = camVideoPath
+        val vo = camVoCode.takeIf { it in 1..2 }
+        camVideoPath = null
+        camVoCode = -1
+        val f = path?.let { File(it) }
         if (ok && f != null && f.exists() && f.length() > 0) {
-            // ROUND 31: the armed view-once allowance rides this capture.
-            val vo = armedVo; armedVo = null
+            // ROUND 31 + 43: launch-time allowance snapshot, as above.
+            armedVo = null
             AppState.repo.sendVideoVo(threadId, f, "video/mp4", mediaDurationSec(f), vo)
-        } else if (f != null) {
-            runCatching { f.delete() }
+        } else {
+            if (f != null) runCatching { f.delete() }
+            // ROUND 43: a "successful" capture with no usable file is
+            // a failure and says so (a cancel stays silent).
+            if (ok) AppState.toast("Couldn't send that video — please try again")
         }
     }
     fun launchCameraPhoto() {
         val f = File(ctx.cacheDir, "cap_${System.currentTimeMillis()}.jpg")
-        camPhotoFile = f
+        camPhotoPath = f.absolutePath
+        camVoCode = armedVo ?: -1
         ChatSession.expectExternalActivity = true
         takePhoto.launch(FileProvider.getUriForFile(ctx, "tiku.app.fileprovider", f))
     }
     fun launchCameraVideo() {
         val f = File(ctx.cacheDir, "cap_${System.currentTimeMillis()}.mp4")
-        camVideoFile = f
+        camVideoPath = f.absolutePath
+        camVoCode = armedVo ?: -1
         ChatSession.expectExternalActivity = true
         recordVideoCapture.launch(FileProvider.getUriForFile(ctx, "tiku.app.fileprovider", f))
     }
@@ -3450,6 +3600,32 @@ private fun RdChatContent(thread: ChatThread) {
         return prompt.ifEmpty { null }
     }
 
+    /** ROUND 43: the replied-to photo's decrypted bitmap for a /tiku
+     *  vision ask. Photos publish into thread state through the
+     *  listener's decrypt path (TikuMessage.photo, an in-memory
+     *  bitmap), so the bytes are normally already here — [snapshot] is
+     *  the copy the user saw when they hit reply, and the poll covers
+     *  a just-landed photo whose chunks finished a beat after its doc.
+     *  Null when the message is gone, tombstoned, undecryptable on
+     *  this phone, or still not loaded after the wait — the caller
+     *  toasts "Photo load nahi hui" and does nothing else.
+     *  NOTE: fetchMedia is deliberately NOT the loader for images —
+     *  its success contract is a cache localPath, which image
+     *  messages never carry (they decrypt straight to a Bitmap), so
+     *  it cannot publish an image into state; the listener decrypt IS
+     *  the image load path, and this poll observes it. */
+    suspend fun loadReplyPhoto(msgId: String, snapshot: Bitmap?): Bitmap? {
+        snapshot?.let { return it }
+        repeat(40) {
+            val m = AppState.thread(threadId)?.messages?.firstOrNull { it.id == msgId }
+                ?: return null
+            m.photo?.let { return it }
+            if (m.undecryptable || m.deletedForEveryone) return null
+            delay(300)
+        }
+        return AppState.thread(threadId)?.messages?.firstOrNull { it.id == msgId }?.photo
+    }
+
     fun sendCurrent() {
         val v = input.trim()
         if (v.isEmpty()) return
@@ -3490,6 +3666,62 @@ private fun RdChatContent(thread: ChatThread) {
                             AppState.toast("Tika: quota abhi khatam hai — thodi der baad try karo")
                         GeminiClient.Outcome.Failed ->
                             AppState.toast("Tika game nahi bana paya — dobara try karo")
+                    }
+                } finally {
+                    aiThinking = null
+                }
+            }
+            return
+        }
+        // ROUND 43: /tiku as a REPLY to a photo — Tika LOOKS at the
+        // photo and answers about it. The command still sends FIRST,
+        // as the user's reply message with its quote attached (both
+        // sides see what was asked, exactly like a plain reply send);
+        // then the replied photo's decrypted bytes are read from
+        // thread state on THIS phone and go to Gemini vision with the
+        // question, and the answer lands as a normal ai message. This
+        // explicit reply is the ONLY door an image ever takes to the
+        // AI (owner privacy law: nothing else from the chat — no
+        // history, no other messages or images — is ever sent). A
+        // bare "/tiku" reply asks the default describe-it question.
+        val visionTarget = replyTarget?.takeIf { it.kind == MsgKind.IMAGE }
+        val visionQuestion = if (visionTarget != null && armedFx == null) {
+            val lower = v.lowercase()
+            when {
+                lower == "/tiku" -> ""
+                lower.startsWith("/tiku ") -> v.substring(5).trim()
+                else -> null
+            }
+        } else null
+        if (visionTarget != null && visionQuestion != null) {
+            if (aiThinking != null) {
+                AppState.toast("Tika pehle wale jawab pe kaam kar raha hai")
+                return
+            }
+            val question = visionQuestion.ifEmpty { "Is photo me kya hai? Describe karo." }
+            val targetId = visionTarget.id
+            val snapshot = visionTarget.photo
+            AppState.repo.sendTextFx(threadId, v, replyQuoteLabel(visionTarget), null)
+            input = ""; replyTarget = null
+            scope.launch { AppState.repo.setTyping(threadId, false) }
+            aiThinking = "Tika is thinking…"
+            scope.launch {
+                try {
+                    val bmp = loadReplyPhoto(targetId, snapshot)
+                    if (bmp == null) {
+                        AppState.toast("Photo load nahi hui")
+                    } else {
+                        // Vision payload: ≤1024 px on the long edge,
+                        // JPEG — the question is about the content,
+                        // not the pixels.
+                        val jpeg = MediaStore.compressPhoto(bmp, maxSide = 1024, quality = 82)
+                        when (val out = GeminiClient.answerImage(question, jpeg)) {
+                            is GeminiClient.Outcome.Ok -> AppState.repo.sendTextAi(threadId, out.value)
+                            GeminiClient.Outcome.Quota ->
+                                AppState.toast("Tika: quota abhi khatam hai — thodi der baad try karo")
+                            GeminiClient.Outcome.Failed ->
+                                AppState.toast("Tika jawab nahi de paya — dobara try karo")
+                        }
                     }
                 } finally {
                     aiThinking = null
