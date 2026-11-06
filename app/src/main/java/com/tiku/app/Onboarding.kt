@@ -221,6 +221,78 @@ fun CreatePasswordScreen() {
     }
 }
 
+/**
+ * ROUND 51 — the ONE recovery-key restore form, shared by every place
+ * a journal restore is offered (the Restore screen and the
+ * forgot-password flow's Mode F) so the crypto path can never diverge:
+ * code + a NEW journal password -> FirebaseEngine.restoreWithRecoveryKey
+ * -> the host's own landing via [onRestored]. A wrong code feeds the
+ * same GateGuard backoff as a wrong password (it is the same class of
+ * guessing surface, even at 128 bits) and changes NOTHING — the engine
+ * writes only after the code has actually opened the blob.
+ */
+@Composable
+fun RecoveryRestoreForm(onRestored: (cloudUpdated: Boolean) -> Unit) {
+    val ctx = LocalContext.current
+    val pal = LocalPalette.current
+    val scope = rememberCoroutineScope()
+    var code by remember { mutableStateOf("") }
+    var np by remember { mutableStateOf("") }
+    var cf by remember { mutableStateOf("") }
+    var busy by remember { mutableStateOf(false) }
+    var error by remember { mutableStateOf("") }
+    var lockRemainingMs by remember { mutableStateOf(GateGuard.lockedRemainingMs(ctx)) }
+    LaunchedEffect(lockRemainingMs) {
+        while (lockRemainingMs > 0) { delay(500); lockRemainingMs = GateGuard.lockedRemainingMs(ctx) }
+    }
+    val match = cf.isNotEmpty() && np == cf
+    PasswordField(code, { code = it; error = "" }, "Recovery key")
+    Spacer(Modifier.height(14.dp))
+    PasswordField(np, { np = it; error = "" }, "New password")
+    Spacer(Modifier.height(14.dp))
+    PasswordField(cf, { cf = it; error = "" }, "Confirm new password")
+    Spacer(Modifier.height(6.dp))
+    Text(
+        when {
+            lockRemainingMs > 0 -> "Too many tries in a row — take a short break and try again in ${(lockRemainingMs + 999) / 1000}s."
+            error.isNotEmpty() -> error
+            cf.isNotEmpty() && !match -> "Passwords don’t match yet"
+            else -> "Use 8+ characters with a number and a symbol."
+        },
+        fontSize = 12.5.sp,
+        color = if (error.isNotEmpty() || lockRemainingMs > 0) pal.danger else pal.sub,
+        fontFamily = PoppinsFamily,
+    )
+    Spacer(Modifier.height(16.dp))
+    PrimaryButton(
+        if (busy) "Restoring…" else "Restore with my recovery key",
+        enabled = code.isNotBlank() && np.length >= 8 && match && !busy && lockRemainingMs <= 0,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        busy = true
+        error = ""
+        scope.launch {
+            when (val r = FirebaseEngine.restoreWithRecoveryKey(ctx, code, np)) {
+                is FirebaseEngine.RecoveryResult.Ok -> {
+                    GateGuard.reset(ctx)
+                    onRestored(r.cloudUpdated)
+                }
+                FirebaseEngine.RecoveryResult.WrongCode -> {
+                    busy = false
+                    GateGuard.recordFailure(ctx)
+                    lockRemainingMs = GateGuard.lockedRemainingMs(ctx)
+                    code = ""
+                    error = "That recovery key doesn't match — check it and try again. Nothing was changed or deleted."
+                }
+                FirebaseEngine.RecoveryResult.NoRecovery ->
+                    { busy = false; error = "This account doesn't have a recovery key — it can't be restored with one." }
+                is FirebaseEngine.RecoveryResult.Unavailable ->
+                    { busy = false; error = "Couldn't restore right now (${r.why}) — check your connection and try again." }
+            }
+        }
+    }
+}
+
 @Composable
 fun RestorePasswordScreen() {
     androidx.activity.compose.BackHandler { AppState.go(Screen.Facade) }
@@ -228,6 +300,10 @@ fun RestorePasswordScreen() {
     var pw by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf("") }
+    // ROUND 51: the recovery-key alternative, offered on this very
+    // screen (spec: anywhere the password restore is offered) — it
+    // lands through the exact same post-restore path as a password.
+    var recOpen by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     val ctx = LocalContext.current
     // ROUND 8: the restore field is the same offline guessing surface as the
@@ -237,18 +313,37 @@ fun RestorePasswordScreen() {
         while (lockRemainingMs > 0) { delay(500); lockRemainingMs = GateGuard.lockedRemainingMs(ctx) }
     }
     FormScaffold("Welcome back", "Your journal was found on this account. Enter the password you set when you created it — and everything comes back on this phone: every note and every conversation, exactly as you left it.") {
-        PasswordField(pw, { pw = it; error = "" }, "Backup password")
-        Spacer(Modifier.height(6.dp))
-        Text(
-            when {
-                lockRemainingMs > 0 -> "Too many tries in a row — take a short break and try again in ${(lockRemainingMs + 999) / 1000}s."
-                error.isNotEmpty() -> error
-                else -> "Only this password opens this journal — there is no starting over with a new one. A wrong try changes nothing and deletes nothing."
-            },
-            fontSize = 13.sp, color = if (error.isNotEmpty() || lockRemainingMs > 0) pal.danger else pal.sub, fontFamily = PoppinsFamily,
-        )
+        // ROUND 51: the password form and the recovery form SWAP (the
+        // scaffold doesn't scroll — stacking both could push the
+        // recovery button off a small screen).
+        if (!recOpen) {
+            PasswordField(pw, { pw = it; error = "" }, "Backup password")
+            Spacer(Modifier.height(6.dp))
+            Text(
+                when {
+                    lockRemainingMs > 0 -> "Too many tries in a row — take a short break and try again in ${(lockRemainingMs + 999) / 1000}s."
+                    error.isNotEmpty() -> error
+                    else -> "Only this password opens this journal — there is no starting over with a new one. A wrong try changes nothing and deletes nothing."
+                },
+                fontSize = 13.sp, color = if (error.isNotEmpty() || lockRemainingMs > 0) pal.danger else pal.sub, fontFamily = PoppinsFamily,
+            )
+        } else {
+            Text("Restore with your recovery key — your journal and every chat in it come back; only the password changes.",
+                fontSize = 12.5.sp, color = pal.sub, fontFamily = PoppinsFamily)
+            Spacer(Modifier.height(12.dp))
+            RecoveryRestoreForm { cloudUpdated ->
+                ctx.getSharedPreferences("tiku_prefs", android.content.Context.MODE_PRIVATE)
+                    .edit().putBoolean("onboarded", true).apply()
+                FirebaseEngine.start(ctx)
+                FirebaseEngine.loadMyProfile()
+                FirebaseEngine.setPresence(true)
+                AppState.toast(if (cloudUpdated) "Journal restored — welcome back"
+                    else "Journal restored on this phone — the cloud backup updates when you're back online")
+                AppState.go(Screen.Home)
+            }
+        }
         Spacer(Modifier.weight(1f))
-        PrimaryButton(if (busy) "Restoring…" else "Restore my journal", enabled = pw.isNotEmpty() && !busy && lockRemainingMs <= 0, modifier = Modifier.fillMaxWidth()) {
+        if (!recOpen) PrimaryButton(if (busy) "Restoring…" else "Restore my journal", enabled = pw.isNotEmpty() && !busy && lockRemainingMs <= 0, modifier = Modifier.fillMaxWidth()) {
             busy = true
             scope.launch {
                 // outcomes are DISTINCT (owner Bug 0): a genuinely wrong password
@@ -280,11 +375,25 @@ fun RestorePasswordScreen() {
                 }
             }
         }
+        // ROUND 51: forgot the password but saved the recovery key?
+        // The toggle swaps the form above — the key restores the SAME
+        // journal, every chat included.
+        if (!Config.PREVIEW_UI_ONLY) {
+            Spacer(Modifier.height(16.dp))
+            Text(if (recOpen) "Use my password instead" else "Use my recovery key instead",
+                fontSize = 13.sp, fontFamily = PoppinsFamily, fontWeight = FontWeight.SemiBold,
+                color = pal.ac,
+                modifier = Modifier.fillMaxWidth()
+                    .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {
+                        recOpen = !recOpen
+                    },
+                textAlign = androidx.compose.ui.text.style.TextAlign.Center)
+        }
         // ROUND 10 PARITY: a forgotten password must have a way forward from
         // HERE too — this restore screen is where a returning user actually
         // lands after sign-in. The link leads to the same reset flow the
         // gate offers (Mode F on this phone: no local key lives here).
-        if (!Config.PREVIEW_UI_ONLY) {
+        if (!Config.PREVIEW_UI_ONLY && !recOpen) {
             Spacer(Modifier.height(14.dp))
             Text("Forgot your password?",
                 fontSize = 13.sp, fontFamily = PoppinsFamily, fontWeight = FontWeight.SemiBold,
@@ -306,10 +415,14 @@ fun RestorePasswordScreen() {
  *    new password — the existing key is re-wrapped under it and the cloud
  *    backup re-uploaded. History survives intact.
  *  - Mode F ([ResetPasswordFreshStart]): no key on this phone and the old
- *    password gone — the cloud backup can never be opened again. After the
- *    same Google re-auth + uid binding and an explicit one-way warning, the
- *    old key material is retired server-side and the user starts a FRESH
- *    journal (same account, same username, new keypair + new password).
+ *    password gone. ROUND 51: the first option is now the RECOVERY KEY —
+ *    it unwraps the SAME key, a new password is set, and every chat
+ *    survives (see RecoveryRestoreForm). Only when there is no usable
+ *    recovery key does the old road remain: after the same Google
+ *    re-auth + uid binding and an explicit one-way warning (plus the
+ *    ROUND-50 confirmation checkbox), the old key material is retired
+ *    server-side and the user starts a FRESH journal (same account,
+ *    same username, new keypair + new password).
  *
  * ROUND 10 PARITY RULE: this flow is IDENTICAL for every account. There is
  * deliberately NO OwnerState / isOwner / OWNER_EMAIL check anywhere in
@@ -434,6 +547,12 @@ private fun ResetPasswordFreshStart() {
     // is ticked. A single tap on a warning screen was too easy a way
     // to orphan a whole journal (the owner's build-84 key loss).
     var confirmed by remember { mutableStateOf(false) }
+    // ROUND 51: does this account carry a recovery wrap at all?
+    // (null = the check itself failed — never reported as "none".)
+    var hasRecovery by remember { mutableStateOf<Boolean?>(null) }
+    LaunchedEffect(Unit) {
+        if (!Config.PREVIEW_UI_ONLY) hasRecovery = FirebaseEngine.hasRecoveryKey()
+    }
     // captured ONCE — same binding discipline as Mode R
     val expectedUid = remember { FirebaseEngine.uid }
     if (stage == 0) {
@@ -464,6 +583,57 @@ private fun ResetPasswordFreshStart() {
                     }
                 }
             }
+        }
+    } else if (stage == 1) {
+        // ROUND 51: the choice. The recovery key is the FIRST option —
+        // it keeps every chat; start-fresh is demoted to the last
+        // resort at the bottom. The recovery button shows unless the
+        // account is KNOWN to have no recovery wrap (a failed check
+        // never hides it — the form itself reports the truth).
+        FormScaffold("Reset your password",
+            "Your Google account is confirmed. Choose how to continue.") {
+            if (hasRecovery == false) {
+                Text("This account doesn't have a recovery key, so its chats can't be brought back with one.",
+                    fontSize = 13.sp, fontFamily = PoppinsFamily, color = pal.tx)
+            } else {
+                Text(
+                    if (hasRecovery == true) "Enter the recovery key you saved when you set up your journal, choose a new password — and everything comes back: every note and every conversation, exactly as you left it."
+                    else "If you saved a recovery key when you set up your journal, it brings everything back — every chat, exactly as it was. Only your password changes.",
+                    fontSize = 13.sp, fontFamily = PoppinsFamily, color = pal.sub)
+                Spacer(Modifier.height(16.dp))
+                PrimaryButton("Use my recovery key — keeps all your chats", enabled = !busy, modifier = Modifier.fillMaxWidth()) {
+                    stage = 2
+                }
+            }
+            Spacer(Modifier.weight(1f))
+            Text("I don't have a recovery key — start fresh",
+                fontSize = 13.sp, fontFamily = PoppinsFamily, fontWeight = FontWeight.SemiBold,
+                color = pal.sub,
+                modifier = Modifier.fillMaxWidth()
+                    .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {
+                        stage = 3
+                    },
+                textAlign = androidx.compose.ui.text.style.TextAlign.Center)
+        }
+    } else if (stage == 2) {
+        FormScaffold("Restore with your recovery key",
+            "Your journal and every chat in it come back exactly as they were — only your password changes.") {
+            RecoveryRestoreForm { cloudUpdated ->
+                ctx.getSharedPreferences("tiku_prefs", android.content.Context.MODE_PRIVATE)
+                    .edit().putBoolean("onboarded", true).apply()
+                AppState.toast(if (cloudUpdated) "Journal restored — welcome back"
+                    else "Journal restored on this phone — the cloud backup updates when you're back online")
+                ChatSession.unlockFlow(ctx)
+            }
+            Spacer(Modifier.height(14.dp))
+            Text("Back",
+                fontSize = 13.sp, fontFamily = PoppinsFamily, fontWeight = FontWeight.SemiBold,
+                color = pal.ac,
+                modifier = Modifier.fillMaxWidth()
+                    .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {
+                        stage = 1
+                    },
+                textAlign = androidx.compose.ui.text.style.TextAlign.Center)
         }
     } else {
         FormScaffold("Start a fresh journal",
@@ -530,6 +700,10 @@ fun ProfileSetupScreen() {
     var hint by remember { mutableStateOf("Letters, numbers, dots and underscores.") }
     var available by remember { mutableStateOf(false) }
     var busy by remember { mutableStateOf(false) }
+    // ROUND 51: after a successful finishNewUser, the flow detours to
+    // the one-time recovery-key display before Home (the engine
+    // stashed the code in AppState.pendingRecoveryCode).
+    var showRecovery by remember { mutableStateOf(false) }
 
     val pick = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
         // ROUND 18: a photo that can't be read used to fail silently (the
@@ -567,6 +741,11 @@ fun ProfileSetupScreen() {
                 else { hint = "✓ @$username is available"; available = true }
             }
         }
+    }
+
+    if (showRecovery) {
+        RecoveryKeyShowStage()
+        return
     }
 
     FormScaffold("Set up your profile", "Add a photo and pick your Tiku ID.") {
@@ -661,8 +840,18 @@ fun ProfileSetupScreen() {
                         ctx.getSharedPreferences("tiku_prefs", android.content.Context.MODE_PRIVATE)
                             .edit().putBoolean("onboarded", true).apply()
                         FirebaseEngine.start(ctx)
-                        AppState.go(Screen.Home)
-                        AppState.toast("Welcome to Tiku")
+                        // ROUND 51: show the recovery key ONCE before
+                        // Home — setup is not complete until the user
+                        // confirms they saved it. (An empty stash —
+                        // impossible on this path — falls through to
+                        // Home; a fresh key can be made in Settings.)
+                        if (AppState.pendingRecoveryCode.isNotEmpty()) {
+                            busy = false
+                            showRecovery = true
+                        } else {
+                            AppState.go(Screen.Home)
+                            AppState.toast("Welcome to Tiku")
+                        }
                     } else if (res.exceptionOrNull() is FirebaseEngine.ExistingJournalException) {
                         // ROUND 5: this account already has a journal in the
                         // cloud — setup was refused BEFORE anything could be
@@ -680,6 +869,81 @@ fun ProfileSetupScreen() {
     }
 }
 
+
+/**
+ * ROUND 51 — the one-time recovery-key display that completes every
+ * NEW journal setup. The code (AppState.pendingRecoveryCode, RAM
+ * only) is shown once with a copy button; Continue stays disabled
+ * until the unticked-by-default "I have saved it" box is ticked —
+ * the same deliberate-consent pattern ROUND 50 put on start-fresh.
+ * Leaving clears the stash: the code is never persisted anywhere,
+ * and a user who loses it can rotate a fresh one from Settings
+ * (which retires this one).
+ */
+@Composable
+private fun RecoveryKeyShowStage() {
+    androidx.activity.compose.BackHandler { /* setup is done — nowhere to go back to */ }
+    val pal = LocalPalette.current
+    val clipboard = androidx.compose.ui.platform.LocalClipboardManager.current
+    val code = AppState.pendingRecoveryCode
+    var confirmed by remember { mutableStateOf(false) }
+    var copied by remember { mutableStateOf(false) }
+    FormScaffold("Save your recovery key",
+        "If you ever forget your journal password, this key brings your journal — and every chat in it — back on a new phone. It is shown only this once: Tiku never stores it and can never show it again.") {
+        Box(
+            Modifier.fillMaxWidth()
+                .clip(RoundedCornerShape(16.dp))
+                .background(pal.s2)
+                .border(1.dp, pal.ln, RoundedCornerShape(16.dp))
+                .padding(horizontal = 18.dp, vertical = 20.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(code, color = pal.tx, fontSize = 18.sp, fontFamily = InterTight,
+                fontWeight = FontWeight.SemiBold, letterSpacing = 1.2.sp,
+                textAlign = androidx.compose.ui.text.style.TextAlign.Center)
+        }
+        Spacer(Modifier.height(12.dp))
+        Text(if (copied) "Copied ✓" else "Copy the key",
+            fontSize = 13.sp, fontFamily = PoppinsFamily, fontWeight = FontWeight.SemiBold,
+            color = pal.ac,
+            modifier = Modifier.fillMaxWidth()
+                .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {
+                    clipboard.setText(androidx.compose.ui.text.AnnotatedString(code))
+                    copied = true
+                },
+            textAlign = androidx.compose.ui.text.style.TextAlign.Center)
+        Spacer(Modifier.height(16.dp))
+        Text("Keep it somewhere only you can reach. Anyone who has this key together with your Google account can restore your journal — treat it like a password.",
+            fontSize = 12.5.sp, fontFamily = PoppinsFamily, color = pal.sub)
+        Spacer(Modifier.height(16.dp))
+        Row(
+            Modifier.fillMaxWidth()
+                .clip(RoundedCornerShape(12.dp))
+                .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) { confirmed = !confirmed }
+                .padding(vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Box(
+                Modifier.size(24.dp)
+                    .clip(RoundedCornerShape(7.dp))
+                    .background(if (confirmed) pal.ac else Color.Transparent)
+                    .border(1.5.dp, if (confirmed) pal.ac else pal.sub, RoundedCornerShape(7.dp)),
+                contentAlignment = Alignment.Center,
+            ) {
+                if (confirmed) Text("✓", color = Color.White, fontSize = 14.sp, fontFamily = PoppinsFamily)
+            }
+            Spacer(Modifier.width(12.dp))
+            Text("I have saved my recovery key somewhere safe.",
+                fontSize = 13.sp, fontFamily = PoppinsFamily, color = pal.tx)
+        }
+        Spacer(Modifier.weight(1f))
+        PrimaryButton("Continue", enabled = confirmed, modifier = Modifier.fillMaxWidth()) {
+            AppState.pendingRecoveryCode = ""
+            AppState.go(Screen.Home)
+            AppState.toast("Welcome to Tiku")
+        }
+    }
+}
 
 // bitmap -> Compose ImageBitmap helper
 fun android.graphics.Bitmap.asBmp(): androidx.compose.ui.graphics.ImageBitmap = asImageBitmap()

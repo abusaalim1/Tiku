@@ -25,6 +25,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material3.Icon
@@ -254,6 +255,7 @@ internal fun buildGameWebView(
     ctx: Context,
     native: Any,
     onPageReady: () -> Unit,
+    onLoadError: (() -> Unit)? = null,
 ): WebView {
     val wv = WebView(ctx)
     wv.settings.apply {
@@ -295,6 +297,18 @@ internal fun buildGameWebView(
         override fun onPageFinished(view: WebView?, url: String?) {
             onPageReady()
         }
+
+        // ROUND 51: a main-frame load failure used to be invisible —
+        // the player sat on the game's own loading screen (or a blank
+        // page) forever, because the initial state delivery only ever
+        // happens from onPageFinished. Surface it: the host turns it
+        // into a real error state with a retry. Subresource errors
+        // stay ignored (the lockdown answers them empty by design).
+        override fun onReceivedError(
+            view: WebView?, request: WebResourceRequest?, error: android.webkit.WebResourceError?,
+        ) {
+            if (request?.isForMainFrame == true) onLoadError?.invoke()
+        }
     }
     return wv
 }
@@ -318,6 +332,7 @@ private fun GameWebViewHost(
     myName: String,
     peerName: String,
     html: String,
+    onError: () -> Unit = {},
 ) {
     val ctx = LocalContext.current
     val bridgeState = remember(m.id) { GameBridgeState() }
@@ -332,21 +347,32 @@ private fun GameWebViewHost(
             writer.offer(json)
         }
     }
+    var pageReady by remember(m.id) { mutableStateOf(false) }
     val wvHolder = remember(m.id) { mutableStateOf<WebView?>(null) }
     val webView = remember(m.id) {
-        buildGameWebView(ctx, native) {
+        buildGameWebView(ctx, native, onPageReady = {
             // Page ready: re-assert the shim (a no-op when the
             // prepended copy already defined window.TikuGame — e.g.
             // if a model's document shape defeated the prepend), then
             // push the current snapshot once, exactly as the contract
             // promises ("on open, the app hands you the state").
+            pageReady = true
             val wv = wvHolder.value ?: return@buildGameWebView
             runCatching { wv.evaluateJavascript(TIKU_GAME_SHIM, null) }
             deliverGameState(wv, bridgeState.latest)
-        }.also { wvHolder.value = it }
+        }, onLoadError = onError).also { wvHolder.value = it }
     }
     LaunchedEffect(m.id, html) {
         webView.loadDataWithBaseURL(null, injectGameShim(html), "text/html", "utf-8", null)
+    }
+    // ROUND 51 watchdog: if the page never reports finished (a wedged
+    // renderer, a document whose load stalls), the game would sit on
+    // its own loading screen forever — the contract's initial state
+    // delivery rides onPageFinished. 25 s without it is an error the
+    // user can retry, not a life sentence.
+    LaunchedEffect(m.id, html) {
+        kotlinx.coroutines.delay(25_000)
+        if (!pageReady) onError()
     }
     DisposableEffect(m.id) {
         val reg = FirebaseEngine.listenGameState(chatId, m.id) { json, by ->
@@ -362,14 +388,46 @@ private fun GameWebViewHost(
     AndroidView(factory = { webView }, modifier = Modifier.fillMaxSize())
 }
 
+/** The player's one error face (ROUND 51): a plain sentence and a
+ *  working Retry — file failures re-run the fetch, WebView failures
+ *  rebuild the view. Never a spinner without an exit. */
+@Composable
+private fun GameLoadError(modifier: Modifier = Modifier, onRetry: () -> Unit) {
+    Column(
+        modifier.padding(32.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Text(
+            "The game couldn't load.",
+            color = GameInk, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, fontFamily = InterTight,)
+        Spacer(Modifier.size(6.dp))
+        Text(
+            "Check your connection and try again.",
+            color = GameInk.copy(alpha = 0.55f), fontSize = 12.5.sp, fontFamily = PoppinsFamily,)
+        Spacer(Modifier.size(16.dp))
+        Box(
+            Modifier.clip(RoundedCornerShape(20.dp)).background(GameInk)
+                .clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null,
+                ) { onRetry() }
+                .padding(horizontal = 22.dp, vertical = 10.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text("Try again", color = GameCream, fontSize = 13.5.sp,
+                fontWeight = FontWeight.SemiBold, fontFamily = PoppinsFamily)
+        }
+    }
+}
+
 /**
  * The full-screen game player (see the file header). Back closes it.
  * The game's HTML comes from the message's decrypted cache file
  * ([TikuMessage.localPath] — set by sendGame for the sender, by
  * fetchMedia for the receiver); the overlay only ever opens on a
- * LOADED game message (the card gates the tap), so a missing file
- * here means the cache was purged underneath us — said plainly, and
- * closing + re-tapping the card re-fetches it.
+ * LOADED game message (the card gates the tap). ROUND 51: a file
+ * that vanished anyway (cache purge) is re-fetched from inside the
+ * overlay, and every failure lands on [GameLoadError] with a retry.
  */
 @Composable
 fun GamePlayerOverlay(
@@ -387,13 +445,37 @@ fun GamePlayerOverlay(
     // whose senderUid is populated.
     val role = if (m.me || (myUid.isNotEmpty() && myUid == m.senderUid)) "host" else "guest"
 
+    // ROUND 51: the load is a small state machine, never a dead end.
+    // A missing/unreadable cache file (the OS purges cacheDir) triggers
+    // ONE re-fetch through the same bounded, error-speaking tap-to-load
+    // path the card uses, with a short poll for the file it writes; any
+    // final failure — file or WebView — lands on an error state with a
+    // working Retry button instead of an endless "Loading…".
+    val ctx = LocalContext.current
     var html by remember(m.id) { mutableStateOf<String?>(null) }
     var loadFailed by remember(m.id) { mutableStateOf(false) }
-    LaunchedEffect(m.id, m.localPath) {
-        val loaded = withContext(Dispatchers.IO) {
-            val p = m.localPath
-            if (p == null) null
-            else runCatching { File(p).readText(Charsets.UTF_8) }.getOrNull()
+    var fileAttempt by remember(m.id) { mutableStateOf(0) }
+    var webFailed by remember(m.id) { mutableStateOf(false) }
+    var webAttempt by remember(m.id) { mutableStateOf(0) }
+    LaunchedEffect(m.id, fileAttempt) {
+        loadFailed = false
+        val candidates = listOfNotNull(
+            m.localPath,
+            File(ctx.cacheDir, "dl_${m.id}.html").absolutePath,
+        )
+        suspend fun readAny(): String? = withContext(Dispatchers.IO) {
+            candidates.firstNotNullOfOrNull { p ->
+                runCatching { File(p).readText(Charsets.UTF_8) }.getOrNull()
+            }
+        }
+        var loaded = readAny()
+        if (loaded == null && !Config.PREVIEW_UI_ONLY) {
+            AppState.repo.fetchMedia(chatId, m.id)
+            for (i in 0 until 20) {
+                kotlinx.coroutines.delay(1_000)
+                loaded = readAny()
+                if (loaded != null) break
+            }
         }
         html = loaded
         if (loaded == null) loadFailed = true
@@ -443,18 +525,25 @@ fun GamePlayerOverlay(
                             "Game preview",
                             color = GameInk, fontSize = 16.sp, fontWeight = FontWeight.SemiBold, fontFamily = InterTight,)
                         Text(
-                            "Asli app me yahan game chalega — dono player apne phone se khelenge.",
+                            "In the real app the game plays here — both players join from their own phones.",
                             color = GameInk.copy(alpha = 0.55f), fontSize = 12.sp, fontFamily = PoppinsFamily,)
                     }
                 }
-                html != null -> GameWebViewHost(
-                    chatId = chatId, m = m, role = role, myUid = myUid,
-                    myName = myName, peerName = peerName, html = html!!,
+                webFailed -> GameLoadError(
+                    modifier = Modifier.align(Alignment.Center),
+                    onRetry = { webFailed = false; webAttempt++ },
                 )
-                loadFailed -> Text(
-                    "The game couldn't load — close this and tap the card again.",
-                    color = GameInk.copy(alpha = 0.6f), fontSize = 13.sp,
-                    modifier = Modifier.align(Alignment.Center).padding(32.dp), fontFamily = PoppinsFamily,)
+                html != null -> androidx.compose.runtime.key(webAttempt) {
+                    GameWebViewHost(
+                        chatId = chatId, m = m, role = role, myUid = myUid,
+                        myName = myName, peerName = peerName, html = html!!,
+                        onError = { webFailed = true },
+                    )
+                }
+                loadFailed -> GameLoadError(
+                    modifier = Modifier.align(Alignment.Center),
+                    onRetry = { fileAttempt++ },
+                )
                 else -> Text(
                     "Loading the game…",
                     color = GameInk.copy(alpha = 0.6f), fontSize = 13.sp,

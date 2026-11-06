@@ -56,6 +56,14 @@ import java.net.URLEncoder
  * ROUND 43 adds [answerImage]: a /tiku question about ONE photo the
  * user explicitly replied to (vision). The image reaches Gemini only
  * through that deliberate attach — never from chat history.
+ *
+ * ROUND 51 (games that "loaded forever"): the game output budget went
+ * 8192 -> 32768 tokens on BOTH writers (thinking-era models were
+ * truncating the document before </html>, and MiniMax — a reasoning
+ * model — was returning content=null at 8000 max_tokens after
+ * spending the whole budget on reasoning), game extraction now skips
+ * `thought` parts, and the whole cascade carries a 10-minute hard
+ * ceiling so the "creating" indicator can never spin unbounded.
  */
 object GeminiClient {
 
@@ -309,29 +317,67 @@ object GeminiClient {
             }))
             put("generationConfig", JSONObject().apply {
                 put("temperature", 0.7)
-                put("maxOutputTokens", 8192)
+                // ROUND 51: 8192 was the silent killer of this whole
+                // feature. A complete HTML game is 10–30k tokens of
+                // output, and the thinking-era flash models spend part
+                // of the SAME budget on reasoning before the first tag
+                // — at 8192 the document was truncated before </html>,
+                // the (correctly strict) validator rejected it, and
+                // every attempt "failed" after minutes of waiting.
+                // 32768 gives the document room to actually finish.
+                put("maxOutputTokens", 32768)
             })
         }
-        var sawQuota = false
-        for (model in GeminiConfig.TEXT_MODELS) {
-            when (val r = post(model, body, readTimeoutMs = 180_000)) {
-                is Raw.Ok -> {
-                    val html = cleanGameHtml(extractText(r.json))
-                    if (html != null) return Outcome.Ok(html)
-                    Log.w("TikaAi", "model $model returned no valid game — cascading")
+        // ROUND 51: one hard ceiling over the WHOLE cascade. Every
+        // step already had a socket timeout, but four slow steps in a
+        // row could still hold the "creating your game…" indicator for
+        // ~12 minutes — indistinguishable from a hang. Past the
+        // ceiling the honest answer is Failed: the indicator clears
+        // and the caller toasts.
+        val result = kotlinx.coroutines.withTimeoutOrNull(GAME_OVERALL_TIMEOUT_MS) {
+            var sawQuota = false
+            for (model in GeminiConfig.TEXT_MODELS) {
+                when (val r = post(model, body, readTimeoutMs = 240_000)) {
+                    is Raw.Ok -> {
+                        val html = cleanGameHtml(extractGameText(r.json))
+                        if (html != null) return@withTimeoutOrNull Outcome.Ok(html)
+                        Log.w("TikaAi", "model $model returned no valid game — cascading")
+                    }
+                    Raw.Quota -> sawQuota = true
+                    Raw.Failed -> Unit
                 }
-                Raw.Quota -> sawQuota = true
-                Raw.Failed -> Unit
             }
+            // Gemini could not build a valid game — MiniMax (NVIDIA) gets
+            // the same contract and the same validation.
+            val mm = postMiniMaxGame(full)
+            val mmHtml = cleanGameHtml(mm)
+            if (mmHtml != null) return@withTimeoutOrNull Outcome.Ok(mmHtml)
+            if (mm == null) Log.w("TikaAi", "minimax game call failed")
+            else Log.w("TikaAi", "minimax returned no valid game")
+            if (sawQuota) Outcome.Quota else Outcome.Failed
         }
-        // Gemini could not build a valid game — MiniMax (NVIDIA) gets
-        // the same contract and the same validation.
-        val mm = postMiniMaxGame(full)
-        val mmHtml = cleanGameHtml(mm)
-        if (mmHtml != null) return Outcome.Ok(mmHtml)
-        if (mm == null) Log.w("TikaAi", "minimax game call failed")
-        else Log.w("TikaAi", "minimax returned no valid game")
-        return if (sawQuota) Outcome.Quota else Outcome.Failed
+        if (result == null) Log.w("TikaAi", "game generation hit the overall timeout")
+        return result ?: Outcome.Failed
+    }
+
+    /** ROUND 51: the whole /babeg cascade's hard ceiling (10 minutes). */
+    private const val GAME_OVERALL_TIMEOUT_MS = 600_000L
+
+    /** Game answers only: like [extractText], but parts the API marks
+     *  as the model's private reasoning (`thought: true`) are skipped
+     *  — reasoning prose must never reach the game validator (the
+     *  document cut in [cleanGameHtml] already tolerates leading
+     *  prose; this keeps the check honest and the logs truthful). */
+    private fun extractGameText(json: JSONObject): String? {
+        val parts = json.optJSONArray("candidates")?.optJSONObject(0)
+            ?.optJSONObject("content")?.optJSONArray("parts") ?: return null
+        val sb = StringBuilder()
+        for (i in 0 until parts.length()) {
+            val part = parts.optJSONObject(i) ?: continue
+            if (part.optBoolean("thought")) continue
+            part.optString("text")?.let { if (it.isNotEmpty()) sb.append(it) }
+        }
+        return sb.toString()
     }
 
     /** Validate + normalise a model's game answer: strip markdown
@@ -381,13 +427,22 @@ object GeminiClient {
                         put("role", "user")
                         put("content", fullPrompt)
                     }))
-                    put("max_tokens", 8000)
+                    // ROUND 51: minimax-m3.1-flash is a REASONING model —
+                    // verified live: with a small budget it spends every
+                    // token in reasoning_content and returns
+                    // message.content = null with finish_reason "length"
+                    // (an 8k budget never reaches the answer for a full
+                    // HTML game). 32768 leaves room for the reasoning AND
+                    // the document. One attempt, bounded — a null/empty
+                    // content is a failure the cascade reports, never a
+                    // retry loop.
+                    put("max_tokens", 32768)
                     put("temperature", 0.7)
                 }
                 conn = (URL(GeminiConfig.NV_BASE).openConnection() as HttpURLConnection).apply {
                     requestMethod = "POST"
                     connectTimeout = 20_000
-                    readTimeout = 180_000
+                    readTimeout = 300_000
                     doOutput = true
                     setRequestProperty("Content-Type", "application/json")
                     setRequestProperty("Authorization", "Bearer ${GeminiConfig.NV_API_KEY}")
@@ -399,9 +454,16 @@ object GeminiClient {
                 }
                 val text = conn.inputStream.bufferedReader(Charsets.UTF_8).readText()
                 runCatching {
-                    JSONObject(text).optJSONArray("choices")?.optJSONObject(0)
-                        ?.optJSONObject("message")?.optString("content")
+                    val choice = JSONObject(text).optJSONArray("choices")?.optJSONObject(0)
+                    val content = choice?.optJSONObject("message")?.optString("content")
                         ?.takeIf { it.isNotBlank() }
+                    if (content == null) {
+                        // Diagnosability without content: WHY the answer
+                        // was empty (budget exhaustion reads "length").
+                        Log.w("TikaAi", "minimax content empty (finish_reason=" +
+                            "${choice?.optString("finish_reason") ?: "?"})")
+                    }
+                    content
                 }.getOrNull()
             } catch (e: Exception) {
                 Log.w("TikaAi", "minimax call failed (${e.javaClass.simpleName})")

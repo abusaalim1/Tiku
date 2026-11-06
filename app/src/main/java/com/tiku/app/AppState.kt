@@ -101,6 +101,13 @@ object AppState {
      *  consumed by profile setup / engine bootstrap; never persisted in plaintext). */
     var pendingPassword: String = ""
 
+    /** ROUND 51: transient hand-off of a JUST-CREATED recovery code from
+     *  finishNewUser to the profile-setup screen that shows it ONCE.
+     *  RAM only, cleared the moment the user confirms saving it — the
+     *  code is never persisted, logged or sent anywhere (the server
+     *  holds only its wrapped blob). */
+    var pendingRecoveryCode: String = ""
+
     // ---- threads ----
     // NOTE: call SIGNALING intentionally leaves NO trace — no call-log store exists.
     // Round 6: the Calls tab only aggregates the encrypted in-chat call-event

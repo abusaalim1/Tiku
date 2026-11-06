@@ -202,6 +202,107 @@ object FirebaseEngine : ChatRepo {
         return snap.get("keyBackup") as? Map<String, String>
     }
 
+    // ================= ROUND 51: RECOVERY KEY =================
+    // A second wrap of the SAME private key, under a high-entropy
+    // recovery code the user keeps (see Crypto.generateRecoveryCode).
+    // The blob rides the user doc as the ADDITIVE sibling field
+    // `keyRecovery` — builds without this round simply never read it,
+    // and accounts created before it simply don't have it (the reset
+    // flows say so in one plain line). The code itself is NEVER
+    // stored, logged or sent anywhere: it exists in RAM between its
+    // one-time display and the user's own keeping, nowhere else.
+
+    /** The recovery blob on my user doc, or null when this account
+     *  has none (pre-recovery-key accounts). Throws on fetch failure —
+     *  callers that must tell "none" from "couldn't check" catch it. */
+    suspend fun recoveryBlob(): Map<String, String>? {
+        if (uid.isEmpty()) return null
+        val snap = db.collection(Schema.Users.COLL).document(uid).get().await()
+        @Suppress("UNCHECKED_CAST")
+        return snap.get("keyRecovery") as? Map<String, String>
+    }
+
+    /** Tri-state: true/false = the doc was read; null = the read
+     *  itself failed (offline) — the UI must not claim "no recovery
+     *  key" on a guess. */
+    suspend fun hasRecoveryKey(): Boolean? =
+        runCatching { recoveryBlob() != null }.getOrNull()
+
+    /**
+     * Create (or rotate) MY recovery key: wrap the EXISTING local
+     * identity under a fresh code and replace the `keyRecovery` blob —
+     * rotation therefore retires the previous code the moment the new
+     * blob lands. Returns the code for its ONE display; the caller
+     * shows it and drops it. Only callable while unlocked (the local
+     * identity must be loadable); the key itself never changes.
+     */
+    suspend fun createRecoveryKey(ctx: Context): Result<String> {
+        return try {
+            if (myPrivBytes == null) loadLocalIdentity(ctx)
+            val priv = myPrivBytes ?: return Result.failure(
+                IllegalStateException("No journal key found on this phone."))
+            val code = Crypto.generateRecoveryCode()
+            val blob = Crypto.recoveryWrap(priv, code)
+            db.collection(Schema.Users.COLL).document(uid).update("keyRecovery", blob).await()
+            Result.success(code)
+        } catch (e: Exception) { Result.failure(e) }
+    }
+
+    /** Recovery-restore outcomes — distinct for the same reason as
+     *  [RestoreResult]: a wrong code must never be confused with a
+     *  missing blob or a network failure. */
+    sealed interface RecoveryResult {
+        /** [cloudUpdated] false = the journal is restored on THIS
+         *  phone but the cloud password backup still wraps under the
+         *  old password (the update failed, e.g. offline) — it heals
+         *  on the next successful change/reset. */
+        data class Ok(val cloudUpdated: Boolean) : RecoveryResult
+        data object WrongCode : RecoveryResult
+        data object NoRecovery : RecoveryResult
+        data class Unavailable(val why: String) : RecoveryResult
+    }
+
+    /**
+     * THE "reset ≠ lose chats" path (ROUND 51): unwrap the SAME
+     * private key with the recovery code, install it locally exactly
+     * like [restoreFromBackup], then re-wrap the cloud password
+     * backup under the NEW journal password the user just chose.
+     * Nothing is written anywhere before the code has actually opened
+     * the blob — a wrong code changes nothing, and the keypair,
+     * publicKey and every chat survive untouched by construction.
+     * Callers must already have authenticated the account's Google
+     * sign-in for this uid (the same gate Mode R/F apply).
+     */
+    suspend fun restoreWithRecoveryKey(ctx: Context, rawCode: String, newPassword: String): RecoveryResult {
+        val blob = try {
+            recoveryBlob()
+        } catch (e: Exception) {
+            Log.e("TikuGate", "recovery restore: blob fetch failed", e)
+            return RecoveryResult.Unavailable(sendFailureReason(e))
+        } ?: return RecoveryResult.NoRecovery
+        val priv = try {
+            Crypto.recoveryUnwrap(blob, rawCode)
+        } catch (e: Exception) {
+            return RecoveryResult.WrongCode
+        }
+        return try {
+            Crypto.privateKeyFromPkcs8(priv) // validates the key material
+            myPrivBytes = priv
+            val (iv, ct) = Crypto.deviceWrap(priv)
+            securePrefs(ctx).edit().putString("idk_iv", iv).putString("idk_ct", ct)
+                .putString("idk_uid", uid)
+                .putString("pw_hash", Crypto.passwordHash(newPassword)).apply()
+            val cloudOk = runCatching {
+                db.collection(Schema.Users.COLL).document(uid)
+                    .update("keyBackup", Crypto.backupWrap(priv, newPassword)).await()
+            }.isSuccess
+            RecoveryResult.Ok(cloudOk)
+        } catch (e: Exception) {
+            Log.e("TikuGate", "recovery restore: local save failed", e)
+            RecoveryResult.Unavailable("the recovery key opened your journal but it couldn't be saved on this phone")
+        }
+    }
+
     /** Load the local device-wrapped identity; false when this is a new device. */
     fun loadLocalIdentity(ctx: Context): Boolean {
         val sp = securePrefs(ctx)
@@ -320,6 +421,10 @@ object FirebaseEngine : ChatRepo {
             db.collection(Schema.Users.COLL).document(uid).update(mapOf(
                 "keyBackup" to FieldValue.delete(),
                 "publicKey" to FieldValue.delete(),
+                // ROUND 51: the recovery wrap of the retired key goes
+                // too (finishNewUser's set() would overwrite it anyway;
+                // deleting keeps "retired" true at every instant).
+                "keyRecovery" to FieldValue.delete(),
             )).await()
             securePrefs(ctx).edit()
                 .remove("idk_iv").remove("idk_ct").remove("idk_uid").remove("pw_hash")
@@ -373,6 +478,13 @@ object FirebaseEngine : ChatRepo {
             val priv = kp.private.encoded
             myPrivBytes = priv
             val blob = Crypto.backupWrap(priv, password)
+            // ROUND 51: every NEW journal also gets a recovery wrap of
+            // the SAME key from birth — a forgotten password must never
+            // again be a death sentence for the chats. The code is
+            // stashed for its one-time display only AFTER the doc
+            // (carrying the blob) has actually landed.
+            val recCode = Crypto.generateRecoveryCode()
+            val recBlob = Crypto.recoveryWrap(priv, recCode)
             val (iv, ct) = Crypto.deviceWrap(priv)
             val sp = securePrefs(ctx)
             // BUG-0 GUARD: the create-password step already saved + self-verified
@@ -403,11 +515,14 @@ object FirebaseEngine : ChatRepo {
             db.collection(Schema.Users.COLL).document(uid).set(mapOf(
                 "username" to u, "displayName" to u, "photoData" to photoData,
                 "publicKey" to Crypto.publicKeyB64(kp), "keyBackup" to blob,
+                // ROUND 51: additive sibling — old builds ignore it.
+                "keyRecovery" to recBlob,
                 "online" to true, "lastSeen" to FieldValue.serverTimestamp(),
                 // round 4: live username search fields (prefix + token queries)
                 "usernameNorm" to SearchNorm.norm(u),
                 "nameTokens" to SearchNorm.tokens(u, u),
             )).await()
+            AppState.pendingRecoveryCode = recCode
             Result.success(Unit)
         } catch (e: Exception) { Result.failure(e) }
     }

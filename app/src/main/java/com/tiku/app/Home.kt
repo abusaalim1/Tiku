@@ -61,6 +61,8 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
@@ -704,6 +706,7 @@ fun SettingsScreen() {
                 onBlocked = { page = "blocked" },
                 onDevices = { page = "devices" },
                 onChangePassword = { ChangePasswordSheet.open(ctx, scope) },
+                onRecoveryKey = { RecoveryKeySheet.open(ctx, scope) },
                 onClearCache = {
                     scope.launch {
                         withContext(Dispatchers.IO) {
@@ -741,6 +744,8 @@ private fun SettingsMain(
     onBlocked: () -> Unit,
     onDevices: () -> Unit,
     onChangePassword: () -> Unit,
+    /** ROUND 51: recovery-key create/rotate (RecoveryKeySheet). */
+    onRecoveryKey: () -> Unit,
     onClearCache: () -> Unit,
     onLogout: () -> Unit,
     /** ROUND 30: owner-only "Deleted messages" log navigation. */
@@ -961,7 +966,8 @@ private fun SettingsMain(
         item { NavRow("Clear cache", cacheLabel, onClick = onClearCache) }
         item { Section("Account") }
         item { NavRow("Linked devices", "Manage where Tiku is open", onClick = onDevices) }
-        item { NavRow("Change password", "Update your lock password", onClick = onChangePassword) }
+        item { NavRow("Change password", "Keeps all your chats", onClick = onChangePassword) }
+        item { NavRow("Recovery key", "Brings your chats back if you forget your password", onClick = onRecoveryKey) }
         item { NavRow("Log out", danger = true, chevron = false, onClick = onLogout) }
         item { Section("Additional settings") }
         item {
@@ -1323,6 +1329,114 @@ object EditProfileSheet {
                     }
                 }
                 Spacer(Modifier.height(8.dp))
+            }
+        }
+    }
+}
+
+/**
+ * ROUND 51 — RECOVERY KEY sheet (Settings ▸ Account ▸ Recovery key).
+ * For accounts that predate recovery keys (no `keyRecovery` blob) this
+ * is where one is born; for accounts that have one, this is where it
+ * ROTATES — creating a new key replaces the blob, so the old key
+ * stops working the moment the new one lands (the copy says so before
+ * the tap). The key itself is shown ONCE, here, with a copy button
+ * and the same unticked-by-default saved-confirmation as setup; it is
+ * never stored on this phone or anywhere else. Only reachable inside
+ * Tik (unlocked), where the engine holds the identity it wraps.
+ */
+object RecoveryKeySheet {
+    fun open(ctx: android.content.Context, scope: kotlinx.coroutines.CoroutineScope) {
+        AppState.sheet {
+            val clipboard = LocalClipboardManager.current
+            var hasKey by remember { mutableStateOf<Boolean?>(null) }
+            var code by remember { mutableStateOf("") }
+            var confirmed by remember { mutableStateOf(false) }
+            var copied by remember { mutableStateOf(false) }
+            var busy by remember { mutableStateOf(false) }
+            LaunchedEffect(Unit) {
+                if (!Config.PREVIEW_UI_ONLY) hasKey = FirebaseEngine.hasRecoveryKey()
+                else hasKey = false
+            }
+            Column(Modifier.padding(horizontal = 6.dp)) {
+                TikSheetTitle("Recovery key")
+                if (code.isEmpty()) {
+                    Text(
+                        when (hasKey) {
+                            true -> "A recovery key already protects this account. It was shown once, when it was created, and can't be shown again. Creating a new one replaces it — the old key stops working right away."
+                            false -> "If you forget your journal password, your recovery key is the only way to bring your chats back on a new phone. Create one now and keep it somewhere safe — it is shown only once."
+                            null -> "Checking…"
+                        },
+                        color = Sub, fontSize = 13.sp,
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp), fontFamily = PoppinsFamily,)
+                    Spacer(Modifier.height(16.dp))
+                    TikPrimaryButton(
+                        if (busy) "Creating…" else if (hasKey == true) "Create a new recovery key" else "Create recovery key",
+                        enabled = !busy && hasKey != null,
+                    ) {
+                        busy = true
+                        scope.launch {
+                            val r = FirebaseEngine.createRecoveryKey(ctx)
+                            busy = false
+                            val c = r.getOrNull()
+                            if (c != null) code = c
+                            else AppState.toast("Couldn't create the recovery key — check your connection and try again")
+                        }
+                    }
+                } else {
+                    Text(
+                        "Save this key now — it won't be shown again. Anyone who has it together with your Google account can restore your journal, so keep it somewhere only you can reach.",
+                        color = Sub, fontSize = 13.sp,
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp), fontFamily = PoppinsFamily,)
+                    Spacer(Modifier.height(12.dp))
+                    Box(
+                        Modifier.fillMaxWidth().padding(horizontal = 16.dp)
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(Sub.copy(alpha = 0.10f))
+                            .border(1.dp, Sub.copy(alpha = 0.25f), RoundedCornerShape(12.dp))
+                            .padding(horizontal = 14.dp, vertical = 16.dp),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text(code, color = androidx.compose.ui.graphics.Color.White, fontSize = 16.5.sp, fontFamily = InterTight,
+                            fontWeight = FontWeight.SemiBold, letterSpacing = 1.sp,
+                            textAlign = androidx.compose.ui.text.style.TextAlign.Center)
+                    }
+                    Spacer(Modifier.height(10.dp))
+                    Text(if (copied) "Copied ✓" else "Copy the key",
+                        color = Rose, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, fontFamily = PoppinsFamily,
+                        modifier = Modifier.fillMaxWidth()
+                            .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {
+                                clipboard.setText(AnnotatedString(code))
+                                copied = true
+                            },
+                        textAlign = androidx.compose.ui.text.style.TextAlign.Center)
+                    Spacer(Modifier.height(14.dp))
+                    Row(
+                        Modifier.fillMaxWidth().padding(horizontal = 16.dp)
+                            .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) { confirmed = !confirmed }
+                            .padding(vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Box(
+                            Modifier.size(24.dp)
+                                .clip(RoundedCornerShape(7.dp))
+                                .background(if (confirmed) Rose else androidx.compose.ui.graphics.Color.Transparent)
+                                .border(1.5.dp, if (confirmed) Rose else Sub, RoundedCornerShape(7.dp)),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            if (confirmed) Text("✓", color = androidx.compose.ui.graphics.Color.White, fontSize = 14.sp, fontFamily = PoppinsFamily)
+                        }
+                        Spacer(Modifier.width(12.dp))
+                        Text("I have saved my recovery key somewhere safe.",
+                            fontSize = 13.sp, fontFamily = PoppinsFamily, color = androidx.compose.ui.graphics.Color.White)
+                    }
+                    Spacer(Modifier.height(16.dp))
+                    TikPrimaryButton("Done", enabled = confirmed) {
+                        AppState.closeSheet()
+                        AppState.toast("Recovery key saved — keep it safe")
+                    }
+                }
+                Spacer(Modifier.height(10.dp))
             }
         }
     }

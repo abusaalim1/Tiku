@@ -115,6 +115,73 @@ object Crypto {
         return cipher.doFinal(unb64(blob.getValue("ct")))
     }
 
+    // ---------- ROUND 51: recovery key (a second wrap of the SAME key) ----------
+    // The journal password is forgettable — the owner has forgotten it
+    // before, and a forgotten password + no local key used to mean the
+    // whole journal was gone forever (Mode F start-fresh). The recovery
+    // key is a second, independent wrap of the SAME private-key bytes:
+    // 128 bits of SecureRandom entropy, Crockford-base32 encoded (an
+    // alphabet with no look-alike characters: no I, L, O or U), shown
+    // to the user ONCE and never stored anywhere — the server holds
+    // only the wrapped blob (users/{uid}.keyRecovery {salt, iv, ct}),
+    // produced by the exact same PBKDF2(310k) -> AES-256-GCM machinery
+    // as the password backup, with the normalised code as the secret.
+    // Whoever holds the code (plus the account's Google sign-in, which
+    // the reset flows demand first) can unwrap the key; nobody else —
+    // server admin included — can derive anything from the blob.
+
+    /** Crockford base32 alphabet (32 symbols, 5 bits each). */
+    private const val RECOVERY_ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
+    /** 16 random bytes = 128 bits -> 26 base32 chars (130 bits of space). */
+    private const val RECOVERY_ENTROPY_BYTES = 16
+
+    /** A fresh recovery code, grouped for copying: XXXX-XXXX-… (26 chars). */
+    fun generateRecoveryCode(): String {
+        val bytes = randomBytes(RECOVERY_ENTROPY_BYTES)
+        val sb = StringBuilder(26)
+        var buffer = 0
+        var bits = 0
+        for (b in bytes) {
+            buffer = (buffer shl 8) or (b.toInt() and 0xFF)
+            bits += 8
+            while (bits >= 5) {
+                bits -= 5
+                sb.append(RECOVERY_ALPHABET[(buffer shr bits) and 0x1F])
+            }
+        }
+        if (bits > 0) sb.append(RECOVERY_ALPHABET[(buffer shl (5 - bits)) and 0x1F])
+        val raw = sb.toString()
+        return raw.chunked(4).joinToString("-")
+    }
+
+    /** Forgiving entry: case, spaces and dashes don't matter, and the
+     *  classic look-alikes fold to their Crockford meanings (O->0,
+     *  I/L->1, U->V) — the alphabet the code is GENERATED from never
+     *  contains them. */
+    fun normalizeRecoveryCode(raw: String): String {
+        val sb = StringBuilder(raw.length)
+        for (c in raw.uppercase()) {
+            when (c) {
+                in RECOVERY_ALPHABET -> sb.append(c)
+                'O' -> sb.append('0')
+                'I', 'L' -> sb.append('1')
+                'U' -> sb.append('V')
+                else -> Unit // separators / stray characters are dropped
+            }
+        }
+        return sb.toString()
+    }
+
+    /** Wrap [plain] under a recovery code — same blob shape and the
+     *  same KDF/cipher as [backupWrap]; only the secret differs. */
+    fun recoveryWrap(plain: ByteArray, code: String): Map<String, String> =
+        backupWrap(plain, normalizeRecoveryCode(code))
+
+    /** Unwrap a recovery blob. Throws when the code is wrong, exactly
+     *  like [backupUnwrap] with a wrong password. */
+    fun recoveryUnwrap(blob: Map<String, String>, code: String): ByteArray =
+        backupUnwrap(blob, normalizeRecoveryCode(code))
+
     // ---------- App-lock password hash (verification only, never the password itself) ----------
     fun passwordHash(password: String): String {
         val salt = randomBytes(16)
