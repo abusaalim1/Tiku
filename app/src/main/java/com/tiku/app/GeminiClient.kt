@@ -90,7 +90,7 @@ object GeminiClient {
     suspend fun answerText(prompt: String): Outcome<String> {
         if (Config.PREVIEW_UI_ONLY) {
             return Outcome.Ok(
-                "Preview mode — asli app me Tika yahin Gemini ka jawab dikhayega. Tumne pucha tha: $prompt",
+                "Preview mode — in the real app, Tika's Gemini answer appears here. You asked: $prompt",
             )
         }
         val body = JSONObject().apply {
@@ -116,7 +116,7 @@ object GeminiClient {
      *  the caller (≤1024 px on the long edge). */
     suspend fun answerImage(question: String, jpeg: ByteArray): Outcome<String> {
         if (Config.PREVIEW_UI_ONLY) {
-            return Outcome.Ok("(preview) Photo mil gayi — yahi iska jawab hai.")
+            return Outcome.Ok("(preview) Got the photo — this is its answer.")
         }
         val body = JSONObject().apply {
             put("system_instruction", JSONObject().apply {

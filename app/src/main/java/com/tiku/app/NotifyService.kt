@@ -296,6 +296,15 @@ class TikuAlertService : Service() {
 
     override fun onCreate() {
         super.onCreate()
+        // ROUND 50: belt-and-braces singleness — the pre-Round-20 era
+        // posted its standing banner under a DIFFERENT id (cancelled
+        // on logout by NotifyService.stop); a direct upgrade from that
+        // era must never be able to show that ghost next to this
+        // service's own single entry. No-op on every modern install.
+        runCatching {
+            (getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager)
+                ?.cancel(NotifyService.LEGACY_FOREGROUND_ID)
+        }
         // The judge is service-owned from the moment the service
         // exists (see OwnerNotify.pipelineLive).
         OwnerNotify.pipelineLive = true
@@ -470,7 +479,7 @@ class TikuAlertService : Service() {
  *  service and additionally sweeps the pre-Round-20 banner id a very
  *  old install could in principle still show. */
 object NotifyService {
-    private const val LEGACY_FOREGROUND_ID = 0x2A15
+    const val LEGACY_FOREGROUND_ID = 0x2A15
 
     fun start(ctx: Context) = TikuAlertService.start(ctx)
 

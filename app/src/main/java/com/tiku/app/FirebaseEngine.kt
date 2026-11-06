@@ -308,6 +308,11 @@ object FirebaseEngine : ChatRepo {
      * password + backup. The account and username survive untouched;
      * existing chats stay on the server as ciphertext that no key can
      * ever open again — the reset screen says so before this ever runs.
+     * ROUND 50: the reset screen additionally gates its button behind
+     * an unticked-by-default confirmation checkbox ("I understand:
+     * start fresh — my old chats will never open again, on any phone")
+     * — after the owner's build-84 key loss, a single tap on a
+     * warning screen was judged too easy a way through this door.
      */
     suspend fun startFreshAfterKeyLoss(ctx: Context): Result<Unit> {
         return try {
@@ -707,18 +712,40 @@ object FirebaseEngine : ChatRepo {
      *  because startThreadWith/ensureChatDoc is only reached by my action —
      *  the acceptedFor stamp is written on accept; a thread with NO messages
      *  yet is never a request). */
-    private fun deriveIsRequest(msgs: List<TikuMessage>, accepted: Boolean): Boolean {
-        if (accepted || msgs.isEmpty()) return false
-        val hasIncoming = msgs.any { !it.me }
-        val hasOutgoing = msgs.any { it.me }
-        return hasIncoming && !hasOutgoing
+    /** ROUND 50: chatIds where an outgoing message of mine has EVER
+     *  been observed this session — any window, either list path.
+     *  Feeds [deriveIsRequest]: a thread I have written in can never
+     *  (re)become a "request" just because the currently visible
+     *  window — the newest-40 preview, or the post-Clear-chat filtered
+     *  set — happens to hold none of my messages right now. That flip
+     *  moved a live chat out of the main list into Requests (the
+     *  owner's "message gaya, chat gayab" report: after Clear chat,
+     *  one partner reply was enough). Session-scoped like the other
+     *  derivation caches; cleared with them at lock / sign-out. */
+    private val everOutgoing = mutableSetOf<String>()
+
+    private fun deriveIsRequest(
+        id: String, msgs: List<TikuMessage>, accepted: Boolean,
+        hasOutgoingAny: Boolean = false,
+    ): Boolean {
+        if (hasOutgoingAny || msgs.any { it.me }) everOutgoing += id
+        if (accepted || id in everOutgoing) return false
+        if (msgs.isEmpty()) return false
+        return msgs.any { !it.me }
     }
 
     /** Hidden = I hid it and the partner has not sent a NEWER message since
      *  (a new partner message resurfaces the thread — spec semantics). */
-    private fun deriveHidden(id: String, msgs: List<TikuMessage>): Boolean {
+    /** ROUND 50: [newestIncomingMs] lets a caller pass the newest
+     *  incoming stamp from the RAW snapshot docs — a partner message
+     *  that exists server-side but sits outside the decrypted preview
+     *  window (or was filtered from it) must still un-hide the thread;
+     *  the server doc existing is what counts, not what the window
+     *  happened to decrypt. */
+    private fun deriveHidden(id: String, msgs: List<TikuMessage>, newestIncomingMs: Long = 0L): Boolean {
         val h = hiddenForCache[id] ?: 0L
         if (h <= 0L) return false
+        if (newestIncomingMs > h) return false
         return msgs.none { !it.me && it.tsMs > h }
     }
     /** Pinned chats (round 8): a per-user LOCAL view preference. */
@@ -818,7 +845,28 @@ object FirebaseEngine : ChatRepo {
                             // transient profile-fetch failure must NOT drop the thread from
                             // under an open ChatScreen — fall back to the known person.
                             val peer = runCatching { fetchPerson(peerUid) }.getOrNull()
-                                ?: existing?.person ?: run { skipped++; return@mapNotNull null }
+                                ?: existing?.person ?: run {
+                                    // ROUND 50: NEVER drop the row. A
+                                    // transient profile-fetch failure
+                                    // (offline, slow network) used to
+                                    // remove the whole chat from the
+                                    // list — after 2 retries, for the
+                                    // rest of the session — which is
+                                    // exactly the owner's "chat gayab"
+                                    // report. The row now stands on a
+                                    // placeholder person (blank name —
+                                    // the UI falls back to the username,
+                                    // then to "Tiku") and the failure
+                                    // still counts into the self-heal
+                                    // re-attach below, so the real
+                                    // profile replaces the placeholder
+                                    // as soon as any fetch succeeds.
+                                    skipped++
+                                    Person(
+                                        uid = peerUid, name = "", username = "",
+                                        emoji = "🙂", colorArgb = avatarColorFor(peerUid),
+                                    )
+                                }
                             val ts = doc.getTimestamp("updatedAt")?.toDate()?.time ?: 0L
                             // round 6: the peer's nickname lives on the chat
                             // doc, keyed by the nickname OWNER's uid (the peer).
@@ -889,7 +937,7 @@ object FirebaseEngine : ChatRepo {
                                 themeAssetAt = doc.getTimestamp("themeAssetAt")?.toDate()?.time ?: 0L,
                                 receiptsOffMine = uid in receiptsOffList,
                                 pinnedMsgIds = pinnedMsgsList,
-                                isRequest = deriveIsRequest(knownMsgs, accMs > 0L),
+                                isRequest = deriveIsRequest(doc.id, knownMsgs, accMs > 0L),
                                 createdAtMs = createdMs,
                                 hiddenForMe = deriveHidden(doc.id, knownMsgs),
                                 // ROUND 20: this from-scratch rebuild must
@@ -1078,8 +1126,25 @@ object FirebaseEngine : ChatRepo {
                     // ROUND 14: every fresh preview window re-derives the
                     // request flag, the hide state (a NEW partner message is
                     // exactly what un-hides a thread) and the creation time.
-                    isRequest = deriveIsRequest(msgs, (acceptedForCache[id] ?: 0L) > 0L),
-                    hiddenForMe = deriveHidden(id, msgs),
+                    isRequest = deriveIsRequest(
+                        id, msgs, (acceptedForCache[id] ?: 0L) > 0L,
+                        // ROUND 50: the RAW docs are the window-independent
+                        // truth for "I have written in this chat" — the
+                        // filtered window alone could hide every outgoing
+                        // message (Clear chat, paging) and flip the
+                        // thread into Requests.
+                        hasOutgoingAny = docs.any { it.getString("senderId") == uid },
+                    ),
+                    hiddenForMe = deriveHidden(
+                        id, msgs,
+                        // ROUND 50: same raw truth for un-hiding — any
+                        // partner doc newer than the hide stamp, even one
+                        // the preview window didn't decrypt or display.
+                        newestIncomingMs = docs.maxOfOrNull { d ->
+                            val s = d.getString("senderId")
+                            if (s != null && s != uid) d.getTimestamp("ts")?.toDate()?.time ?: 0L else 0L
+                        } ?: 0L,
+                    ),
                     createdAtMs = if (t.createdAtMs > 0L) t.createdAtMs
                         else msgs.firstOrNull()?.tsMs ?: 0L,
                 )
@@ -1387,6 +1452,7 @@ object FirebaseEngine : ChatRepo {
         runCatching { myPrivBytes?.fill(0) }
         myPrivBytes = null
         convKeyCache.clear(); profileCache.clear(); publicKeyCache.clear()
+        everOutgoing.clear()
         openChatIds.clear()
         // ROUND 8: the decrypted message cache + pagination bookkeeping die
         // with the session too, and so do the decrypted voice-note FILES in
@@ -2715,7 +2781,17 @@ object FirebaseEngine : ChatRepo {
         }
         val cutoff = now - AI_IMAGE_TTL_MS
         val expired = candidates.filter {
-            it.kind == MsgKind.IMAGE && it.ai && it.tsMs > 0L && it.tsMs < cutoff
+            // ROUND 50 TIGHTENING (belt on the braces): beyond kind+ai+ts,
+            // a victim must ALSO carry real media chunks and must have
+            // DECRYPTED — an undecryptable stub (key loss, foreign
+            // device) is never touched even if a doc were somehow
+            // malformed enough to claim kind=image with ai=true, and a
+            // chunk-less "image" is not a /tika product at all. Both
+            // additions are provable no-ops for genuine /tika images:
+            // they always decrypt for their owner and always carry
+            // chunk references (imageChunksFor ≥ 1 part).
+            it.kind == MsgKind.IMAGE && it.ai && it.tsMs > 0L && it.tsMs < cutoff &&
+                !it.undecryptable && it.mediaChunks > 0
         }
         if (expired.isEmpty()) return
         val ids = expired.mapTo(HashSet()) { it.id }
@@ -3401,6 +3477,7 @@ object FirebaseEngine : ChatRepo {
         auth.signOut()
         myPrivBytes = null
         convKeyCache.clear(); profileCache.clear(); publicKeyCache.clear()
+        everOutgoing.clear()
         AppState.threads.value = emptyList()
         // ROUND 14: no note/block state may leak into the next session.
         AppState.notes.value = emptyMap()

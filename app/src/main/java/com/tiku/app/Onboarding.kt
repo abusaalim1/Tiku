@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
@@ -428,6 +429,11 @@ private fun ResetPasswordFreshStart() {
     var stage by remember { mutableStateOf(0) }
     var busy by remember { mutableStateOf(false) }
     var note by remember { mutableStateOf("") }
+    // ROUND 50: the one-way door needs a deliberate, separate act of
+    // consent — the start-fresh button stays disabled until this box
+    // is ticked. A single tap on a warning screen was too easy a way
+    // to orphan a whole journal (the owner's build-84 key loss).
+    var confirmed by remember { mutableStateOf(false) }
     // captured ONCE — same binding discipline as Mode R
     val expectedUid = remember { FirebaseEngine.uid }
     if (stage == 0) {
@@ -467,12 +473,33 @@ private fun ResetPasswordFreshStart() {
             Spacer(Modifier.height(10.dp))
             Text("Starting fresh keeps the same account and the same username. You will set a new password and get a brand-new journal — new chats work exactly as before.",
                 fontSize = 13.sp, fontFamily = PoppinsFamily, color = pal.sub)
+            Spacer(Modifier.height(16.dp))
+            Row(
+                Modifier.fillMaxWidth()
+                    .clip(RoundedCornerShape(12.dp))
+                    .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) { confirmed = !confirmed }
+                    .padding(vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Box(
+                    Modifier.size(24.dp)
+                        .clip(RoundedCornerShape(7.dp))
+                        .background(if (confirmed) pal.ac else Color.Transparent)
+                        .border(1.5.dp, if (confirmed) pal.ac else pal.sub, RoundedCornerShape(7.dp)),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    if (confirmed) Text("✓", color = Color.White, fontSize = 14.sp, fontFamily = PoppinsFamily)
+                }
+                Spacer(Modifier.width(12.dp))
+                Text("I understand: start fresh — my old chats will never open again, on any phone.",
+                    fontSize = 13.sp, fontFamily = PoppinsFamily, color = pal.tx)
+            }
             if (note.isNotEmpty()) {
                 Spacer(Modifier.height(10.dp))
                 Text(note, fontSize = 12.sp, color = pal.danger, fontFamily = PoppinsFamily)
             }
             Spacer(Modifier.weight(1f))
-            PrimaryButton(if (busy) "Starting…" else "Start fresh with a new journal", enabled = !busy, modifier = Modifier.fillMaxWidth()) {
+            PrimaryButton(if (busy) "Starting…" else "Start fresh with a new journal", enabled = confirmed && !busy, modifier = Modifier.fillMaxWidth()) {
                 busy = true
                 note = ""
                 scope.launch {

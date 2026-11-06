@@ -35,7 +35,7 @@ object PreviewStore {
         val now = System.currentTimeMillis()
         return mapOf(
             "p-aarav" to NoteUi("p-aarav", "Dreaming of Goa 🌴", setOf("me"), now - 3600_000),
-            "p-meera" to NoteUi("p-meera", "Chai time ☕", emptySet(), now - 1800_000),
+            "p-meera" to NoteUi("p-meera", "Tea time ☕", emptySet(), now - 1800_000),
             "p-zoya" to NoteUi("p-zoya", "Golden hour 🌇", emptySet(), now - 600_000),
         )
     }

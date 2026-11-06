@@ -105,9 +105,10 @@ fun myUidKey(): String = if (Config.PREVIEW_UI_ONLY) "me" else FirebaseEngine.my
  *  by their pill label, never raw call text. ROUND 18: a delete-for-everyone
  *  tombstone previews as itself, and the preview is NEVER blank while a
  *  message exists. ROUND 19: an undecryptable last message (retired-key
- *  ciphertext, flagged on the preview path's metadata stub) previews with
- *  the same honest label the chat placeholder shows — never a kind label,
- *  never blank. */
+ *  ciphertext, flagged on the preview path's metadata stub) never blanks
+ *  the preview. ROUND 50: in the LIST it reads as the neutral "Message"
+ *  (the owner's order — the list is a glance, not a diagnosis); the chat
+ *  itself keeps the honest "can't be opened on this phone" line. */
 fun threadPreview(th: ChatThread): String {
     // ROUND 21 — IG LIST RULE (owner's Instagram reference): with
     // several unread, the preview line itself becomes the summary —
@@ -118,7 +119,7 @@ fun threadPreview(th: ChatThread): String {
     if (th.unread >= 2) return "${th.unread} new messages"
     val last = th.messages.lastOrNull { !it.deletedForMe } ?: return ""
     if (last.deletedForEveryone) return "This message was deleted"
-    if (last.undecryptable) return "This message can't be opened on this phone"
+    if (last.undecryptable) return "Message"
     // ROUND 22: a gift-wrapped message previews as a gift — its text
     // stays sealed on EVERY surface until the chat is opened and the
     // gift is tapped open there.
@@ -918,19 +919,19 @@ private fun SettingsMain(
                 if (batteryExempt) {
                     CardRow({}, idx = 0) {
                         TwoLine(
-                            "Turant notifications",
-                            "Battery bandish hati hui hai ✓",
+                            "Instant notifications",
+                            "Battery restriction removed ✓",
                             Modifier.weight(1f),
                         )
                     }
                 } else {
                     CardRow(askExemption, idx = 0) {
                         TwoLine(
-                            "Turant notifications",
-                            "Turant notification ke liye battery bandish hatao — bandish lagi ho toh message alerts der se aate hain",
+                            "Instant notifications",
+                            "Remove the battery restriction for instant notifications — with it on, message alerts can arrive late",
                             Modifier.weight(1f),
                         )
-                        Pill("Hatao", Modifier.padding(start = 10.dp), true, askExemption)
+                        Pill("Remove", Modifier.padding(start = 10.dp), true, askExemption)
                     }
                 }
             }

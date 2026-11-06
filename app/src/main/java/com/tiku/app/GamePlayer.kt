@@ -452,11 +452,11 @@ fun GamePlayerOverlay(
                     myName = myName, peerName = peerName, html = html!!,
                 )
                 loadFailed -> Text(
-                    "Game load nahi ho paya — band karke card pe dobara tap karo.",
+                    "The game couldn't load — close this and tap the card again.",
                     color = GameInk.copy(alpha = 0.6f), fontSize = 13.sp,
                     modifier = Modifier.align(Alignment.Center).padding(32.dp), fontFamily = PoppinsFamily,)
                 else -> Text(
-                    "Game load ho raha hai…",
+                    "Loading the game…",
                     color = GameInk.copy(alpha = 0.6f), fontSize = 13.sp,
                     modifier = Modifier.align(Alignment.Center).padding(32.dp), fontFamily = PoppinsFamily,)
             }

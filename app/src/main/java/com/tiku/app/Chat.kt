@@ -2568,9 +2568,9 @@ private fun RdChatTopBar(
 private data class SlashCommand(val name: String, val desc: String)
 
 private val SlashCommands = listOf(
-    SlashCommand("/tiku", "AI se sawal pucho"),
-    SlashCommand("/tika", "AI photo banayega"),
-    SlashCommand("/babeg", "AI game banayega"),
+    SlashCommand("/tiku", "Ask AI a question"),
+    SlashCommand("/tika", "AI creates a photo"),
+    SlashCommand("/babeg", "AI creates a game"),
 )
 
 /** ROUND 44: the composer's command-bold transformation (owner's ask:
@@ -3586,7 +3586,7 @@ private fun RdChatContent(thread: ChatThread) {
      *  a just-landed photo whose chunks finished a beat after its doc.
      *  Null when the message is gone, tombstoned, undecryptable on
      *  this phone, or still not loaded after the wait — the caller
-     *  toasts "Photo load nahi hui" and does nothing else.
+     *  toasts "Couldn't load that photo" and does nothing else.
      *  NOTE: fetchMedia is deliberately NOT the loader for images —
      *  its success contract is a cache localPath, which image
      *  messages never carry (they decrypt straight to a Bitmap), so
@@ -3627,13 +3627,13 @@ private fun RdChatContent(thread: ChatThread) {
         val gamePrompt = if (replyTarget == null && armedFx == null) gameCommand(v) else null
         if (gamePrompt != null) {
             if (aiThinking != null) {
-                AppState.toast("Tika pehle wale kaam pe laga hai")
+                AppState.toast("Tika is busy with the previous task")
                 return
             }
             AppState.repo.sendText(threadId, v, null)
             input = ""
             scope.launch { AppState.repo.setTyping(threadId, false) }
-            aiThinking = "Tika game bana raha hai…"
+            aiThinking = "Tika is creating your game…"
             scope.launch {
                 try {
                     when (val out = GeminiClient.generateGame(gamePrompt)) {
@@ -3641,9 +3641,9 @@ private fun RdChatContent(thread: ChatThread) {
                             threadId, out.value, gamePrompt.take(48),
                         )
                         GeminiClient.Outcome.Quota ->
-                            AppState.toast("Tika: quota abhi khatam hai — thodi der baad try karo")
+                            AppState.toast("Tika: the quota is finished — try again in a little while")
                         GeminiClient.Outcome.Failed ->
-                            AppState.toast("Tika game nahi bana paya — dobara try karo")
+                            AppState.toast("Tika couldn't create the game — try again")
                     }
                 } finally {
                     aiThinking = null
@@ -3673,10 +3673,10 @@ private fun RdChatContent(thread: ChatThread) {
         } else null
         if (visionTarget != null && visionQuestion != null) {
             if (aiThinking != null) {
-                AppState.toast("Tika pehle wale jawab pe kaam kar raha hai")
+                AppState.toast("Tika is still answering the previous one")
                 return
             }
-            val question = visionQuestion.ifEmpty { "Is photo me kya hai? Describe karo." }
+            val question = visionQuestion.ifEmpty { "What is in this photo? Describe it." }
             val targetId = visionTarget.id
             val snapshot = visionTarget.photo
             AppState.repo.sendTextFx(threadId, v, replyQuoteLabel(visionTarget), null)
@@ -3687,7 +3687,7 @@ private fun RdChatContent(thread: ChatThread) {
                 try {
                     val bmp = loadReplyPhoto(targetId, snapshot)
                     if (bmp == null) {
-                        AppState.toast("Photo load nahi hui")
+                        AppState.toast("Couldn't load that photo")
                     } else {
                         // Vision payload: ≤1024 px on the long edge,
                         // JPEG — the question is about the content,
@@ -3696,9 +3696,9 @@ private fun RdChatContent(thread: ChatThread) {
                         when (val out = GeminiClient.answerImage(question, jpeg)) {
                             is GeminiClient.Outcome.Ok -> AppState.repo.sendTextAi(threadId, out.value)
                             GeminiClient.Outcome.Quota ->
-                                AppState.toast("Tika: quota abhi khatam hai — thodi der baad try karo")
+                                AppState.toast("Tika: the quota is finished — try again in a little while")
                             GeminiClient.Outcome.Failed ->
-                                AppState.toast("Tika jawab nahi de paya — dobara try karo")
+                                AppState.toast("Tika couldn't answer — try again")
                         }
                     }
                 } finally {
@@ -3710,7 +3710,7 @@ private fun RdChatContent(thread: ChatThread) {
         val cmd = if (replyTarget == null && armedFx == null) tikaCommand(v) else null
         if (cmd != null) {
             if (aiThinking != null) {
-                AppState.toast("Tika pehle wale jawab pe kaam kar raha hai")
+                AppState.toast("Tika is still answering the previous one")
                 return
             }
             val (isImage, prompt) = cmd
@@ -3724,17 +3724,17 @@ private fun RdChatContent(thread: ChatThread) {
                         when (val out = GeminiClient.generateImage(prompt)) {
                             is GeminiClient.Outcome.Ok -> AppState.repo.sendPhotoAi(threadId, out.value)
                             GeminiClient.Outcome.Quota ->
-                                AppState.toast("Tika: image quota abhi khatam hai — thodi der baad try karo")
+                                AppState.toast("Tika: the image quota is finished — try again in a little while")
                             GeminiClient.Outcome.Failed ->
-                                AppState.toast("Tika image nahi bana paya — dobara try karo")
+                                AppState.toast("Tika couldn't create the image — try again")
                         }
                     } else {
                         when (val out = GeminiClient.answerText(prompt)) {
                             is GeminiClient.Outcome.Ok -> AppState.repo.sendTextAi(threadId, out.value)
                             GeminiClient.Outcome.Quota ->
-                                AppState.toast("Tika: quota abhi khatam hai — thodi der baad try karo")
+                                AppState.toast("Tika: the quota is finished — try again in a little while")
                             GeminiClient.Outcome.Failed ->
-                                AppState.toast("Tika jawab nahi de paya — dobara try karo")
+                                AppState.toast("Tika couldn't answer — try again")
                         }
                     }
                 } finally {
