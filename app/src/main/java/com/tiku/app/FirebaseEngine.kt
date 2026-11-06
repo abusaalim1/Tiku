@@ -816,6 +816,16 @@ object FirebaseEngine : ChatRepo {
      *  listener exactly like clearedBeforeCache. */
     private val acceptedForCache = mutableMapOf<String, Long>()
     private val hiddenForCache = mutableMapOf<String, Long>()
+    /** ROUND 52: chatId -> my archivedFor stamp (ms), fed by the threads
+     *  listener exactly like hiddenForCache; and the chatIds whose calls
+     *  I muted (chat doc mutedCallsFor contains my uid), read by the
+     *  incoming-call paths — the watcher and the reconcile pass — which
+     *  run off listener callbacks, not off thread objects. */
+    private val archivedForCache = mutableMapOf<String, Long>()
+    private val callsMutedCache = mutableSetOf<String>()
+    /** ROUND 52: pull-to-refresh completions waiting for the next
+     *  applied threads snapshot (see refreshThreads). */
+    private val refreshCallbacks = mutableListOf<() -> Unit>()
     /** My blocked uids (users/{me}.blockedUids), fed by the my-doc listener. */
     private var blockedCache: Set<String> = emptySet()
     private var myDocReg: com.google.firebase.firestore.ListenerRegistration? = null
@@ -862,6 +872,17 @@ object FirebaseEngine : ChatRepo {
         if (h <= 0L) return false
         if (newestIncomingMs > h) return false
         return msgs.none { !it.me && it.tsMs > h }
+    }
+
+    /** ROUND 52: archived = I archived it and the partner has not sent
+     *  a NEWER message since — the exact deriveHidden rule over the
+     *  archivedFor stamp, so a new incoming message un-archives the
+     *  chat automatically (owner's spec for the Archived list). */
+    private fun deriveArchived(id: String, msgs: List<TikuMessage>, newestIncomingMs: Long = 0L): Boolean {
+        val a = archivedForCache[id] ?: 0L
+        if (a <= 0L) return false
+        if (newestIncomingMs > a) return false
+        return msgs.none { !it.me && it.tsMs > a }
     }
     /** Pinned chats (round 8): a per-user LOCAL view preference. */
     private var pinPrefs: android.content.SharedPreferences? = null
@@ -1021,6 +1042,19 @@ object FirebaseEngine : ChatRepo {
                             val hidMs = (hidMap?.get(uid) as? Number)?.toLong()
                                 ?: (hidMap?.get(uid) as? com.google.firebase.Timestamp)?.toDate()?.time ?: 0L
                             hiddenForCache[doc.id] = hidMs
+                            // ROUND 52: the per-user list states (pin /
+                            // mute messages / mute calls / archive) ride
+                            // this same snapshot — additive fields, absent
+                            // on every pre-52 doc, ignored by old builds.
+                            @Suppress("UNCHECKED_CAST")
+                            val arcMap = doc.get("archivedFor") as? Map<String, Any?>
+                            val arcMs = (arcMap?.get(uid) as? Number)?.toLong()
+                                ?: (arcMap?.get(uid) as? com.google.firebase.Timestamp)?.toDate()?.time ?: 0L
+                            archivedForCache[doc.id] = arcMs
+                            val pinnedForList = (doc.get("pinnedFor") as? List<*>)?.mapNotNull { it as? String } ?: emptyList()
+                            val mutedForList = (doc.get("mutedFor") as? List<*>)?.mapNotNull { it as? String } ?: emptyList()
+                            val mutedCallsForList = (doc.get("mutedCallsFor") as? List<*>)?.mapNotNull { it as? String } ?: emptyList()
+                            if (uid in mutedCallsForList) callsMutedCache += doc.id else callsMutedCache -= doc.id
                             val createdMs = doc.getTimestamp("createdAt")?.toDate()?.time
                                 ?: existing?.createdAtMs?.takeIf { it > 0L } ?: ts
                             // ROUND 10: per-chat details ride this same
@@ -1038,7 +1072,17 @@ object FirebaseEngine : ChatRepo {
                                 messages = knownMsgs,
                                 unread = existing?.unread ?: 0,
                                 time = fmtTime(ts),
-                                pinned = doc.id in pinnedIds,
+                                // ROUND 52: the doc's pinnedFor wins, the
+                                // legacy local pin prefs still count.
+                                pinned = uid in pinnedForList || doc.id in pinnedIds,
+                                // ROUND 52: message mute = the doc's
+                                // mutedFor, ORed with the legacy local
+                                // ThreadMuteStore so the ChatDetails
+                                // toggle keeps working unchanged. This
+                                // also makes OwnerNotify's long-standing
+                                // muted check live for the first time.
+                                muted = uid in mutedForList || ThreadMuteStore.isMuted(doc.id),
+                                callsMuted = uid in mutedCallsForList,
                                 nickname = nickname,
                                 hasOlder = existing?.hasOlder ?: (hasOlderCache[doc.id] ?: false),
                                 myNickname = myNickname,
@@ -1055,6 +1099,7 @@ object FirebaseEngine : ChatRepo {
                                 isRequest = deriveIsRequest(doc.id, knownMsgs, accMs > 0L),
                                 createdAtMs = createdMs,
                                 hiddenForMe = deriveHidden(doc.id, knownMsgs),
+                                archivedForMe = deriveArchived(doc.id, knownMsgs),
                                 // ROUND 20: this from-scratch rebuild must
                                 // not wipe the open-time unread capture.
                                 unreadAtOpen = existing?.unreadAtOpen
@@ -1065,6 +1110,13 @@ object FirebaseEngine : ChatRepo {
                         val list = built.sortedByDescending { it.first }.map { it.second }
                             .filter { it.person.uid !in blockedCache }
                         AppState.threads.value = list
+                        // ROUND 52: a pull-to-refresh waiting on this
+                        // re-attach completes now — the fresh snapshot
+                        // has actually been applied, spinner honesty.
+                        val cbs = synchronized(refreshCallbacks) {
+                            val c = refreshCallbacks.toList(); refreshCallbacks.clear(); c
+                        }
+                        cbs.forEach { cb -> runCatching { cb() } }
                         // ROUND 35: custom gallery themes — make sure
                         // every custom chat's encrypted photo asset is
                         // cached + published (no-ops for built-ins and
@@ -1260,6 +1312,16 @@ object FirebaseEngine : ChatRepo {
                             if (s != null && s != uid) d.getTimestamp("ts")?.toDate()?.time ?: 0L else 0L
                         } ?: 0L,
                     ),
+                    // ROUND 52: the same raw truth un-archives — any
+                    // partner doc newer than the archive stamp brings
+                    // the chat back to the main list on this pass.
+                    archivedForMe = deriveArchived(
+                        id, msgs,
+                        newestIncomingMs = docs.maxOfOrNull { d ->
+                            val s = d.getString("senderId")
+                            if (s != null && s != uid) d.getTimestamp("ts")?.toDate()?.time ?: 0L else 0L
+                        } ?: 0L,
+                    ),
                     createdAtMs = if (t.createdAtMs > 0L) t.createdAtMs
                         else msgs.firstOrNull()?.tsMs ?: 0L,
                 )
@@ -1302,6 +1364,11 @@ object FirebaseEngine : ChatRepo {
     private fun handleIncomingCall(chatId: String, callId: String, doc: com.google.firebase.firestore.DocumentSnapshot) {
         val caller = doc.getString("caller") ?: return
         if (caller == uid) return // my own outgoing call echo
+        // ROUND 52: calls muted for this chat (mutedCallsFor) — the call
+        // never rings or alerts on my side. The doc is left strictly
+        // alone (no busy-delete): the caller's own ring timeout ends it
+        // and the caller records the missed-call event in the chat.
+        if (chatId in callsMutedCache) return
         // ROUND 7 ROOT FIX ("Offer missing" on receive): this watcher re-fires
         // on EVERY update to the ringing doc — and the caller pushes ICE
         // candidates (arrayUnion writes) continuously from the moment the
@@ -1351,6 +1418,79 @@ object FirebaseEngine : ChatRepo {
                 }
             }
         }
+    }
+
+    /** ROUND 52 (item 5) — INCOMING-CALL RECONCILE. The watcher rings
+     *  only at snapshot time, gated on unlocked+foreground THEN; a call
+     *  that started while the receiver was elsewhere (YouTube, shade,
+     *  another app) took the OwnerNotify branch, and when he came back
+     *  seconds later nothing re-ran the watcher — the still-ringing
+     *  call never surfaced (his exact report). This pass is the
+     *  baseline-free counterpart: a one-shot query of the calls
+     *  subcollection(s) for state == "ringing", judged purely on the
+     *  call doc's own fields — not the caller → a live incoming call;
+     *  createdAt inside the ring window (the caller's own timeout
+     *  value) → still ringable. Declined/ended calls are not
+     *  state == "ringing" and expired ones fail the window test, so
+     *  nothing dead can resurrect. Called from MainActivity.onResume
+     *  (foreground return), from openThread (a chat being opened) and
+     *  after engine start paths; it self-gates on the same
+     *  unlocked+foreground+idle conditions the watcher uses, and on
+     *  mutedCallsFor (a calls-muted chat never pops up). */
+    fun reconcileIncomingCalls(onlyChatId: String? = null) {
+        if (uid.isEmpty()) return
+        if (!ChatSession.unlocked || !ChatSession.foreground) return
+        if (CallController.state.value !is CallUiState.Idle) return
+        val ids = if (onlyChatId != null) listOf(onlyChatId)
+            else AppState.threads.value.map { it.id }
+        if (ids.isEmpty()) return
+        scope.launch {
+            runCatching {
+                for (tid in ids) {
+                    if (tid in callsMutedCache) continue
+                    if (CallController.state.value !is CallUiState.Idle) return@runCatching
+                    val docs = db.collection(Schema.Chats.COLL).document(tid).collection("calls")
+                        .whereEqualTo("state", "ringing").get().await().documents
+                    val live = docs.mapNotNull { doc ->
+                        val caller = doc.getString("caller") ?: return@mapNotNull null
+                        if (caller == uid) return@mapNotNull null
+                        val createdAt = doc.getTimestamp("createdAt")?.toDate()?.time
+                            ?: return@mapNotNull null
+                        if (System.currentTimeMillis() - createdAt > Config.CALL_RING_TIMEOUT_MS) {
+                            return@mapNotNull null
+                        }
+                        Triple(doc.id, caller, doc)
+                    }.minByOrNull { it.third.getTimestamp("createdAt")?.toDate()?.time ?: Long.MAX_VALUE }
+                    if (live != null) {
+                        val (callId, caller, doc) = live
+                        if (CallController.activeCallId() == callId) return@runCatching
+                        val person = fetchPerson(caller)
+                        CallController.onIncoming(
+                            tid, callId, doc.getString("kind") ?: "audio",
+                            person, doc.getString("offer"),
+                        )
+                        return@runCatching // one live call presented; done
+                    }
+                }
+            }.onFailure { Log.e("TikuCall", "reconcileIncomingCalls failed", it) }
+        }
+    }
+
+    /** ROUND 52 (item 6) — PULL-TO-REFRESH, a genuine re-sync: the
+     *  profile cache is dropped (profiles re-read), every preview
+     *  registration is dropped (syncPreviewListeners re-registers them
+     *  from the fresh snapshot) and the threads listener is re-attached
+     *  via the proven full start() path — the same re-attach the error
+     *  retries and the Round-49 keepalive use. [onDone] fires from the
+     *  threads snapshot handler once the fresh list has actually been
+     *  applied (see refreshCallbacks), never on a timer here. */
+    override fun refreshThreads(onDone: () -> Unit) {
+        if (uid.isEmpty()) { onDone(); return }
+        synchronized(refreshCallbacks) { refreshCallbacks += onDone }
+        profileCache.clear()
+        previewRegs.values.forEach { it.remove() }
+        previewRegs.clear()
+        start(appCtx)
     }
 
     /** Crash-residue cleanup: delete ended calls and anything older than 2 hours. */
@@ -1699,6 +1839,11 @@ object FirebaseEngine : ChatRepo {
         }
         openChatIds += id
         attachMessages(id)
+        // ROUND 52: opening a chat is a reconcile point for item 5 — a
+        // call that started ringing while this phone was elsewhere
+        // (YouTube, shade) must surface here even if the watcher's
+        // snapshot was consumed by the background alert path.
+        reconcileIncomingCalls(id)
         // ROUND 8: no more full-collection get() here — the old code read
         // EVERY message doc of the chat on EVERY open just to seen-mark them
         // (thousands of reads on a long chat). Seen-marking now runs off the
@@ -1938,15 +2083,85 @@ object FirebaseEngine : ChatRepo {
 
     /** ROUND 8: pin/unpin — persisted locally (a personal view preference),
      *  reflected onto the thread immediately; the threads listener re-derives
-     *  it from the same prefs on every snapshot. */
+     *  it from the same prefs on every snapshot.
+     *  ROUND 52: the pin ALSO rides the chat doc (additive pinnedFor
+     *  array — my uid in/out) so it survives a reinstall; the listener
+     *  ORs both sources, so a pin made on either survives. */
     override fun setPinned(id: String, on: Boolean) {
         AppState.threads.value = AppState.threads.value.map {
             if (it.id == id) it.copy(pinned = on) else it
         }
-        val prefs = pinPrefs ?: return
-        val cur = (prefs.getStringSet("ids", emptySet()) ?: emptySet()).toMutableSet()
-        if (on) cur += id else cur -= id
-        prefs.edit().putStringSet("ids", cur).apply()
+        val prefs = pinPrefs
+        if (prefs != null) {
+            val cur = (prefs.getStringSet("ids", emptySet()) ?: emptySet()).toMutableSet()
+            if (on) cur += id else cur -= id
+            prefs.edit().putStringSet("ids", cur).apply()
+        }
+        scope.launch {
+            runCatching {
+                db.collection(Schema.Chats.COLL).document(id).update(
+                    "pinnedFor",
+                    if (on) FieldValue.arrayUnion(uid) else FieldValue.arrayRemove(uid),
+                ).await()
+            }.onFailure { Log.e("TikuChat", "setPinned doc write failed for $id", it) }
+        }
+    }
+
+    /** ROUND 52: mute MESSAGE alerts for this chat (chat doc mutedFor
+     *  array). Optimistic thread update; the threads listener re-derives
+     *  thread.muted from the doc (ORed with the legacy local store), and
+     *  OwnerNotify's judge — which reads thread.muted before posting —
+     *  skips the chat from the next snapshot on. */
+    override fun setThreadMuted(id: String, on: Boolean) {
+        AppState.threads.value = AppState.threads.value.map {
+            if (it.id == id) it.copy(muted = on) else it
+        }
+        scope.launch {
+            runCatching {
+                db.collection(Schema.Chats.COLL).document(id).update(
+                    "mutedFor",
+                    if (on) FieldValue.arrayUnion(uid) else FieldValue.arrayRemove(uid),
+                ).await()
+            }.onFailure { Log.e("TikuChat", "setThreadMuted failed for $id", it) }
+        }
+    }
+
+    /** ROUND 52: mute CALLS for this chat (chat doc mutedCallsFor
+     *  array). The cache flips immediately (the watcher and the
+     *  reconcile pass read it, not the thread object), the thread copy
+     *  follows, and the listener keeps both honest from the doc. */
+    override fun setThreadCallsMuted(id: String, on: Boolean) {
+        if (on) callsMutedCache += id else callsMutedCache -= id
+        AppState.threads.value = AppState.threads.value.map {
+            if (it.id == id) it.copy(callsMuted = on) else it
+        }
+        scope.launch {
+            runCatching {
+                db.collection(Schema.Chats.COLL).document(id).update(
+                    "mutedCallsFor",
+                    if (on) FieldValue.arrayUnion(uid) else FieldValue.arrayRemove(uid),
+                ).await()
+            }.onFailure { Log.e("TikuChat", "setThreadCallsMuted failed for $id", it) }
+        }
+    }
+
+    /** ROUND 52: archive / unarchive for me (chat doc archivedFor map,
+     *  the hiddenFor stamp convention). Archiving stamps now; a newer
+     *  partner message out-dates the stamp in the derivations and the
+     *  chat returns to the main list on its own. Unarchiving deletes
+     *  my stamp outright. */
+    override fun setThreadArchived(id: String, on: Boolean) {
+        archivedForCache[id] = if (on) System.currentTimeMillis() else 0L
+        AppState.threads.value = AppState.threads.value.map {
+            if (it.id == id) it.copy(archivedForMe = on) else it
+        }
+        scope.launch {
+            runCatching {
+                val ref = db.collection(Schema.Chats.COLL).document(id)
+                if (on) ref.update("archivedFor.$uid", FieldValue.serverTimestamp()).await()
+                else ref.update("archivedFor.$uid", FieldValue.delete()).await()
+            }.onFailure { Log.e("TikuChat", "setThreadArchived failed for $id", it) }
+        }
     }
 
     /** [light] (round 6 preview path): text + call payloads decrypt fully,
@@ -3600,6 +3815,8 @@ object FirebaseEngine : ChatRepo {
         AppState.blockedPeople.value = emptyList()
         blockedCache = emptySet()
         acceptedForCache.clear(); hiddenForCache.clear()
+        // ROUND 52: the archive / calls-mute derivations are per-user too.
+        archivedForCache.clear(); callsMutedCache.clear()
         ctx.getSharedPreferences("tiku_prefs", Context.MODE_PRIVATE).edit().putBoolean("onboarded", false).apply()
         AppState.go(Screen.Welcome)
     }

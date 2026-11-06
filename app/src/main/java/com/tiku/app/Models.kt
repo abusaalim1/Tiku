@@ -230,6 +230,18 @@ data class ChatThread(
     // a strictly newer value means the photo was replaced and must be
     // re-fetched. 0 = no asset known. Old builds ignore the field.
     val themeAssetAt: Long = 0L,
+    // ---- ROUND 52 (appended last, same discipline) ----
+    /** True when MY uid sits in the chat doc's mutedCallsFor array:
+     *  incoming calls from this chat never ring or alert on my side
+     *  (they still land in the chat as missed calls). The message-mute
+     *  twin rides the pre-existing [muted] field (chat doc mutedFor,
+     *  ORed with the legacy local ThreadMuteStore). */
+    val callsMuted: Boolean = false,
+    /** True while I archived this chat (chat doc archivedFor[me]
+     *  stamp) and the partner has not sent a newer message since —
+     *  derived exactly like [hiddenForMe]; archived chats leave the
+     *  main Messages list for the Archived list. */
+    val archivedForMe: Boolean = false,
 ) {
     /** What every surface renders as this chat's title: nickname first,
      *  profile name otherwise. Real name + @username stay visible in the

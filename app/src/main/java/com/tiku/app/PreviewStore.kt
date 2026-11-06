@@ -408,6 +408,30 @@ object PreviewRepo : ChatRepo {
         }
     }
 
+    // ---- ROUND 52 preview sinks (local-only mirrors of the engine) ----
+    override fun refreshThreads(onDone: () -> Unit) {
+        // Nothing to re-attach in preview — the seeds are the truth.
+        onDone()
+    }
+
+    override fun setThreadMuted(id: String, on: Boolean) {
+        AppState.threads.value = AppState.threads.value.map {
+            if (it.id == id) it.copy(muted = on) else it
+        }
+    }
+
+    override fun setThreadCallsMuted(id: String, on: Boolean) {
+        AppState.threads.value = AppState.threads.value.map {
+            if (it.id == id) it.copy(callsMuted = on) else it
+        }
+    }
+
+    override fun setThreadArchived(id: String, on: Boolean) {
+        AppState.threads.value = AppState.threads.value.map {
+            if (it.id == id) it.copy(archivedForMe = on) else it
+        }
+    }
+
     /** Preview nickname: local-only (the real engine writes nicknames.<peerUid>
      *  on the chat doc). */
     override fun setNickname(id: String, nickname: String?) {

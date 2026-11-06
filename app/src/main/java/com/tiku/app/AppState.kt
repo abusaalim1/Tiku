@@ -374,8 +374,12 @@ interface ChatRepo {
     /** ROUND 8: fetch the next page of OLDER messages for an open chat
      *  (pagination — a chat opens at its newest ~60). Default no-op. */
     fun loadOlder(id: String) {}
-    /** ROUND 8: pin/unpin a chat in the list (IG-style). A per-user, local
-     *  view preference — never written to the chat doc. Default no-op. */
+    /** ROUND 8: pin/unpin a chat in the list (IG-style). A per-user
+     *  view preference. ROUND 52: the engine now ALSO records it on
+     *  the chat doc (additive pinnedFor array — my uid in/out) so the
+     *  pin survives a reinstall like the other per-user list states;
+     *  the local prefs copy stays as the offline/legacy source and the
+     *  two are ORed. Default no-op. */
     fun setPinned(id: String, on: Boolean) {}
     // ---- ROUND 10 ----
     /** Edit one of MY OWN text messages in place (re-encrypts through the
@@ -394,4 +398,24 @@ interface ChatRepo {
     /** My per-chat read-receipts switch (chat doc receiptsOff array).
      *  Default no-op. */
     fun setReceipts(id: String, on: Boolean) {}
+    // ---- ROUND 52 ----
+    /** Pull-to-refresh on the Messages list: a genuine re-sync —
+     *  re-attach the threads listener, rebuild the per-chat preview
+     *  listeners and re-read profiles — then invoke [onDone] once the
+     *  fresh threads snapshot has been applied. Default no-op (the UI
+     *  clears its indicator on a timeout fallback). */
+    fun refreshThreads(onDone: () -> Unit = {}) {}
+    /** Mute MESSAGE alerts for this chat (chat doc mutedFor array —
+     *  my uid in/out). The alert pipeline skips muted chats; the chat
+     *  itself, its badge and its list row are otherwise untouched.
+     *  Default no-op. */
+    fun setThreadMuted(id: String, on: Boolean) {}
+    /** Mute CALLS for this chat (chat doc mutedCallsFor array):
+     *  incoming calls from this chat never ring or pop up for me;
+     *  they still land in the chat as missed calls. Default no-op. */
+    fun setThreadCallsMuted(id: String, on: Boolean) {}
+    /** Archive / unarchive this chat for me (chat doc archivedFor
+     *  map, hiddenFor-style stamp). A newer partner message
+     *  un-archives automatically. Default no-op. */
+    fun setThreadArchived(id: String, on: Boolean) {}
 }

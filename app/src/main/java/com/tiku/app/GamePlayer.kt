@@ -219,20 +219,39 @@ private class GameStateWriter(
     companion object { const val MIN_WRITE_GAP_MS = 300L }
 }
 
-/** The inert bridge behind the chat card's mini preview: the game's
- *  first frame can ask who it is and render its initial board, but
- *  setState goes nowhere and state() is always null — the card is a
- *  picture of the game, never a third player. The full player uses
- *  [TikuGameNative] instead. */
+/** The bridge behind the chat card's mini preview.
+ *  ROUND 52 (item 2): the old preview bridge was FULLY inert — state()
+ *  was always null and setState went nowhere. That starves exactly
+ *  the games the contract produces: a host-side game creates its
+ *  initial state and publishes it with setState, then renders when
+ *  the sync layer delivers that state back through onState. With the
+ *  echo missing, the tic-tac-toe the owner screenshotted sat on its
+ *  own "Loading…" screen forever. The preview now EMULATES the sync
+ *  layer locally: setState stores the state and echoes it straight
+ *  back into the page through [onEcho] (the host's deliverGameState),
+ *  and state() returns the latest stored state. Nothing leaves the
+ *  device — no Firestore write, no third player — the card is still
+ *  only a picture of the game; it is now a picture that can finish
+ *  loading. */
 internal class GamePreviewNative(
     private val role: String,
     private val peerName: String,
+    private val onEcho: (String) -> Unit = {},
 ) {
+    @Volatile private var latest: String? = null
+    /** The newest state the game itself published in this preview —
+     *  read by the card's stuck probe (a game that produced a state
+     *  is past its loading screen by construction). */
+    val producedState: Boolean get() = latest != null
+
     @JavascriptInterface fun myRole(): String = role
     @JavascriptInterface fun myName(): String = "You"
     @JavascriptInterface fun peerName(): String = peerName
-    @JavascriptInterface fun state(): String? = null
-    @JavascriptInterface fun setState(json: String) = Unit
+    @JavascriptInterface fun state(): String? = latest
+    @JavascriptInterface fun setState(json: String) {
+        latest = json
+        onEcho(json)
+    }
 }
 
 /** Push one shared-state snapshot into the page (main thread, via the
@@ -337,18 +356,46 @@ private fun GameWebViewHost(
     val ctx = LocalContext.current
     val bridgeState = remember(m.id) { GameBridgeState() }
     val writer = remember(m.id) { GameStateWriter(chatId, m.id) }
+    var pageReady by remember(m.id) { mutableStateOf(false) }
+    /** ROUND 52: the last state string actually handed to the page —
+     *  the delivery dedupe. Volatile: written from the JS thread (own
+     *  setState) and the main thread (listener / page-ready). */
+    val lastDelivered = remember(m.id) { object { @Volatile var v: String? = null; @Volatile var sent: Boolean = false } }
+    val wvHolder = remember(m.id) { mutableStateOf<WebView?>(null) }
+    /** ROUND 52 (item 2a): THE delivery path — every state the game
+     *  may see flows through here. It fires as soon as the page is
+     *  ready (never waiting on a Firestore round-trip: the value is
+     *  whatever this phone already holds, null included — the
+     *  contract's "once at the start" call), and again whenever the
+     *  freshest state changes under a ready page. Before Round 52 the
+     *  listener skipped the delivery whenever the snapshot's author
+     *  was ME (by == myUid) and page-ready delivered only whatever
+     *  had landed by then — so re-opening a game whose state I had
+     *  authored could strand the page on the game's own loading
+     *  screen with the state sitting undelivered in bridgeState. */
+    fun pushState(force: Boolean = false) {
+        if (!pageReady) return
+        val wv = wvHolder.value ?: return
+        val cur = bridgeState.latest
+        if (!force && lastDelivered.sent && lastDelivered.v == cur) return
+        lastDelivered.sent = true
+        lastDelivered.v = cur
+        deliverGameState(wv, cur)
+    }
     val native = remember(m.id) {
         TikuGameNative(role, myName, peerName, bridgeState) { json ->
             // My own move: this phone's copy is authoritative the
             // moment I make it — the holder updates immediately, the
-            // Firestore write rides the throttle, and the listener
-            // below deliberately skips my own echo (by == my uid).
+            // Firestore write rides the throttle, and (ROUND 52) the
+            // state is ALSO delivered straight back into the page:
+            // the sync layer would hand this exact state to the game
+            // through onState, and games that render on delivery
+            // (the stuck tic-tac-toe pattern) starve without the echo.
             bridgeState.latest = json
             writer.offer(json)
+            pushState()
         }
     }
-    var pageReady by remember(m.id) { mutableStateOf(false) }
-    val wvHolder = remember(m.id) { mutableStateOf<WebView?>(null) }
     val webView = remember(m.id) {
         buildGameWebView(ctx, native, onPageReady = {
             // Page ready: re-assert the shim (a no-op when the
@@ -359,7 +406,7 @@ private fun GameWebViewHost(
             pageReady = true
             val wv = wvHolder.value ?: return@buildGameWebView
             runCatching { wv.evaluateJavascript(TIKU_GAME_SHIM, null) }
-            deliverGameState(wv, bridgeState.latest)
+            pushState(force = true)
         }, onLoadError = onError).also { wvHolder.value = it }
     }
     LaunchedEffect(m.id, html) {
@@ -377,7 +424,10 @@ private fun GameWebViewHost(
     DisposableEffect(m.id) {
         val reg = FirebaseEngine.listenGameState(chatId, m.id) { json, by ->
             bridgeState.latest = json
-            if (by != myUid) deliverGameState(webView, json)
+            // ROUND 52: delivery no longer skips my own snapshots —
+            // pushState dedupes, and a state I authored is exactly
+            // what a re-opened game is waiting for (see pushState).
+            pushState()
         }
         onDispose {
             reg.remove()

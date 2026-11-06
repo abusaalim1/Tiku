@@ -147,7 +147,9 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.OffsetMapping
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.input.TransformedText
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.IntOffset
@@ -2429,15 +2431,30 @@ private fun RdGameCard(
 
 /** ROUND 41 — the game card's live mini preview: the game's actual
  *  first frame in a small WebView (built once per message, destroyed
- *  with the row — Moments discipline), running on the inert
- *  [GamePreviewNative] bridge (state() = null, setState goes nowhere)
- *  with the shared shim, so the game renders its initial board but
- *  can never act as a third player. Touch is swallowed whole — the
- *  card's own gesture layer underneath owns taps (play) and
- *  long-presses (menu); a transparent overlay keeps that true even
- *  over the WebView's surface. Inert and silent: if the file vanished
- *  between the exists() check and the read, the area simply stays
- *  cream. */
+ *  with the row — Moments discipline), running on the
+ *  [GamePreviewNative] bridge with the shared shim, so the game
+ *  renders its initial board but can never act as a third player.
+ *  Touch is swallowed whole — the card's own gesture layer underneath
+ *  owns taps (play) and long-presses (menu); a transparent overlay
+ *  keeps that true even over the WebView's surface. If the file
+ *  vanished between the exists() check and the read, the area simply
+ *  stays cream.
+ *
+ *  ROUND 52 (item 2 — the owner's screenshot: the card frozen on the
+ *  game's own "Tic-Tac-Toe / Loading…" screen): the Round-41 bridge
+ *  was fully inert (state() always null, setState a no-op), which
+ *  starves the exact pattern the generation contract produces — the
+ *  host-side game creates its initial state, publishes it with
+ *  setState, and renders when the sync layer delivers it back. The
+ *  preview bridge now EMULATES the sync layer locally (setState
+ *  stores + echoes straight back into the page; nothing leaves the
+ *  device). Delivery happens at page-ready with whatever the game
+ *  already holds (null = the contract's start call) and once more
+ *  ~700 ms later for games that attach their callback late. If the
+ *  page STILL shows nothing but its loading screen ~4.5 s after
+ *  page-ready, the preview area swaps to the card's static facade
+ *  (title + "Tap to play") — a stuck "Loading…" is never the
+ *  resting state of this card. */
 @Composable
 private fun RdGamePreview(m: TikuMessage, path: String, peerName: String) {
     val ctx = LocalContext.current
@@ -2447,14 +2464,25 @@ private fun RdGamePreview(m: TikuMessage, path: String, peerName: String) {
         }
     }
     val wvHolder = remember(m.id) { mutableStateOf<android.webkit.WebView?>(null) }
+    var pageReadyAt by remember(m.id) { mutableStateOf(0L) }
+    var stuck by remember(m.id) { mutableStateOf(false) }
+    val previewNative = remember(m.id) {
+        GamePreviewNative(if (m.me) "host" else "guest", peerName) { json ->
+            // The sync-layer echo: a state the game just published is
+            // delivered straight back into the page (see GamePlayer).
+            wvHolder.value?.let { deliverGameState(it, json) }
+        }
+    }
     val webView = remember(m.id) {
-        buildGameWebView(ctx, GamePreviewNative(if (m.me) "host" else "guest", peerName), onPageReady = {
-            // First frame: re-assert the shim, then deliver the one
-            // null snapshot — a game that renders only inside its
-            // onState callback still draws its initial board.
+        buildGameWebView(ctx, previewNative, onPageReady = {
+            // First frame: re-assert the shim, then deliver the
+            // current state (initially null — the contract's start
+            // call; a game that renders only inside its onState
+            // callback still draws its initial board).
             val w = wvHolder.value ?: return@buildGameWebView
             runCatching { w.evaluateJavascript(TIKU_GAME_SHIM, null) }
-            deliverGameState(w, null)
+            deliverGameState(w, previewNative.state())
+            pageReadyAt = System.currentTimeMillis()
         }).also {
             it.setOnTouchListener { _, _ -> true }
             wvHolder.value = it
@@ -2469,11 +2497,63 @@ private fun RdGamePreview(m: TikuMessage, path: String, peerName: String) {
             webView.loadDataWithBaseURL(null, injectGameShim(doc), "text/html", "utf-8", null)
         }
     }
+    // ROUND 52: the late-attach re-delivery — a game that registers
+    // its onState callback after the first delivery still receives
+    // the freshest state once, shortly after.
+    LaunchedEffect(m.id, pageReadyAt) {
+        if (pageReadyAt == 0L) return@LaunchedEffect
+        kotlinx.coroutines.delay(700)
+        if (!stuck) wvHolder.value?.let { deliverGameState(it, previewNative.state()) }
+    }
+    // ROUND 52: the stuck probe. A game that published a state is
+    // past loading by construction; otherwise read the page's own
+    // visible text — a lone short "Loading…" (or an empty page) after
+    // the bounded wait means the game never got past its loader, and
+    // the static facade takes the area instead.
+    LaunchedEffect(m.id, pageReadyAt) {
+        if (pageReadyAt == 0L) return@LaunchedEffect
+        kotlinx.coroutines.delay(4_500)
+        if (stuck || previewNative.producedState) return@LaunchedEffect
+        val w = wvHolder.value ?: return@LaunchedEffect
+        w.evaluateJavascript(
+            "(function(){return document.body ? (document.body.innerText || '') : ''})()",
+        ) { raw ->
+            val text = raw?.trim('"', ' ')?.replace("\\n", " ")?.trim().orEmpty()
+            if (!previewNative.producedState &&
+                (text.isEmpty() || (text.contains("loading", ignoreCase = true) && text.length < 160))
+            ) {
+                runCatching { w.stopLoading() }
+                stuck = true
+            }
+        }
+    }
     if (doc != null) {
-        androidx.compose.ui.viewinterop.AndroidView(
-            factory = { webView },
-            modifier = Modifier.fillMaxSize(),
-        )
+        if (stuck) {
+            // The card's static facade (the harness face's language):
+            // the game exists and plays on tap — it just never
+            // painted its first frame in the preview.
+            Column(
+                Modifier.fillMaxSize(),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center,
+            ) {
+                EmojiGlyph("🎮", 40.dp)
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    m.gameTitle.ifBlank { "Game" },
+                    color = GameCardInk, fontSize = 14.sp,
+                    fontWeight = FontWeight.SemiBold, fontFamily = InterTight,)
+                Spacer(Modifier.height(3.dp))
+                Text(
+                    "Tap to play",
+                    color = GameCardInk.copy(alpha = 0.6f), fontSize = 12.sp, fontFamily = PoppinsFamily,)
+            }
+        } else {
+            androidx.compose.ui.viewinterop.AndroidView(
+                factory = { webView },
+                modifier = Modifier.fillMaxSize(),
+            )
+        }
     }
 }
 
@@ -2646,6 +2726,38 @@ fun RdChatInput(
     // UNFOCUSED — tapping into the field to type takes focus and the
     // button animates away (owner's exact ask).
     var fieldFocused by remember { mutableStateOf(false) }
+    // ROUND 52 (item 8): the field binds a TextFieldValue MIRROR of
+    // the caller's String state. The String-only binding left the
+    // selection in the text field's internal state, and the slash
+    // sheet's tap — a wholesale String replacement through onChange —
+    // reset that selection to 0: the caret landed at the LEFT of the
+    // inserted "/tika " and the owner's next keystrokes went INSIDE
+    // the token, breaking the command apart (his exact report). The
+    // mirror makes selection ours: typing flows straight through
+    // (the field's own TextFieldValue is adopted verbatim, caret and
+    // IME composition untouched), programmatic fills (a send clearing
+    // the field, the slash insert below) set the caret deliberately.
+    var tfv by remember { mutableStateOf(TextFieldValue(value, TextRange(value.length))) }
+    LaunchedEffect(value) {
+        // External change (send-clear, prefill): adopt the new text
+        // with the caret at its end. Changes that came FROM the field
+        // already match tfv.text and are left exactly as they are.
+        if (value != tfv.text) tfv = TextFieldValue(value, TextRange(value.length))
+    }
+    /** ROUND 52: the slash-sheet tap. Replaces ONLY the first token
+     *  (the sheet is visible solely for a bare token, but any text
+     *  after it is preserved verbatim behind the inserted command), so
+     *  "/ti" + tap yields exactly "/tika " — never "/ti/tika", never a
+     *  doubled slash — with the caret placed right after the command
+     *  and its trailing space, where typing continues. */
+    fun insertSlashCommand(cmd: SlashCommand) {
+        val tokenEnd = value.indexOf(' ').let { if (it < 0) value.length else it }
+        val suffix = value.substring(tokenEnd).trimStart()
+        val inserted = cmd.name + " " + suffix
+        val caret = cmd.name.length + 1
+        tfv = TextFieldValue(inserted, TextRange(caret))
+        onChange(inserted)
+    }
     // ROUND 22: typed emoji render as iOS glyphs while typing (the
     // same font the bubbles use — EmojiArt.kt, worker A §5).
     val emojiFont = rememberChatFontFamily() // ROUND 48: Inter + iOS-emoji chain (see EmojiArt)
@@ -2702,10 +2814,13 @@ fun RdChatInput(
         // the live filter is a plain prefix match on the token. A tap
         // fills "<name> " — the trailing space ends the token, so the
         // sheet closes itself and never reopens over the finished
-        // command. Focus and the IME are never touched: onChange only
-        // rewrites the field's text (String field → caret lands after
-        // the space). lastSlashMatches keeps the rows composed through
-        // the exit animation, the fx chip's trick above.
+        // command. Focus and the IME are never touched. (ROUND 52:
+        // the tap goes through insertSlashCommand, which also places
+        // the caret after the trailing space — the Round-42 claim
+        // that a plain String rewrite did that was wrong on device:
+        // the caret reset to 0 and typing broke the token.)
+        // lastSlashMatches keeps the rows composed through the exit
+        // animation, the fx chip's trick above.
         val slashMatches = if (
             value.startsWith("/") && !value.contains(' ') &&
             replyText == null && fxArmed == null && !recording
@@ -2728,7 +2843,7 @@ fun RdChatInput(
                                 .background(contentCol.copy(alpha = 0.07f)),
                         )
                         Row(
-                            Modifier.fillMaxWidth().rdPress { onChange(cmd.name + " ") }
+                            Modifier.fillMaxWidth().rdPress { insertSlashCommand(cmd) }
                                 .padding(horizontal = 16.dp, vertical = 10.dp),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
@@ -2797,7 +2912,16 @@ fun RdChatInput(
                 Box(Modifier.weight(1f).padding(horizontal = 12.dp)) {
                     if (value.isEmpty()) Text("Message…", color = subCol, fontSize = 15.sp, fontFamily = emojiFont)
                     BasicTextField(
-                        value, onChange,
+                        // ROUND 52: the TextFieldValue mirror (see
+                        // tfv above) — manual typing adopts the
+                        // field's own value verbatim, so caret and
+                        // composition behave exactly as before; only
+                        // programmatic fills differ.
+                        value = tfv,
+                        onValueChange = { nv ->
+                            tfv = nv
+                            if (nv.text != value) onChange(nv.text)
+                        },
                         textStyle = TextStyle(color = contentCol, fontSize = 15.sp, fontFamily = emojiFont),
                         cursorBrush = SolidColor(accent),
                         // ROUND 44: a leading "/" command token renders

@@ -49,12 +49,15 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Archive
 import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.KeyboardArrowRight
+import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material3.Icon
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
@@ -152,6 +155,9 @@ fun HomeScreen() {
     val threads by AppState.threads.collectAsState()
     val blocked by AppState.blockedUids.collectAsState()
     var noteTarget by remember { mutableStateOf<NoteTarget?>(null) }
+    // ROUND 52: the Archived list rides as an overlay of this shell
+    // (the note sheet's pattern) — no new destination was added.
+    var showArchived by remember { mutableStateOf(false) }
 
     // minimized live call -> CallPill (the file's model; replaces the
     // build-47 FloatingCallWindow, which TikuRoot no longer composes).
@@ -190,6 +196,7 @@ fun HomeScreen() {
                         0 -> MessagesScreen(
                             onNote = { noteTarget = it },
                             onRequests = { AppState.goTik(7) },
+                            onArchived = { showArchived = true },
                         )
                         1 -> CallsScreen()
                         2 -> WatchScreen()
@@ -198,6 +205,7 @@ fun HomeScreen() {
                         else -> MessagesScreen(
                             onNote = { noteTarget = it },
                             onRequests = { AppState.goTik(7) },
+                            onArchived = { showArchived = true },
                         )
                     }
                 }
@@ -309,26 +317,93 @@ fun HomeScreen() {
             }
         }
 
+        // ROUND 52: the Archived list overlay (long-press ▸ Archive
+        // sends chats here; a new incoming message un-archives them
+        // back to Messages on its own — see the engine derivations).
+        AnimatedVisibility(
+            visible = showArchived,
+            enter = fadeIn(), exit = fadeOut(),
+            modifier = Modifier.fillMaxSize(),
+        ) {
+            ArchivedScreen(onBack = { showArchived = false })
+        }
+
         // (The fullscreen YouTube layer renders in TikuRoot beside
         // WatchHost — ROUND 15 hoist, see above. Empty unless fullscreen.)
     }
 }
 
+/** ROUND 52 — the Archived list: the Messages rows, reused whole
+ *  (same ThreadRow — its long-press sheet offers Unarchive there),
+ *  over the shell's black. Only my archived, non-request, non-hidden
+ *  chats live here. */
+@Composable
+private fun ArchivedScreen(onBack: () -> Unit) {
+    val threads by AppState.threads.collectAsState()
+    val blocked by AppState.blockedUids.collectAsState()
+    val archived = threads.filter {
+        it.archivedForMe && !it.isRequest && !it.hiddenForMe && it.person.uid !in blocked
+    }.sortedByDescending { it.pinned }
+    LazyColumn(
+        Modifier.fillMaxSize().background(Color.Black),
+        contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 16.dp, bottom = 40.dp),
+    ) {
+        item {
+            BackBtn(onBack); Spacer(Modifier.height(14.dp)); Title("Archived")
+            Spacer(Modifier.height(18.dp))
+        }
+        if (archived.isEmpty()) {
+            item { Text("No archived chats", color = Sub, fontSize = 14.sp, fontFamily = PoppinsFamily) }
+        }
+        itemsIndexed(archived, key = { _, th -> th.id }) { idx, th ->
+            ThreadRow(th, idx, Modifier.animateItem())
+        }
+    }
+}
+
 // ================= Messages =================
 @Composable
-internal fun MessagesScreen(onNote: (NoteTarget) -> Unit, onRequests: () -> Unit) {
+internal fun MessagesScreen(
+    onNote: (NoteTarget) -> Unit,
+    onRequests: () -> Unit,
+    onArchived: () -> Unit = {},
+) {
     val threads by AppState.threads.collectAsState()
     val notes by AppState.notes.collectAsState()
     val blocked by AppState.blockedUids.collectAsState()
+    // ROUND 52: archived chats leave this list (they live one tap
+    // away in Archived); pinned chats sort above the rest — the
+    // stable sort keeps the engine's recency order inside each half.
     val visible = threads.filter {
-        !it.isRequest && !it.hiddenForMe && it.person.uid !in blocked
+        !it.isRequest && !it.hiddenForMe && !it.archivedForMe && it.person.uid !in blocked
     }.sortedByDescending { it.pinned }
+    val archivedCount = threads.count {
+        it.archivedForMe && !it.isRequest && !it.hiddenForMe && it.person.uid !in blocked
+    }
     val reqCount = threads.count { it.isRequest && !it.hiddenForMe && it.person.uid !in blocked }
     val now = System.currentTimeMillis()
     val notedThreads = visible.filter { th ->
         val n = notes[th.person.uid]
         n != null && n.text.isNotEmpty() && now - n.atMs < 24L * 3600 * 1000
     }
+    // ROUND 52 (item 6): pull-to-refresh — a genuine engine re-sync
+    // (FirebaseEngine.refreshThreads re-attaches the listeners and
+    // re-reads profiles); the indicator clears when the fresh
+    // snapshot has actually been applied, with a 4 s safety so a dead
+    // network can never pin it forever. The LazyColumn keeps its own
+    // state — scroll position and the Requests header are untouched.
+    var refreshing by remember { mutableStateOf(false) }
+    LaunchedEffect(refreshing) {
+        if (refreshing) { delay(4000); refreshing = false }
+    }
+    PullToRefreshBox(
+        isRefreshing = refreshing,
+        onRefresh = {
+            refreshing = true
+            AppState.repo.refreshThreads { refreshing = false }
+        },
+        modifier = Modifier.fillMaxSize(),
+    ) {
     LazyColumn(
         Modifier.fillMaxSize(),
         contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 24.dp, bottom = 210.dp),
@@ -386,6 +461,24 @@ internal fun MessagesScreen(onNote: (NoteTarget) -> Unit, onRequests: () -> Unit
                 Icon(Icons.Filled.KeyboardArrowRight, null, tint = Sub, modifier = Modifier.size(22.dp))
             }
         }
+        if (archivedCount > 0) {
+            item {
+                // ROUND 52: the Archived entry — same CardRow language
+                // as Memories, shown only while something is archived.
+                CardRow(onArchived, idx = 3) {
+                    Box(
+                        Modifier.size(50.dp).clip(CircleShape).background(Color.White.copy(alpha = 0.08f)),
+                        contentAlignment = Alignment.Center,
+                    ) { Icon(Icons.Filled.Archive, null, tint = Color.White, modifier = Modifier.size(22.dp)) }
+                    TwoLine(
+                        "Archived",
+                        if (archivedCount == 1) "1 chat" else "$archivedCount chats",
+                        Modifier.weight(1f).padding(start = 14.dp),
+                    )
+                    Icon(Icons.Filled.KeyboardArrowRight, null, tint = Sub, modifier = Modifier.size(22.dp))
+                }
+            }
+        }
         item {
             Row(
                 Modifier.fillMaxWidth().padding(bottom = 12.dp),
@@ -414,6 +507,46 @@ internal fun MessagesScreen(onNote: (NoteTarget) -> Unit, onRequests: () -> Unit
             ThreadRow(th, idx, Modifier.animateItem())
         }
     }
+    }
+}
+
+/** ROUND 52 — "Mark as unread" view state. Purely local and
+ *  per-device (the ThreadMuteStore pattern): the engine's unread
+ *  count is read-watermark truth and must not be forged, so a manual
+ *  mark lives here instead — the row shows its unread dot until the
+ *  chat is opened, then the mark clears. Persisted in
+ *  SharedPreferences; every access is guarded because
+ *  AppState.appCtx is a lateinit that is unset in the screenshot
+ *  harness. */
+object MarkedUnreadStore {
+    private val _marked = kotlinx.coroutines.flow.MutableStateFlow<Set<String>>(emptySet())
+    val marked: kotlinx.coroutines.flow.StateFlow<Set<String>> = _marked
+
+    @Volatile
+    private var loaded = false
+
+    private fun ensureLoaded() {
+        if (loaded) return
+        loaded = true
+        runCatching {
+            val prefs = AppState.appCtx.getSharedPreferences("tiku_marked_unread", android.content.Context.MODE_PRIVATE)
+            _marked.value = prefs.getStringSet("ids", emptySet())?.toSet() ?: emptySet()
+        }
+    }
+
+    fun isMarked(threadId: String): Boolean {
+        ensureLoaded()
+        return threadId in _marked.value
+    }
+
+    fun setMarked(threadId: String, on: Boolean) {
+        ensureLoaded()
+        _marked.value = if (on) _marked.value + threadId else _marked.value - threadId
+        runCatching {
+            AppState.appCtx.getSharedPreferences("tiku_marked_unread", android.content.Context.MODE_PRIVATE)
+                .edit().putStringSet("ids", _marked.value).apply()
+        }
+    }
 }
 
 /** One Messages row (the file's CardRow shape) with the real thread data;
@@ -423,12 +556,16 @@ private fun ThreadRow(th: ChatThread, idx: Int, modifier: Modifier = Modifier) {
     val src = remember { MutableInteractionSource() }
     val down by src.collectIsPressedAsState()
     val s by animateFloatAsState(if (down) 0.95f else 1f, spring(0.6f, 500f), label = "press")
+    val markedSet by MarkedUnreadStore.marked.collectAsState()
+    val markedUnread = th.id in markedSet
     Row(
         modifier.fillMaxWidth().padding(bottom = 10.dp).rise(idx + 3)
             .clip(RoundedCornerShape(24.dp)).background(CardC).scale(s)
             .combinedClickable(
                 interactionSource = src, indication = null,
                 onClick = {
+                    // ROUND 52: opening clears a manual unread mark.
+                    if (markedUnread) MarkedUnreadStore.setMarked(th.id, false)
                     AppState.repo.openThread(th.id)
                     AppState.go(Screen.Chat(th.id))
                 },
@@ -441,21 +578,50 @@ private fun ThreadRow(th: ChatThread, idx: Int, modifier: Modifier = Modifier) {
         Column(Modifier.weight(1f).padding(horizontal = 14.dp)) {
             Text(th.displayName, color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.SemiBold,
                 maxLines = 1, overflow = TextOverflow.Ellipsis, fontFamily = InterTight)
-            Text(threadPreview(th), fontFamily = rememberChatFontFamily(), color = Sub, fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            // ROUND 52 (item 9): the IG emphasis — once a chat holds
+            // 4+ unread (the counts that render "4 new messages" /
+            // "4+ new messages" in threadPreview), the preview line
+            // itself goes MOTTA: Bold, +1sp, full-strength ink. The
+            // 1–3 unread states and every read chat keep the exact
+            // styling they have always had.
+            val heavyUnread = th.unread >= 4
+            Text(
+                threadPreview(th), fontFamily = rememberChatFontFamily(),
+                color = if (heavyUnread) Color.White else Sub,
+                fontSize = if (heavyUnread) 15.sp else 14.sp,
+                fontWeight = if (heavyUnread) FontWeight.Bold else FontWeight.Normal,
+                maxLines = 1, overflow = TextOverflow.Ellipsis,
+            )
         }
         Column(horizontalAlignment = Alignment.End) {
-            Text(th.time, color = Sub, fontSize = 12.sp, fontFamily = PoppinsFamily)
-            if (th.unread > 0 && !th.muted) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                if (th.pinned) {
+                    Icon(Icons.Filled.PushPin, null, tint = Sub, modifier = Modifier.padding(end = 4.dp).size(11.dp))
+                }
+                Text(th.time, color = Sub, fontSize = 12.sp, fontFamily = PoppinsFamily)
+            }
+            if ((th.unread > 0 || markedUnread) && !th.muted) {
                 Box(Modifier.padding(top = 8.dp).size(9.dp).clip(CircleShape).background(Rose))
             }
         }
     }
 }
 
-/** Long-press thread actions (re-skinned sheet): Open / Clear chat (local)
- *  / Delete (local hide). Minimal and real, per spec. */
+/** Long-press thread actions (re-skinned sheet).
+ *  ROUND 52 (item 7): the full Instagram-style set, every row wired
+ *  end-to-end — Pin (chat doc pinnedFor), Mute notifications (chat
+ *  doc mutedFor → the alert pipeline skips the chat), Mute calls
+ *  (chat doc mutedCallsFor → no ring/popup; the call still lands as
+ *  a missed call), Mark as unread (local view state), Archive (chat
+ *  doc archivedFor → the Archived list; a new incoming message
+ *  un-archives), Clear chat and Delete chat — both of which are, as
+ *  they have always been, MY-view-only operations (item 1: the
+ *  engine's clearedBefore / hiddenFor writes; no message doc is
+ *  ever touched). Toggle labels read the thread snapshot taken at
+ *  open time; the sheet re-opens fresh on every long-press. */
 object ThreadActionsSheet {
     fun open(th: ChatThread) {
+        val marked = MarkedUnreadStore.isMarked(th.id)
         AppState.sheet {
             Row(
                 Modifier.fillMaxWidth().padding(horizontal = 22.dp, vertical = 10.dp),
@@ -469,8 +635,41 @@ object ThreadActionsSheet {
             }
             MenuItem("Open", onClick = {
                 AppState.closeSheet()
+                if (marked) MarkedUnreadStore.setMarked(th.id, false)
                 AppState.repo.openThread(th.id)
                 AppState.go(Screen.Chat(th.id))
+            }) {}
+            Divider1()
+            MenuItem(if (th.pinned) "Unpin chat" else "Pin chat", onClick = {
+                AppState.repo.setPinned(th.id, !th.pinned)
+                AppState.closeSheet()
+                AppState.toast(if (th.pinned) "Chat unpinned" else "Chat pinned")
+            }) {}
+            Divider1()
+            MenuItem(if (th.muted) "Unmute notifications" else "Mute notifications", onClick = {
+                AppState.repo.setThreadMuted(th.id, !th.muted)
+                AppState.closeSheet()
+                AppState.toast(if (th.muted) "Notifications unmuted" else "Notifications muted")
+            }) {}
+            Divider1()
+            MenuItem(if (th.callsMuted) "Unmute calls" else "Mute calls", onClick = {
+                AppState.repo.setThreadCallsMuted(th.id, !th.callsMuted)
+                AppState.closeSheet()
+                AppState.toast(if (th.callsMuted) "Calls unmuted" else "Calls muted")
+            }) {}
+            if (th.unread == 0 && !marked) {
+                Divider1()
+                MenuItem("Mark as unread", onClick = {
+                    MarkedUnreadStore.setMarked(th.id, true)
+                    AppState.closeSheet()
+                    AppState.toast("Marked as unread")
+                }) {}
+            }
+            Divider1()
+            MenuItem(if (th.archivedForMe) "Unarchive" else "Archive", onClick = {
+                AppState.repo.setThreadArchived(th.id, !th.archivedForMe)
+                AppState.closeSheet()
+                AppState.toast(if (th.archivedForMe) "Chat unarchived" else "Chat archived")
             }) {}
             Divider1()
             MenuItem("Clear chat", onClick = {
@@ -479,7 +678,7 @@ object ThreadActionsSheet {
                 AppState.toast("Chat cleared")
             }) {}
             Divider1()
-            MenuItem("Delete", danger = true, onClick = {
+            MenuItem("Delete chat", danger = true, onClick = {
                 AppState.repo.hideThread(th.id)
                 AppState.closeSheet()
                 AppState.toast("Chat deleted")

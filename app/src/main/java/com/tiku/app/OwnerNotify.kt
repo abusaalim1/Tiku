@@ -114,8 +114,14 @@ object OwnerNotify {
 
     /** ROUND 29: the incoming-call channel (HIGH importance — a call
      *  must ring through; same generic shade name as the messages
-     *  channel, per the standing naming convention). */
-    private const val CALL_CHANNEL_ID = "tiku_call_alerts"
+     *  channel, per the standing naming convention).
+     *  ROUND 52 (item 4): the owner ordered calls SILENT — popup only,
+     *  no ringtone ever. The Round-29 channel was created with the
+     *  system default sound, and a channel's sound is immutable once
+     *  created, so the silent channel lives under a NEW id and the
+     *  legacy one is deleted at ensure time (see ensureCallChannel). */
+    private const val CALL_CHANNEL_ID = "tiku_call_alerts_v2"
+    private const val LEGACY_CALL_CHANNEL_ID = "tiku_call_alerts"
 
     /** ROUND 29 — pipeline ownership. True only while
      *  [TikuAlertService] exists (set in its onCreate/onStartCommand,
@@ -477,8 +483,16 @@ object OwnerNotify {
     }
 
     private fun ensureCallChannel(nm: NotificationManager) {
+        // ROUND 52 migration: the pre-52 channel carried the default
+        // ringtone and channels are immutable — retire it so no stale
+        // standing alert can ever sound through it again.
+        runCatching { nm.deleteNotificationChannel(LEGACY_CALL_CHANNEL_ID) }
         if (nm.getNotificationChannel(CALL_CHANNEL_ID) != null) return
         val ch = NotificationChannel(CALL_CHANNEL_ID, "Reminders", NotificationManager.IMPORTANCE_HIGH)
+        // ROUND 52 (item 4): NO sound — the call alert is a visual
+        // popup only (the owner's explicit order). Vibration stays
+        // exactly as it was.
+        ch.setSound(null, null)
         ch.enableVibration(true)
         nm.createNotificationChannel(ch)
     }

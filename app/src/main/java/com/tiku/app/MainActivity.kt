@@ -121,6 +121,11 @@ class MainActivity : ComponentActivity() {
         // presence reflects being INSIDE ChatRoot only — never the facade
         if (!Config.PREVIEW_UI_ONLY && ChatSession.unlocked && FirebaseEngine.signedIn && isOnboarded()) {
             FirebaseEngine.setPresence(true)
+            // ROUND 52 (item 5): returning to the foreground is a
+            // reconcile point — a call that started ringing while the
+            // receiver was in another app gets its ringing UI now,
+            // judged on the call doc itself, not on watcher baselines.
+            FirebaseEngine.reconcileIncomingCalls()
         }
     }
 
@@ -394,6 +399,34 @@ fun TikuRoot(onGoogleClick: () -> Unit) {
         } else {
             w?.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
         }
+    }
+    // ROUND 52 (item 3): STATUS-BAR ICON APPEARANCE, per screen. The
+    // app is edge-to-edge and never set this before — the icons kept
+    // the light (white) default everywhere, so on the app's white /
+    // cream surfaces (the Tik light palette) the clock and battery
+    // were white-on-white, invisible (the owner's report). The rule:
+    // light surfaces get DARK icons, dark surfaces keep light icons,
+    // keyed on the current screen so navigation restores each
+    // screen's own appearance. Facade (black design), the gate/auth
+    // flow (dark liquid glass), Story (dark viewer), Call (dark) and
+    // ChatDetails (the dark redesign) are dark surfaces. The Tik home
+    // branch follows the palette: light palette → dark icons, dark
+    // palette → light icons.
+    // HARD OWNER CONSTRAINT: the CHAT SCREEN is excluded — Screen.Chat
+    // (and the Call overlay it can carry) is assigned the exact
+    // shipped default (light icons), and nothing in Chat.kt or in the
+    // chat's insets/window handling was touched.
+    LaunchedEffect(screen, rootSettings.darkMode) {
+        val w = activity?.window ?: return@LaunchedEffect
+        val lightIcons = when (screen) {
+            is Screen.Chat, is Screen.ChatDetails, is Screen.Call,
+            is Screen.Story, is Screen.Facade, is Screen.TikGate,
+            is Screen.Welcome, is Screen.Password, is Screen.Restore,
+            is Screen.ProfileSetup, is Screen.PasswordReset -> true
+            else -> rootSettings.darkMode
+        }
+        androidx.core.view.WindowInsetsControllerCompat(w, w.decorView)
+            .isAppearanceLightStatusBars = !lightIcons
     }
 }
 

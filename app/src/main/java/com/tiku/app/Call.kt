@@ -6,11 +6,7 @@ import android.content.Context
 import android.content.pm.PackageManager
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import android.media.AudioManager
 import android.media.projection.MediaProjectionManager
-import android.media.Ringtone
-import android.media.RingtoneManager
-import android.media.ToneGenerator
 import android.os.Build
 import android.os.VibrationEffect
 import android.os.Vibrator
@@ -90,10 +86,15 @@ import kotlinx.coroutines.delay
 import org.webrtc.RendererCommon
 import org.webrtc.SurfaceViewRenderer
 
-/** Manages ringing sounds, ringback tones, and phone vibration during calls. */
+/** Manages phone vibration during calls.
+ *  ROUND 52 (item 4, owner's explicit order): calls are SILENT — the
+ *  incoming ringing screen is a visual popup only and the outgoing
+ *  side plays no ringback. This manager used to play the device's
+ *  default ringtone (RingtoneManager) on Incoming — audibly the
+ *  phone's SIM-style ringtone the owner complained about — and a
+ *  ToneGenerator ringback on Outgoing; both players are GONE. The
+ *  vibration behaviour is byte-for-byte what it was. */
 object CallFeedbackManager {
-    private var ringtone: Ringtone? = null
-    private var toneGen: ToneGenerator? = null
     private var vibrator: Vibrator? = null
 
     fun onCallStateChanged(context: android.content.Context, state: CallUiState) {
@@ -115,39 +116,15 @@ object CallFeedbackManager {
                         }
                     }
                 }
-                if (settings.sounds) {
-                    runCatching {
-                        val uri = RingtoneManager.getActualDefaultRingtoneUri(context, RingtoneManager.TYPE_RINGTONE)
-                            ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE)
-                        ringtone = RingtoneManager.getRingtone(context, uri)?.apply {
-                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-                                isLooping = true
-                            }
-                            play()
-                        }
-                    }
-                }
             }
-            is CallUiState.Outgoing -> {
-                stopAll()
-                if (settings.sounds) {
-                    runCatching {
-                        toneGen = ToneGenerator(AudioManager.STREAM_VOICE_CALL, 80)
-                        toneGen?.startTone(ToneGenerator.TONE_SUP_RINGTONE)
-                    }
-                }
-            }
-            is CallUiState.Connected, is CallUiState.Failed, CallUiState.Idle -> {
+            is CallUiState.Outgoing, is CallUiState.Connected,
+            is CallUiState.Failed, CallUiState.Idle -> {
                 stopAll()
             }
         }
     }
 
     fun stopAll() {
-        runCatching { toneGen?.stopTone(); toneGen?.release() }
-        toneGen = null
-        runCatching { ringtone?.stop() }
-        ringtone = null
         runCatching { vibrator?.cancel() }
         vibrator = null
     }
@@ -313,7 +290,7 @@ fun CallScreen(threadId: String, video: Boolean) {
     // surface steps aside for the avatar instead of freezing.
     val remoteCameraOffNow by CallController.remoteCameraOff.collectAsState()
 
-    // manage ringtones and vibration feedback
+    // vibration feedback only — calls never play a sound (Round 52)
     LaunchedEffect(callState) {
         CallFeedbackManager.onCallStateChanged(ctx, callState)
     }
