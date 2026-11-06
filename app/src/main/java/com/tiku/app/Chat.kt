@@ -2448,14 +2448,14 @@ private fun RdGamePreview(m: TikuMessage, path: String, peerName: String) {
     }
     val wvHolder = remember(m.id) { mutableStateOf<android.webkit.WebView?>(null) }
     val webView = remember(m.id) {
-        buildGameWebView(ctx, GamePreviewNative(if (m.me) "host" else "guest", peerName)) {
+        buildGameWebView(ctx, GamePreviewNative(if (m.me) "host" else "guest", peerName), onPageReady = {
             // First frame: re-assert the shim, then deliver the one
             // null snapshot — a game that renders only inside its
             // onState callback still draws its initial board.
             val w = wvHolder.value ?: return@buildGameWebView
             runCatching { w.evaluateJavascript(TIKU_GAME_SHIM, null) }
             deliverGameState(w, null)
-        }.also {
+        }).also {
             it.setOnTouchListener { _, _ -> true }
             wvHolder.value = it
         }

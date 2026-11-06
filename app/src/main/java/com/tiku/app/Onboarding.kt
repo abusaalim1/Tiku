@@ -335,7 +335,7 @@ fun RestorePasswordScreen() {
                 ctx.getSharedPreferences("tiku_prefs", android.content.Context.MODE_PRIVATE)
                     .edit().putBoolean("onboarded", true).apply()
                 FirebaseEngine.start(ctx)
-                FirebaseEngine.loadMyProfile()
+                scope.launch { FirebaseEngine.loadMyProfile() }
                 FirebaseEngine.setPresence(true)
                 AppState.toast(if (cloudUpdated) "Journal restored — welcome back"
                     else "Journal restored on this phone — the cloud backup updates when you're back online")
@@ -623,7 +623,7 @@ private fun ResetPasswordFreshStart() {
                     .edit().putBoolean("onboarded", true).apply()
                 AppState.toast(if (cloudUpdated) "Journal restored — welcome back"
                     else "Journal restored on this phone — the cloud backup updates when you're back online")
-                ChatSession.unlockFlow(ctx)
+                scope.launch { ChatSession.unlockFlow(ctx) }
             }
             Spacer(Modifier.height(14.dp))
             Text("Back",
