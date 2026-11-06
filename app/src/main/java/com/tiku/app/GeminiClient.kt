@@ -112,6 +112,45 @@ object GeminiClient {
         return cascadeTextAnswer(body)
     }
 
+    /** ROUND 54 (Part B): one reply from the Tika COMPANION — the
+     *  pinned bot at the top of the Messages list. This is the one
+     *  deliberate multi-turn conversation the AI ever sees: [history]
+     *  is the companion's OWN local history (user/bot pairs, oldest
+     *  first, user turns flagged true) and [persona] is its system
+     *  prompt, built by TikaBotStore from the user's onboarding
+     *  answers (it carries the same identity law as IDENTITY above).
+     *  NO other chat's content may ever be passed here — the /tiku
+     *  privacy law is untouched; this conversation is the exception
+     *  the owner ordered, and it contains only itself. Same
+     *  TEXT_MODELS cascade as [answerText]. */
+    suspend fun companionReply(
+        history: List<Pair<Boolean, String>>,
+        persona: String,
+    ): Outcome<String> {
+        if (Config.PREVIEW_UI_ONLY) {
+            return Outcome.Ok("That's so sweet of you to say! Tell me more na 💛")
+        }
+        val body = JSONObject().apply {
+            put("system_instruction", JSONObject().apply {
+                put("parts", JSONArray().put(JSONObject().put("text", persona)))
+            })
+            put("contents", JSONArray().apply {
+                for ((isUser, text) in history) {
+                    put(JSONObject().apply {
+                        put("role", if (isUser) "user" else "model")
+                        put("parts", JSONArray().put(JSONObject().put("text", text)))
+                    })
+                }
+            })
+            // Companion replies stay SHORT (1–2 lines, like a text
+            // message) — the persona asks for it and this caps it.
+            put("generationConfig", JSONObject().apply {
+                put("maxOutputTokens", 220)
+            })
+        }
+        return cascadeTextAnswer(body)
+    }
+
     /** ROUND 43: a /tiku question ABOUT one photo — the vision path.
      *  The caller (RdChatContent) invokes this ONLY when the user has
      *  explicitly replied to a photo message with a /tiku command:

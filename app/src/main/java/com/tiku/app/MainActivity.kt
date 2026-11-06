@@ -80,7 +80,9 @@ class MainActivity : ComponentActivity() {
         // silent on failure; sets UpdateState + a one-per-build
         // notification when a newer build is published).
         UpdateCheck.maybeCheck(this)
-        setContent { TikuRoot(onGoogleClick = ::onGoogleClick) }
+        setContent {
+            TikuRoot(onGoogleClick = ::onGoogleClick, onAccountClick = ::onFacadeAccountClick)
+        }
     }
 
     /** ROUND 29: a tap on an incoming-call alert (OwnerNotify) brings
@@ -189,29 +191,51 @@ class MainActivity : ComponentActivity() {
                 AppState.toast("Sign-in failed. Please try again.")
                 return@launch
             }
-            // ROUND 5: tri-state — a failed account check must never fall
-            // through to the create-password branch (that is how a returning
-            // user could be walked into overwriting their own journal).
-            val returning = FirebaseEngine.returningUserCheck()
-            when {
-                returning == null ->
-                    AppState.toast("Couldn't check your account — check your connection and try again.")
-                returning == true && FirebaseEngine.loadLocalIdentity(this@MainActivity) -> {
-                    getSharedPreferences("tiku_prefs", MODE_PRIVATE).edit().putBoolean("onboarded", true).apply()
-                    FirebaseEngine.start(this@MainActivity)
-                    FirebaseEngine.loadMyProfile()
-                    FirebaseEngine.setPresence(true)
-                    AppState.go(Screen.Home)
-                }
-                returning == true -> AppState.go(Screen.Restore)
-                else -> AppState.go(Screen.Password)
+            routeAfterGoogleAuth()
+        }
+    }
+
+    /** ROUND 54 (Part A): the facade home's account chip. Signed out,
+     *  tapping it IS the Google sign-in — the same flow the Welcome
+     *  screen ran. Signed in, it re-runs the post-auth routing below
+     *  (a locked, onboarded session lands back in Tik through the
+     *  returning-user path; a signed-in session that still owes setup
+     *  lands on exactly the setup screen it owes). */
+    private fun onFacadeAccountClick() {
+        if (Config.PREVIEW_UI_ONLY) return
+        if (FirebaseEngine.signedIn) {
+            lifecycleScope.launch { routeAfterGoogleAuth() }
+        } else {
+            onGoogleClick()
+        }
+    }
+
+    /** Where a completed Google auth lands — the journal create /
+     *  restore routing, unchanged since Round 5: it is post-sign-in
+     *  setup, shared by the Welcome screen and the facade chip. */
+    private suspend fun routeAfterGoogleAuth() {
+        // ROUND 5: tri-state — a failed account check must never fall
+        // through to the create-password branch (that is how a returning
+        // user could be walked into overwriting their own journal).
+        val returning = FirebaseEngine.returningUserCheck()
+        when {
+            returning == null ->
+                AppState.toast("Couldn't check your account — check your connection and try again.")
+            returning == true && FirebaseEngine.loadLocalIdentity(this@MainActivity) -> {
+                getSharedPreferences("tiku_prefs", MODE_PRIVATE).edit().putBoolean("onboarded", true).apply()
+                FirebaseEngine.start(this@MainActivity)
+                FirebaseEngine.loadMyProfile()
+                FirebaseEngine.setPresence(true)
+                AppState.go(Screen.Home)
             }
+            returning == true -> AppState.go(Screen.Restore)
+            else -> AppState.go(Screen.Password)
         }
     }
 }
 
 @Composable
-fun TikuRoot(onGoogleClick: () -> Unit) {
+fun TikuRoot(onGoogleClick: () -> Unit, onAccountClick: () -> Unit = {}) {
     // app-wide light gradient (the design's .s background)
     val bgBrush = Brush.verticalGradient(listOf(TikuTokens.BgTop, TikuTokens.BgBottom))
     val screen = AppState.screen
@@ -259,7 +283,7 @@ fun TikuRoot(onGoogleClick: () -> Unit) {
                     is Screen.ProfileSetup -> ProfileSetupScreen()
                     else -> WelcomeScreen(onGoogleClick)
                 }
-                "facade" -> FacadeRouter()
+                "facade" -> FacadeRouter(onAccountClick)
                 else -> {
                     Box(Modifier.fillMaxSize()) {
                         HomeScreen()
@@ -314,6 +338,20 @@ fun TikuRoot(onGoogleClick: () -> Unit) {
                                 fadeOut(tween(200, easing = TikEase)),
                         ) {
                             MomentsScreen()
+                        }
+                        // ROUND 54 (Part B): the Tika companion chat
+                        // rides the same overlay pattern — full-screen
+                        // above Home (NavPill hides itself, gated on
+                        // Screen.Home); leaving on lock destroys it
+                        // with the session, like every Tik surface.
+                        AnimatedVisibility(
+                            visible = screen is Screen.TikaBot,
+                            enter = slideInVertically(tween(260, easing = TikEase)) { 24 } +
+                                fadeIn(tween(260, easing = TikEase)),
+                            exit = slideOutVertically(tween(200, easing = TikEase)) { 24 } +
+                                fadeOut(tween(200, easing = TikEase)),
+                        ) {
+                            TikaBotScreen()
                         }
                         // ROUND 15 (owner device test): the Watch host
                         // is hoisted HERE from HomeScreen — above the
@@ -401,39 +439,49 @@ fun TikuRoot(onGoogleClick: () -> Unit) {
             w?.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
         }
     }
-    // ROUND 52 (item 3): STATUS-BAR ICON APPEARANCE, per screen. The
-    // app is edge-to-edge and never set this before — the icons kept
-    // the light (white) default everywhere, so on the app's white /
-    // cream surfaces (the Tik light palette) the clock and battery
-    // were white-on-white, invisible (the owner's report). The rule:
-    // light surfaces get DARK icons, dark surfaces keep light icons,
-    // keyed on the current screen so navigation restores each
-    // screen's own appearance. Facade (black design), the gate/auth
-    // flow (dark liquid glass), Story (dark viewer), Call (dark) and
-    // ChatDetails (the dark redesign) are dark surfaces. The Tik home
-    // branch follows the palette: light palette → dark icons, dark
-    // palette → light icons.
-    // HARD OWNER CONSTRAINT: the CHAT SCREEN is excluded — Screen.Chat
-    // (and the Call overlay it can carry) is assigned the exact
-    // shipped default (light icons), and nothing in Chat.kt or in the
-    // chat's insets/window handling was touched.
+    // ROUND 52 (item 3) → ROUND 54 (Part C): STATUS BAR VISIBILITY.
+    // Round 52's per-screen rule misread the geometry: EVERY screen's
+    // content is inset-padded BELOW the status bar (see the
+    // windowInsetsPadding(systemBars) box above), so the strip the
+    // system draws the clock / signal / battery over is ALWAYS this
+    // root's fixed pale gradient (TikuTokens BgTop #FFF4EE → BgBottom
+    // #FCD9C6) — never the screen's own background. Round 52 keyed the
+    // icon appearance on each screen's CONTENT theme and gave the
+    // facade, the gate/auth flow, Story, Call and ChatDetails WHITE
+    // icons — white on the pale strip reads as a permanently hidden
+    // status bar (the owner's Round-54 report: the bar stays "hidden"
+    // from app open, which lands on the facade). A full audit found
+    // NO hide() call, no SYSTEM_UI flag and no window flag anywhere
+    // in the app — the bars were never hidden, only camouflaged.
+    // The fix matches the strip that actually exists: DARK icons on
+    // every screen, re-asserted on every navigation, plus an
+    // explicit show() of the status bars so no transient state (a
+    // player fullscreen session included) can leave them hidden
+    // behind it. Player exits restore them too (FacadePlayer /
+    // WatchFullscreenLayer call restoreStatusBars on dispose).
     LaunchedEffect(screen, rootSettings.darkMode) {
         val w = activity?.window ?: return@LaunchedEffect
-        val lightIcons = when (screen) {
-            is Screen.Chat, is Screen.ChatDetails, is Screen.Call,
-            is Screen.Story, is Screen.Facade, is Screen.TikGate,
-            is Screen.Welcome, is Screen.Password, is Screen.Restore,
-            is Screen.ProfileSetup, is Screen.PasswordReset -> true
-            else -> rootSettings.darkMode
-        }
-        androidx.core.view.WindowInsetsControllerCompat(w, w.decorView)
-            .isAppearanceLightStatusBars = !lightIcons
+        val controller = androidx.core.view.WindowInsetsControllerCompat(w, w.decorView)
+        controller.show(androidx.core.view.WindowInsetsCompat.Type.statusBars())
+        controller.isAppearanceLightStatusBars = true
     }
+}
+
+/** ROUND 54 (Part C): the one status-bar restore the player surfaces
+ *  call when they close — leaving a fullscreen video must hand the
+ *  system bars back exactly as every other screen keeps them: shown,
+ *  with dark icons over the root's pale strip. Safe from any context:
+ *  a non-activity context is a no-op. */
+internal fun restoreStatusBars(ctx: android.content.Context) {
+    val window = (ctx as? ComponentActivity)?.window ?: return
+    val controller = androidx.core.view.WindowInsetsControllerCompat(window, window.decorView)
+    controller.show(androidx.core.view.WindowInsetsCompat.Type.statusBars())
+    controller.isAppearanceLightStatusBars = true
 }
 
 /** Facade sub-navigation: fade transitions; instant snaps when re-locking. */
 @Composable
-fun FacadeRouter() {
+fun FacadeRouter(onAccountClick: () -> Unit = {}) {
     val screen = AppState.screen
     AnimatedContent(
         targetState = screen,
@@ -444,9 +492,9 @@ fun FacadeRouter() {
         label = "facade",
     ) { s ->
         when (s) {
-            is Screen.Facade -> FacadeHome()
+            is Screen.Facade -> FacadeHome(onAccountClick = onAccountClick)
             is Screen.TikGate -> TikGateScreen()
-            else -> FacadeHome()
+            else -> FacadeHome(onAccountClick = onAccountClick)
         }
     }
 }

@@ -11,6 +11,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.click
 import androidx.compose.ui.test.doubleClick
 import androidx.compose.ui.test.hasScrollAction
@@ -231,7 +232,8 @@ class ScreenshotsTest {
             .performScrollToIndex(DramaContent.stories.size - 1)
         composeRule.waitForIdle()
         // THE DOOR: a double tap on the SAME card routes to the Tik
-        // password gate. App lock is ON in this harness, so the gate is
+        // gate (ROUND 54: the camouflaged episode gate — same screen,
+        // new face). App lock is ON in this harness, so the gate is
         // never skipped — SecretEntry lands on Screen.TikGate.
         composeRule.onAllNodesWithText("2023,05", substring = true)[0]
             .performTouchInput { doubleClick() }
@@ -255,12 +257,27 @@ class ScreenshotsTest {
     }
 
     @Test fun shot07_tikGate() {
-        // ROUND 3.1: seed a stand-in local identity (hasLocalIdentity only
-        // null-checks idk_iv/idk_ct) so the gate renders in the state the owner
-        // actually hits — password field PLUS the always-offered Google reset.
-        ctx.getSharedPreferences("tiku_secure", android.content.Context.MODE_PRIVATE)
-            .edit().putString("idk_iv", "shot").putString("idk_ct", "shot").apply()
+        // ROUND 54 (Part A): the gate's face is now the camouflaged
+        // episode panel — no identity seed is needed (the panel renders
+        // identically for everyone; that is the point). Assert the
+        // in-world furniture exists and NO trace of the old gate does:
+        // no password wording, no journal wording, no lock copy.
         frame { TikGateScreen() }
+        composeRule.onNodeWithText("Enter your episode").assertIsDisplayed()
+        composeRule.onNodeWithText("Search").assertIsDisplayed()
+        composeRule.onNodeWithText("Cancel").assertIsDisplayed()
+        org.junit.Assert.assertTrue(
+            "the episode gate must never say 'Password'",
+            composeRule.onAllNodesWithText("Password", substring = true)
+                .fetchSemanticsNodes().isEmpty(),
+        )
+        org.junit.Assert.assertTrue(
+            "the episode gate must never mention a journal",
+            composeRule.onAllNodesWithText("journal", substring = true)
+                .fetchSemanticsNodes().isEmpty() &&
+                composeRule.onAllNodesWithText("Journal", substring = true)
+                    .fetchSemanticsNodes().isEmpty(),
+        )
         shot("07-tik-gate.png")
     }
 

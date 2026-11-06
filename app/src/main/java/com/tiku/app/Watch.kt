@@ -1174,6 +1174,13 @@ fun WatchPane(chromeInsets: Boolean = true, boundedAboveNav: Boolean = false) {
 @Composable
 fun WatchFullscreenLayer() {
     val v = WatchFullscreen.view ?: return
+    val ctx = LocalContext.current
+    // ROUND 54 (Part C): when the fullscreen layer leaves composition
+    // (fullscreen exit, pane teardown, session lock), the status bars
+    // are restored — shown, dark icons — never left hidden behind it.
+    DisposableEffect(v) {
+        onDispose { restoreStatusBars(ctx) }
+    }
     key(v) {
         AndroidView(
             factory = { v },

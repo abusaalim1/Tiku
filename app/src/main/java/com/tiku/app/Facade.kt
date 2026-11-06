@@ -46,6 +46,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -53,6 +54,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -85,6 +87,7 @@ import dev.chrisbanes.haze.HazeStyle
 import dev.chrisbanes.haze.HazeTint
 import dev.chrisbanes.haze.hazeEffect
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /**
@@ -415,13 +418,26 @@ private fun HomeScreen(
     rows: List<Pair<String, List<Show>>>,
     favs: Set<String>,
     onToggleFav: (Show) -> Unit,
-    onOpen: (Show) -> Unit
+    onOpen: (Show) -> Unit,
+    accountInitial: String? = null,
+    onAccountClick: () -> Unit = {}
 ) {
     LazyColumn(
         Modifier.fillMaxSize(),
         contentPadding = PaddingValues(top = topInset() + 24.dp, bottom = 140.dp)
     ) {
         item { Header(DramaContent.appName, DramaContent.tagline) }
+        // ROUND 54 (Part A): the ordinary account row under the
+        // header — where any app keeps its account button. Google
+        // sign-in lives here now, out in the open; the episode gate
+        // carries no account surface at all.
+        item {
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 6.dp),
+                horizontalArrangement = Arrangement.End,
+            ) { AccountChip(accountInitial, onAccountClick) }
+            Spacer(Modifier.height(8.dp))
+        }
         if (hero != null) {
             item { Spacer(Modifier.height(0.dp)); Hero(hero) { onOpen(hero) } }
         }
@@ -659,8 +675,17 @@ fun FacadeRoot(
     onToggleFav: (DramaContent.Drama) -> Unit,
     onOpenStory: (DramaContent.Story) -> Unit,
     onOpenPhoto: (Int) -> Unit,
-    onSecretGate: () -> Unit
+    onSecretGate: () -> Unit,
+    onAccountClick: () -> Unit = {}
 ) {
+    // ROUND 54 (Part A): the account chip's face — the signed-in
+    // account's initial when a Google session exists on this device,
+    // null (the ordinary "Sign in" pill) when signed out. Read at
+    // composition; the facade recomposes when sign-in completes.
+    val accountInitial = remember(tab) {
+        if (Config.PREVIEW_UI_ONLY || !FirebaseEngine.signedIn) null
+        else FirebaseEngine.signedInEmail.trim().firstOrNull()?.uppercaseChar()?.toString()
+    }
     Box(Modifier.fillMaxSize().background(Bg)) {
         Box(Modifier.fillMaxSize()) {
             AnimatedContent(
@@ -680,6 +705,8 @@ fun FacadeRoot(
                         favs = favs,
                         onToggleFav = { s -> DramaContent.drama(s.id)?.let(onToggleFav) },
                         onOpen = { s -> DramaContent.drama(s.id)?.let(onPlay) },
+                        accountInitial = accountInitial,
+                        onAccountClick = onAccountClick,
                     )
                     1 -> StoriesScreen(
                         stories = facadeStories(),
@@ -696,6 +723,383 @@ fun FacadeRoot(
 
         Box(Modifier.align(Alignment.BottomCenter).padding(bottom = bottomInset() + 6.dp)) {
             NavPill(haze, tab, onTab)
+        }
+    }
+}
+
+/* ───────────────────── Account chip (ROUND 54, Part A) ─────────────────────
+ * The facade home's ordinary account button, under the header. Signed
+ * out it is the standard white "Sign in" pill (tapping it runs the
+ * existing Google sign-in, after which the journal create / restore /
+ * recovery screens run exactly as they always have — they are
+ * post-sign-in setup, not a gate). Signed in it is the account's
+ * initial in a rose circle, like any app's avatar chip. Nothing about
+ * this surface hints at a second app behind the facade. */
+
+@Composable
+private fun AccountChip(initial: String?, onClick: () -> Unit) {
+    if (initial != null) {
+        Box(
+            Modifier.size(40.dp).clip(CircleShape)
+                .background(Brush.linearGradient(listOf(Rose, RoseDeep)))
+                .press(onClick),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(initial, color = Color.White, fontSize = 16.sp,
+                fontWeight = FontWeight.Bold, fontFamily = InterTight)
+        }
+    } else {
+        Row(
+            Modifier.clip(RoundedCornerShape(999.dp)).background(Color.White).press(onClick)
+                .padding(horizontal = 14.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Box(
+                Modifier.size(20.dp).clip(CircleShape).background(CardC),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text("G", color = Color.White, fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold, fontFamily = InterTight)
+            }
+            Spacer(Modifier.width(8.dp))
+            Text("Sign in", color = Color(0xFF1B1B1F), fontSize = 14.sp,
+                fontWeight = FontWeight.Medium, fontFamily = PoppinsFamily)
+        }
+    }
+}
+
+/* ───────────────────── Episode gate (ROUND 54, Part A) ─────────────────────
+ * What the double tap on the last story opens now. On its face it is
+ * a plain "find your episode" search: a box labelled "Enter your
+ * episode", a Search button and a Cancel button. There is no password
+ * wording, no lock imagery, no account surface and no error state —
+ * because there is nothing here to explain: anything that is not a
+ * credential is simply a search, and searches always succeed.
+ *
+ * What Search does, in order (all invisible):
+ *  (i)  signed in + onboarded + the input verifies against the stored
+ *       journal verifier (the EXISTING SettingsStore / Crypto check —
+ *       no crypto was rebuilt) → GateGuard clears → the existing
+ *       ChatSession.unlockFlow into Tik.
+ *  (ii) else, signed in + the input normalizes to a recovery code and
+ *       opens the account's keyRecovery blob → route into the EXISTING
+ *       recovery restore flow (Screen.PasswordReset → its recovery
+ *       form), where a new password is set and chats are preserved.
+ *  (iii) anything else → the decoy search below.
+ * A failed credential probe feeds the existing invisible GateGuard;
+ * while the guard is throttling, probes are skipped entirely and the
+ * search results simply show — no counter, no message, ever. Signed
+ * out, the panel is a guest search: a password typed by a guest falls
+ * through to results like any other text. */
+
+private enum class EpisodeAttempt { UNLOCK, RECOVERY, SEARCH }
+
+private suspend fun episodeAttempt(ctx: android.content.Context, raw: String): EpisodeAttempt {
+    if (Config.PREVIEW_UI_ONLY) return EpisodeAttempt.SEARCH
+    val input = raw.trim()
+    if (input.isEmpty()) return EpisodeAttempt.SEARCH
+    if (GateGuard.lockedRemainingMs(ctx) > 0L) return EpisodeAttempt.SEARCH
+    if (!FirebaseEngine.signedIn) return EpisodeAttempt.SEARCH
+    val onboarded = ctx.getSharedPreferences("tiku_prefs", android.content.Context.MODE_PRIVATE)
+        .getBoolean("onboarded", false)
+    if (onboarded) {
+        // (i) the journal password, via the existing verifier.
+        val hash = SettingsStore.passwordHash(ctx)
+        if (hash != null && Crypto.hashWellFormed(hash)) {
+            val ok = withContext(Dispatchers.Default) { Crypto.passwordVerify(input, hash) }
+            if (ok) {
+                GateGuard.reset(ctx)
+                return EpisodeAttempt.UNLOCK
+            }
+            GateGuard.recordFailure(ctx)
+        }
+    }
+    // (ii) a recovery code, probed against the cloud keyRecovery blob.
+    if (Crypto.normalizeRecoveryCode(input).length == 26) {
+        val blob = runCatching { FirebaseEngine.recoveryBlob() }.getOrNull()
+        if (blob != null) {
+            val opens = runCatching {
+                withContext(Dispatchers.Default) { Crypto.recoveryUnwrap(blob, input) }
+            }.isSuccess
+            if (opens) {
+                GateGuard.reset(ctx)
+                return EpisodeAttempt.RECOVERY
+            }
+            GateGuard.recordFailure(ctx)
+        }
+    }
+    return EpisodeAttempt.SEARCH
+}
+
+/** One decoy result: a drama (optionally dressed as a specific
+ *  episode) or a story, both drawn from the real facade catalogue. */
+private sealed interface EpisodeHit {
+    data class DramaHit(val drama: DramaContent.Drama, val g: List<Color>, val episode: Int?) : EpisodeHit
+    data class StoryHit(val story: Story, val g: List<Color>) : EpisodeHit
+}
+
+private class EpisodeResults(val hits: List<EpisodeHit>, val fallback: Boolean)
+
+/** The decoy search itself. Bare numbers become episode rows ("572"
+ *  → "Episode 572" of real catalogue titles); text matches catalogue
+ *  titles / genres / subs and story titles / tags; no match at all
+ *  falls back to the popular shelf, the way a real search app pads a
+ *  thin result set. */
+private fun episodeSearch(query: String): EpisodeResults {
+    val q = query.trim()
+    val dramas = DramaContent.allDramas()
+    if (q.isNotEmpty() && q.all { it.isDigit() }) {
+        val n = q.toIntOrNull() ?: return EpisodeResults(emptyList(), fallback = true)
+        return EpisodeResults(
+            dramas.take(8).mapIndexed { i, d ->
+                EpisodeHit.DramaHit(d, rowGradients[i % rowGradients.size], n)
+            },
+            fallback = false,
+        )
+    }
+    val tokens = q.lowercase().split(Regex("\\s+")).filter { it.length >= 3 }
+    fun dramaScore(d: DramaContent.Drama): Int = tokens.count { t ->
+        d.title.lowercase().contains(t) || d.genre.lowercase().contains(t) ||
+            d.sub.lowercase().contains(t)
+    }
+    val dramaHits = dramas.map { it to dramaScore(it) }
+        .filter { it.second > 0 }.sortedByDescending { it.second }.map { it.first }
+    val storyHits = facadeStories().filter { s ->
+        tokens.any { t -> s.title.lowercase().contains(t) || s.tag.lowercase().contains(t) }
+    }
+    val hits = mutableListOf<EpisodeHit>()
+    dramaHits.take(8).forEachIndexed { i, d ->
+        hits += EpisodeHit.DramaHit(d, rowGradients[i % rowGradients.size], null)
+    }
+    storyHits.take(3).forEachIndexed { i, s ->
+        hits += EpisodeHit.StoryHit(s, rowGradients[(i + 2) % rowGradients.size])
+    }
+    if (hits.isNotEmpty()) return EpisodeResults(hits, fallback = false)
+    val shelf = mutableListOf<EpisodeHit>()
+    dramas.take(6).forEachIndexed { i, d ->
+        shelf += EpisodeHit.DramaHit(d, rowGradients[i % rowGradients.size], null)
+    }
+    facadeStories().take(2).forEachIndexed { i, s ->
+        shelf += EpisodeHit.StoryHit(s, rowGradients[(i + 2) % rowGradients.size])
+    }
+    return EpisodeResults(shelf, fallback = true)
+}
+
+@Composable
+fun EpisodeGateScreen() {
+    val ctx = LocalContext.current
+    val scope = rememberCoroutineScope()
+    remember { DramaContent.load(ctx) }
+    var query by remember { mutableStateOf("") }
+    var busy by remember { mutableStateOf(false) }
+    var results by remember { mutableStateOf<EpisodeResults?>(null) }
+    var searchedFor by remember { mutableStateOf("") }
+
+    androidx.activity.compose.BackHandler {
+        if (results != null) results = null else AppState.go(Screen.Facade)
+    }
+
+    fun runSearch() {
+        val q = query.trim()
+        if (q.isEmpty() || busy) return
+        busy = true
+        scope.launch {
+            when (episodeAttempt(ctx, q)) {
+                EpisodeAttempt.UNLOCK -> { busy = false; ChatSession.unlockFlow(ctx) }
+                EpisodeAttempt.RECOVERY -> { busy = false; AppState.go(Screen.PasswordReset) }
+                EpisodeAttempt.SEARCH -> {
+                    searchedFor = q
+                    results = episodeSearch(q)
+                    busy = false
+                }
+            }
+        }
+    }
+
+    Box(Modifier.fillMaxSize().background(Bg)) {
+        Column(Modifier.fillMaxSize().padding(top = topInset() + 24.dp)) {
+            val res = results
+            if (res == null) {
+                Header("Episodes", "Jump straight to the episode you left off")
+                Spacer(Modifier.height(26.dp))
+                Row(
+                    Modifier.padding(horizontal = 20.dp).fillMaxWidth()
+                        .clip(RoundedCornerShape(28.dp)).background(CardC)
+                        .border(1.dp, Color.White.copy(0.08f), RoundedCornerShape(28.dp))
+                        .padding(horizontal = 18.dp, vertical = 15.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Icon(Icons.Filled.Search, null, tint = Sub, modifier = Modifier.size(20.dp))
+                    Spacer(Modifier.width(10.dp))
+                    androidx.compose.foundation.text.BasicTextField(
+                        value = query,
+                        onValueChange = { query = it },
+                        singleLine = true,
+                        textStyle = androidx.compose.ui.text.TextStyle(
+                            color = Ink, fontSize = 16.sp, fontFamily = PoppinsFamily),
+                        cursorBrush = androidx.compose.ui.graphics.SolidColor(Rose),
+                        keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+                            imeAction = androidx.compose.ui.text.input.ImeAction.Search),
+                        keyboardActions = androidx.compose.foundation.text.KeyboardActions(
+                            onSearch = { runSearch() }),
+                        modifier = Modifier.weight(1f),
+                        decorationBox = { inner ->
+                            if (query.isEmpty()) {
+                                Text("Enter your episode", color = Sub, fontSize = 16.sp,
+                                    fontFamily = PoppinsFamily)
+                            }
+                            inner()
+                        },
+                    )
+                }
+                Spacer(Modifier.height(16.dp))
+                Row(
+                    Modifier.padding(horizontal = 20.dp),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Box(
+                        Modifier.weight(1f).clip(RoundedCornerShape(999.dp))
+                            .background(Brush.linearGradient(listOf(Rose, RoseDeep)))
+                            .press { runSearch() }
+                            .padding(vertical = 14.dp),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text(if (busy) "Searching…" else "Search", color = Color.White,
+                            fontSize = 16.sp, fontWeight = FontWeight.SemiBold,
+                            fontFamily = PoppinsFamily)
+                    }
+                    Box(
+                        Modifier.clip(RoundedCornerShape(999.dp)).background(CardC)
+                            .border(1.dp, Color.White.copy(0.08f), RoundedCornerShape(999.dp))
+                            .press { AppState.go(Screen.Facade) }
+                            .padding(horizontal = 26.dp, vertical = 14.dp),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text("Cancel", color = Ink, fontSize = 16.sp, fontFamily = PoppinsFamily)
+                    }
+                }
+                Spacer(Modifier.height(16.dp))
+                Text(
+                    "Try a show name — or an episode number, like 12.",
+                    color = Sub, fontSize = 13.sp, fontFamily = PoppinsFamily,
+                    modifier = Modifier.padding(horizontal = 20.dp),
+                )
+            } else {
+                Row(
+                    Modifier.padding(horizontal = 20.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Box(
+                        Modifier.size(38.dp).clip(CircleShape).background(CardC)
+                            .press { results = null },
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text("←", color = Ink, fontSize = 18.sp, fontFamily = InterTight)
+                    }
+                    Spacer(Modifier.width(12.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text("Results", color = Ink, fontSize = 24.sp,
+                            fontWeight = FontWeight.Bold, fontFamily = InterTight)
+                        Text(
+                            if (res.fallback) "Popular right now"
+                            else "For “$searchedFor”",
+                            color = Sub, fontSize = 13.sp, fontFamily = PoppinsFamily)
+                    }
+                    Box(
+                        Modifier.clip(RoundedCornerShape(999.dp)).background(CardC)
+                            .border(1.dp, Color.White.copy(0.08f), RoundedCornerShape(999.dp))
+                            .press { AppState.go(Screen.Facade) }
+                            .padding(horizontal = 18.dp, vertical = 9.dp),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text("Cancel", color = Ink, fontSize = 14.sp, fontFamily = PoppinsFamily)
+                    }
+                }
+                Spacer(Modifier.height(14.dp))
+                LazyColumn(
+                    Modifier.fillMaxSize(),
+                    contentPadding = PaddingValues(bottom = 30.dp),
+                ) {
+                    items(res.hits.size) { i ->
+                        val hit = res.hits[i]
+                        EpisodeResultRow(hit, i) {
+                            when (hit) {
+                                is EpisodeHit.DramaHit -> {
+                                    AppState.facadeOpenDramaId = hit.drama.id
+                                    AppState.go(Screen.Facade)
+                                }
+                                is EpisodeHit.StoryHit -> {
+                                    AppState.facadeOpenStoryId = hit.story.id
+                                    AppState.go(Screen.Facade)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun EpisodeResultRow(hit: EpisodeHit, idx: Int, onClick: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 5.dp).rise(idx)
+            .clip(RoundedCornerShape(24.dp)).background(CardC)
+            .border(1.dp, Color.White.copy(0.06f), RoundedCornerShape(24.dp))
+            .press(onClick).padding(10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        when (hit) {
+            is EpisodeHit.DramaHit -> {
+                val show = hit.drama.toShow(hit.g)
+                Poster(show.img, show.res, show.g,
+                    Modifier.width(112.dp).height(64.dp).clip(RoundedCornerShape(14.dp)))
+                Spacer(Modifier.width(12.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(hit.drama.title, color = Ink, fontSize = 16.sp,
+                        fontWeight = FontWeight.Medium, maxLines = 1,
+                        overflow = TextOverflow.Ellipsis, fontFamily = InterTight)
+                    Text(
+                        if (hit.episode != null) {
+                            val bits = listOf(hit.drama.genre, hit.drama.lang)
+                                .filter { it.isNotBlank() }.joinToString(" · ")
+                            if (bits.isNotBlank()) "Episode ${hit.episode} · $bits"
+                            else "Episode ${hit.episode}"
+                        } else hit.drama.sub.ifBlank { "Tap to watch" },
+                        color = Sub, fontSize = 13.sp, maxLines = 1,
+                        overflow = TextOverflow.Ellipsis, fontFamily = PoppinsFamily)
+                    if (hit.episode == null && hit.drama.genre.isNotBlank()) {
+                        Text(hit.drama.genre, color = Rose, fontSize = 11.5.sp,
+                            fontFamily = PoppinsFamily)
+                    }
+                }
+                Icon(Icons.Filled.PlayArrow, null, tint = Ink, modifier = Modifier.size(22.dp))
+            }
+            is EpisodeHit.StoryHit -> {
+                Box(
+                    Modifier.width(112.dp).height(64.dp).clip(RoundedCornerShape(14.dp))
+                        .background(Brush.linearGradient(hit.g)),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text("Aa", color = Color.White, fontSize = 20.sp,
+                        fontWeight = FontWeight.Bold, fontFamily = InterTight)
+                }
+                Spacer(Modifier.width(12.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(hit.story.title, color = Ink, fontSize = 16.sp,
+                        fontWeight = FontWeight.Medium, maxLines = 1,
+                        overflow = TextOverflow.Ellipsis, fontFamily = InterTight)
+                    Text("Story · ${hit.story.mins} min read", color = Sub, fontSize = 13.sp,
+                        maxLines = 1, overflow = TextOverflow.Ellipsis,
+                        fontFamily = PoppinsFamily)
+                    if (hit.story.tag.isNotBlank()) {
+                        Text(hit.story.tag, color = Rose, fontSize = 11.5.sp,
+                            fontFamily = PoppinsFamily)
+                    }
+                }
+            }
         }
     }
 }

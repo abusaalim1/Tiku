@@ -10,6 +10,9 @@ import android.os.PowerManager
 import android.provider.Settings
 import androidx.core.content.ContextCompat
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.Image
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.res.painterResource
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedContent
@@ -398,6 +401,9 @@ internal fun MessagesScreen(
     LaunchedEffect(refreshing) {
         if (refreshing) { delay(4000); refreshing = false }
     }
+    // ROUND 54 (Part B): warm the companion's local store so its row
+    // subtitle shows the last exchange, not the first-run label.
+    LaunchedEffect(Unit) { TikaBotStore.ensureLoaded() }
     PullToRefreshBox(
         isRefreshing = refreshing,
         onRefresh = {
@@ -447,11 +453,33 @@ internal fun MessagesScreen(
             }
         }
         item {
+            // ROUND 54 (Part B): the Tika AI companion — a FIXED row
+            // pinned at the top of the list, directly under the notes
+            // row and above the first real chat. It is NOT a thread:
+            // no Firestore doc, no long-press menu, no unread machinery
+            // — a plain CardRow like the other fixed entries. Subtitle:
+            // "AI companion" until the first exchange, then the last
+            // companion message (TikaBotStore.preview).
+            val tikaPreview by TikaBotStore.preview.collectAsState()
+            CardRow({ AppState.go(Screen.TikaBot) }, idx = 2) {
+                Image(
+                    painterResource(R.drawable.tika_mascot), null,
+                    Modifier.size(50.dp).clip(CircleShape),
+                    contentScale = ContentScale.Crop,
+                )
+                TwoLine(
+                    "Tika", tikaPreview,
+                    Modifier.weight(1f).padding(start = 14.dp),
+                )
+                Icon(Icons.Filled.KeyboardArrowRight, null, tint = Sub, modifier = Modifier.size(22.dp))
+            }
+        }
+        item {
             // ROUND 14 (owner order, 2026-11-03): the couple-memories web
             // app, integrated as a Tik surface (Moments.kt) — a fixed
             // feature entry (not data-gated) directly under the notes
             // row, in the file's CardRow language.
-            CardRow({ AppState.go(Screen.Moments) }, idx = 2) {
+            CardRow({ AppState.go(Screen.Moments) }, idx = 3) {
                 Box(
                     Modifier.size(50.dp).clip(CircleShape).background(Rose.copy(alpha = 0.16f)),
                     contentAlignment = Alignment.Center,
@@ -467,7 +495,7 @@ internal fun MessagesScreen(
             item {
                 // ROUND 52: the Archived entry — same CardRow language
                 // as Memories, shown only while something is archived.
-                CardRow(onArchived, idx = 3) {
+                CardRow(onArchived, idx = 4) {
                     Box(
                         Modifier.size(50.dp).clip(CircleShape).background(Color.White.copy(alpha = 0.08f)),
                         contentAlignment = Alignment.Center,

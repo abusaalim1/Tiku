@@ -96,13 +96,14 @@ fun FacadeHome(
     initialStoryId: String? = null,
     initialPhoto: Int? = null,
     playerDramaId: String? = null,
+    onAccountClick: () -> Unit = {},
 ) {
     // The reader / viewer overlays keep the design's LIGHT palette
     // (Rose Petal), provided locally here; the Round-16 tab surface
     // (Facade.kt) carries its own black system and ignores it.
     val lightPal = remember { buildPalette("light", 0) }
     CompositionLocalProvider(LocalPalette provides lightPal) {
-        FacadeShell(initialTab, initialStoryId, initialPhoto, playerDramaId)
+        FacadeShell(initialTab, initialStoryId, initialPhoto, playerDramaId, onAccountClick)
     }
 }
 
@@ -112,6 +113,7 @@ private fun FacadeShell(
     initialStoryId: String?,
     initialPhoto: Int?,
     playerDramaId: String?,
+    onAccountClick: () -> Unit = {},
 ) {
     val pal = LocalPalette.current
     val ctx = LocalContext.current
@@ -127,6 +129,16 @@ private fun FacadeShell(
     // The player writes history as it disposes — refresh the row on return.
     LaunchedEffect(playerId) {
         if (playerId == null) history = FacadeStore.history(ctx)
+    }
+
+    // ROUND 54 (Part A): consume the episode gate's open requests —
+    // a tapped decoy result reopens here as the shell's own player /
+    // reader, indistinguishable from a facade tap.
+    val gateDramaId = AppState.facadeOpenDramaId
+    val gateStoryId = AppState.facadeOpenStoryId
+    LaunchedEffect(gateDramaId, gateStoryId) {
+        gateDramaId?.let { playerId = it; AppState.facadeOpenDramaId = null }
+        gateStoryId?.let { storyId = it; AppState.facadeOpenStoryId = null }
     }
 
     val playerDrama = playerId?.let { DramaContent.drama(it) }
@@ -172,6 +184,10 @@ private fun FacadeShell(
                 onOpenPhoto = { photoIdx = it },
                 // The last story's double-tap door (see Facade.kt).
                 onSecretGate = { SecretEntry.openGate(ctx, scope) },
+                // ROUND 54 (Part A): the ordinary account chip at the
+                // top of the facade home — Google sign-in lives here
+                // now, in the open, like any app's account button.
+                onAccountClick = onAccountClick,
             )
         }
     }
@@ -340,6 +356,9 @@ private fun FacadePlayer(drama: DramaContent.Drama, onClose: () -> Unit) {
                     fsView = null
                     fsCallback = null
                     runCatching { cb?.onCustomViewHidden() }
+                    // ROUND 54 (Part C): leaving fullscreen hands the
+                    // status bars back — shown, dark icons.
+                    restoreStatusBars(ctx)
                 }
             }
             // ROUND 18 — REAL WATCH PAGE: playback is the actual
@@ -389,6 +408,9 @@ private fun FacadePlayer(drama: DramaContent.Drama, onClose: () -> Unit) {
 
     DisposableEffect(webView) {
         onDispose {
+            // ROUND 54 (Part C): the player closing restores the
+            // status bars, whatever state fullscreen left behind.
+            restoreStatusBars(ctx)
             // Watch history is written as the player closes (sole writer).
             FacadeStore.recordWatch(ctx, drama)
             if (fsView != null) {
@@ -512,141 +534,19 @@ private fun PhotoViewer(index: Int, onBack: () -> Unit) {
     }
 }
 
-// ---------- PASSWORD GATE (reached ONLY via SecretEntry, from the
-// double tap on the last story — "First romance of them" — on the Stories shelf) ----------
+// ---------- EPISODE GATE (ROUND 54, Part A) ----------
+// Reached ONLY via SecretEntry, from the double tap on the last
+// story ("First romance of them") on the Stories shelf. The old
+// visible password gate is RETIRED: a third person who reaches this
+// screen sees an ordinary "find your episode" search panel, because
+// that is all it shows. The journal password is now entered only in
+// that episode box (it unlocks when it matches — see
+// EpisodeGateScreen in Facade.kt, which owns the panel, the decoy
+// search and the attempt order); Google sign-in moved to the account
+// chip on the facade home. Every lock trigger lands on the facade,
+// and this panel is the only door back in.
 
 @Composable
 fun TikGateScreen() {
-    val ctx = LocalContext.current
-    val scope = rememberCoroutineScope()
-    val settings = tikuSettings().value
-    // ROUND 36: helper texts take the palette too, so the gate reads in
-    // the same premium-dark language as the rest of the auth family
-    // (the scaffold/field/button restyle lives in Onboarding/Components).
-    val pal = LocalPalette.current
-    var pw by remember { mutableStateOf("") }
-    var error by remember { mutableStateOf("") }
-    var busy by remember { mutableStateOf(false) }
-    // ROUND 8 (item 9b): escalating wrong-attempt backoff (GateGuard) — the
-    // counters persist in prefs, so leaving and reopening the gate resets
-    // nothing; the countdown ticks while a lockout is running.
-    var lockRemainingMs by remember { mutableLongStateOf(GateGuard.lockedRemainingMs(ctx)) }
-    LaunchedEffect(lockRemainingMs) {
-        while (lockRemainingMs > 0) { delay(500); lockRemainingMs = GateGuard.lockedRemainingMs(ctx) }
-    }
-    // BUG-0: the gate distinguishes THREE states — a verifiable password, a
-    // missing verifier, and a DAMAGED verifier. Only the first may ever produce
-    // the words "Wrong password"; missing/damaged data routes to the Google-
-    // gated rescue instead (offered only when this phone still holds the key).
-    val storedHash = remember { SettingsStore.passwordHash(ctx) }
-    val hasHash = storedHash != null
-    val hashDamaged = hasHash && !Crypto.hashWellFormed(storedHash)
-    val rescuable = remember {
-        !Config.PREVIEW_UI_ONLY && FirebaseEngine.hasLocalIdentity(ctx)
-    }
-    // ROUND 10 PARITY: the forgot-password link belongs to EVERY signed-in
-    // account, key or no key — the reset screen itself picks Mode R (key
-    // present) vs Mode F (key lost). GateGuard's backoff throttles password
-    // GUESSES only; it must never hide or block this link.
-    val signedInUser = remember {
-        !Config.PREVIEW_UI_ONLY && FirebaseEngine.signedIn
-    }
-
-    BackHandler { AppState.go(Screen.Facade) }
-    FormScaffold("Your journal is locked", "Enter your password to open your journal.") {
-        when {
-            hasHash && !hashDamaged -> {
-                PasswordField(pw, { pw = it; error = "" }, "Password")
-                Spacer(Modifier.height(6.dp))
-                if (lockRemainingMs > 0) {
-                    Text("Too many tries in a row — take a short break and try again in ${(lockRemainingMs + 999) / 1000}s.",
-                        fontSize = 13.sp, color = pal.danger, fontFamily = InterTight)
-                } else {
-                    Text(error, fontSize = 13.sp, color = pal.danger, fontFamily = InterTight)
-                }
-                if (signedInUser) {
-                    // ROUND 3.1 widened this link to every key-holder; ROUND 10
-                    // completes the parity: it now shows for every SIGNED-IN
-                    // account regardless of hasLocalIdentity (the owner lost
-                    // his key to an uninstall and was the only user with no
-                    // reset path). The reset itself stays exactly as gated as
-                    // before (Google re-auth + uid binding inside
-                    // ResetPasswordScreen; Mode F adds the one-way warning).
-                    Spacer(Modifier.height(10.dp))
-                    Text("Forgot password? Reset with Google",
-                        fontSize = 14.sp, fontFamily = InterTight, fontWeight = FontWeight.SemiBold,
-                        color = pal.ac,
-                        modifier = Modifier.clickable(
-                            interactionSource = remember { MutableInteractionSource() }, indication = null,
-                        ) { AppState.go(Screen.PasswordReset) })
-                }
-                Spacer(Modifier.weight(1f))
-                PrimaryButton(if (busy) "Opening…" else "Open journal", enabled = pw.isNotEmpty() && !busy && lockRemainingMs <= 0, modifier = Modifier.fillMaxWidth()) {
-                    busy = true
-                    scope.launch {
-                        val hash = SettingsStore.passwordHash(ctx)
-                        val ok = hash != null && Crypto.hashWellFormed(hash) &&
-                            withContext(Dispatchers.Default) { Crypto.passwordVerify(pw, hash) }
-                        if (ok) {
-                            GateGuard.reset(ctx)
-                            // first unlock in preview = run onboarding before the home
-                            val onboarded = ctx.getSharedPreferences("tiku_prefs", android.content.Context.MODE_PRIVATE)
-                                .getBoolean("onboarded", false)
-                            if (Config.PREVIEW_UI_ONLY && !onboarded) {
-                                ChatSession.unlocked = true
-                                AppState.go(Screen.Welcome)
-                            } else {
-                                ChatSession.unlockFlow(ctx)
-                            }
-                        } else {
-                            // ROUND 8: feed the backoff and wipe the typed
-                            // guess from the field — a wrong password should
-                            // never linger on screen.
-                            val delayMs = GateGuard.recordFailure(ctx)
-                            lockRemainingMs = GateGuard.lockedRemainingMs(ctx)
-                            pw = ""
-                            error = if (delayMs > 0) {
-                                "Too many tries in a row — take a short break and try again in ${delayMs / 1000}s."
-                            } else "Wrong password — try again."
-                        }
-                        busy = false
-                    }
-                }
-            }
-            rescuable -> {
-                Text(
-                    if (hashDamaged) "Your saved lock data on this phone looks damaged, so your password can't be checked here."
-                    else "This phone still holds your journal key, but its password record is missing.",
-                    fontSize = 14.sp, color = pal.sub, fontFamily = InterTight)
-                Spacer(Modifier.height(8.dp))
-                Text("You can reset the password with the Google account this journal was created with — your notes and chats stay intact.",
-                    fontSize = 14.sp, color = pal.sub, fontFamily = InterTight)
-                Spacer(Modifier.weight(1f))
-                PrimaryButton("Reset password with Google", modifier = Modifier.fillMaxWidth()) {
-                    AppState.go(Screen.PasswordReset)
-                }
-            }
-            else -> {
-                Text("Set up your journal in a minute — your private corner, all yours.",
-                    fontSize = 14.sp, color = pal.sub, fontFamily = InterTight)
-                Spacer(Modifier.height(8.dp))
-                Text("Used your journal on another phone before? Tap Get started, sign in with the same Google account, and your password brings everything back on this phone.",
-                    fontSize = 14.sp, color = pal.sub, fontFamily = InterTight)
-                if (signedInUser) {
-                    // ROUND 10 PARITY: signed in but nothing set up on THIS
-                    // phone (e.g. after a reinstall) — the forgot-password
-                    // link lives here too, not only behind a saved verifier.
-                    Spacer(Modifier.height(10.dp))
-                    Text("Forgot password? Reset with Google",
-                        fontSize = 14.sp, fontFamily = InterTight, fontWeight = FontWeight.SemiBold,
-                        color = pal.ac,
-                        modifier = Modifier.clickable(
-                            interactionSource = remember { MutableInteractionSource() }, indication = null,
-                        ) { AppState.go(Screen.PasswordReset) })
-                }
-                Spacer(Modifier.weight(1f))
-                PrimaryButton("Get started", onClick = { ChatSession.unlocked = true; AppState.go(Screen.Welcome) })
-            }
-        }
-    }
+    EpisodeGateScreen()
 }

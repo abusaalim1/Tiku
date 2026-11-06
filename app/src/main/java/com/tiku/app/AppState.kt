@@ -44,6 +44,10 @@ sealed interface Screen {
      *  the app (Moments.kt). Tik-side only, behind the gate; the facade
      *  never references it. */
     data object Moments : Screen
+    /** ROUND 54 (Part B): the Tika AI companion chat — opened from the
+     *  pinned row at the top of the Messages list. Not a thread: no
+     *  Firestore doc, no peer; its history is local-only (TikaBot.kt). */
+    data object TikaBot : Screen
 }
 
 enum class HomeTab { CHATS, CALLS, WATCH, ME }
@@ -232,7 +236,7 @@ object AppState {
     fun isChatRoot(dest: Screen): Boolean = when (dest) {
         is Screen.Welcome, is Screen.Password, is Screen.Restore, is Screen.ProfileSetup,
         is Screen.TikGate, is Screen.Home, is Screen.Chat, is Screen.ChatDetails,
-        is Screen.Call, is Screen.Story, is Screen.Moments -> true
+        is Screen.Call, is Screen.Story, is Screen.Moments, is Screen.TikaBot -> true
         else -> false
     }
 
@@ -244,6 +248,16 @@ object AppState {
         is Screen.Facade -> true
         else -> false
     }
+
+    /** ROUND 54 (Part A): the episode gate's bridge back into the
+     *  facade. The gate lives OUTSIDE FacadeShell (it is Screen-routed),
+     *  so when one of its decoy search results is tapped it parks the
+     *  target here and navigates to Screen.Facade; FacadeShell consumes
+     *  the parked id on composition and opens its own player / reader —
+     *  the exact surfaces a facade tap opens. Plain ids only: nothing
+     *  about the gate, the password or Tik ever rides this bridge. */
+    var facadeOpenDramaId by mutableStateOf<String?>(null)
+    var facadeOpenStoryId by mutableStateOf<String?>(null)
 
     /** Simulated <-> real repository facade (see Repository.kt). */
     lateinit var repo: ChatRepo
