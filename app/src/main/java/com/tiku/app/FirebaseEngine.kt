@@ -859,19 +859,32 @@ object FirebaseEngine : ChatRepo {
         return msgs.any { !it.me }
     }
 
-    /** Hidden = I hid it and the partner has not sent a NEWER message since
-     *  (a new partner message resurfaces the thread — spec semantics). */
+    /** Hidden = I hid it and NO message — the partner's or MINE — is
+     *  newer than the hide stamp. A new partner message resurfaces the
+     *  thread (the original spec semantics); ROUND 53 adds the twin
+     *  rule: a message I send after hiding resurfaces it too — the
+     *  owner deletes a chat from the list, later searches the person,
+     *  messages them, and the chat must be back in the list and stay
+     *  there (until he deletes it again). The send funnels also lift
+     *  the hide on the doc itself (see liftHideOnSend); this
+     *  direction-agnostic derivation is what makes every rebuild path
+     *  agree even before that write lands — or if it ever fails. */
     /** ROUND 50: [newestIncomingMs] lets a caller pass the newest
      *  incoming stamp from the RAW snapshot docs — a partner message
      *  that exists server-side but sits outside the decrypted preview
      *  window (or was filtered from it) must still un-hide the thread;
      *  the server doc existing is what counts, not what the window
-     *  happened to decrypt. */
-    private fun deriveHidden(id: String, msgs: List<TikuMessage>, newestIncomingMs: Long = 0L): Boolean {
+     *  happened to decrypt. ROUND 53: [newestOutgoingMs] is the same
+     *  raw truth for MY docs — my just-sent message un-hides even when
+     *  the preview window filtered it out or hasn't decrypted it yet. */
+    private fun deriveHidden(
+        id: String, msgs: List<TikuMessage>,
+        newestIncomingMs: Long = 0L, newestOutgoingMs: Long = 0L,
+    ): Boolean {
         val h = hiddenForCache[id] ?: 0L
         if (h <= 0L) return false
-        if (newestIncomingMs > h) return false
-        return msgs.none { !it.me && it.tsMs > h }
+        if (newestIncomingMs > h || newestOutgoingMs > h) return false
+        return msgs.none { it.tsMs > h }
     }
 
     /** ROUND 52: archived = I archived it and the partner has not sent
@@ -1311,6 +1324,13 @@ object FirebaseEngine : ChatRepo {
                             val s = d.getString("senderId")
                             if (s != null && s != uid) d.getTimestamp("ts")?.toDate()?.time ?: 0L else 0L
                         } ?: 0L,
+                        // ROUND 53: the mirror raw truth for MY docs —
+                        // a message I sent after hiding un-hides too,
+                        // even one this window didn't decrypt or display.
+                        newestOutgoingMs = docs.maxOfOrNull { d ->
+                            if (d.getString("senderId") == uid)
+                                d.getTimestamp("ts")?.toDate()?.time ?: 0L else 0L
+                        } ?: 0L,
                     ),
                     // ROUND 52: the same raw truth un-archives — any
                     // partner doc newer than the archive stamp brings
@@ -1341,9 +1361,13 @@ object FirebaseEngine : ChatRepo {
     }
 
     // ================= CALL SIGNALING WATCHERS =================
-    /** One ringing-listener per chat I belong to. A ringing call only ever rings
-     *  when I'm unlocked AND foregrounded (checked in handleIncomingCall) — there
-     *  are no notifications, by design. */
+    /** One ringing-listener per chat I belong to. ROUND 53 (item 2): a
+     *  ringing call presents in-app ONLY while unlocked, foregrounded
+     *  AND that chat is the one open on screen (checked in
+     *  handleIncomingCall) — never merely because the app came to the
+     *  foreground. Outside that, a call goes to the silent alert
+     *  pipeline (Round 29/52, background only) or stays invisible until
+     *  the chat is opened, where openThread's reconcile presents it. */
     private fun syncCallWatchers(threadIds: Set<String>) {
         (callsRegs.keys - threadIds).forEach { callsRegs.remove(it)?.remove() }
         threadIds.forEach { tid ->
@@ -1393,7 +1417,22 @@ object FirebaseEngine : ChatRepo {
                     // already in a DIFFERENT call: clear the new one (busy)
                     CallController.state.value !is CallUiState.Idle ->
                         CallSignal.deleteCallTree(chatId, callId)
-                    ChatSession.unlocked && ChatSession.foreground -> {
+                    // ROUND 53 (item 2): the in-app ring fires ONLY
+                    // when THIS chat is the one open on screen — that
+                    // is the owner's rule: an incoming call becomes
+                    // visible when he opens the chat, never on its own
+                    // while he is anywhere else in the app (the list,
+                    // Settings, another chat). While he is elsewhere
+                    // the snapshot falls through to the OwnerNotify
+                    // branch below, which self-suppresses in the
+                    // foreground — so nothing presents — and the call
+                    // surfaces later, still inside its ring window,
+                    // through openThread's reconcile when he opens
+                    // this chat. A call that starts while he is already
+                    // inside this chat still presents right here: the
+                    // chat being open IS the presentation context.
+                    ChatSession.unlocked && ChatSession.foreground &&
+                        openChatIds.contains(chatId) -> {
                         val person = fetchPerson(caller)
                         // ROUND 7: hand the offer from THIS snapshot to the
                         // controller — accept() uses the cached copy first.
@@ -1432,11 +1471,14 @@ object FirebaseEngine : ChatRepo {
      *  createdAt inside the ring window (the caller's own timeout
      *  value) → still ringable. Declined/ended calls are not
      *  state == "ringing" and expired ones fail the window test, so
-     *  nothing dead can resurrect. Called from MainActivity.onResume
-     *  (foreground return), from openThread (a chat being opened) and
-     *  after engine start paths; it self-gates on the same
-     *  unlocked+foreground+idle conditions the watcher uses, and on
-     *  mutedCallsFor (a calls-muted chat never pops up). */
+     *  nothing dead can resurrect. ROUND 53 (item 2): the ONLY caller
+     *  left is openThread — the owner reversed the auto-popup half of
+     *  Round 52 item 5, so the MainActivity.onResume foreground
+     *  trigger is gone and foregrounding the app alone never presents
+     *  a call; the full-list mode below simply has no caller by
+     *  design now. It self-gates on the same unlocked+foreground+idle
+     *  conditions the watcher uses, and on mutedCallsFor (a
+     *  calls-muted chat never pops up). */
     fun reconcileIncomingCalls(onlyChatId: String? = null) {
         if (uid.isEmpty()) return
         if (!ChatSession.unlocked || !ChatSession.foreground) return
@@ -1843,6 +1885,9 @@ object FirebaseEngine : ChatRepo {
         // call that started ringing while this phone was elsewhere
         // (YouTube, shade) must surface here even if the watcher's
         // snapshot was consumed by the background alert path.
+        // ROUND 53 (item 2): this is now the ONLY reconcile point —
+        // per the owner's reversal, the call becomes visible exactly
+        // here, when he opens this chat, and nowhere else.
         reconcileIncomingCalls(id)
         // ROUND 8: no more full-collection get() here — the old code read
         // EVERY message doc of the chat on EVERY open just to seen-mark them
@@ -2496,6 +2541,7 @@ object FirebaseEngine : ChatRepo {
             if (local.ai) docData["ai"] = true
             msgRef(id, local.id).set(docData).await()
             AppState.setMessageStatus(id, local.id, SendStatus.SENT)
+            liftHideOnSend(id)
             touchChat(id)
         } catch (e: Exception) {
             Log.e("TikuSend", "text send failed in chat $id (msg ${local.id})", e)
@@ -2790,6 +2836,7 @@ object FirebaseEngine : ChatRepo {
             // the recording temp file is only cleaned up once delivery landed —
             // a FAILED voice note keeps its file so tap-to-retry can resend it.
             if (local.kind == MsgKind.VOICE) local.localPath?.let { runCatching { File(it).delete() } }
+            liftHideOnSend(id)
             touchChat(id)
         } catch (e: Exception) {
             Log.e("TikuSend", "$kind send failed in chat $id (msg ${local.id})", e)
@@ -2837,6 +2884,32 @@ object FirebaseEngine : ChatRepo {
                 MsgKind.CALL -> AppState.setMessageStatus(id, msgId, SendStatus.SENT)
             }
         }
+    }
+
+    /** ROUND 53 (item 1) — SENDING LIFTS MY HIDE. The owner deletes a
+     *  chat from the list (the hiddenFor[me] stamp), later searches the
+     *  person and messages them: the chat must return to the Messages
+     *  list and stay there. Both send funnels ([deliverText] /
+     *  [deliverMedia] — retries ride them too) call this once the
+     *  message doc has landed: the local cache and the thread flip at
+     *  once, and the stamp is deleted on the doc itself, so every
+     *  later derivation agrees — on every device, across restarts.
+     *  A failed delete is non-fatal: [deriveHidden]'s
+     *  direction-agnostic rule (any message newer than the stamp, mine
+     *  included) keeps the chat visible wherever the message shows.
+     *  [recordCallEvent] deliberately does NOT call this — a call
+     *  event is system-written by both clients, not a message I sent,
+     *  so a missed call alone never resurrects a deleted chat. */
+    private suspend fun liftHideOnSend(id: String) {
+        if ((hiddenForCache[id] ?: 0L) <= 0L) return
+        hiddenForCache[id] = 0L
+        AppState.threads.value = AppState.threads.value.map {
+            if (it.id == id) it.copy(hiddenForMe = false) else it
+        }
+        runCatching {
+            db.collection(Schema.Chats.COLL).document(id)
+                .update("hiddenFor.$uid", FieldValue.delete()).await()
+        }.onFailure { Log.e("TikuChat", "liftHideOnSend failed for $id", it) }
     }
 
     private suspend fun touchChat(id: String) {

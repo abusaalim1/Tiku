@@ -296,7 +296,9 @@ interface ChatRepo {
      *  (chat doc acceptedFor[me] = now). Default no-op. */
     fun acceptThread(id: String) {}
     /** Locally hide a thread (chat doc hiddenFor[me] = now). It reappears
-     *  if the partner sends a NEW message after the hide. Default no-op. */
+     *  when a NEW message lands after the hide — the partner's, or
+     *  (round 53) one I send myself after searching them up again.
+     *  Default no-op. */
     fun hideThread(id: String) {}
     /** Block a user (users/{me}.blockedUids += uid) and hide our thread.
      *  Default no-op. */

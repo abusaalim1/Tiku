@@ -206,10 +206,14 @@ data class ChatThread(
      *  Info screen's "Day N together" pill; 0 = unknown (pill omitted). */
     val createdAtMs: Long = 0L,
     /** True while I have locally hidden this thread (chat doc
-     *  hiddenFor[me]) and the partner has not sent a newer message since.
-     *  The engine KEEPS hidden threads in AppState.threads (their preview
-     *  listeners must keep running so a new partner message can un-hide
-     *  them); every list surface filters them out. */
+     *  hiddenFor[me]) and no message from either side is newer than the
+     *  hide stamp: a newer partner message resurfaces the thread, and
+     *  (round 53) so does a message I send after hiding — delete a
+     *  chat, search the person, message them, and it is back in the
+     *  list to stay. The engine KEEPS hidden threads in
+     *  AppState.threads (their preview listeners must keep running so
+     *  a new message can un-hide them); every list surface filters
+     *  them out. */
     val hiddenForMe: Boolean = false,
     // ---- ROUND 20 (appended last, same discipline) ----
     /** The unread count as it stood the moment this chat was OPENED —

@@ -121,11 +121,12 @@ class MainActivity : ComponentActivity() {
         // presence reflects being INSIDE ChatRoot only — never the facade
         if (!Config.PREVIEW_UI_ONLY && ChatSession.unlocked && FirebaseEngine.signedIn && isOnboarded()) {
             FirebaseEngine.setPresence(true)
-            // ROUND 52 (item 5): returning to the foreground is a
-            // reconcile point — a call that started ringing while the
-            // receiver was in another app gets its ringing UI now,
-            // judged on the call doc itself, not on watcher baselines.
-            FirebaseEngine.reconcileIncomingCalls()
+            // ROUND 53 (item 2): NO call reconcile here any more. The
+            // owner reversed the auto-popup half of Round 52 item 5:
+            // merely returning to the foreground must never throw a
+            // ringing screen up. An incoming call becomes visible only
+            // when he opens that chat — openThread's reconcile is the
+            // one presentation point that remains.
         }
     }
 
