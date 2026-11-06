@@ -81,7 +81,7 @@ class MainActivity : ComponentActivity() {
         // notification when a newer build is published).
         UpdateCheck.maybeCheck(this)
         setContent {
-            TikuRoot(onGoogleClick = ::onGoogleClick, onAccountClick = ::onFacadeAccountClick)
+            TikuRoot(onGoogleClick = ::onGoogleClick)
         }
     }
 
@@ -195,47 +195,44 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    /** ROUND 54 (Part A): the facade home's account chip. Signed out,
-     *  tapping it IS the Google sign-in — the same flow the Welcome
-     *  screen ran. Signed in, it re-runs the post-auth routing below
-     *  (a locked, onboarded session lands back in Tik through the
-     *  returning-user path; a signed-in session that still owes setup
-     *  lands on exactly the setup screen it owes). */
-    private fun onFacadeAccountClick() {
-        if (Config.PREVIEW_UI_ONLY) return
-        if (FirebaseEngine.signedIn) {
-            lifecycleScope.launch { routeAfterGoogleAuth() }
-        } else {
-            onGoogleClick()
-        }
-    }
-
-    /** Where a completed Google auth lands — the journal create /
-     *  restore routing, unchanged since Round 5: it is post-sign-in
-     *  setup, shared by the Welcome screen and the facade chip. */
+    /** Where a completed Google auth lands.
+     *
+     *  ROUND 55 (Part A) — THE SECURITY RULE, superseding the Round-54
+     *  routing: GOOGLE AUTH ALONE MUST NEVER UNLOCK TIK. Round 54 put
+     *  an account chip on the facade home and let a signed-in tap
+     *  re-run this routing, whose returning-user branch walked
+     *  straight into Screen.Home whenever a local identity existed —
+     *  the owner caught it live: one tap on his own profile avatar
+     *  and he was inside, no password asked. Auth proves WHO is
+     *  holding the phone; it says nothing about whether the journal
+     *  may open. So a RETURNING account (a journal/keyBackup exists)
+     *  now lands back on the FACADE from every auth completion — the
+     *  Welcome button and the episode gate's sign-in alike. Entry
+     *  from there happens ONLY through the episode box: the journal
+     *  password (verified locally, or unwrapped against the cloud
+     *  backup on a device that holds no local identity yet) or a
+     *  recovery code — see episodeAttempt in Facade.kt. Only a
+     *  genuinely NEW account (no key material on its doc) proceeds
+     *  into first-run setup, where creating the journal password IS
+     *  the unlock act.
+     *
+     *  ROUND 5's tri-state still holds: a failed account check must
+     *  never fall through to the create-password branch (that is how
+     *  a returning user could be walked into overwriting their own
+     *  journal) — it toasts and stays where it was. */
     private suspend fun routeAfterGoogleAuth() {
-        // ROUND 5: tri-state — a failed account check must never fall
-        // through to the create-password branch (that is how a returning
-        // user could be walked into overwriting their own journal).
         val returning = FirebaseEngine.returningUserCheck()
         when {
             returning == null ->
                 AppState.toast("Couldn't check your account — check your connection and try again.")
-            returning == true && FirebaseEngine.loadLocalIdentity(this@MainActivity) -> {
-                getSharedPreferences("tiku_prefs", MODE_PRIVATE).edit().putBoolean("onboarded", true).apply()
-                FirebaseEngine.start(this@MainActivity)
-                FirebaseEngine.loadMyProfile()
-                FirebaseEngine.setPresence(true)
-                AppState.go(Screen.Home)
-            }
-            returning == true -> AppState.go(Screen.Restore)
+            returning == true -> AppState.go(Screen.Facade)
             else -> AppState.go(Screen.Password)
         }
     }
 }
 
 @Composable
-fun TikuRoot(onGoogleClick: () -> Unit, onAccountClick: () -> Unit = {}) {
+fun TikuRoot(onGoogleClick: () -> Unit) {
     // app-wide light gradient (the design's .s background)
     val bgBrush = Brush.verticalGradient(listOf(TikuTokens.BgTop, TikuTokens.BgBottom))
     val screen = AppState.screen
@@ -283,7 +280,7 @@ fun TikuRoot(onGoogleClick: () -> Unit, onAccountClick: () -> Unit = {}) {
                     is Screen.ProfileSetup -> ProfileSetupScreen()
                     else -> WelcomeScreen(onGoogleClick)
                 }
-                "facade" -> FacadeRouter(onAccountClick)
+                "facade" -> FacadeRouter(onGoogleClick)
                 else -> {
                     Box(Modifier.fillMaxSize()) {
                         HomeScreen()
@@ -479,9 +476,14 @@ internal fun restoreStatusBars(ctx: android.content.Context) {
     controller.isAppearanceLightStatusBars = true
 }
 
-/** Facade sub-navigation: fade transitions; instant snaps when re-locking. */
+/** Facade sub-navigation: fade transitions; instant snaps when re-locking.
+ *  ROUND 55: the facade home takes NO account wiring any more (the
+ *  Round-54 home chip is deleted — home is a plain drama app). The
+ *  one callback is the episode gate's signed-out Google sign-in,
+ *  which runs the same [MainActivity.onGoogleClick] flow as the
+ *  Welcome screen. */
 @Composable
-fun FacadeRouter(onAccountClick: () -> Unit = {}) {
+fun FacadeRouter(onGoogleSignIn: () -> Unit = {}) {
     val screen = AppState.screen
     AnimatedContent(
         targetState = screen,
@@ -492,9 +494,9 @@ fun FacadeRouter(onAccountClick: () -> Unit = {}) {
         label = "facade",
     ) { s ->
         when (s) {
-            is Screen.Facade -> FacadeHome(onAccountClick = onAccountClick)
-            is Screen.TikGate -> TikGateScreen()
-            else -> FacadeHome(onAccountClick = onAccountClick)
+            is Screen.Facade -> FacadeHome()
+            is Screen.TikGate -> TikGateScreen(onGoogleSignIn)
+            else -> FacadeHome()
         }
     }
 }

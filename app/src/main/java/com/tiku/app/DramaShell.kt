@@ -96,14 +96,13 @@ fun FacadeHome(
     initialStoryId: String? = null,
     initialPhoto: Int? = null,
     playerDramaId: String? = null,
-    onAccountClick: () -> Unit = {},
 ) {
     // The reader / viewer overlays keep the design's LIGHT palette
     // (Rose Petal), provided locally here; the Round-16 tab surface
     // (Facade.kt) carries its own black system and ignores it.
     val lightPal = remember { buildPalette("light", 0) }
     CompositionLocalProvider(LocalPalette provides lightPal) {
-        FacadeShell(initialTab, initialStoryId, initialPhoto, playerDramaId, onAccountClick)
+        FacadeShell(initialTab, initialStoryId, initialPhoto, playerDramaId)
     }
 }
 
@@ -113,7 +112,6 @@ private fun FacadeShell(
     initialStoryId: String?,
     initialPhoto: Int?,
     playerDramaId: String?,
-    onAccountClick: () -> Unit = {},
 ) {
     val pal = LocalPalette.current
     val ctx = LocalContext.current
@@ -184,10 +182,6 @@ private fun FacadeShell(
                 onOpenPhoto = { photoIdx = it },
                 // The last story's double-tap door (see Facade.kt).
                 onSecretGate = { SecretEntry.openGate(ctx, scope) },
-                // ROUND 54 (Part A): the ordinary account chip at the
-                // top of the facade home — Google sign-in lives here
-                // now, in the open, like any app's account button.
-                onAccountClick = onAccountClick,
             )
         }
     }
@@ -534,7 +528,7 @@ private fun PhotoViewer(index: Int, onBack: () -> Unit) {
     }
 }
 
-// ---------- EPISODE GATE (ROUND 54, Part A) ----------
+// ---------- EPISODE GATE (ROUND 54, Part A → ROUND 55, Part A) ----------
 // Reached ONLY via SecretEntry, from the double tap on the last
 // story ("First romance of them") on the Stories shelf. The old
 // visible password gate is RETIRED: a third person who reaches this
@@ -542,11 +536,16 @@ private fun PhotoViewer(index: Int, onBack: () -> Unit) {
 // that is all it shows. The journal password is now entered only in
 // that episode box (it unlocks when it matches — see
 // EpisodeGateScreen in Facade.kt, which owns the panel, the decoy
-// search and the attempt order); Google sign-in moved to the account
-// chip on the facade home. Every lock trigger lands on the facade,
+// search and the attempt order). ROUND 55: Google sign-in lives at
+// the TOP OF THIS PANEL, shown only while signed out (the facade
+// home itself carries no account surface at all — the Round-54 home
+// chip was a live password bypass and is deleted). Signing in here
+// still does NOT open Tik: a returning account lands back on the
+// facade and enters through this box, password or recovery code —
+// there is no other way in. Every lock trigger lands on the facade,
 // and this panel is the only door back in.
 
 @Composable
-fun TikGateScreen() {
-    EpisodeGateScreen()
+fun TikGateScreen(onGoogleSignIn: () -> Unit = {}) {
+    EpisodeGateScreen(onGoogleSignIn)
 }

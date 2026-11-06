@@ -142,10 +142,66 @@ object GeminiClient {
                     })
                 }
             })
-            // Companion replies stay SHORT (1–2 lines, like a text
-            // message) — the persona asks for it and this caps it.
+            // ROUND 55 (Part C): the cap is generous now — the
+            // persona keeps normal replies to ~3 lines, and when the
+            // user asks something important the answer may run as
+            // long as it genuinely needs. (Round 54's 220-token cap
+            // produced the absurd 3-word replies the owner rejected.)
             put("generationConfig", JSONObject().apply {
-                put("maxOutputTokens", 220)
+                put("maxOutputTokens", 1200)
+            })
+        }
+        return cascadeTextAnswer(body)
+    }
+
+    /** ROUND 55 (Part C): the companion LOOKS at a photo — the bot
+     *  chat's vision path, the deliberate-attach twin of [answerImage]
+     *  under the companion's own rules. The user picked this one image
+     *  in the bot chat and sent it to Tika on purpose: that image —
+     *  and only that image — rides as an inline_data part on the
+     *  final user turn, under the PERSONA (not the /tiku IDENTITY),
+     *  with the companion's own history as the preceding turns.
+     *  [history] is the companion's history BEFORE this photo turn;
+     *  [caption] is the user's caption (may be empty). Nothing from
+     *  any real chat can enter here either — the caller builds the
+     *  history from TikaBotStore alone. [jpeg] must already be
+     *  downscaled by the caller (≤1024 px on the long edge), exactly
+     *  like the /tiku vision payload. Same TEXT_MODELS cascade. */
+    suspend fun companionImageReply(
+        history: List<Pair<Boolean, String>>,
+        persona: String,
+        caption: String,
+        jpeg: ByteArray,
+    ): Outcome<String> {
+        if (Config.PREVIEW_UI_ONLY) {
+            return Outcome.Ok("(preview) Got your photo — Tika's reply appears here.")
+        }
+        val body = JSONObject().apply {
+            put("system_instruction", JSONObject().apply {
+                put("parts", JSONArray().put(JSONObject().put("text", persona)))
+            })
+            put("contents", JSONArray().apply {
+                for ((isUser, text) in history) {
+                    put(JSONObject().apply {
+                        put("role", if (isUser) "user" else "model")
+                        put("parts", JSONArray().put(JSONObject().put("text", text)))
+                    })
+                }
+                put(JSONObject().apply {
+                    put("role", "user")
+                    put("parts", JSONArray()
+                        .put(JSONObject().put("text",
+                            caption.ifBlank { "Look at this photo and react to it." }))
+                        .put(JSONObject().apply {
+                            put("inline_data", JSONObject().apply {
+                                put("mime_type", "image/jpeg")
+                                put("data", Base64.encodeToString(jpeg, Base64.NO_WRAP))
+                            })
+                        }))
+                })
+            })
+            put("generationConfig", JSONObject().apply {
+                put("maxOutputTokens", 1200)
             })
         }
         return cascadeTextAnswer(body)

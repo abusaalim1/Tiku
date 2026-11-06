@@ -132,6 +132,15 @@ class ScreenshotsTest {
             "facade home must carry the brand wordmark",
             composeRule.onAllNodesWithText(DramaContent.appName).fetchSemanticsNodes().isNotEmpty(),
         )
+        // ROUND 55 (Part A): NO account surface on the home — the
+        // Round-54 sign-in chip is deleted (its signed-in tap was a
+        // password bypass). No sign-in wording may render here; the
+        // only sign-in in the app lives at the top of the gate.
+        org.junit.Assert.assertTrue(
+            "facade home must not contain any sign-in surface",
+            composeRule.onAllNodesWithText("Sign in", substring = true)
+                .fetchSemanticsNodes().isEmpty(),
+        )
         shot("01-drama-home.png")
     }
 
@@ -262,7 +271,11 @@ class ScreenshotsTest {
         // identically for everyone; that is the point). Assert the
         // in-world furniture exists and NO trace of the old gate does:
         // no password wording, no journal wording, no lock copy.
+        // ROUND 55 (Part A): the panel's top now carries the Google
+        // sign-in — the harness has no live Firebase session, so the
+        // signed-out face is what renders, and it must be present.
         frame { TikGateScreen() }
+        composeRule.onNodeWithText("Sign in with Google").assertIsDisplayed()
         composeRule.onNodeWithText("Enter your episode").assertIsDisplayed()
         composeRule.onNodeWithText("Search").assertIsDisplayed()
         composeRule.onNodeWithText("Cancel").assertIsDisplayed()

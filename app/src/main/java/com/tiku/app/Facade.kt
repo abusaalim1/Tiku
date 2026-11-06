@@ -419,25 +419,19 @@ private fun HomeScreen(
     favs: Set<String>,
     onToggleFav: (Show) -> Unit,
     onOpen: (Show) -> Unit,
-    accountInitial: String? = null,
-    onAccountClick: () -> Unit = {}
 ) {
     LazyColumn(
         Modifier.fillMaxSize(),
         contentPadding = PaddingValues(top = topInset() + 24.dp, bottom = 140.dp)
     ) {
         item { Header(DramaContent.appName, DramaContent.tagline) }
-        // ROUND 54 (Part A): the ordinary account row under the
-        // header — where any app keeps its account button. Google
-        // sign-in lives here now, out in the open; the episode gate
-        // carries no account surface at all.
-        item {
-            Row(
-                Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 6.dp),
-                horizontalArrangement = Arrangement.End,
-            ) { AccountChip(accountInitial, onAccountClick) }
-            Spacer(Modifier.height(8.dp))
-        }
+        // ROUND 55 (Part A): NO account surface on this home — no
+        // sign-in button, no Google mark, no avatar. The Round-54
+        // account row that lived here is deleted: its signed-in face
+        // was a live password bypass (one tap re-ran post-auth
+        // routing straight into Tik). Home is a plain drama app;
+        // sign-in exists only at the top of the episode gate, and
+        // only while signed out.
         if (hero != null) {
             item { Spacer(Modifier.height(0.dp)); Hero(hero) { onOpen(hero) } }
         }
@@ -676,16 +670,7 @@ fun FacadeRoot(
     onOpenStory: (DramaContent.Story) -> Unit,
     onOpenPhoto: (Int) -> Unit,
     onSecretGate: () -> Unit,
-    onAccountClick: () -> Unit = {}
 ) {
-    // ROUND 54 (Part A): the account chip's face — the signed-in
-    // account's initial when a Google session exists on this device,
-    // null (the ordinary "Sign in" pill) when signed out. Read at
-    // composition; the facade recomposes when sign-in completes.
-    val accountInitial = remember(tab) {
-        if (Config.PREVIEW_UI_ONLY || !FirebaseEngine.signedIn) null
-        else FirebaseEngine.signedInEmail.trim().firstOrNull()?.uppercaseChar()?.toString()
-    }
     Box(Modifier.fillMaxSize().background(Bg)) {
         Box(Modifier.fillMaxSize()) {
             AnimatedContent(
@@ -705,8 +690,6 @@ fun FacadeRoot(
                         favs = favs,
                         onToggleFav = { s -> DramaContent.drama(s.id)?.let(onToggleFav) },
                         onOpen = { s -> DramaContent.drama(s.id)?.let(onPlay) },
-                        accountInitial = accountInitial,
-                        onAccountClick = onAccountClick,
                     )
                     1 -> StoriesScreen(
                         stories = facadeStories(),
@@ -727,46 +710,15 @@ fun FacadeRoot(
     }
 }
 
-/* ───────────────────── Account chip (ROUND 54, Part A) ─────────────────────
- * The facade home's ordinary account button, under the header. Signed
- * out it is the standard white "Sign in" pill (tapping it runs the
- * existing Google sign-in, after which the journal create / restore /
- * recovery screens run exactly as they always have — they are
- * post-sign-in setup, not a gate). Signed in it is the account's
- * initial in a rose circle, like any app's avatar chip. Nothing about
- * this surface hints at a second app behind the facade. */
-
-@Composable
-private fun AccountChip(initial: String?, onClick: () -> Unit) {
-    if (initial != null) {
-        Box(
-            Modifier.size(40.dp).clip(CircleShape)
-                .background(Brush.linearGradient(listOf(Rose, RoseDeep)))
-                .press(onClick),
-            contentAlignment = Alignment.Center,
-        ) {
-            Text(initial, color = Color.White, fontSize = 16.sp,
-                fontWeight = FontWeight.Bold, fontFamily = InterTight)
-        }
-    } else {
-        Row(
-            Modifier.clip(RoundedCornerShape(999.dp)).background(Color.White).press(onClick)
-                .padding(horizontal = 14.dp, vertical = 8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Box(
-                Modifier.size(20.dp).clip(CircleShape).background(CardC),
-                contentAlignment = Alignment.Center,
-            ) {
-                Text("G", color = Color.White, fontSize = 12.sp,
-                    fontWeight = FontWeight.Bold, fontFamily = InterTight)
-            }
-            Spacer(Modifier.width(8.dp))
-            Text("Sign in", color = Color(0xFF1B1B1F), fontSize = 14.sp,
-                fontWeight = FontWeight.Medium, fontFamily = PoppinsFamily)
-        }
-    }
-}
+/* ───────────────────── Account chip — DELETED (ROUND 55, Part A) ──────────
+ * Round 54 put the account button here, on the home, and its
+ * signed-in face (the rose initial circle) re-ran the post-auth
+ * routing on tap — which walked a returning user straight into Tik
+ * with no password. The owner caught it on his own phone and
+ * ordered the whole surface gone: this home now shows NOTHING
+ * account-related, and Google sign-in lives at the top of the
+ * episode gate instead (see GateSignIn below), visible only while
+ * signed out. Do not resurrect an account surface on this home. */
 
 /* ───────────────────── Episode gate (ROUND 54, Part A) ─────────────────────
  * What the double tap on the last story opens now. On its face it is
@@ -785,12 +737,28 @@ private fun AccountChip(initial: String?, onClick: () -> Unit) {
  *       opens the account's keyRecovery blob → route into the EXISTING
  *       recovery restore flow (Screen.PasswordReset → its recovery
  *       form), where a new password is set and chats are preserved.
- *  (iii) anything else → the decoy search below.
+ *  (iii) ROUND 55: else, signed in + this device holds NO local
+ *       identity for the account yet (a fresh phone) → the input is
+ *       tried against the cloud keyBackup itself, via the EXISTING
+ *       FirebaseEngine.restoreFromBackup — the cryptographic unwrap
+ *       IS the verification. A genuine open installs the identity on
+ *       this device, marks setup done and unlocks; a wrong password
+ *       feeds the GateGuard and decoys like any text. (Round 54 let
+ *       the home chip's Restore route carry this case; the chip is
+ *       deleted, so the box carries it now — the box is the ONLY way
+ *       in, for every device state.)
+ *  (iv) anything else → the decoy search below.
  * A failed credential probe feeds the existing invisible GateGuard;
  * while the guard is throttling, probes are skipped entirely and the
  * search results simply show — no counter, no message, ever. Signed
  * out, the panel is a guest search: a password typed by a guest falls
- * through to results like any other text. */
+ * through to results like any other text.
+ *
+ * ROUND 55 also puts the Google sign-in at the TOP of this panel —
+ * shown ONLY while signed out (GateSignIn below). A completed
+ * sign-in never opens Tik by itself: the post-auth routing returns a
+ * returning account to the facade, and this box remains the only
+ * door (see routeAfterGoogleAuth in MainActivity.kt). */
 
 private enum class EpisodeAttempt { UNLOCK, RECOVERY, SEARCH }
 
@@ -826,6 +794,24 @@ private suspend fun episodeAttempt(ctx: android.content.Context, raw: String): E
                 return EpisodeAttempt.RECOVERY
             }
             GateGuard.recordFailure(ctx)
+        }
+    }
+    // (iii) ROUND 55: a device holding no local identity yet (fresh
+    // phone, or data cleared) has no local verifier for step (i) —
+    // try the input against the cloud keyBackup itself. The unwrap
+    // is the verification (AES-GCM tag): restoreFromBackup installs
+    // the identity locally only when the password genuinely opens
+    // the blob, so a success here is exactly as strong as step (i).
+    if (!FirebaseEngine.hasLocalIdentity(ctx)) {
+        when (FirebaseEngine.restoreFromBackup(ctx, input)) {
+            is FirebaseEngine.RestoreResult.Ok -> {
+                ctx.getSharedPreferences("tiku_prefs", android.content.Context.MODE_PRIVATE)
+                    .edit().putBoolean("onboarded", true).apply()
+                GateGuard.reset(ctx)
+                return EpisodeAttempt.UNLOCK
+            }
+            is FirebaseEngine.RestoreResult.WrongPassword -> GateGuard.recordFailure(ctx)
+            is FirebaseEngine.RestoreResult.Unavailable -> Unit // no backup / offline → decoy
         }
     }
     return EpisodeAttempt.SEARCH
@@ -885,8 +871,53 @@ private fun episodeSearch(query: String): EpisodeResults {
     return EpisodeResults(shelf, fallback = true)
 }
 
+/** ROUND 55 (Part A): the gate panel's Google sign-in — an ordinary
+ *  app-header account action at the very top of the panel, rendered
+ *  ONLY while signed out (when signed in, nothing renders here at
+ *  all: no avatar, no initial, no chip). It runs the existing Google
+ *  flow (the same one the Welcome screen's button runs); completing
+ *  it does NOT open Tik — a returning account is routed back to the
+ *  facade and still enters through the episode box below. The busy
+ *  label mirrors the Welcome button's AppState.authBusy pattern. */
 @Composable
-fun EpisodeGateScreen() {
+private fun GateSignIn(onClick: () -> Unit) {
+    Column {
+        Row(
+            Modifier.fillMaxWidth().padding(horizontal = 20.dp),
+            horizontalArrangement = Arrangement.End,
+        ) {
+            Row(
+                Modifier.clip(RoundedCornerShape(999.dp)).background(Color.White)
+                    .press {
+                        if (!AppState.authBusy) {
+                            AppState.authBusy = true
+                            onClick()
+                        }
+                    }
+                    .padding(horizontal = 14.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Box(
+                    Modifier.size(20.dp).clip(CircleShape).background(CardC),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text("G", color = Color.White, fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold, fontFamily = InterTight)
+                }
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    if (AppState.authBusy) "Connecting…" else "Sign in with Google",
+                    color = Color(0xFF1B1B1F), fontSize = 14.sp,
+                    fontWeight = FontWeight.Medium, fontFamily = PoppinsFamily,
+                )
+            }
+        }
+        Spacer(Modifier.height(14.dp))
+    }
+}
+
+@Composable
+fun EpisodeGateScreen(onGoogleSignIn: () -> Unit = {}) {
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
     remember { DramaContent.load(ctx) }
@@ -894,6 +925,11 @@ fun EpisodeGateScreen() {
     var busy by remember { mutableStateOf(false) }
     var results by remember { mutableStateOf<EpisodeResults?>(null) }
     var searchedFor by remember { mutableStateOf("") }
+    // ROUND 55: the sign-in shows only while signed out. Read once at
+    // composition: a completed sign-in navigates away from this panel
+    // (facade for a returning account, setup for a new one), so the
+    // value never needs to flip in place.
+    val signedOut = remember { !FirebaseEngine.signedIn }
 
     androidx.activity.compose.BackHandler {
         if (results != null) results = null else AppState.go(Screen.Facade)
@@ -920,6 +956,7 @@ fun EpisodeGateScreen() {
         Column(Modifier.fillMaxSize().padding(top = topInset() + 24.dp)) {
             val res = results
             if (res == null) {
+                if (signedOut) GateSignIn(onGoogleSignIn)
                 Header("Episodes", "Jump straight to the episode you left off")
                 Spacer(Modifier.height(26.dp))
                 Row(
