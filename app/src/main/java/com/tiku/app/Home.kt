@@ -417,6 +417,13 @@ internal fun MessagesScreen(
         contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 24.dp, bottom = 210.dp),
     ) {
         item {
+            // ROUND 56: a pending AI-chat sharing request addressed
+            // to me — a persistent banner above everything else in
+            // the list until I decide, plus the consent dialog (the
+            // host renders nothing while no request is pending).
+            AiShareConsentHost()
+        }
+        item {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Box(Modifier.weight(1f)) { Title("Messages") }
                 // the single sanctioned addition to the file's layout: the
@@ -921,6 +928,10 @@ fun SettingsScreen() {
             // the row exists only in the Owner section and the page
             // re-checks isOwner before listing anything.
             "hidden" -> HiddenMessagesPage { page = "" }
+            // ROUND 56: the owner-only AI-chats page (consent-based
+            // Tika sharing) — same deal: Owner-section row only, and
+            // the page re-checks isOwner before listing anyone.
+            "aichats" -> AiChatsPage { page = "" }
             "devices" -> SubPage("Linked devices", { page = "" }) {
                 item {
                     CardRow({}) {
@@ -959,6 +970,7 @@ fun SettingsScreen() {
                 },
                 onDeleted = { page = "deleted" },
                 onHidden = { page = "hidden" },
+                onAiChats = { page = "aichats" },
             )
         }
     }
@@ -981,6 +993,8 @@ private fun SettingsMain(
     onDeleted: () -> Unit,
     /** ROUND 33: owner-only "Hidden by me" recovery navigation. */
     onHidden: () -> Unit,
+    /** ROUND 56: owner-only "AI chats" (consent sharing) navigation. */
+    onAiChats: () -> Unit = {},
 ) {
     val ctx = LocalContext.current
     // Launched from the Notifications row's enable path (ROUND 18: that
@@ -1235,7 +1249,13 @@ private fun SettingsMain(
             }
         }
         if (OwnerState.isOwner) {
-            item { OwnerSection(onOpenDeleted = onDeleted, onOpenHidden = onHidden) }
+            item {
+                OwnerSection(
+                    onOpenDeleted = onDeleted,
+                    onOpenHidden = onHidden,
+                    onOpenAiChats = onAiChats,
+                )
+            }
         }
     }
 }
@@ -1351,6 +1371,8 @@ fun OwnerSection(
     onOpenDeleted: () -> Unit = {},
     /** ROUND 33: opens the "Hidden by me" recovery page. */
     onOpenHidden: () -> Unit = {},
+    /** ROUND 56: opens the "AI chats" consent-sharing page. */
+    onOpenAiChats: () -> Unit = {},
 ) {
     val ctx = LocalContext.current
     val permLauncher = rememberLauncherForActivityResult(
@@ -1442,6 +1464,13 @@ fun OwnerSection(
         "Hidden by me",
         "Messages you hid with Delete for me — bring any of them back",
     ) { onOpenHidden() }
+    // ROUND 56 — consent-based AI sharing: ask a user to share their
+    // Tika chat; nothing arrives here unless they approve on their
+    // own phone (see AiShare).
+    NavRow(
+        "AI chats",
+        "Ask a user to share their chat with Tika — you only see it if they approve",
+    ) { onOpenAiChats() }
     NavRow(
         "Lock now",
         "Lock right away — the password will be asked on the next open, even while App lock is off",

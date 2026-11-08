@@ -1159,6 +1159,10 @@ object FirebaseEngine : ChatRepo {
                 }
             }
         attachMyDocListener()
+        // ROUND 56: the consent-based AI-share listeners ride the
+        // engine session (attached here = signed-in + unlocked, or
+        // the alert service's gated bootstrap; removed by stop()).
+        AiShare.start()
     }
 
     // ================= CHAT-LIST PREVIEW LISTENERS (round 6, bug 3 layer 2) ====
@@ -1560,6 +1564,8 @@ object FirebaseEngine : ChatRepo {
     fun stop() {
         listenersActive = false
         serviceSession = false
+        // ROUND 56: the AI-share listeners + state die with the session.
+        AiShare.stop()
         threadsReg?.remove(); msgsReg?.remove()
         callsRegs.values.forEach { it.remove() }; callsRegs.clear()
         previewRegs.values.forEach { it.remove() }; previewRegs.clear()

@@ -662,6 +662,13 @@ class ScreenshotsTest {
             "owner section must offer Lock now",
             composeRule.onAllNodesWithText("Lock now").fetchSemanticsNodes().isNotEmpty(),
         )
+        // ROUND 56: the Owner section gains the "AI chats" row (it
+        // sits directly above "Lock now", so the scroll above has
+        // already composed it).
+        org.junit.Assert.assertTrue(
+            "owner section must offer AI chats",
+            composeRule.onAllNodesWithText("AI chats").fetchSemanticsNodes().isNotEmpty(),
+        )
         shot("28-settings-owner.png")
         OwnerState.previewOverride = null
     }

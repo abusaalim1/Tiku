@@ -265,15 +265,46 @@ object TikaBotStore {
 
     /** "Reset Tika": history + onboarding wiped (the account's local
      *  photo copies go too); the greeting seeds again, exactly like
-     *  a first run. */
+     *  a first run. ROUND 56: a reset ALSO removes any shared copy in
+     *  `aiShared` — the shared snapshot described a transcript that
+     *  no longer exists, so it must not outlive it. */
     fun reset() {
         _gender.value = null
         _role.value = null
         _messages.value = emptyList()
         prefs()?.edit()?.clear()?.apply()
         runCatching { imageDir().deleteRecursively() }
+        AiShare.revokeMine()
         seedOnboarding()
     }
+
+    /** ROUND 56 — one transcript entry of a consent snapshot, in
+     *  send order. [tsMs] is the entry's order stamp (its index —
+     *  the local store keeps no per-message clock, and a fabricated
+     *  wall-clock would be a lie; ordering is what the snapshot
+     *  promises). */
+    data class ShareEntry(val who: String, val text: String, val tsMs: Long)
+
+    /**
+     * ROUND 56 — the snapshot an APPROVE tap shares, built ONLY at
+     * that tap from this local store (see AiShare.approve — the
+     * store itself never writes anywhere). Text entries ride as
+     * themselves; a photo entry becomes "[Photo]" plus its caption
+     * when it has one — photo BYTES never leave the device.
+     * System lines are excluded (they never persist anyway).
+     */
+    fun snapshotForSharing(): List<ShareEntry> =
+        _messages.value.filter { !it.sys }.mapIndexed { i, m ->
+            ShareEntry(
+                who = if (m.mine) "user" else "tika",
+                text = when {
+                    m.img != null && m.text.isNotBlank() -> "[Photo] ${m.text}"
+                    m.img != null -> "[Photo]"
+                    else -> m.text
+                },
+                tsMs = i.toLong(),
+            )
+        }
 
     /** The companion's own history as the AI sees it: the last two
      *  dozen real exchanges, oldest first. System lines never enter.
@@ -502,6 +533,11 @@ fun TikaBotScreen() {
                                         Modifier.weight(1f),
                                     )
                                 }
+                                Spacer(Modifier.height(10.dp))
+                                // ROUND 56: the Sharing state — whether a
+                                // consented snapshot of this chat currently
+                                // sits in the shared store, and its revoke.
+                                TikaSharingRow()
                             }
                         }
                     },

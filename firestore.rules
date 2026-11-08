@@ -46,5 +46,42 @@ service cloud.firestore {
         allow write: if signedIn() && request.auth.uid == uid;
       }
     }
+
+    // ROUND 56 — CONSENT-BASED AI-CHAT SHARING. The owner identity is
+    // the token EMAIL, exactly as Config.OWNER_EMAIL defines it in
+    // the app. Nothing here touches chats/messages: person-to-person
+    // encryption and membership rules above are unchanged.
+    function isOwner() {
+      return signedIn() && request.auth.token.email == "taiwanserverforff123@gmail.com";
+    }
+
+    match /aiShareRequests/{reqId} {
+      // Only the owner creates a request, and only as himself.
+      allow create: if isOwner()
+        && request.resource.data.fromUid == request.auth.uid
+        && request.resource.data.status == "pending";
+      // The target reads requests addressed to them; the owner reads his own.
+      allow read: if signedIn()
+        && (resource.data.toUid == request.auth.uid || isOwner());
+      // Only the target decides, only from "pending", and only the
+      // decision fields may change.
+      allow update: if signedIn()
+        && resource.data.toUid == request.auth.uid
+        && resource.data.status == "pending"
+        && request.resource.data.status in ["approved", "declined"]
+        && request.resource.data.diff(resource.data).affectedKeys()
+             .hasOnly(["status", "decidedMs"]);
+      allow delete: if false;
+    }
+
+    match /aiShared/{uid} {
+      // A shared copy is written ONLY by the user it belongs to (at
+      // their own Approve tap) — never by the owner, never by anyone else.
+      allow create, update: if signedIn() && request.auth.uid == uid;
+      // Readable by the sharing user and by the owner — nobody else.
+      allow read: if signedIn() && (request.auth.uid == uid || isOwner());
+      // Revoke: only the sharing user may delete the copy. The owner cannot.
+      allow delete: if signedIn() && request.auth.uid == uid;
+    }
   }
 }
