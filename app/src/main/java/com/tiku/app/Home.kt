@@ -1014,7 +1014,7 @@ private fun SettingsMain(
         ActivityResultContracts.RequestPermission(),
     ) { granted ->
         pushPermGranted = granted
-        if (granted && OwnerPrefs.notifyOn) FcmTokenSync.register(ctx)
+        if (granted) FcmTokenSync.register(ctx)
     }
     LaunchedEffect(Unit) {
         // Re-read the permission on entry too (it can be changed in
@@ -1112,15 +1112,14 @@ private fun SettingsMain(
             }
         }
         item {
-            // ROUND 15 (owner order): the Notifications toggle lives
+            // ROUND 15 (owner order): the Notifications row lives
             // HERE, directly under App lock.
-            // ROUND 18 (owner order): visible and functional for EVERY
-            // signed-in user — same OwnerPrefs binding, same default
-            // (OFF), same POST_NOTIFICATIONS request on enable.
-            // ROUND 58: this toggle is the display gate for every
-            // NON-owner account (TikuFcmService reads it at push time);
-            // the Owner section's row is a separate always-on rendering,
-            // because the owner account's pushes ignore this pref.
+            // ROUND 62 (owner decision 2026-11-09): notifications are
+            // ALWAYS ON for every user — this row no longer gates
+            // anything. It renders always-on (same presentation as
+            // the Owner section's row) and only reports status: the
+            // switch is non-functional by design. The stored legacy
+            // pref is read nowhere in the display path any more.
             ToggleRow(
                 "Notifications",
                 // ROUND 61: the subtitle is the live push status
@@ -1128,35 +1127,19 @@ private fun SettingsMain(
                 // "Setting up…"), computed above from the permission
                 // + the verified fcmToken presence.
                 pushStatusSub,
-                OwnerPrefs.notifyOn,
+                true,
             ) {
-                // ROUND 61: while the status is "Permission needed —
-                // tap", a tap re-fires the system permission request
-                // instead of flipping the toggle — without the OS
-                // permission no push can ever show, whatever the
-                // toggle says.
+                // ROUND 61/62: while the status is "Permission
+                // needed — tap", a tap re-fires the system permission
+                // request — without the OS permission no push can
+                // ever show. Otherwise the tap only (re)stores this
+                // phone's push token and explains the always-on state.
                 if (!pushPermGranted) {
                     permLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
                     return@ToggleRow
                 }
-                val on = !OwnerPrefs.notifyOn
-                OwnerPrefs.setNotify(on)
-                if (on) {
-                    if (Build.VERSION.SDK_INT >= 33 &&
-                        ContextCompat.checkSelfPermission(ctx, Manifest.permission.POST_NOTIFICATIONS) !=
-                        PackageManager.PERMISSION_GRANTED
-                    ) {
-                        permLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
-                    }
-                    // ROUND 58: enabling the toggle is one of the
-                    // token (re)store points — pushes can only reach
-                    // this phone once its fcmToken is on the user doc.
-                    FcmTokenSync.register(ctx)
-                    AppState.toast("Notifications on — only on this phone, only for you")
-                } else {
-                    PushAlerts.cancelAll(ctx)
-                    AppState.toast("Notifications off")
-                }
+                FcmTokenSync.register(ctx)
+                AppState.toast("Notifications are always on")
             }
         }
         item {
@@ -1379,11 +1362,10 @@ fun OwnerSection(
     Section("Owner")
     // ROUND 58 (owner decision): the OWNER account's notifications are
     // ALWAYS ON — every new message pushes, no toggle can turn them
-    // off (the FCM display gate checks OwnerState.isOwner before it
-    // ever looks at OwnerPrefs.notifyOn). The row therefore renders
-    // its always-on state and only explains itself; the shared
-    // Settings ▸ Notifications toggle above stays harmless for the
-    // owner for the same reason. Tapping also (re)stores this phone's
+    // off. ROUND 62: that is now true for EVERY account, and the
+    // shared Settings ▸ Notifications row above renders the same
+    // always-on state. The row therefore renders
+    // its always-on state and only explains itself. Tapping also (re)stores this phone's
     // push token, so an owner who never touched any toggle is still
     // registered. ROUND 61: the subtitle is the live push status
     // (same three states as the shared row); in the "Permission

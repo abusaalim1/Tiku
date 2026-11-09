@@ -71,7 +71,9 @@ object OwnerPrefs {
     private const val PREF = "tiku_owner"
     private var prefs: SharedPreferences? = null
 
-    /** Opt-in message alerts on this phone. Default OFF for everyone. */
+    /** LEGACY (ROUND 62): the old opt-in message-alerts flag. Still
+     *  stored for prefs compatibility, but READ NOWHERE in the
+     *  display path — notifications are always on for every user. */
     var notifyOn by mutableStateOf(false)
         private set
 
@@ -246,8 +248,8 @@ object ChatSession {
         // ROUND 58: lock() used to also end the alert session here
         // (NotifyGate.sessionEnded stopped the foreground service).
         // With FCM there is no service to stop and nothing to end:
-        // pushes are gated at DISPLAY time in TikuFcmService (owner =
-        // always on; others = their toggle), independent of the lock —
+        // pushes are gated at DISPLAY time in TikuFcmService (ROUND 62:
+        // always on for every signed-in user), independent of the lock —
         // that independence is the point of the FCM switch.
         // ROUND 10 (Watch lock safety): this lock() is the single choke point
         // every lock path funnels through (quick exit, Back-out, backgrounding
@@ -310,10 +312,11 @@ object ChatSession {
         // the same bootstrap point where the deleted alert service
         // used to start. Fire-and-forget: a token failure never gates
         // the unlock or messaging. The Android 13+ notification
-        // permission is also asked here, once, when this phone's
-        // display gate could show an alert — but only when the caller
-        // handed us a real Activity (the gate routes do; background
-        // callers pass the app context and simply skip the ask).
+        // permission is also asked here, once — ROUND 62: for EVERY
+        // user, since the display gate is now always-on — but only
+        // when the caller handed us a real Activity (the gate routes
+        // do; background callers pass the app context and simply
+        // skip the ask).
         FcmTokenSync.register(c)
         (ctx as? android.app.Activity)?.let { PushAlerts.maybeRequestPermission(it) }
         val onboarded = c.getSharedPreferences("tiku_prefs", Context.MODE_PRIVATE)

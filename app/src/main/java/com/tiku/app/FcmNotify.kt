@@ -47,7 +47,8 @@ import java.net.URL
  *    verifies the sender's ID token, checks chat membership, reads
  *    the receiver's stored token and forwards a data-only FCM push.
  *  - RECEIVE: [TikuFcmService] gets the data payload, gates it
- *    (owner = always on; everyone else = their Notifications toggle),
+ *    (ROUND 62: always on for every signed-in user with a local
+ *    identity — the Round-58 Notifications-toggle gate is gone),
  *    decrypts text ON-DEVICE with the same engine machinery the old
  *    service bootstrap used (loadLocalIdentity + the conversation
  *    key + Crypto.decrypt — see FirebaseEngine.decryptForNotify),
@@ -238,8 +239,9 @@ object PushAlerts {
         }
     }
 
-    /** The Notifications toggle was flipped OFF: clear anything of
-     *  ours still on the shade. */
+    /** Clear anything of ours still on the shade. (ROUND 62: no
+     *  toggle flips off any more; kept for callers that need a
+     *  full clear.) */
     fun cancelAll(ctx: Context) {
         runCatching {
             (ctx.applicationContext.getSystemService(Context.NOTIFICATION_SERVICE)
@@ -248,17 +250,16 @@ object PushAlerts {
     }
 
     /** Android 13+ runtime permission, asked ONCE from the unlock /
-     *  resume path when this phone's display gate could actually show
-     *  an alert (owner — always on — or a user whose Notifications
-     *  toggle is ON). The Settings toggles keep their own immediate
-     *  request on enable, exactly as before; this covers the owner,
-     *  who never has to touch a toggle. A denial is remembered: the
+     *  resume path. ROUND 62: notifications are always on for every
+     *  user, so the ask fires for EVERY signed-in user at first
+     *  unlock — there is no toggle gate on it any more. The Settings
+     *  Notifications row keeps its own tap-to-request in the
+     *  "Permission needed" state. A denial is remembered: the
      *  system dialog is never re-nagged from here. */
     fun maybeRequestPermission(activity: Activity) {
         runCatching {
             if (Build.VERSION.SDK_INT < 33) return
             if (Config.PREVIEW_UI_ONLY) return
-            if (!OwnerState.isOwner && !OwnerPrefs.notifyOn) return
             if (ContextCompat.checkSelfPermission(
                     activity, android.Manifest.permission.POST_NOTIFICATIONS
                 ) == PackageManager.PERMISSION_GRANTED
@@ -498,12 +499,13 @@ object PushSender {
  * was ever unlocked in-process: the persisted Firebase Auth session
  * and the device-Keystore-wrapped local identity are what identify
  * this phone's account (the exact cold bootstrap the deleted alert
- * service performed). Display gate, in order:
+ * service performed). Display gate (ROUND 62 — owner decision
+ * 2026-11-09, superseding the Round-58 toggle gate):
  *
  *  1. signed out, or no local identity on this device → show nothing;
- *  2. the OWNER account → always show (no toggle can turn it off);
- *  3. any other user → show only while their Notifications toggle
- *     ([OwnerPrefs.notifyOn], default OFF) is on.
+ *  2. every other signed-in user → always show (WhatsApp-style;
+ *     push notifications are always on for every user, no toggle
+ *     gates them).
  *
  * A muted chat never pushes (same rule the old judge enforced, when
  * the thread is loaded in this process). The exact chat open in the
@@ -547,7 +549,8 @@ class TikuFcmService : FirebaseMessagingService() {
         // The cold bootstrap: device-wrapped identity, NO journal
         // password (it is never available here, and never needed).
         if (!FirebaseEngine.loadLocalIdentity(ctx)) return
-        if (!OwnerState.isOwner && !OwnerPrefs.notifyOn) return
+        // ROUND 62: no further display gate — every signed-in user
+        // with a local identity is shown pushes by default.
 
         val chatId = data["chatId"]?.takeIf { it.isNotBlank() } ?: return
         val type = data["type"]?.takeIf { it.isNotBlank() } ?: "text"

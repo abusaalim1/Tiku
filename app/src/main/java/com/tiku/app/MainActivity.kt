@@ -59,8 +59,8 @@ class TikuApp : Application() {
         // push landing in a cold FCM-only process always finds them
         // ready (PushAlerts). Creating a channel posts nothing — a
         // notification still exists only while a real event stands,
-        // and the display gate lives in TikuFcmService (owner always
-        // on; everyone else only with their Notifications toggle on).
+        // and the display gate lives in TikuFcmService (ROUND 62:
+        // always on for every signed-in user).
         PushAlerts.ensureChannels(this)
     }
 }
