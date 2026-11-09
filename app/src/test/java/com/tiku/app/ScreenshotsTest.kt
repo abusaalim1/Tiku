@@ -11,6 +11,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.click
 import androidx.compose.ui.test.doubleClick
@@ -30,6 +31,7 @@ import androidx.compose.ui.test.swipeLeft
 import androidx.compose.ui.unit.dp
 import androidx.test.core.app.ApplicationProvider
 import com.github.takahirom.roborazzi.captureRoboImage
+import kotlinx.coroutines.launch
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
@@ -1640,7 +1642,7 @@ class ScreenshotsTest {
                 EmojiFxOverlay(kind = 1, onDone = {})
             }
         }
-        composeRule.mainClock.advanceBy(1300)
+        composeRule.mainClock.advanceTimeBy(1300)
         shot("59-fx-kiss-round25.png")
     }
 
@@ -1652,7 +1654,11 @@ class ScreenshotsTest {
         // complete under Robolectric (no real provider); the save is
         // attempted and its outcome printed, not asserted.
         val keepsake = nikahSampleKeepsake()
-        frame { NikahCertificateOverlay(keepsake) {} }
+        var hostActivity: android.app.Activity? = null
+        frame {
+            hostActivity = LocalContext.current as? android.app.Activity
+            NikahCertificateOverlay(keepsake) {}
+        }
         composeRule.waitForIdle()
         org.junit.Assert.assertTrue(
             "keepsake certificate view must carry the Download action",
@@ -1664,7 +1670,7 @@ class ScreenshotsTest {
                 "CERTIFICATE NO. ${nikahCertNo(keepsake)}", substring = true,
             ).fetchSemanticsNodes().isNotEmpty(),
         )
-        val activity = composeRule.activity
+        val activity: android.content.Context = hostActivity ?: ctx
         var rendered: android.graphics.Bitmap? = null
         var renderDone = false
         android.os.Handler(android.os.Looper.getMainLooper()).post {
