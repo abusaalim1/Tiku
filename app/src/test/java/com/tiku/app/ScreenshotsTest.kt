@@ -969,10 +969,12 @@ class ScreenshotsTest {
         // arrangement / contentPadding / state anchors) is byte-for-
         // byte build 93's; this shot pins the resting state so any
         // future drift is visible in the PNG.
-        val p = PreviewStore.people.first { person ->
-            AppState.threads.value.none { it.person.uid == person.uid }
-        }
+        // seedThreads() gives EVERY preview person a thread, so take the
+        // first person's thread and clear it — the conversation under
+        // test must hold exactly the three messages below, nothing else.
+        val p = PreviewStore.people.first()
         val id = PreviewRepo.startThreadWith(p)
+        AppState.updateThread(id) { it.messages.clear() }
         AppState.upsertMessage(id, TikuMessage(
             id = "few1", senderUid = p.uid, kind = MsgKind.TEXT,
             text = "Hi, are we still on for tomorrow?", time = "9:30", me = false, tsMs = 1))
