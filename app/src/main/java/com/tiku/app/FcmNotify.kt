@@ -445,9 +445,12 @@ class TikuFcmService : FirebaseMessagingService() {
     override fun onMessageReceived(message: RemoteMessage) {
         val data = message.data
         if (data.isEmpty()) return
-        // Decryption may need a peer-key fetch: finish the platform
-        // call now and hold the process with goAsync's result.
-        val pending = goAsync()
+        // Decryption may need a peer-key fetch: run it on the service
+        // scope. (NOTE: goAsync() is a BroadcastReceiver API and does
+        // not exist on a Service — CI caught that here on the first
+        // R58 run. The FCM-woken process lives for the short IO work
+        // below; worst case a push is dropped and Firestore sync on
+        // next open still delivers the message.)
         serviceScope.launch {
             try {
                 handle(data)
@@ -455,8 +458,6 @@ class TikuFcmService : FirebaseMessagingService() {
                 // The push path can never crash the process; a failed
                 // push simply shows nothing (Firestore still holds
                 // the message for the next sync).
-            } finally {
-                runCatching { pending.finish() }
             }
         }
     }
