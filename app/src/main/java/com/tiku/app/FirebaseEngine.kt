@@ -2322,7 +2322,25 @@ object FirebaseEngine : ChatRepo {
         // round 4 call-event payload (decrypted JSON from the ct field)
         var callCallerUid = ""; var callOutcome = ""; var callDurSec = 0; var callVideo = false
         when (kindRaw) {
-            "text" -> text = Crypto.decryptText(key, doc.getString("iv") ?: "", doc.getString("ct") ?: "")
+            "text" -> {
+                // ROUND 57: an edited message carries its new body in
+                // the ADDITIVE eCt/eIv fields (the original ct/iv is
+                // never touched — older builds keep showing the
+                // original). Prefer the edit whenever eCt is present;
+                // if the edit can't be opened on this device, fall
+                // back to the original ciphertext rather than stubbing
+                // a message this phone could have shown.
+                val eCt = doc.getString("eCt")?.takeIf { it.isNotEmpty() }
+                text = if (eCt != null) {
+                    runCatching {
+                        Crypto.decryptText(key, doc.getString("eIv") ?: "", eCt)
+                    }.getOrElse {
+                        Crypto.decryptText(key, doc.getString("iv") ?: "", doc.getString("ct") ?: "")
+                    }
+                } else {
+                    Crypto.decryptText(key, doc.getString("iv") ?: "", doc.getString("ct") ?: "")
+                }
+            }
             "call" -> {
                 val payload = Crypto.decryptText(key, doc.getString("iv") ?: "", doc.getString("ct") ?: "")
                 runCatching {
@@ -3282,23 +3300,43 @@ object FirebaseEngine : ChatRepo {
 
     // ================= ROUND 10 — CHAT DETAILS + MESSAGE OPS =================
 
-    /** EDIT MY OWN TEXT MESSAGE: re-encrypt the new body through the exact
-     *  same conversation-key path as a fresh send and replace ct/iv on the
-     *  doc, stamping editedAt. The messages rule grants member writes, so
-     *  this is the same class of update as reactions/seen (proven live).
-     *  The 15-minute window is enforced by the UI (the only caller). */
+    /** ROUND 57 — EDIT MY OWN TEXT MESSAGE. The new body is re-encrypted
+     *  through the exact same conversation-key path as a fresh send, but
+     *  written to the doc's ADDITIVE `eCt`/`eIv` fields ONLY: the original
+     *  ct/iv is never touched, so builds from before this round keep
+     *  showing the original text (accepted), while this build's
+     *  decryptDoc prefers eCt/eIv on every surface it feeds (open chat,
+     *  thread-list preview, search, alerts). No timestamp, no flag —
+     *  nothing marks the message as edited anywhere. There is NO time
+     *  limit (owner's explicit order). The deployed messages rule grants
+     *  member writes (`allow read, write: if … uid in members`), the
+     *  same class of update as reactions/seen, so no rules change is
+     *  needed. The local copy updates optimistically; the snapshot echo
+     *  (same doc, decrypt preferring eCt) confirms the identical text.
+     *  SUPERSEDES the round-10 edit, which replaced ct/iv in place and
+     *  stamped editedAt (that field is no longer written here; docs an
+     *  older build edited that way still decrypt via their ct). */
     override fun editText(id: String, msgId: String, newText: String) {
         val th = AppState.thread(id) ?: return
         val trimmed = newText.trim()
         if (trimmed.isEmpty()) return
+        val target = th.messages.firstOrNull { it.id == msgId } ?: return
+        // Own TEXT messages only — never media, games, AI or tombstones,
+        // and only once the send has landed (the UI menu gates the same
+        // way; this is the engine backstop).
+        if (!target.me || target.kind != MsgKind.TEXT || target.ai ||
+            target.deletedForEveryone || target.undecryptable ||
+            target.status != SendStatus.SENT
+        ) return
+        if (trimmed == target.text) return
+        AppState.upsertMessage(id, target.copy(text = trimmed))
         scope.launch {
             runCatching {
                 val key = convKeyOrNull(id, th.person.uid)
                     ?: throw IllegalStateException("encryption key not ready")
-                val (iv, ct) = Crypto.encryptText(key, trimmed)
+                val (eIv, eCt) = Crypto.encryptText(key, trimmed)
                 msgRef(id, msgId).update(mapOf(
-                    "ct" to ct, "iv" to iv,
-                    "editedAt" to FieldValue.serverTimestamp(),
+                    "eCt" to eCt, "eIv" to eIv,
                 )).await()
                 Log.d("TikuChat", "message $msgId edited in chat $id")
             }.onFailure {

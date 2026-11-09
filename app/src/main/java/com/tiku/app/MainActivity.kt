@@ -70,6 +70,20 @@ class MainActivity : ComponentActivity() {
         AppState.repo = if (Config.PREVIEW_UI_ONLY) PreviewRepo else FirebaseEngine
         DramaContent.load(this)
         AppState.instantGo(Screen.Facade)
+        // ROUND 57 (Fix 5) — OWNER DIRECT ENTRY: with "Skip home
+        // screen" on (OwnerPrefs.skipHome, default ON) and the
+        // signed-in account being the owner, opening the app goes
+        // straight to the episode gate — through the SAME
+        // SecretEntry route the facade double-tap uses, so every
+        // build-92 entry invariant holds: App lock OFF still skips
+        // the password via its unlockFlow, otherwise the gate shows
+        // exactly as it does from the double-tap (password required;
+        // Google auth alone never unlocks; the gate's Cancel drops
+        // back to this facade). Non-owners never take this branch —
+        // their entry is the facade, unchanged.
+        if (OwnerState.isOwner && OwnerPrefs.skipHome) {
+            SecretEntry.openGate(this, lifecycleScope)
+        }
         // ROUND 15: app start is one of the notify service's choke points
         // (OwnerPrefs was initialized in TikuApp.onCreate, before this).
         NotifyGate.sync(this)

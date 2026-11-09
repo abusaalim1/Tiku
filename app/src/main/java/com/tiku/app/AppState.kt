@@ -398,8 +398,12 @@ interface ChatRepo {
      *  two are ORed. Default no-op. */
     fun setPinned(id: String, on: Boolean) {}
     // ---- ROUND 10 ----
-    /** Edit one of MY OWN text messages in place (re-encrypts through the
-     *  existing path; the doc gains an editedAt stamp). Default no-op. */
+    /** ROUND 57: edit one of MY OWN text messages — the new text is
+     *  re-encrypted under the conversation key and written to the doc's
+     *  ADDITIVE `eCt`/`eIv` fields only (original ct/iv untouched, so
+     *  older builds keep showing the original — accepted). No time
+     *  limit, and no "edited" marker of any kind is written or shown.
+     *  Default no-op. */
     fun editText(id: String, msgId: String, newText: String) {}
     /** Pin/unpin a MESSAGE inside the chat (chat doc pinnedMsgs, max 3,
      *  shared by both members). Default no-op. */

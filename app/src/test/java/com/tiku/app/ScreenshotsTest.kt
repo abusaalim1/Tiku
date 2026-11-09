@@ -445,6 +445,11 @@ class ScreenshotsTest {
             "long-press menu must offer Copy for a text message",
             composeRule.onAllNodesWithText("Copy").fetchSemanticsNodes().isNotEmpty(),
         )
+        // ROUND 57 (Fix 2): the menu gains Edit for an own text message.
+        org.junit.Assert.assertTrue(
+            "long-press menu must offer Edit for an own text message",
+            composeRule.onAllNodesWithText("Edit").fetchSemanticsNodes().isNotEmpty(),
+        )
         org.junit.Assert.assertTrue(
             "long-press menu must offer Delete for me",
             composeRule.onAllNodesWithText("Delete for me").fetchSemanticsNodes().isNotEmpty(),
@@ -668,6 +673,13 @@ class ScreenshotsTest {
         org.junit.Assert.assertTrue(
             "owner section must offer AI chats",
             composeRule.onAllNodesWithText("AI chats").fetchSemanticsNodes().isNotEmpty(),
+        )
+        // ROUND 57 (Fix 5): the Owner section gains the "Skip home
+        // screen" toggle (above "Lock now" in the same section, so
+        // the scroll above has already composed it).
+        org.junit.Assert.assertTrue(
+            "owner section must offer Skip home screen",
+            composeRule.onAllNodesWithText("Skip home screen").fetchSemanticsNodes().isNotEmpty(),
         )
         shot("28-settings-owner.png")
         OwnerState.previewOverride = null

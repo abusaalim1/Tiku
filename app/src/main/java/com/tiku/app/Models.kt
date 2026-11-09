@@ -71,8 +71,14 @@ data class TikuMessage(
      *  actually changed" (upload finished — download it). */
     val mediaChunks: Int = 0,
     /** ROUND 10: server timestamp (ms) of the last in-place edit of a TEXT
-     *  message (0 = never edited). Drives the muted "Edited" caption; the
-     *  ciphertext itself is replaced through the normal encrypt path. */
+     *  message (0 = never edited). LEGACY (rounds ≤ 56): edits replaced
+     *  ct/iv in place and stamped this field; no surface ever rendered an
+     *  "Edited" caption from it. ROUND 57 supersedes the write path: an
+     *  edit now writes ONLY the additive `eCt`/`eIv` fields (see
+     *  [Schema.Messages.Doc]) and never touches ct/iv or this stamp, and
+     *  there is deliberately NO edited label anywhere in the UI. The
+     *  field stays readable for docs written by older builds and for the
+     *  engine's optimistic-echo merge. */
     val editedAtMs: Long = 0L,
     // ---- round 15 (appended last on purpose: every existing positional
     // TikuMessage construction keeps compiling unchanged) ----
@@ -373,6 +379,15 @@ object Schema {
         data class Doc(
             val senderId: String = "", val kind: String = "text",
             val ct: String = "", val iv: String = "",
+            /** ROUND 57: the EDITED body of a text message — the new
+             *  plaintext re-encrypted under the conversation key, stored
+             *  in these ADDITIVE fields so the original ct/iv is never
+             *  touched: builds from before round 57 ignore both fields
+             *  and keep showing the original text, while this build's
+             *  decrypt path prefers eCt/eIv whenever eCt is present.
+             *  Absent/empty = never edited. No timestamp, no flag, no
+             *  label rides along — an edit is invisible as an edit. */
+            val eCt: String = "", val eIv: String = "",
             val ts: Any? = null,
             val replyToId: String? = null, val rqCt: String = "", val rqIv: String = "",
             val reaction: Map<String, String> = emptyMap(),

@@ -45,6 +45,8 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.animateScrollBy
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.rememberTransformableState
@@ -63,6 +65,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -173,6 +176,9 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import java.io.File
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import kotlin.math.abs
 import kotlin.math.roundToInt
 import kotlin.math.sin
@@ -682,6 +688,36 @@ fun replyQuoteLabel(m: TikuMessage): String = if (m.undecryptable) "This message
     MsgKind.AUDIO -> "Audio file"
     else -> m.text
 }.take(60)
+
+/** ROUND 57 (Fix 1) — the in-bubble clock: every message bubble shows
+ *  its own time, WhatsApp-style, small at the bubble's bottom-end
+ *  corner. Formatted from the message's [TikuMessage.tsMs] as
+ *  "h:mm a" in the local timezone; a message with no clock yet (the
+ *  preview seeds) falls back to its preformatted [TikuMessage.time].
+ *  (The day separators above the bubbles are untouched, and so is the
+ *  Seen/Sent caption under the last own message.) */
+private fun bubbleTimeText(m: TikuMessage): String =
+    if (m.tsMs > 0L) SimpleDateFormat("h:mm a", Locale.getDefault()).format(Date(m.tsMs))
+    else m.time
+
+/** ROUND 57 (Fix 1) — the bubble's bottom-end time, ~10.5 sp in a muted
+ *  alpha of the bubble's own ink. On my own messages ([showTicks]) a
+ *  compact tick rides beside it once the send has landed: ✓ sent,
+ *  ✓✓ seen by the peer — the per-bubble form of the read state the
+ *  Seen/Sent caption under the last own message also reports. */
+@Composable
+private fun RdBubbleTime(m: TikuMessage, color: Color, showTicks: Boolean) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Text(bubbleTimeText(m), color = color, fontSize = 10.5.sp, fontFamily = PoppinsFamily)
+        if (showTicks && m.me && m.status == SendStatus.SENT) {
+            Spacer(Modifier.width(4.dp))
+            Text(
+                if (m.seenByPeer) "✓✓" else "✓",
+                color = color, fontSize = 10.5.sp, fontFamily = PoppinsFamily,
+            )
+        }
+    }
+}
 
 /** "3:24" media duration label (video / audio bubbles). */
 private fun fmtDurSec(sec: Int): String = "${sec / 60}:${(sec % 60).toString().padStart(2, '0')}"
@@ -1809,7 +1845,7 @@ private fun RdBubbleRow(
                                 // and opening it is what consumes a view.
                                 MsgKind.IMAGE -> if (voIncoming) RdVoBubble(m, voRemaining, voExpired, voBypass) else RdImageBubble(m)
                                 MsgKind.VIDEO -> if (voIncoming) RdVoBubble(m, voRemaining, voExpired, voBypass) else RdVideoBubble(m)
-                                MsgKind.VOICE, MsgKind.AUDIO -> RdVoiceBubble(m, playing, onPlayToggle, tint = bubbleText)
+                                MsgKind.VOICE, MsgKind.AUDIO -> RdVoiceBubble(m, playing, onPlayToggle, tint = bubbleText, timeText = bubbleTimeText(m))
                                 else -> {
                                     if (sealedGift) {
                                         // ROUND 24: the sealed gift — the
@@ -1869,6 +1905,26 @@ private fun RdBubbleRow(
                                                 descColor = bubbleText.copy(alpha = 0.72f),
                                                 hostColor = bubbleText.copy(alpha = 0.55f),
                                                 onLongPress = onMenu,
+                                            )
+                                        }
+                                        // ROUND 57 (Fix 1): the time (and, on
+                                        // my messages, the tick) at the
+                                        // bubble's bottom-end corner,
+                                        // inside the bubble — WhatsApp's
+                                        // layout. The sealed gift above
+                                        // never reaches this branch; an
+                                        // opened gift does, like any text.
+                                        // (End-aligned, NOT fillMaxWidth —
+                                        // the bubble column wraps its
+                                        // widest child, and a filling row
+                                        // would stretch short bubbles.)
+                                        Row(
+                                            Modifier.align(Alignment.End).padding(top = 4.dp),
+                                        ) {
+                                            RdBubbleTime(
+                                                m,
+                                                color = bubbleText.copy(alpha = 0.65f),
+                                                showTicks = true,
                                             )
                                         }
                                     }
@@ -1998,6 +2054,16 @@ private fun RdImageBubble(m: TikuMessage) {
                 m.text, color = Color.White, fontSize = 13.sp,
                 modifier = Modifier.align(Alignment.BottomStart).padding(12.dp), fontFamily = emojiFont,)
         }
+        // ROUND 57 (Fix 1): the time chip over the photo's bottom-end
+        // corner (WhatsApp's media layout), on a small dark scrim so it
+        // stays readable over any photo.
+        Box(
+            Modifier.align(Alignment.BottomEnd).padding(8.dp)
+                .clip(RoundedCornerShape(999.dp)).background(Color.Black.copy(0.45f))
+                .padding(horizontal = 7.dp, vertical = 3.dp),
+        ) {
+            RdBubbleTime(m, color = Color.White.copy(alpha = 0.92f), showTicks = true)
+        }
     }
 }
 
@@ -2040,6 +2106,12 @@ private fun RdVideoBubble(m: TikuMessage) {
                     else -> ""
                 },
                 color = Color.White.copy(0.85f), fontSize = 11.5.sp, fontFamily = PoppinsFamily,)
+            // ROUND 57 (Fix 1): the time at the bar's end — the video
+            // bubble's bottom corner.
+            Spacer(Modifier.width(8.dp))
+            Text(
+                bubbleTimeText(m), color = Color.White.copy(0.85f), fontSize = 10.5.sp,
+                fontFamily = PoppinsFamily,)
         }
     }
 }
@@ -2092,8 +2164,12 @@ private fun RdVoChip(label: String, selected: Boolean, onClick: () -> Unit) {
 @Composable
 private fun RdVoBubble(m: TikuMessage, remaining: Int, expired: Boolean, bypass: Boolean) {
     val isVideo = m.kind == MsgKind.VIDEO
+    // ROUND 57 (Fix 1): the row now rides in a Column so the in-bubble
+    // time can sit at the bubble's bottom-end corner, like every other
+    // bubble type.
+    Column(Modifier.width(220.dp).padding(horizontal = 16.dp, vertical = 15.dp)) {
     Row(
-        Modifier.width(220.dp).padding(horizontal = 16.dp, vertical = 15.dp),
+        Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Box(
@@ -2125,6 +2201,13 @@ private fun RdVoBubble(m: TikuMessage, remaining: Int, expired: Boolean, bypass:
             Text("${m.vo}×", color = RdRose, fontSize = 13.sp, fontWeight = FontWeight.Bold, fontFamily = InterTight)
         }
     }
+    Row(
+        Modifier.fillMaxWidth().padding(top = 6.dp),
+        horizontalArrangement = Arrangement.End,
+    ) {
+        RdBubbleTime(m, color = Color.White.copy(alpha = 0.6f), showTicks = true)
+    }
+    }
 }
 
 /** The file's voice bubble, driven by REAL playback: the play disc
@@ -2137,6 +2220,10 @@ private fun RdVoiceBubble(
     /** ROUND 26: the bubble's theme text colour. Defaults to White —
      *  the exact pre-round rendering. */
     tint: Color = Color.White,
+    /** ROUND 57 (Fix 1): the in-bubble time, rendered after the
+     *  duration at the bubble's bottom-end. Null = no time (the
+     *  owner-vault rows keep their exact pre-round shape). */
+    timeText: String? = null,
 ) {
     val prog = remember(m.id) { Animatable(0f) }
     LaunchedEffect(playing) {
@@ -2176,6 +2263,12 @@ private fun RdVoiceBubble(
         Text(
             "${m.voiceDurSec / 60}:${(m.voiceDurSec % 60).toString().padStart(2, '0')}",
             color = tint, fontSize = 12.sp, fontFamily = PoppinsFamily,)
+        if (timeText != null) {
+            Spacer(Modifier.width(8.dp))
+            Text(
+                timeText, color = tint.copy(alpha = 0.65f), fontSize = 10.5.sp,
+                fontFamily = PoppinsFamily,)
+        }
     }
 }
 
@@ -2262,19 +2355,31 @@ private fun RdAiBubbleRow(
         Spacer(Modifier.height(4.dp))
         val bmp = m.photo
         if (m.kind == MsgKind.IMAGE && bmp != null) {
-            Image(
-                bmp.asImageBitmap(), null,
-                Modifier.widthIn(max = 240.dp)
-                    .aspectRatio(bmp.width.toFloat() / bmp.height.coerceAtLeast(1).toFloat())
-                    .clip(RoundedCornerShape(22.dp))
-                    .pointerInput(m.id) {
-                        detectTapGestures(
-                            onTap = { onOpenImage(m) },
-                            onLongPress = { onMenu() },
-                        )
-                    },
-                contentScale = ContentScale.Crop,
-            )
+            // ROUND 57 (Fix 1): the image rides in a Box so the time
+            // chip can sit over its bottom-end corner, like the
+            // ordinary photo bubble.
+            Box {
+                Image(
+                    bmp.asImageBitmap(), null,
+                    Modifier.widthIn(max = 240.dp)
+                        .aspectRatio(bmp.width.toFloat() / bmp.height.coerceAtLeast(1).toFloat())
+                        .clip(RoundedCornerShape(22.dp))
+                        .pointerInput(m.id) {
+                            detectTapGestures(
+                                onTap = { onOpenImage(m) },
+                                onLongPress = { onMenu() },
+                            )
+                        },
+                    contentScale = ContentScale.Crop,
+                )
+                Box(
+                    Modifier.align(Alignment.BottomEnd).padding(8.dp)
+                        .clip(RoundedCornerShape(999.dp)).background(Color.Black.copy(0.45f))
+                        .padding(horizontal = 7.dp, vertical = 3.dp),
+                ) {
+                    RdBubbleTime(m, color = Color.White.copy(alpha = 0.92f), showTicks = false)
+                }
+            }
         } else {
             // ROUND 46: AI text wears the same bubble skin as before,
             // now as a Column so a detected link can carry its styled
@@ -2307,6 +2412,16 @@ private fun RdAiBubbleRow(
                         hostColor = aiInk.copy(alpha = 0.55f),
                         onLongPress = onMenu,
                     )
+                }
+                // ROUND 57 (Fix 1): the time at the AI bubble's
+                // bottom-end corner (no ticks — the bubble renders as
+                // Tika's, whichever member's client posted it).
+                // End-aligned wrap row, like the ordinary text bubble
+                // (a filling row would stretch the bubble).
+                Row(
+                    Modifier.align(Alignment.End).padding(top = 4.dp),
+                ) {
+                    RdBubbleTime(m, color = aiInk.copy(alpha = 0.6f), showTicks = false)
                 }
             }
         }
@@ -2423,6 +2538,14 @@ private fun RdGameCard(
                     Text(
                         "Sending…", color = GameCardInk.copy(alpha = 0.5f),
                         fontSize = 11.5.sp, fontFamily = PoppinsFamily,)
+                }
+                // ROUND 57 (Fix 1): the time at the game card's
+                // bottom-end corner, like every other bubble.
+                Row(
+                    Modifier.fillMaxWidth().padding(top = 8.dp),
+                    horizontalArrangement = Arrangement.End,
+                ) {
+                    RdBubbleTime(m, color = GameCardInk.copy(alpha = 0.55f), showTicks = true)
                 }
             }
         }
@@ -2711,6 +2834,13 @@ fun RdChatInput(
      *  the composer pill + reply strip + fx chip wear the theme's
      *  composer colours instead of the glass skin. */
     theme: ChatTheme? = null,
+    /** ROUND 57 (Fix 2): edit mode — while true, the "Editing message"
+     *  banner rides above the pill and the caller's Send replaces the
+     *  edited message instead of posting a new one; [onCancelEdit] is
+     *  the banner's ✕. Defaults keep direct framings of this input
+     *  (screenshot harness) compiling unchanged. */
+    editing: Boolean = false,
+    onCancelEdit: () -> Unit = {},
 ) {
     // ROUND 26: themed composer colours. Every value falls back to the
     // EXACT pre-round expression when theme == null, so the Default
@@ -2738,6 +2868,17 @@ fun RdChatInput(
     // IME composition untouched), programmatic fills (a send clearing
     // the field, the slash insert below) set the caret deliberately.
     var tfv by remember { mutableStateOf(TextFieldValue(value, TextRange(value.length))) }
+    // ROUND 57 (Fix 4): the field's internal scroll state for the
+    // height cap (see the field's modifier below). While the caret
+    // sits at the very end of the text, growth scrolls the newest
+    // line into view inside the field; a caret parked mid-text (an
+    // edit in progress) is never yanked.
+    val composerScroll = rememberScrollState()
+    LaunchedEffect(value) {
+        if (tfv.selection.end >= value.length) {
+            composerScroll.animateScrollTo(composerScroll.maxValue)
+        }
+    }
     LaunchedEffect(value) {
         // External change (send-clear, prefill): adopt the new text
         // with the caret at its end. Changes that came FROM the field
@@ -2763,6 +2904,29 @@ fun RdChatInput(
     val emojiFont = rememberChatFontFamily() // ROUND 48: Inter + iOS-emoji chain (see EmojiArt)
     val showCamera = value.isEmpty() && !fieldFocused
     Column(Modifier.padding(horizontal = 14.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        // ROUND 57 (Fix 2): the editing banner — WhatsApp's pattern:
+        // a strip above the pill naming the mode, with a ✕ that
+        // cancels back to normal compose. It borrows the reply strip's
+        // glass language directly below.
+        AnimatedVisibility(
+            visible = editing,
+            enter = fadeIn() + expandVertically(),
+            exit = fadeOut() + shrinkVertically(),
+        ) {
+            Row(
+                Modifier.fillMaxWidth().then(barMod(RoundedCornerShape(20.dp))).padding(horizontal = 14.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Box(Modifier.width(3.dp).height(28.dp).clip(RoundedCornerShape(2.dp)).background(accent))
+                Text(
+                    "Editing message", color = accent, fontSize = 13.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.weight(1f).padding(horizontal = 10.dp),
+                    fontFamily = PoppinsFamily,
+                )
+                Text("✕", color = contentCol, fontSize = 16.sp, modifier = Modifier.rdPress(onCancelEdit).padding(6.dp))
+            }
+        }
         AnimatedVisibility(
             visible = replyText != null,
             enter = fadeIn() + expandVertically(),
@@ -2823,7 +2987,7 @@ fun RdChatInput(
         // animation, the fx chip's trick above.
         val slashMatches = if (
             value.startsWith("/") && !value.contains(' ') &&
-            replyText == null && fxArmed == null && !recording
+            replyText == null && fxArmed == null && !recording && !editing
         ) SlashCommands.filter { it.name.startsWith(value.lowercase()) } else emptyList()
         var lastSlashMatches by remember { mutableStateOf<List<SlashCommand>>(emptyList()) }
         LaunchedEffect(slashMatches) { if (slashMatches.isNotEmpty()) lastSlashMatches = slashMatches }
@@ -2857,9 +3021,15 @@ fun RdChatInput(
                 }
             }
         }
+        // ROUND 57 (Fix 4): the pill's corners are a FIXED 28 dp (was
+        // 999 dp): a fully-round pill whose field grows uncapped is
+        // what ballooned into a giant circle on long text — with a
+        // fixed radius + the field's 150 dp cap below, the bar keeps
+        // one stable rounded-rectangle shape at every height, and its
+        // buttons ride the BOTTOM (WhatsApp-style) while it is tall.
         Row(
-            Modifier.fillMaxWidth().then(barMod(RoundedCornerShape(999.dp))).padding(start = 6.dp, end = 6.dp, top = 6.dp, bottom = 6.dp),
-            verticalAlignment = Alignment.CenterVertically,
+            Modifier.fillMaxWidth().then(barMod(RoundedCornerShape(28.dp))).padding(start = 6.dp, end = 6.dp, top = 6.dp, bottom = 6.dp),
+            verticalAlignment = Alignment.Bottom,
         ) {
             if (recording) {
                 val pulse by rememberInfiniteTransition(label = "rec").animateFloat(
@@ -2927,7 +3097,15 @@ fun RdChatInput(
                         // ROUND 44: a leading "/" command token renders
                         // Bold while typing (see CommandBoldTransformation).
                         visualTransformation = CommandBoldTransformation,
-                        modifier = Modifier.fillMaxWidth().onFocusChanged { fieldFocused = it.isFocused },
+                        // ROUND 57 (Fix 4): the height cap — the field
+                        // grows with the text up to 150 dp (≈6 lines),
+                        // then scrolls INTERNALLY (composerScroll keeps
+                        // the caret's line in view). The text itself is
+                        // never truncated, capped or blocked: unlimited
+                        // typing, bounded box.
+                        modifier = Modifier.fillMaxWidth().heightIn(max = 150.dp)
+                            .verticalScroll(composerScroll)
+                            .onFocusChanged { fieldFocused = it.isFocused },
                     )
                 }
                 val has = value.isNotBlank()
@@ -3100,6 +3278,13 @@ private fun RdChatContent(thread: ChatThread) {
 
     var input by remember { mutableStateOf("") }
     var replyTarget by remember { mutableStateOf<TikuMessage?>(null) }
+    /** ROUND 57 (Fix 2): the message being edited, or null. Set by the
+     *  long-press menu's Edit (own text messages only): the composer
+     *  loads the message's current text, the "Editing message" banner
+     *  shows, and sendCurrent REPLACES this message via
+     *  [ChatRepo.editText] instead of posting a new one. Cancelling
+     *  (banner ✕) restores normal compose mode. */
+    var editingMsg by remember(threadId) { mutableStateOf<TikuMessage?>(null) }
     var menuMsg by remember { mutableStateOf<TikuMessage?>(null) }
     var attachOpen by remember { mutableStateOf(false) }
     var viewerMsg by remember { mutableStateOf<TikuMessage?>(null) }
@@ -3731,6 +3916,27 @@ private fun RdChatContent(thread: ChatThread) {
     fun sendCurrent() {
         val v = input.trim()
         if (v.isEmpty()) return
+        // ROUND 57 (Fix 2): EDIT MODE — Send replaces the message being
+        // edited (the eCt/eIv write in the engine) instead of posting
+        // a new one, and the composer returns to normal mode either
+        // way. An unchanged text is a silent no-op; a target that was
+        // deleted for everyone while the editor was open says so.
+        val editTarget = editingMsg
+        if (editTarget != null) {
+            editingMsg = null
+            input = ""
+            scope.launch { AppState.repo.setTyping(threadId, false) }
+            val stillThere = AppState.thread(threadId)?.messages
+                ?.firstOrNull { it.id == editTarget.id }
+            if (stillThere == null || stillThere.deletedForEveryone) {
+                AppState.toast("That message is gone")
+                return
+            }
+            if (v != stillThere.text) {
+                AppState.repo.editText(threadId, editTarget.id, v)
+            }
+            return
+        }
         // ROUND 37: a bare Tika command (no reply target, no armed
         // effect) takes the AI path: the command itself sends FIRST as
         // the user's normal message — both sides see what was asked,
@@ -4092,6 +4298,30 @@ private fun RdChatContent(thread: ChatThread) {
     }
 
     Box(Modifier.fillMaxSize().background(Color.Black)) {
+        // ROUND 57 (Fix 3) — TOUCH SHIELD: the culprit behind "Memories
+        // opens by itself from inside a chat". There is NO navigation
+        // to Memories anywhere in the chat (the tree's only
+        // `go(Screen.Moments)` call site is the Messages list's
+        // "Memories" CardRow in Home.kt) — but HomeScreen stays
+        // COMPOSED underneath this chat overlay in TikuRoot, and this
+        // root was a plain background Box: a tap landing on a dead
+        // zone of the chat (the gaps around the header pill, the
+        // composer's margins, the list's top padding) was consumed by
+        // NOTHING here and fell through to the Messages list beneath,
+        // whose Memories row sits exactly in that upper region. This
+        // first child consumes every pointer event that reaches it;
+        // everything above it (list, header, composer) still gets its
+        // events first, so chat interaction is unchanged — taps simply
+        // can no longer escape the chat.
+        Box(
+            Modifier.fillMaxSize().pointerInput(Unit) {
+                awaitPointerEventScope {
+                    while (true) {
+                        awaitPointerEvent().changes.forEach { it.consume() }
+                    }
+                }
+            },
+        )
         // ROUND 26: the theme wallpaper — full-bleed behind the message
         // list, under the header and composer (both draw later in this
         // Box). The asset is the owner's image exactly as supplied,
@@ -4311,7 +4541,7 @@ private fun RdChatContent(thread: ChatThread) {
                                         }
                                     }
                                 },
-                                onReply = { replyTarget = m },
+                                onReply = { editingMsg = null; replyTarget = m },
                                 onReact = { e -> react(m, e) },
                                 onMenu = { menuMsg = m },
                                 onMediaTap = {
@@ -4594,6 +4824,15 @@ private fun RdChatContent(thread: ChatThread) {
                         }
                     },
                     onCamera = { camChooserOpen = true },
+                    // ROUND 57 (Fix 2): edit mode — the banner above
+                    // the pill; ✕ cancels back to normal compose (the
+                    // loaded text is discarded with the mode).
+                    editing = editingMsg != null,
+                    onCancelEdit = {
+                        editingMsg = null
+                        input = ""
+                        scope.launch { AppState.repo.setTyping(threadId, false) }
+                    },
                     // ROUND 22: message effects — arm state + picker
                     fxArmed = armedFx,
                     onFxClick = { fxPickerOpen = true },
@@ -4741,8 +4980,33 @@ private fun RdChatContent(thread: ChatThread) {
                                 Icon(Icons.Filled.Delete, null, tint = RdDanger, modifier = Modifier.size(22.dp))
                             }
                           } else {
-                            RdMenuItem("Reply", onClick = { replyTarget = mm; menuMsg = null }) {
+                            RdMenuItem("Reply", onClick = { editingMsg = null; replyTarget = mm; menuMsg = null }) {
                                 Text("↩", color = Color.White, fontSize = 20.sp)
+                            }
+                            // ROUND 57 (Fix 2): Edit — MY OWN text
+                            // messages only (fx text included; media,
+                            // games and AI messages never), at ANY age
+                            // (no time cutoff, owner's order), and only
+                            // once the send has landed (a SENDING doc
+                            // may not exist yet; a FAILED one never
+                            // will). Tapping it loads the message's
+                            // current text into the composer under the
+                            // "Editing message" banner; the edit itself
+                            // writes only the additive eCt/eIv doc
+                            // fields and shows no "edited" mark anywhere.
+                            if (mm.me && mm.kind == MsgKind.TEXT && !mm.ai &&
+                                mm.status == SendStatus.SENT
+                            ) {
+                                RdDivider1()
+                                RdMenuItem("Edit", onClick = {
+                                    replyTarget = null
+                                    armedFx = null
+                                    editingMsg = mm
+                                    input = mm.text
+                                    menuMsg = null
+                                }) {
+                                    Text("✎", color = Color.White, fontSize = 20.sp)
+                                }
                             }
                             // ROUND 22: Copy is withheld for an
                             // unopened gift — copying would hand out

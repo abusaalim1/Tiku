@@ -441,10 +441,12 @@ object PreviewRepo : ChatRepo {
     }
 
     // ---- ROUND 10 preview sinks (local-only mirrors of the engine) ----
+    /** ROUND 57: preview mirror of the eCt/eIv edit — the visible text
+     *  simply changes; nothing marks the message as edited. */
     override fun editText(id: String, msgId: String, newText: String) {
         AppState.updateThread(id) {
             it.messages.replaceAll { m ->
-                if (m.id == msgId) m.copy(text = newText.trim(), editedAtMs = System.currentTimeMillis()) else m
+                if (m.id == msgId) m.copy(text = newText.trim()) else m
             }
         }
     }

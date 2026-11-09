@@ -1412,6 +1412,20 @@ fun OwnerSection(
         NotifyGate.sync(ctx)
         AppState.toast(if (on) "App lock on" else "App lock off — the password won't be asked on open")
     }
+    // ROUND 57 (Fix 5) — owner direct entry: with this on (the
+    // default), opening the app lands straight on the episode gate
+    // instead of the facade — no double-tap. The gate itself is
+    // unchanged (the password is still asked; see MainActivity's
+    // entry routing through SecretEntry). Owner-section only, and
+    // the routing re-checks isOwner, so the row exists solely for
+    // the owner account.
+    ToggleRow(
+        "Skip home screen",
+        "Open straight to the sign-in box — no double-tap",
+        OwnerPrefs.skipHome,
+    ) {
+        OwnerPrefs.setSkipHome(!OwnerPrefs.skipHome)
+    }
     // ROUND 31 — the view-once override: with this on, photos and
     // videos OTHERS sent as view once / view twice never run out of
     // views on this phone (opens don't consume, the bubble never

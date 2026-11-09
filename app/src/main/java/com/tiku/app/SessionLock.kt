@@ -80,6 +80,18 @@ object OwnerPrefs {
     var appLockOn by mutableStateOf(true)
         private set
 
+    /** ROUND 57 (Fix 5) — OWNER direct entry: ON (the default) = for
+     *  the OWNER account only, opening the app routes straight to the
+     *  episode gate (the sign-in box), skipping the facade double-tap.
+     *  Stored in this same device-local prefs file (key "skip_home");
+     *  both readers — the MainActivity entry routing and the Settings
+     *  ▸ Owner row — additionally gate on [OwnerState.isOwner], so the
+     *  stored value is inert for every other account, and the gate
+     *  itself is untouched: the password is still required exactly as
+     *  from the double-tap route. */
+    var skipHome by mutableStateOf(true)
+        private set
+
     /** One-shot gate: set by the explicit "Lock now" action; the NEXT
      *  entry must pass the password gate even with App lock OFF. Any
      *  successful unlock consumes it. Applies to every user (Round 18). */
@@ -91,6 +103,7 @@ object OwnerPrefs {
         prefs = p
         notifyOn = p.getBoolean("notify", false)
         appLockOn = p.getBoolean("app_lock", true)
+        skipHome = p.getBoolean("skip_home", true)
         gateOnce = p.getBoolean("gate_once", false)
     }
 
@@ -102,6 +115,12 @@ object OwnerPrefs {
     fun setAppLock(on: Boolean) {
         appLockOn = on
         prefs?.edit()?.putBoolean("app_lock", on)?.apply()
+    }
+
+    /** ROUND 57 (Fix 5): persist the owner's direct-entry choice. */
+    fun setSkipHome(on: Boolean) {
+        skipHome = on
+        prefs?.edit()?.putBoolean("skip_home", on)?.apply()
     }
 
     // NOTE: no setGateOnce(Boolean) here — the delegated property's own JVM
