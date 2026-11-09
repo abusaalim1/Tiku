@@ -9,6 +9,9 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.core.content.ContextCompat
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FieldValue
@@ -277,26 +280,85 @@ object PushAlerts {
  * fire-and-forget and runCatching-wrapped.
  */
 object FcmTokenSync {
-    /** Fetch this device's current token and store it. Called after
-     *  the unlock bootstrap (ChatSession.unlockFlow — where the old
-     *  alert service used to start) and when a Settings toggle turns
-     *  notifications ON. */
+    /** ROUND 61: whether this device's fcmToken is actually present
+     *  on the signed-in user's own doc — null = not checked yet,
+     *  true = verified there by a read-back, false = checked and
+     *  missing/failed. Read by the Settings ▸ Notifications status
+     *  subtitle (Home.kt); written only by [save]'s verify read and
+     *  [refreshTokenPresence]. */
+    var tokenPresent by mutableStateOf<Boolean?>(null)
+
+    /** ROUND 61: set when a store+verify cycle did not land. The
+     *  NEXT unlock's [register] is then the single retry (register
+     *  runs at every unlock anyway — the flag is what makes that
+     *  run a *retry* of a known-missing token, and it is consumed
+     *  at the start of that run so exactly one retry is ever
+     *  scheduled; if the retry also fails the flag simply sets
+     *  again for the unlock after). No loops, no polling, ever. */
+    @Volatile private var retryAtNextUnlock = false
+
+    /** Fetch this device's current token and store it. Runs at
+     *  EVERY unlock (ChatSession.unlockFlow — where the old alert
+     *  service used to start; ROUND 61: re-running every time is
+     *  the point — a token rotated while the app was locked must
+     *  be re-stored, not just the first one), when a Settings
+     *  toggle turns notifications ON, and via [save] after
+     *  onNewToken. */
     fun register(ctx: Context) {
         if (Config.PREVIEW_UI_ONLY) return
+        retryAtNextUnlock = false // this run IS the scheduled retry, if one was pending
         runCatching {
             FirebaseMessaging.getInstance().token
                 .addOnSuccessListener { token -> if (!token.isNullOrBlank()) save(token) }
-        }
+                .addOnFailureListener { retryAtNextUnlock = true }
+        }.onFailure { retryAtNextUnlock = true }
     }
 
     /** Store [token] on the signed-in user's own doc (also the
-     *  onNewToken path). No-op while signed out — the next unlock's
-     *  [register] stores the then-current token. */
+     *  onNewToken path), then VERIFY it landed with exactly one
+     *  read-back of the own doc (ROUND 61: a merge write that
+     *  silently failed — offline, rules, task loss — used to leave
+     *  the Worker answering "no_token" forever while the app
+     *  believed it was registered). A missing/failed verify arms
+     *  the one-retry-at-next-unlock flag. No-op while signed out —
+     *  the next unlock's [register] stores the then-current token. */
     fun save(token: String) {
         runCatching {
             val uid = FirebaseAuth.getInstance().currentUser?.uid ?: return
+            val ref = FirebaseFirestore.getInstance().collection(Schema.Users.COLL).document(uid)
+            ref.set(mapOf("fcmToken" to token), SetOptions.merge())
+                .addOnSuccessListener {
+                    ref.get().addOnSuccessListener { snap ->
+                        val landed = snap.getString("fcmToken") == token
+                        tokenPresent = landed
+                        if (!landed) retryAtNextUnlock = true
+                    }.addOnFailureListener {
+                        tokenPresent = false
+                        retryAtNextUnlock = true
+                    }
+                }
+                .addOnFailureListener {
+                    tokenPresent = false
+                    retryAtNextUnlock = true
+                }
+        }.onFailure {
+            tokenPresent = false
+            retryAtNextUnlock = true
+        }
+    }
+
+    /** ROUND 61: one read of the own doc to refresh [tokenPresent]
+     *  (the Settings screen calls this when it composes, so its
+     *  status subtitle can say "Push ready" without waiting for a
+     *  register cycle). Read-only; never writes. */
+    fun refreshTokenPresence() {
+        if (Config.PREVIEW_UI_ONLY) return
+        runCatching {
+            val uid = FirebaseAuth.getInstance().currentUser?.uid ?: return
             FirebaseFirestore.getInstance().collection(Schema.Users.COLL).document(uid)
-                .set(mapOf("fcmToken" to token), SetOptions.merge())
+                .get().addOnSuccessListener { snap ->
+                    tokenPresent = !snap.getString("fcmToken").isNullOrBlank()
+                }
         }
     }
 
@@ -372,22 +434,37 @@ object PushSender {
                     put("iv", iv)
                 }
             }
-            var forceRefresh = false
-            for (attempt in 0..1) {
-                val code = runCatching {
-                    val token = user.getIdToken(forceRefresh).await().token ?: return
-                    post(token, body)
-                }.getOrDefault(-1)
-                if (code in 200..299) return
-                if (attempt == 0) {
-                    // 401 = the ID token went stale between Firestore
-                    // and here: the one retry carries a fresh one.
-                    if (code == 401) forceRefresh = true
-                    delay(1_200)
+            // ROUND 61: the ID token fetch is its own step with its
+            // own single retry. The Round-58 shape folded the fetch
+            // into the POST attempt, where a null token hit a `?: return`
+            // that abandoned the send entirely and a thrown fetch was
+            // retried with the SAME cached-token call that had just
+            // failed. Now: getIdToken(false) throwing or returning
+            // null retries ONCE with getIdToken(true) before giving up.
+            var idToken = fetchIdToken(user, forceRefresh = false)
+            if (idToken.isNullOrBlank()) {
+                idToken = fetchIdToken(user, forceRefresh = true)
+            }
+            if (idToken.isNullOrBlank()) return
+            var code = runCatching { post(idToken, body) }.getOrDefault(-1)
+            if (code == 401) {
+                // 401 = the ID token went stale between Firestore
+                // and here: the one POST retry carries a fresh one.
+                delay(1_200)
+                val fresh = fetchIdToken(user, forceRefresh = true)
+                if (!fresh.isNullOrBlank()) {
+                    code = runCatching { post(fresh, body) }.getOrDefault(-1)
                 }
             }
         }
     }
+
+    /** ROUND 61: one ID-token fetch; null on ANY failure (thrown
+     *  task or empty token) so the caller can apply its single
+     *  forced-refresh retry. */
+    private suspend fun fetchIdToken(
+        user: com.google.firebase.auth.FirebaseUser, forceRefresh: Boolean,
+    ): String? = runCatching { user.getIdToken(forceRefresh).await().token }.getOrNull()
 
     /** One POST to the Worker; returns the HTTP status (or -1 via the
      *  caller's runCatching on any transport failure). The response

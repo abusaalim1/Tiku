@@ -85,6 +85,7 @@ import androidx.compose.material.icons.filled.Block
 import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Mic
@@ -3293,6 +3294,27 @@ private fun RdChatContent(thread: ChatThread) {
      *  (GamePlayer.kt), or null. Only ever set for a LOADED game —
      *  the card gates the tap (unloaded → fetchMedia first). */
     var gamePlayerMsg by remember { mutableStateOf<TikuMessage?>(null) }
+    // ---- ROUND 60: Nikah ceremony (Nikah.kt / NikahUi.kt) ----
+    /** The full-screen live ceremony is open on this chat. */
+    var nikahOpen by remember(threadId) { mutableStateOf(false) }
+    /** The role pick ("I am the groom / bride") shown before creating
+     *  a ceremony from the attach sheet. */
+    var nikahRolePick by remember(threadId) { mutableStateOf(false) }
+    /** The keepsake message whose certificate is being viewed. */
+    var nikahCertMsg by remember { mutableStateOf<TikuMessage?>(null) }
+    /** My display name for ceremony surfaces (same derivation the game
+     *  player uses below). */
+    val myDisplayName = if (Config.PREVIEW_UI_ONLY) "You"
+        else FirebaseEngine.myPerson.name.takeIf { it.isNotBlank() && it != "You" }
+            ?: AppState.myUsername.ifEmpty { "You" }
+    /** The ceremony session state for THIS chat (NikahStore's doc
+     *  listener) — drives the invite card's live state + rejoin banner. */
+    val nikahSession by NikahStore.flow(threadId).collectAsState()
+    LaunchedEffect(threadId) {
+        if (!Config.PREVIEW_UI_ONLY) {
+            NikahStore.watch(threadId, person.uid, myDisplayName, thread.displayName)
+        }
+    }
     var camChooserOpen by remember { mutableStateOf(false) }
     var recording by remember { mutableStateOf(false) }
     var recSecs by remember { mutableIntStateOf(0) }
@@ -4490,6 +4512,20 @@ private fun RdChatContent(thread: ChatThread) {
                                 onPlay = { gamePlayerMsg = m },
                                 onRetry = { AppState.repo.retrySend(threadId, m.id) },
                             )
+                            // ROUND 60: Nikah ceremony cards (invite /
+                            // keepsake) render as centred ceremony cards,
+                            // never as bubbles — the doc is a plain text
+                            // message with a fallback line for old builds
+                            // (see TikuMessage.nikah).
+                            m.nikah == "invite" -> NikahInviteRow(
+                                m = m, session = nikahSession,
+                                peerName = person.name,
+                                onOpen = { nikahOpen = true },
+                            )
+                            m.nikah == "keepsake" -> NikahKeepsakeRow(
+                                m = m,
+                                onView = { nikahCertMsg = m },
+                            )
                             // ROUND 37: an AI (Tika) message renders
                             // as Tika's own left-aligned bubble with
                             // its label — whichever member's client
@@ -5085,6 +5121,18 @@ private fun RdChatContent(thread: ChatThread) {
             }
         }
 
+        // ---- ROUND 60: Nikah rejoin banner — floats directly above the
+        // composer (whose measured height this screen already tracks)
+        // while a ceremony is live and not currently open. ----
+        if (nikahSession?.active == true && !nikahOpen) {
+            Box(
+                Modifier.align(Alignment.BottomCenter)
+                    .padding(bottom = composerHeight),
+            ) {
+                NikahProgressBanner { nikahOpen = true }
+            }
+        }
+
         // ---- attachment sheet: the file's glass sheet ----
         // ROUND 15: Photo / Video / Audio file rows. The keyboard is
         // dismissed the moment this opens (see the attachOpen effect), so
@@ -5143,6 +5191,27 @@ private fun RdChatContent(thread: ChatThread) {
                         Icon(Icons.Filled.Audiotrack, null, tint = Color.White, modifier = Modifier.size(21.dp))
                         Spacer(Modifier.width(12.dp))
                         Text("Audio file", color = Color.White, fontSize = 15.sp, fontFamily = PoppinsFamily)
+                    }
+                    // ROUND 60: the Nikah entry — inside a 1:1 chat only
+                    // (this sheet exists only on the 1:1 chat screen).
+                    // A live ceremony re-opens; otherwise the role pick
+                    // creates one and lands the invite card in the chat.
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.fillMaxWidth().rdPress {
+                            attachOpen = false
+                            if (nikahSession?.active == true) nikahOpen = true
+                            else nikahRolePick = true
+                        }.padding(16.dp),
+                    ) {
+                        Icon(Icons.Filled.Favorite, null, tint = Color(0xFFE7C46A), modifier = Modifier.size(21.dp))
+                        Spacer(Modifier.width(12.dp))
+                        Text("Nikah", color = Color.White, fontSize = 15.sp, fontFamily = PoppinsFamily)
+                        Spacer(Modifier.width(10.dp))
+                        Text(
+                            if (nikahSession?.active == true) "In progress — tap to rejoin" else "Live ceremony, together",
+                            color = RdSub, fontSize = 12.sp, fontFamily = PoppinsFamily,
+                        )
                     }
                 }
             }
@@ -5343,6 +5412,29 @@ private fun RdChatContent(thread: ChatThread) {
                 peerName = thread.displayName,
                 onClose = { gamePlayerMsg = null },
             )
+        }
+
+        // ---- ROUND 60: Nikah overlays (topmost) ----
+        if (nikahRolePick) {
+            NikahStarterSheet(
+                myName = myDisplayName, peerName = thread.displayName,
+                onPick = { role ->
+                    nikahRolePick = false
+                    NikahStore.create(threadId, person.uid, role, myDisplayName)
+                    nikahOpen = true
+                },
+                onDismiss = { nikahRolePick = false },
+            )
+        }
+        if (nikahOpen) {
+            NikahCeremonyOverlay(
+                chatId = threadId, peerUid = person.uid,
+                myName = myDisplayName, peerName = thread.displayName,
+                onClose = { nikahOpen = false },
+            )
+        }
+        nikahCertMsg?.nikahKeepsake?.let { k ->
+            NikahCertificateOverlay(k) { nikahCertMsg = null }
         }
     }
 }

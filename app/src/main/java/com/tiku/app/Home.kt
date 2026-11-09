@@ -128,6 +128,10 @@ fun threadPreview(th: ChatThread): String {
     // stays sealed on EVERY surface until the chat is opened and the
     // gift is tapped open there.
     if (last.fx == "gift") return "Gift message"
+    // ROUND 60: Nikah cards preview as themselves, not as their
+    // old-build fallback line.
+    if (last.nikah == "invite") return "💍 Nikah invitation"
+    if (last.nikah == "keepsake") return "💍 Nikah complete"
     return when (last.kind) {
         MsgKind.VOICE -> "Voice message"
         MsgKind.IMAGE -> "Photo"
@@ -996,9 +1000,35 @@ private fun SettingsMain(
     // Launched from the Notifications row's enable path (ROUND 18: that
     // row is for every user now — same pattern as the Owner section's
     // toggle, which keeps its own launcher).
+    // ROUND 61: the Notifications row's status subtitle — derived
+    // from the POST_NOTIFICATIONS permission + whether this phone's
+    // fcmToken is verified on the user's own doc (FcmTokenSync).
+    var pushPermGranted by remember {
+        mutableStateOf(
+            Build.VERSION.SDK_INT < 33 ||
+                ContextCompat.checkSelfPermission(ctx, Manifest.permission.POST_NOTIFICATIONS) ==
+                PackageManager.PERMISSION_GRANTED,
+        )
+    }
     val permLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission(),
-    ) { }
+    ) { granted ->
+        pushPermGranted = granted
+        if (granted && OwnerPrefs.notifyOn) FcmTokenSync.register(ctx)
+    }
+    LaunchedEffect(Unit) {
+        // Re-read the permission on entry too (it can be changed in
+        // system settings while the app is away).
+        pushPermGranted = Build.VERSION.SDK_INT < 33 ||
+            ContextCompat.checkSelfPermission(ctx, Manifest.permission.POST_NOTIFICATIONS) ==
+            PackageManager.PERMISSION_GRANTED
+        FcmTokenSync.refreshTokenPresence()
+    }
+    val pushStatusSub = when {
+        !pushPermGranted -> "Permission needed — tap"
+        FcmTokenSync.tokenPresent == true -> "Push ready"
+        else -> "Setting up…"
+    }
     val myName = FirebaseEngine.myPerson.name.takeIf { it.isNotBlank() && it != "You" }
         ?: AppState.myUsername.ifEmpty { "You" }
     LazyColumn(
@@ -1093,9 +1123,22 @@ private fun SettingsMain(
             // because the owner account's pushes ignore this pref.
             ToggleRow(
                 "Notifications",
-                "A quiet “New message” alert on this phone, even when the app isn't open",
+                // ROUND 61: the subtitle is the live push status
+                // ("Push ready" / "Permission needed — tap" /
+                // "Setting up…"), computed above from the permission
+                // + the verified fcmToken presence.
+                pushStatusSub,
                 OwnerPrefs.notifyOn,
             ) {
+                // ROUND 61: while the status is "Permission needed —
+                // tap", a tap re-fires the system permission request
+                // instead of flipping the toggle — without the OS
+                // permission no push can ever show, whatever the
+                // toggle says.
+                if (!pushPermGranted) {
+                    permLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                    return@ToggleRow
+                }
                 val on = !OwnerPrefs.notifyOn
                 OwnerPrefs.setNotify(on)
                 if (on) {
@@ -1307,9 +1350,32 @@ fun OwnerSection(
     onOpenAiChats: () -> Unit = {},
 ) {
     val ctx = LocalContext.current
+    // ROUND 61: the same push-status derivation as the shared
+    // Settings ▸ Notifications row (permission + verified fcmToken).
+    var pushPermGranted by remember {
+        mutableStateOf(
+            Build.VERSION.SDK_INT < 33 ||
+                ContextCompat.checkSelfPermission(ctx, Manifest.permission.POST_NOTIFICATIONS) ==
+                PackageManager.PERMISSION_GRANTED,
+        )
+    }
     val permLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission(),
-    ) { }
+    ) { granted ->
+        pushPermGranted = granted
+        if (granted) FcmTokenSync.register(ctx)
+    }
+    LaunchedEffect(Unit) {
+        pushPermGranted = Build.VERSION.SDK_INT < 33 ||
+            ContextCompat.checkSelfPermission(ctx, Manifest.permission.POST_NOTIFICATIONS) ==
+            PackageManager.PERMISSION_GRANTED
+        FcmTokenSync.refreshTokenPresence()
+    }
+    val pushStatusSub = when {
+        !pushPermGranted -> "Permission needed — tap"
+        FcmTokenSync.tokenPresent == true -> "Push ready"
+        else -> "Setting up…"
+    }
     Section("Owner")
     // ROUND 58 (owner decision): the OWNER account's notifications are
     // ALWAYS ON — every new message pushes, no toggle can turn them
@@ -1319,10 +1385,13 @@ fun OwnerSection(
     // Settings ▸ Notifications toggle above stays harmless for the
     // owner for the same reason. Tapping also (re)stores this phone's
     // push token, so an owner who never touched any toggle is still
-    // registered.
+    // registered. ROUND 61: the subtitle is the live push status
+    // (same three states as the shared row); in the "Permission
+    // needed — tap" state the tap below re-fires the system
+    // permission request, as it already did.
     ToggleRow(
         "Notifications",
-        "Always on for your account — a quiet “New message” alert on this phone when something arrives, even when the app isn't open",
+        pushStatusSub,
         true,
     ) {
         if (Build.VERSION.SDK_INT >= 33 &&

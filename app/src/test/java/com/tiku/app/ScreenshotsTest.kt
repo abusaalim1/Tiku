@@ -846,6 +846,118 @@ class ScreenshotsTest {
         shot("35-moments-entry.png")
     }
 
+    // ---------- ROUND 60: Nikah ceremony (fake partner state) ----------
+    // The ceremony content is pure on (state, myUid, nowMs): the harness
+    // seeds a session whose partner presence stamp is fresh, exactly as
+    // a live partner's heartbeat would make it — one device drives both
+    // sides by choosing which uid is "me".
+    private fun nikahFakeState(
+        step: String,
+        groomQabool: Int = 0,
+    ): NikahUiState {
+        val now = System.currentTimeMillis()
+        return NikahUiState(
+            exists = true, status = "active", step = step,
+            creatorUid = "me", groomUid = "me", brideUid = "p-meera",
+            groomName = "Aarav", brideName = "Meera",
+            presence = mapOf("me" to now, "p-meera" to now),
+            mahrPhase = "accepted", mahrText = "₹21,000",
+            groomQabool = groomQabool,
+        )
+    }
+
+    @Test fun shot37_nikahLobby() {
+        val now = System.currentTimeMillis()
+        frame {
+            Box(Modifier.fillMaxSize().background(Color(0xFF121214))) {
+                NikahCeremonyContent(
+                    state = nikahFakeState(NikahSteps.LOBBY),
+                    myUid = "me", nowMs = now, cb = NikahCallbacks(),
+                )
+            }
+        }
+        composeRule.waitForIdle()
+        org.junit.Assert.assertTrue(
+            "nikah lobby must carry its title",
+            composeRule.onAllNodesWithText("NIKAH").fetchSemanticsNodes().isNotEmpty(),
+        )
+        org.junit.Assert.assertTrue(
+            "nikah lobby must offer Ready to both partners",
+            composeRule.onAllNodesWithText("I'm Ready", substring = true)
+                .fetchSemanticsNodes().isNotEmpty(),
+        )
+        shot("37-nikah-lobby.png")
+    }
+
+    @Test fun shot38_nikahQaboolWaiting() {
+        // The BRIDE's view of the groom's Qabool: two rings filled live,
+        // her controls locked behind the turn line.
+        val now = System.currentTimeMillis()
+        frame {
+            Box(Modifier.fillMaxSize().background(Color(0xFF121214))) {
+                NikahCeremonyContent(
+                    state = nikahFakeState(NikahSteps.QABOOL_GROOM, groomQabool = 2),
+                    myUid = "p-meera", nowMs = now, cb = NikahCallbacks(),
+                )
+            }
+        }
+        composeRule.waitForIdle()
+        org.junit.Assert.assertTrue(
+            "waiting side must be told who is saying Qabool",
+            composeRule.onAllNodesWithText("is saying Qabool", substring = true)
+                .fetchSemanticsNodes().isNotEmpty(),
+        )
+        org.junit.Assert.assertTrue(
+            "waiting side's controls must be locked with the turn line",
+            composeRule.onAllNodesWithText("turn — please wait", substring = true)
+                .fetchSemanticsNodes().isNotEmpty(),
+        )
+        shot("38-nikah-qabool-waiting.png")
+    }
+
+    @Test fun shot39_nikahCertificate() {
+        // A signature drawn on a tiny canvas, PNG'd + base64'd exactly as
+        // the keepsake payload carries it.
+        val sigBmp = android.graphics.Bitmap.createBitmap(220, 64, android.graphics.Bitmap.Config.ARGB_8888)
+        val c = android.graphics.Canvas(sigBmp)
+        val p = android.graphics.Paint().apply {
+            color = android.graphics.Color.rgb(255, 217, 228); strokeWidth = 4f
+            style = android.graphics.Paint.Style.STROKE
+        }
+        val path = android.graphics.Path().apply {
+            moveTo(10f, 44f); cubicTo(60f, 4f, 120f, 60f, 210f, 22f)
+        }
+        c.drawPath(path, p)
+        val out = java.io.ByteArrayOutputStream()
+        sigBmp.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, out)
+        val sigB64 = Crypto.b64(out.toByteArray())
+        val keepsake = NikahKeepsake(
+            groomName = "Aarav", brideName = "Meera",
+            dateMs = 1794192000000L, mahr = "₹21,000",
+            witnessGroom = "Ahmed", witnessBride = "Yusuf",
+            sigGroomPngB64 = sigB64, sigBridePngB64 = sigB64,
+        )
+        frame {
+            Box(
+                Modifier.fillMaxSize().background(Color(0xFF121214))
+                    .padding(22.dp),
+            ) {
+                NikahCertificateCard(keepsake)
+            }
+        }
+        composeRule.waitForIdle()
+        org.junit.Assert.assertTrue(
+            "certificate must carry its title",
+            composeRule.onAllNodesWithText("NIKAH NAMA").fetchSemanticsNodes().isNotEmpty(),
+        )
+        org.junit.Assert.assertTrue(
+            "certificate must name both partners",
+            composeRule.onAllNodesWithText("Aarav", substring = true)
+                .fetchSemanticsNodes().isNotEmpty(),
+        )
+        shot("39-nikah-certificate.png")
+    }
+
     @Test fun shot36_momentsScreen() {
         // The Moments surface in preview: the static dark placeholder
         // (PREVIEW branch — never a real WebView headless) with its

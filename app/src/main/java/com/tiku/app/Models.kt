@@ -162,6 +162,45 @@ data class TikuMessage(
      *  — metadata, readable on the not-yet-loaded stub like mime/size,
      *  so the card can name the game before its bytes are fetched. */
     val gameTitle: String = "",
+    // ---- ROUND 60 (appended last, same discipline) ----
+    /** A Nikah ceremony CARD message (Firestore `nk`): "invite" | "keepsake".
+     *  The doc itself is an ordinary kind="text" message whose ct/iv hold a
+     *  harmless human-readable fallback line — builds from before round 60
+     *  ignore `nk`/`nkState`/`ksCt`/`ksIv` entirely and render that fallback
+     *  as a plain text bubble (never a crash, never a broken thread; an
+     *  unknown KIND would also have been safe — decryptDoc maps unknown
+     *  kinds to TEXT with an empty body — but a real text fallback reads
+     *  better). This build renders the card instead of the bubble. */
+    val nikah: String? = null,
+    /** The invite card's lifecycle reflection (Firestore `nkState`):
+     *  "cancelled" | "done", absent while the ceremony is live. Written
+     *  on the invite message doc by whichever client lands the cancel /
+     *  completion transition on the session doc. Keepsakes ignore it. */
+    val nikahState: String? = null,
+    /** A keepsake card's decrypted certificate payload (from the doc's
+     *  ADDITIVE `ksCt`/`ksIv` pair — the rqCt/rqIv pattern — encrypted
+     *  under the conversation key exactly like the message body). Null
+     *  when the payload is absent or cannot be opened on this device;
+     *  the card then falls back to its plain fallback text. */
+    val nikahKeepsake: NikahKeepsake? = null,
+)
+
+/** ROUND 60 — the self-contained payload of a Nikah keepsake card: everything
+ *  the Nikah Nama certificate renders, carried INSIDE the keepsake message
+ *  (encrypted in ksCt/ksIv) so the certificate survives forever as a normal
+ *  message — hide/delete semantics of normal messages apply to it, and a
+ *  later ceremony overwriting the session doc can never rewrite history.
+ *  Signatures ride as base64 PNG bytes (the pad bitmap, downscaled before
+ *  encrypting — see Nikah.kt). */
+data class NikahKeepsake(
+    val groomName: String = "",
+    val brideName: String = "",
+    val dateMs: Long = 0L,
+    val mahr: String = "",
+    val witnessGroom: String = "",
+    val witnessBride: String = "",
+    val sigGroomPngB64: String = "",
+    val sigBridePngB64: String = "",
 )
 
 /** One 1:1 conversation. */
@@ -417,6 +456,14 @@ object Schema {
              *  [TikuMessage.game] / [TikuMessage.gameTitle]. */
             val game: Boolean = false,
             val gtitle: String = "",
+            /** ROUND 60: Nikah card marker ("invite" | "keepsake") on an
+             *  otherwise ordinary text doc + the invite's lifecycle state
+             *  + the keepsake's encrypted certificate payload (ksCt/ksIv,
+             *  the rqCt/rqIv pattern). All additive — see
+             *  [TikuMessage.nikah]. */
+            val nk: String? = null,
+            val nkState: String? = null,
+            val ksCt: String = "", val ksIv: String = "",
             val seenBy: List<String> = emptyList(),
             val durationMs: Int = 0, val amps: List<Int> = emptyList(),
             /** Media kinds (image/voice/video/audio): ciphertext lives in the chunks

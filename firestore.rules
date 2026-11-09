@@ -36,6 +36,29 @@ service cloud.firestore {
         allow read, write: if signedIn() && request.auth.uid in
           get(/databases/$(database)/documents/chats/$(chatId)).data.members;
       }
+
+      // ROUND 35 custom gallery theme asset (rules fix 2026-11-09):
+      // the encrypted theme photo lives at themeasset/main (+ chunks),
+      // written by setCustomTheme; it was missing here, so every
+      // custom-theme write was default-denied.
+      match /themeasset/{assetId} {
+        allow read, write: if signedIn() && request.auth.uid in
+          get(/databases/$(database)/documents/chats/$(chatId)).data.members;
+
+        match /chunks/{chunkId} {
+          allow read, write: if signedIn() && request.auth.uid in
+            get(/databases/$(database)/documents/chats/$(chatId)).data.members;
+        }
+      }
+
+      // ROUND 60: the live Nikah ceremony session
+      // (chats/{chatId}/nikah/session) — plaintext step/presence
+      // metadata plus conversation-key-encrypted personal fields;
+      // members only, exactly like themeasset above.
+      match /nikah/{docId} {
+        allow read, write: if signedIn() && request.auth.uid in
+          get(/databases/$(database)/documents/chats/$(chatId)).data.members;
+      }
     }
 
     match /moments/{uid} {

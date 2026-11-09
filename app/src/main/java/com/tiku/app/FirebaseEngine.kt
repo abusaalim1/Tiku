@@ -2214,6 +2214,36 @@ object FirebaseEngine : ChatRepo {
         // as a tap-to-load file kind, like video/audio.
         val game = doc.getBoolean("game") == true
         val gameTitle = doc.getString("gtitle") ?: ""
+        // ROUND 60 — Nikah card marker + lifecycle state (additive, same
+        // discipline as fx/vo/ai/game). Docs from older builds lack both
+        // → null → ordinary message. Unknown marker values are dropped
+        // here so a future card kind can never confuse this build. The
+        // doc's kind stays "text" and its ct/iv a readable fallback line,
+        // so OLD builds render the fallback bubble and ignore all of this.
+        val nikah = doc.getString("nk")?.takeIf { it == "invite" || it == "keepsake" }
+        val nikahState = doc.getString("nkState")?.takeIf { it == "cancelled" || it == "done" }
+        // ROUND 60 — the keepsake's certificate payload, decrypted from
+        // the ADDITIVE ksCt/ksIv pair (the rqCt/rqIv pattern) under the
+        // same conversation key. Failure (retired key, partial write)
+        // leaves it null and the card renders its fallback text instead.
+        val nikahKeepsake = if (nikah == "keepsake") {
+            doc.getString("ksCt")?.takeIf { it.isNotEmpty() }?.let { ksCt ->
+                runCatching {
+                    val j = org.json.JSONObject(
+                        Crypto.decryptText(key, doc.getString("ksIv") ?: "", ksCt))
+                    NikahKeepsake(
+                        groomName = j.optString("groom"),
+                        brideName = j.optString("bride"),
+                        dateMs = j.optLong("dateMs"),
+                        mahr = j.optString("mahr"),
+                        witnessGroom = j.optString("wGroom"),
+                        witnessBride = j.optString("wBride"),
+                        sigGroomPngB64 = j.optString("sigGroom"),
+                        sigBridePngB64 = j.optString("sigBride"),
+                    )
+                }.getOrNull()
+            }
+        } else null
         val kind = when (kindRaw) {
             "image" -> MsgKind.IMAGE; "voice" -> MsgKind.VOICE; "call" -> MsgKind.CALL
             "video" -> MsgKind.VIDEO; "audio" -> MsgKind.AUDIO; "game" -> MsgKind.GAME
@@ -2388,7 +2418,8 @@ object FirebaseEngine : ChatRepo {
             editedAtMs = doc.getTimestamp("editedAt")?.toDate()?.time ?: 0L,
             mimeType = mimeType, mediaBytes = mediaBytes,
             fx = fx, vo = vo, voDone = voDone, ai = ai,
-            game = game, gameTitle = gameTitle)
+            game = game, gameTitle = gameTitle,
+            nikah = nikah, nikahState = nikahState, nikahKeepsake = nikahKeepsake)
         // ROUND 33 — HIDE RECOVERY: mirror this copy into the hidden
         // registry (or drop its entry, when the doc no longer hides it
         // for me — e.g. right after an unhide lands).
@@ -2487,6 +2518,99 @@ object FirebaseEngine : ChatRepo {
         AppState.upsertMessage(id, local)
         AppState.requestTailScroll(id, local.id)
         scope.launch { deliverText(id, th.person.uid, local) }
+    }
+
+    // ================= ROUND 60: Nikah ceremony cards =================
+    // The invite + keepsake cards are ORDINARY text messages (kind "text")
+    // whose ct/iv encrypt a harmless fallback line, plus additive fields:
+    // `nk` ("invite" | "keepsake"), `nkState` on the invite, and — for the
+    // keepsake — the certificate payload encrypted in `ksCt`/`ksIv` (the
+    // rqCt/rqIv pattern). Builds from before round 60 ignore every one of
+    // those fields and render the fallback line as a plain bubble (see
+    // TikuMessage.nikah). Crypto is the one existing path: convKeyOrNull +
+    // Crypto.encryptText, exactly like deliverText. The ceremony's live
+    // state itself lives in chats/{chatId}/nikah/session (Nikah.kt).
+
+    /** The conversation-key derivation the Nikah session store uses for
+     *  its encrypted fields — the SAME [convKeyOrNull] every message read
+     *  uses (ECDH + HKDF via Crypto.conversationKey). No second path. */
+    suspend fun nikahKey(chatId: String, peerUid: String): SecretKey? =
+        convKeyOrNull(chatId, peerUid)
+
+    /** Post one Nikah card message. [cardKind] is "invite" or "keepsake";
+     *  [fallbackText] is what old builds render; [keepsake] (keepsakes
+     *  only) is encrypted into ksCt/ksIv. [onLanded] receives the new
+     *  message id once the write lands (the session doc records the
+     *  invite's id so cancel/completion can reflect onto the card). */
+    fun sendNikahCard(
+        id: String, cardKind: String, fallbackText: String,
+        keepsake: NikahKeepsake?, onLanded: (String) -> Unit = {},
+    ) {
+        val th = AppState.thread(id) ?: return
+        val local = TikuMessage(
+            id = newLocalId(), senderUid = uid, kind = MsgKind.TEXT, text = fallbackText,
+            time = fmtTime(System.currentTimeMillis()), me = true,
+            tsMs = System.currentTimeMillis(), status = SendStatus.SENDING,
+            nikah = cardKind, nikahKeepsake = keepsake,
+        )
+        AppState.upsertMessage(id, local)
+        AppState.requestTailScroll(id, local.id)
+        scope.launch { deliverNikahCard(id, th.person.uid, local, onLanded) }
+    }
+
+    private suspend fun deliverNikahCard(
+        id: String, peerUid: String, local: TikuMessage, onLanded: (String) -> Unit,
+    ) {
+        try {
+            ensureChatDoc(id, peerUid)
+            val key = convKeyOrNull(id, peerUid)
+                ?: throw IllegalStateException("encryption key not ready — the other person may not have finished setting up")
+            val (iv, ct) = Crypto.encryptText(key, local.text)
+            val docData = mutableMapOf<String, Any?>(
+                "senderId" to uid, "kind" to "text", "ct" to ct, "iv" to iv,
+                "ts" to FieldValue.serverTimestamp(),
+                "replyToId" to null, "rqCt" to "", "rqIv" to "",
+                "reaction" to emptyMap<String, String>(), "starredBy" to emptyList<String>(),
+                "deletedFor" to emptyList<String>(), "seenBy" to listOf(uid),
+                "durationMs" to 0, "amps" to emptyList<Int>(), "mediaChunks" to 0,
+                "nk" to local.nikah,
+            )
+            // The keepsake payload rides ONLY on keepsake cards, as its
+            // own encrypted pair — the fallback ct/iv above stays a short
+            // human line an old build can show.
+            local.nikahKeepsake?.let { k ->
+                val json = org.json.JSONObject()
+                    .put("groom", k.groomName).put("bride", k.brideName)
+                    .put("dateMs", k.dateMs).put("mahr", k.mahr)
+                    .put("wGroom", k.witnessGroom).put("wBride", k.witnessBride)
+                    .put("sigGroom", k.sigGroomPngB64).put("sigBride", k.sigBridePngB64)
+                    .toString()
+                val (ksIv, ksCt) = Crypto.encryptText(key, json)
+                docData["ksCt"] = ksCt
+                docData["ksIv"] = ksIv
+            }
+            msgRef(id, local.id).set(docData).await()
+            AppState.setMessageStatus(id, local.id, SendStatus.SENT)
+            PushSender.notifyMessage(id, peerUid, local.id, "text", ct, iv)
+            liftHideOnSend(id)
+            touchChat(id)
+            onLanded(local.id)
+        } catch (e: Exception) {
+            Log.e("TikuSend", "nikah card send failed in chat $id (msg ${local.id})", e)
+            AppState.setMessageStatus(id, local.id, SendStatus.FAILED)
+            AppState.toast("Couldn't send — ${sendFailureReason(e)}")
+        }
+    }
+
+    /** Reflect a ceremony transition onto its invite card (ROUND 60):
+     *  writes the additive `nkState` ("cancelled" | "done") on the invite
+     *  message doc — a member write, the same class as `reaction`. */
+    fun setNikahInviteState(id: String, msgId: String, state: String) {
+        if (msgId.isEmpty()) return
+        scope.launch {
+            runCatching { msgRef(id, msgId).update("nkState", state).await() }
+                .onFailure { Log.w("TikuNikah", "invite nkState write failed in chat $id", it) }
+        }
     }
 
     private suspend fun deliverText(id: String, peerUid: String, local: TikuMessage) {
