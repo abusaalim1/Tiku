@@ -57,6 +57,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import kotlin.math.*
@@ -259,7 +260,7 @@ private class Fx2Sprites(private val ctx: Context) {
         val path = APath().apply {
             moveTo(80f, 10f); lineTo(148f, 130f); lineTo(20f, 110f); close()
         }
-        val paint = Paint(Paint.ANTI_ALIAS_FLAG); paint.lineJoin = Paint.Join.ROUND
+        val paint = Paint(Paint.ANTI_ALIAS_FLAG); paint.strokeJoin = Paint.Join.ROUND
         paint.style = Paint.Style.FILL
         paint.shader = LinearGradient(
             20f, 0f, 148f, 0f,
@@ -1563,7 +1564,7 @@ private val SP2: List<Spec2> = listOf(
             vig("90,110,140", .1f * env)
             if (t >= .6f && t < 1.8f) {
                 val u = ease2(clamp2((t - .6f) / 1.1f, 0f, 1f))
-                val arc = RectF(hp.x - hs() * .62f, hp.y - hs() * .62f, hp.x + hs() * .62f, hp.y + hs() * .62f)
+                val arc = RectF(hp.x - fx.hs() * .62f, hp.y - fx.hs() * .62f, hp.x + fx.hs() * .62f, hp.y + fx.hs() * .62f)
                 val p = neonPaint("#9fb0c8", 4f * D, 12f, 1f)
                 p.pathEffect = DashPathEffect(floatArrayOf(W * .04f, W * .03f), 0f)
                 c.drawArc(arc, (u * T2 * 1.5f) * 180f / PI.toFloat(), (T2 * .6f) * 180f / PI.toFloat(), false, p)
@@ -1594,7 +1595,7 @@ private val SP2: List<Spec2> = listOf(
  * one frame; production callers never pass it.
  */
 @Composable
-fun EmojiFx2Overlay(specIdx: Int, onDone: () -> Unit, stageT: Float? = null) {
+fun EmojiFx2Overlay(specIdx: Int, stageT: Float? = null, onDone: () -> Unit) {
     val ctx = LocalContext.current
     val density = LocalDensity.current.density
     val sprites = remember(ctx) { Fx2Sprites(ctx) }
