@@ -337,7 +337,11 @@ fun ChatThread.effectiveSettings(global: TikuUiSettings): TikuUiSettings {
 /** ROUND 14 — one user's public note (users/{uid}: noteText / noteAt /
  *  noteHearts). Visible to thread partners for 24h after [atMs]. [hearts]
  *  is the set of uids who hearted it. The map in AppState.notes is keyed
- *  by owner uid; "mine" is simply uid == my uid. */
+ *  by owner uid; "mine" is simply uid == my uid.
+ *  ROUND 62 (Bug C): [hearts] as published is DERIVED — the owner's
+ *  legacy noteHearts plus every partner whose OWN doc carries
+ *  `noteLikes[ownerUid] == atMs` (a partner can only write their own
+ *  doc under the deployed rules; see FirebaseEngine.publishNotes). */
 data class NoteUi(
     val uid: String = "",
     val text: String = "",

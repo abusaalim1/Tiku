@@ -3215,7 +3215,22 @@ fun RdChatInput(
                 Box(Modifier.size(40.dp).clip(CircleShape).background(faintBg).rdPress(onPlus), contentAlignment = Alignment.Center) {
                     Text("+", color = contentCol, fontSize = 24.sp)
                 }
-                Box(Modifier.weight(1f).padding(horizontal = 12.dp)) {
+                // ROUND 62 (Bug B): the field wrapper carries a
+                // 42 dp minimum height (the send disc's height) and
+                // centers its content — Round 57 (Fix 4) set the pill
+                // Row to Alignment.Bottom so the BUTTONS ride the
+                // bottom while the field is tall, but at rest that
+                // also bottom-aligned the single-line field inside
+                // the 42 dp row, so the hint/typed text sat LOW in
+                // the pill instead of centered. With the min height
+                // + CenterStart, the resting single line is exactly
+                // centered; once the field grows past 42 dp it fills
+                // the wrapper and the cap/scroll behaviour is
+                // unchanged.
+                Box(
+                    Modifier.weight(1f).heightIn(min = 42.dp).padding(horizontal = 12.dp),
+                    contentAlignment = Alignment.CenterStart,
+                ) {
                     if (value.isEmpty()) Text("Message…", color = subCol, fontSize = 15.sp, fontFamily = emojiFont)
                     BasicTextField(
                         // ROUND 52: the TextFieldValue mirror (see

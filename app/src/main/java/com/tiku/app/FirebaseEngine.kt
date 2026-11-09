@@ -837,6 +837,19 @@ object FirebaseEngine : ChatRepo {
     private var blockedCache: Set<String> = emptySet()
     private var myDocReg: com.google.firebase.firestore.ListenerRegistration? = null
     private val noteRegs = mutableMapOf<String, com.google.firebase.firestore.ListenerRegistration?>()
+    // ROUND 62 (Bug C): note-heart derivation state. The deployed
+    // rules allow a user to write ONLY their own users/{uid} doc, so
+    // a heart can never be written onto the note OWNER's doc (the
+    // pre-62 toggleNoteHeart did exactly that and was denied every
+    // time). Instead each user stores the hearts they GAVE on their
+    // OWN doc as `noteLikes` (ownerUid -> that note's noteAt ms —
+    // keying to the note's timestamp means a stale like can never
+    // attach itself to the owner's NEXT note), and every client
+    // derives a note's hearts from the docs it already listens to:
+    // [noteBase] holds each owner's raw note (with its legacy
+    // noteHearts), [noteLikesByUser] each seen user's given-likes.
+    private val noteBase = mutableMapOf<String, NoteUi>()
+    private val noteLikesByUser = mutableMapOf<String, Map<String, Long>>()
 
     /** ROUND 14 derivation — a thread is a REQUEST when the partner has sent
      *  at least one message, I have sent none, and I never accepted it
@@ -1601,18 +1614,45 @@ object FirebaseEngine : ChatRepo {
     }
 
     /** Fold one user doc's note fields into AppState.notes (24h window,
-     *  blank text = no note). Shared by the my-doc and per-peer listeners. */
+     *  blank text = no note). Shared by the my-doc and per-peer listeners.
+     *  ROUND 62 (Bug C): the doc's `noteLikes` (hearts this user GAVE,
+     *  ownerUid -> noteAt ms) is folded too, and the published hearts
+     *  are DERIVED by [publishNotes] — a heart lives on the LIKER's
+     *  doc, never written to the owner's (the rules forbid that). */
     private fun applyNoteSnapshot(ownerUid: String, snap: com.google.firebase.firestore.DocumentSnapshot) {
         val text = snap.getString("noteText")?.trim().orEmpty()
         val atMs = snap.getTimestamp("noteAt")?.toDate()?.time ?: 0L
         @Suppress("UNCHECKED_CAST")
         val hearts = (snap.get("noteHearts") as? List<String>)?.toSet() ?: emptySet()
+        @Suppress("UNCHECKED_CAST")
+        val likes = (snap.get("noteLikes") as? Map<String, Any?>)?.mapNotNull { (k, v) ->
+            (v as? Number)?.toLong()?.let { k to it }
+        }?.toMap() ?: emptyMap()
+        noteLikesByUser[ownerUid] = likes
         val fresh = text.isNotEmpty() && atMs > 0L &&
             System.currentTimeMillis() - atMs < 24L * 3600 * 1000
-        AppState.notes.value = if (fresh) {
-            AppState.notes.value + (ownerUid to NoteUi(ownerUid, text, hearts, atMs))
+        if (fresh) {
+            noteBase[ownerUid] = NoteUi(ownerUid, text, hearts, atMs)
         } else {
-            AppState.notes.value - ownerUid
+            noteBase.remove(ownerUid)
+        }
+        publishNotes()
+    }
+
+    /** ROUND 62 (Bug C): publish AppState.notes from [noteBase] with
+     *  each note's hearts derived: the owner's legacy noteHearts PLUS
+     *  every seen user whose own-doc `noteLikes` names this owner
+     *  with THIS note's exact noteAt ms. Runs on every note-relevant
+     *  snapshot (owner docs and liker docs alike), so a like appears
+     *  for the liker at once (their own doc listener) and for the
+     *  owner as soon as the liker's doc snapshot reaches them (the
+     *  per-peer note listener they already hold). */
+    private fun publishNotes() {
+        AppState.notes.value = noteBase.mapValues { (owner, base) ->
+            val derived = noteLikesByUser.entries
+                .filter { (_, likes) -> likes[owner] == base.atMs }
+                .map { it.key }
+            base.copy(hearts = base.hearts + derived)
         }
     }
 
@@ -3873,16 +3913,34 @@ object FirebaseEngine : ChatRepo {
         if (ownerUid.isEmpty() || ownerUid == uid) return
         val cur = AppState.notes.value[ownerUid] ?: return
         val hearted = uid in cur.hearts
-        AppState.notes.value = AppState.notes.value + (ownerUid to cur.copy(
-            hearts = if (hearted) cur.hearts - uid else cur.hearts + uid,
-        ))
+        // ROUND 62 (Bug C): the heart is recorded on MY OWN doc
+        // (users/{me}.noteLikes[ownerUid] = the note's noteAt ms) —
+        // the only users-doc write the deployed rules allow a partner
+        // to make. (Pre-62 this wrote noteHearts onto the OWNER's
+        // doc, which the rules deny — `allow write: if uid == uid` —
+        // so every like was silently permission-denied and the next
+        // snapshot reverted the optimistic heart.) Optimistic first:
+        // fold the change into my given-likes and re-derive; my own
+        // doc listener confirms it moments later. On failure the
+        // optimistic fold is reverted (pre-62 never reverted locally —
+        // it just waited for the owner's snapshot to erase it).
+        val prevLikes = noteLikesByUser[uid] ?: emptyMap()
+        noteLikesByUser[uid] = if (hearted) prevLikes - ownerUid
+            else prevLikes + (ownerUid to cur.atMs)
+        publishNotes()
         scope.launch {
             runCatching {
-                db.collection(Schema.Users.COLL).document(ownerUid).update(
-                    "noteHearts",
-                    if (hearted) FieldValue.arrayRemove(uid) else FieldValue.arrayUnion(uid),
-                ).await()
-            }.onFailure { Log.e("TikuChat", "toggleNoteHeart failed for $ownerUid", it) }
+                val myDoc = db.collection(Schema.Users.COLL).document(uid)
+                if (hearted) {
+                    myDoc.update("noteLikes.$ownerUid", FieldValue.delete()).await()
+                } else {
+                    myDoc.update("noteLikes.$ownerUid", cur.atMs).await()
+                }
+            }.onFailure {
+                Log.e("TikuChat", "toggleNoteHeart failed for $ownerUid", it)
+                noteLikesByUser[uid] = prevLikes
+                publishNotes()
+            }
         }
     }
 
@@ -4020,6 +4078,7 @@ object FirebaseEngine : ChatRepo {
         AppState.threads.value = emptyList()
         // ROUND 14: no note/block state may leak into the next session.
         AppState.notes.value = emptyMap()
+        noteBase.clear(); noteLikesByUser.clear()
         AppState.blockedUids.value = emptySet()
         AppState.blockedPeople.value = emptyList()
         blockedCache = emptySet()

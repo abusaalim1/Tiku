@@ -643,7 +643,16 @@ fun TikaBotScreen() {
                         ) {
                             Text("+", color = Color.White, fontSize = 24.sp)
                         }
-                        Box(Modifier.weight(1f).padding(horizontal = 12.dp)) {
+                        // ROUND 62 (Bug B): same centering fix as
+                        // the chat composer — 42 dp min height +
+                        // CenterStart, so the resting single line is
+                        // centered in the pill instead of sitting low
+                        // under the Row's Alignment.Bottom (Round 57).
+                        Box(
+                            Modifier.weight(1f).heightIn(min = 42.dp)
+                                .padding(horizontal = 12.dp),
+                            contentAlignment = Alignment.CenterStart,
+                        ) {
                             if (input.isEmpty()) {
                                 Text("Message…", color = BotSub, fontSize = 15.sp,
                                     fontFamily = emojiFont)

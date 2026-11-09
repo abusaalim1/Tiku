@@ -310,14 +310,30 @@ object NikahStore {
 
     /** A transactional transition: [body] reads the current doc and
      *  writes through the transaction; returning a value lets the caller
-     *  learn whether IT landed the transition (completion claim). */
-    private suspend fun <T> tx(chatId: String, body: (Transaction) -> T): T? =
-        runCatching {
-            db.runTransaction { txn -> body(txn) }.await()
-        }.onFailure {
-            Log.e("TikuNikah", "session transaction failed chat=$chatId", it)
-            AppState.toast("Couldn't save — check your connection")
-        }.getOrNull()
+     *  learn whether IT landed the transition (completion claim).
+     *  ROUND 62 (Bug A): the whole transaction is retried up to 3
+     *  attempts before the failure toast. Both phones' presence
+     *  heartbeats write THIS SAME session doc every
+     *  [NIKAH_HEARTBEAT_MS], so a transaction that reads the doc is
+     *  routinely aborted by a heartbeat landing mid-flight (Firestore
+     *  ABORTED) — the SDK's internal retries alone were not always
+     *  enough, and the owner's "I'm Ready" tap surfaced exactly that
+     *  as "Couldn't save". Retrying the whole transaction is safe:
+     *  every body re-reads the doc and no-ops when its step/state
+     *  preconditions no longer hold. A re-tap also always re-attempts
+     *  (no latched failure state anywhere in the lobby). */
+    private suspend fun <T> tx(chatId: String, body: (Transaction) -> T): T? {
+        var lastErr: Throwable? = null
+        repeat(3) { attempt ->
+            val r = runCatching { db.runTransaction { txn -> body(txn) }.await() }
+            if (r.isSuccess) return r.getOrNull()
+            lastErr = r.exceptionOrNull()
+            if (attempt < 2) delay(600L * (attempt + 1))
+        }
+        Log.e("TikuNikah", "session transaction failed chat=$chatId", lastErr)
+        AppState.toast("Couldn't save — check your connection")
+        return null
+    }
 
     private fun Transaction.boolMapOf(snap: DocumentSnapshot, field: String): MutableMap<String, Boolean> =
         (snap.get(field) as? Map<*, *>)?.entries?.associate {

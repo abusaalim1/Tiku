@@ -1000,6 +1000,89 @@ class ScreenshotsTest {
         shot("40-chat-few-messages-resting.png")
     }
 
+    /** ROUND 62 (Bug B): frame the REAL RdChatInput directly (the
+     *  shot19 pattern) and return the centre-Y of [text] and of the
+     *  "+" attach glyph (which sits dead-centre in its 40 dp disc,
+     *  itself centred on the pill's mid-line). */
+    private fun composerCentreDelta(text: String, value: String): Pair<Float, Float> {
+        frame {
+            Box(Modifier.fillMaxSize().background(Color.Black)) {
+                Box(Modifier.align(Alignment.BottomCenter)) {
+                    RdChatInput(
+                        h = null, value = value, onChange = {}, onSend = {},
+                        accent = Color(0xFFFF5C8A),
+                        replyText = null, onClearReply = {},
+                        recording = false, recSecs = 0,
+                        onPlus = {}, onMic = {}, onRecCancel = {}, onRecSend = {},
+                    )
+                }
+            }
+        }
+        composeRule.waitForIdle()
+        val textNode = composeRule.onAllNodesWithText(text, substring = true)
+            .fetchSemanticsNodes().firstOrNull()
+        val plusNode = composeRule.onAllNodesWithText("+")
+            .fetchSemanticsNodes().firstOrNull()
+        org.junit.Assert.assertNotNull("composer must render '$text'", textNode)
+        org.junit.Assert.assertNotNull("composer must render the + attach button", plusNode)
+        val t = textNode!!.boundsInRoot
+        val p = plusNode!!.boundsInRoot
+        return (t.top + t.bottom) / 2f to (p.top + p.bottom) / 2f
+    }
+
+    @Test fun shot41_composerHintCentered() {
+        // ROUND 62 (Bug B): at rest the "Message…" hint must sit on
+        // the pill's vertical centre (within 4 dp of the attach
+        // disc's centre) — Round 57's Alignment.Bottom left it low.
+        val (hint, plus) = composerCentreDelta("Message…", "")
+        val tol = 4f * ctx.resources.displayMetrics.density
+        org.junit.Assert.assertTrue(
+            "hint must be vertically centred in the pill (hint=$hint plus=$plus)",
+            kotlin.math.abs(hint - plus) <= tol,
+        )
+        shot("41-composer-hint-centered.png")
+    }
+
+    @Test fun shot42_composerTypedCentered() {
+        // ROUND 62 (Bug B): typed single-line text centres the same way.
+        val (typed, plus) = composerCentreDelta("Hello there", "Hello there")
+        val tol = 4f * ctx.resources.displayMetrics.density
+        org.junit.Assert.assertTrue(
+            "typed text must be vertically centred in the pill (typed=$typed plus=$plus)",
+            kotlin.math.abs(typed - plus) <= tol,
+        )
+        shot("42-composer-typed-centered.png")
+    }
+
+    @Test fun shot43_composerManyLinesCapped() {
+        // ROUND 62 (Bug B): many lines must stay capped at the
+        // field's 150 dp (internal scroll), never balloon the pill.
+        val many = (1..12).joinToString("\n") { "Long message line $it" }
+        frame {
+            Box(Modifier.fillMaxSize().background(Color.Black)) {
+                Box(Modifier.align(Alignment.BottomCenter)) {
+                    RdChatInput(
+                        h = null, value = many, onChange = {}, onSend = {},
+                        accent = Color(0xFFFF5C8A),
+                        replyText = null, onClearReply = {},
+                        recording = false, recSecs = 0,
+                        onPlus = {}, onMic = {}, onRecCancel = {}, onRecSend = {},
+                    )
+                }
+            }
+        }
+        composeRule.waitForIdle()
+        val field = composeRule.onAllNodesWithText("Long message line", substring = true)
+            .fetchSemanticsNodes().firstOrNull()
+        org.junit.Assert.assertNotNull("many-line composer must render its field", field)
+        val capPx = 150f * ctx.resources.displayMetrics.density + 4f
+        org.junit.Assert.assertTrue(
+            "field height ${field!!.boundsInRoot.height} must stay at the 150 dp cap ($capPx)",
+            field.boundsInRoot.height <= capPx,
+        )
+        shot("43-composer-many-lines-capped.png")
+    }
+
     @Test fun shot36_momentsScreen() {
         // The Moments surface in preview: the static dark placeholder
         // (PREVIEW branch — never a real WebView headless) with its
