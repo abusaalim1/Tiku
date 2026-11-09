@@ -130,14 +130,25 @@ fun nikahCertDateStr(ms: Long): String =
 /** ROUND 65: the Hijri date for the certificate, computed on-device
  *  with ICU's Islamic calendar (Umalqura on Android). Any failure —
  *  calendar unavailable on the device — returns null and the
- *  certificate OMITS the Hijri cell; a date is never invented. */
+ *  certificate OMITS the Hijri cell; a date is never invented.
+ *  CI-106 FIX: the string is composed MANUALLY from the calendar's
+ *  own fields. The old ICU SimpleDateFormat pattern "d MMMM yyyy AH"
+ *  was wrong twice over — 'A'/'H' are pattern letters (millis-in-day
+ *  / hour-in-day), not a literal "AH", and the month name resolved
+ *  through the formatter's symbols instead of the Islamic calendar's
+ *  months — rendering garbage like "28 May 1448 96000002". */
 fun nikahHijriStr(ms: Long): String? = runCatching {
     val cal = android.icu.util.IslamicCalendar()
     cal.timeInMillis = ms
-    val fmt = android.icu.text.SimpleDateFormat("d MMMM yyyy AH", Locale.US)
-    @Suppress("UNCHECKED_CAST")
-    fmt.calendar = cal as IcuCalendar
-    fmt.format(cal.time)
+    val day = cal.get(IcuCalendar.DAY_OF_MONTH)
+    val monthIdx = cal.get(IcuCalendar.MONTH)
+    val year = cal.get(IcuCalendar.YEAR)
+    val monthNames = listOf(
+        "Muharram", "Safar", "Rabi al-awwal", "Rabi al-thani",
+        "Jumada al-awwal", "Jumada al-akhirah", "Rajab", "Sha'ban",
+        "Ramadan", "Shawwal", "Dhul-Qa'dah", "Dhul-Hijjah",
+    )
+    "$day ${monthNames[monthIdx]} $year AH"
 }.getOrNull()
 
 /** ROUND 65: "NN-{year}-{####}" — a pure function of keepsake payload
@@ -157,6 +168,37 @@ fun nikahCertNo(k: NikahKeepsake): String {
 /** First name of a full real name (the prototype's turn/waiting lines
  *  address each partner by first name). */
 fun nkFirst(full: String): String = full.trim().split(Regex("\\s+")).firstOrNull() ?: ""
+
+/** CI-106 FIX (owner rule): the REAL name entered for [uid]'s side,
+ *  "" until that side submits — read straight off the state, NEVER
+ *  through groomCertName/brideCertName/certNameOf, whose fallback is
+ *  the chat DISPLAY name. Display names/usernames appear NOWHERE in
+ *  the ceremony. */
+private fun nkRealNameOf(state: NikahUiState, uid: String): String = when (uid) {
+    state.groomUid -> state.groomRealName
+    state.brideUid -> state.brideRealName
+    else -> ""
+}
+
+/** CI-106 FIX: the ceremony-safe FULL name for [uid]'s side — the
+ *  real name once entered; before that the generic wording only
+ *  ("You" for my own side, "Your partner" for the other side).
+ *  Never a display name. */
+private fun nkCeremonyName(state: NikahUiState, uid: String, myUid: String): String {
+    val real = nkRealNameOf(state, uid)
+    if (real.isNotBlank()) return real
+    return if (uid == myUid) "You" else "Your partner"
+}
+
+/** CI-106 FIX: the ceremony-safe FIRST name for [uid]'s side — the
+ *  real first name once entered; before that the generic wording
+ *  only ("You" / "Your partner", kept whole so possessive lines
+ *  read "Your partner's turn — please wait"). Never a display name. */
+private fun nkCeremonyFirst(state: NikahUiState, uid: String, myUid: String): String {
+    val real = nkRealNameOf(state, uid)
+    if (real.isNotBlank()) return nkFirst(real)
+    return if (uid == myUid) "You" else "Your partner"
+}
 
 
 /** Callbacks the ceremony content renders against — the overlay wires
@@ -317,13 +359,16 @@ private fun NkAmeenBoxes(
     state: NikahUiState, myUid: String, flags: Map<String, Boolean>,
 ) {
     val partnerUid = if (myUid == state.groomUid) state.brideUid else state.groomUid
+    // CI-106: real names only — before a side's name arrives the box
+    // stays generic ("You" / "Your partner"), never the display name.
+    val myFirst = nkFirst(nkRealNameOf(state, myUid))
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
         NkAmeenBox(
-            "You · ${nkFirst(state.certNameOf(myUid))}",
+            if (myFirst.isNotBlank()) "You · $myFirst" else "You",
             flags[myUid] == true, Modifier.weight(1f),
         )
         NkAmeenBox(
-            nkFirst(state.certNameOf(partnerUid)),
+            nkCeremonyFirst(state, partnerUid, myUid),
             flags[partnerUid] == true, Modifier.weight(1f),
             waiting = flags[partnerUid] != true,
         )
@@ -737,7 +782,7 @@ private fun NkStepNames(
                 fontFamily = InterFamily, fontWeight = FontWeight.SemiBold,
                 textAlign = TextAlign.Center)
             Spacer(Modifier.height(6.dp))
-            Text(state.certNameOf(myUid), color = Color.White, fontSize = 19.sp,
+            Text(nkCeremonyName(state, myUid, myUid), color = Color.White, fontSize = 19.sp,
                 fontFamily = SerifRegular, textAlign = TextAlign.Center)
         }
         Spacer(Modifier.height(16.dp))
@@ -796,14 +841,17 @@ private fun NkStepLobby(
     Spacer(Modifier.height(22.dp))
     val now = System.currentTimeMillis()
     Row(horizontalArrangement = Arrangement.spacedBy(28.dp)) {
+        // CI-106: the avatars carry the REAL names only ("" until a
+        // side submits — NkLobbyAvatar renders the generic label for
+        // a blank name; the display name never reaches this surface).
         NkLobbyAvatar(
-            emoji = "🤵", name = state.groomCertName, role = "Groom",
+            emoji = "🤵", name = state.groomRealName, role = "Groom",
             present = state.present(state.groomUid, now),
             ready = state.ready[state.groomUid] == true,
             isMe = myUid == state.groomUid,
         )
         NkLobbyAvatar(
-            emoji = "👰", name = state.brideCertName, role = "Bride",
+            emoji = "👰", name = state.brideRealName, role = "Bride",
             present = state.present(state.brideUid, now),
             ready = state.ready[state.brideUid] == true,
             isMe = myUid == state.brideUid,
@@ -815,7 +863,7 @@ private fun NkStepLobby(
     val partnerPresent = state.present(partnerUid, now)
     val myNameMissing = state.nameDoneBySide[myUid] != true
     val partnerNameMissing = state.nameDoneBySide[partnerUid] != true
-    val partnerFirst = nkFirst(state.certNameOf(partnerUid))
+    val partnerFirst = nkCeremonyFirst(state, partnerUid, myUid)
     when {
         myNameMissing ->
             NkStatusLine("Your real name is still missing — Ready unlocks once both names are in", waiting = true)
@@ -853,7 +901,16 @@ private fun NkLobbyAvatar(
         NkStoryRing(emoji, present = present, ring = 110.dp, glyph = 62.dp)
         Spacer(Modifier.height(11.dp))
         Text(
-            if (isMe) "$name · You" else name,
+            // CI-106: a blank (not-yet-entered) real name renders the
+            // generic label — "Your partner" for the other side, "You"
+            // for mine — never a display name. The role caption below
+            // ("Bride"/"Groom") is unchanged.
+            when {
+                name.isNotBlank() && isMe -> "$name · You"
+                name.isNotBlank() -> name
+                isMe -> "You"
+                else -> "Your partner"
+            },
             color = Color.White, fontSize = 14.sp, fontFamily = InterFamily,
             fontWeight = FontWeight.SemiBold, textAlign = TextAlign.Center,
             lineHeight = 18.sp,
@@ -906,7 +963,7 @@ private fun NkStepKhutbah(state: NikahUiState, myUid: String, gateOpen: Boolean,
     Spacer(Modifier.height(20.dp))
     if (state.khutbah[myUid] == true) {
         val partnerUid = if (myUid == state.groomUid) state.brideUid else state.groomUid
-        NkButton("Waiting for ${nkFirst(state.certNameOf(partnerUid))}'s Ameen…", enabled = false) {}
+        NkButton("Waiting for ${nkCeremonyFirst(state, partnerUid, myUid)}'s Ameen…", enabled = false) {}
     } else {
         NkButton("Ameen", enabled = gateOpen) { cb.onKhutbahAmeen() }
     }
@@ -935,15 +992,19 @@ private fun NkStepMahr(
         else "The Mahr is given by the groom, to the bride — your right and your honour, a symbol of his commitment and respect.",
     )
     Spacer(Modifier.height(18.dp))
+    // CI-106: ceremony-safe first names (real only; generic before a
+    // name arrives) — the pills never carry a display name.
+    val groomFirst = nkCeremonyFirst(state, state.groomUid, myUid)
+    val brideFirst = nkCeremonyFirst(state, state.brideUid, myUid)
     Row(verticalAlignment = Alignment.CenterVertically) {
-        NkPill("🤵", "${nkFirst(state.groomCertName)} · the groom gives")
+        NkPill("🤵", "$groomFirst · the groom gives")
         Text("  →  ", color = NkGold, fontSize = 15.sp)
-        NkPill("👰", "${nkFirst(state.brideCertName)} · the bride receives")
+        NkPill("👰", "$brideFirst · the bride receives")
     }
     Spacer(Modifier.height(18.dp))
     if (iAmGroom) {
         if (state.mahrPhase == "proposed") {
-            NkWaiting("You offered ${state.mahrText} — waiting for ${nkFirst(state.brideCertName)} to accept…")
+            NkWaiting("You offered ${state.mahrText} — waiting for $brideFirst to accept…")
             return
         }
         // chips (the groom's pick streams to the bride on every tap)
@@ -1000,11 +1061,11 @@ private fun NkStepMahr(
                         .padding(22.dp),
                     horizontalAlignment = Alignment.CenterHorizontally,
                 ) {
-                    Text("${nkFirst(state.groomCertName)} · the groom offers", color = NkGold,
+                    Text("$groomFirst · the groom offers", color = NkGold,
                         fontSize = 13.sp, fontFamily = InterFamily, fontWeight = FontWeight.Medium)
                     Spacer(Modifier.height(10.dp))
                     Text(
-                        "“For you, ${nkFirst(state.brideCertName)} — a Mahr of ${state.mahrText}, from my heart.”",
+                        "“For you, $brideFirst — a Mahr of ${state.mahrText}, from my heart.”",
                         color = Color.White, fontSize = 22.sp, fontFamily = SerifRegular,
                         textAlign = TextAlign.Center, lineHeight = 31.sp,
                     )
@@ -1016,8 +1077,8 @@ private fun NkStepMahr(
             }
             else -> {
                 NkStatusLine(
-                    if (state.mahrText.isBlank()) "${nkFirst(state.groomCertName)} is choosing your Mahr…"
-                    else "${nkFirst(state.groomCertName)} is choosing your Mahr… so far: ${state.mahrText}",
+                    if (state.mahrText.isBlank()) "$groomFirst is choosing your Mahr…"
+                    else "$groomFirst is choosing your Mahr… so far: ${state.mahrText}",
                     waiting = true,
                 )
             }
@@ -1071,7 +1132,11 @@ private fun NkStepQabool(
     gateOpen: Boolean, cb: NikahCallbacks, motion: Boolean = true,
 ) {
     val activeUid = if (groomTurn) state.groomUid else state.brideUid
-    val activeFirst = nkFirst(if (groomTurn) state.groomCertName else state.brideCertName)
+    // CI-106: ceremony-safe names (real only; generic before a name
+    // arrives) for the turn line, the live count and the script card.
+    val activeFirst = nkCeremonyFirst(state, activeUid, myUid)
+    val groomFull = nkCeremonyName(state, state.groomUid, myUid)
+    val brideFull = nkCeremonyName(state, state.brideUid, myUid)
     val count = if (groomTurn) state.groomQabool else state.brideQabool
     val mine = myUid == activeUid
     NkHeading("Ijab-o-*Qabool*")
@@ -1098,10 +1163,10 @@ private fun NkStepQabool(
         Spacer(Modifier.height(10.dp))
         Text(
             if (groomTurn) {
-                "“I give ${state.brideCertName} to you, ${state.groomCertName}, in Nikah, " +
+                "“I give $brideFull to you, $groomFull, in Nikah, " +
                     "with a Mahr of ${state.mahrText}. Do you accept?”"
             } else {
-                "“${state.brideCertName}, ${state.groomCertName} has accepted you in Nikah " +
+                "“$brideFull, $groomFull has accepted you in Nikah " +
                     "with a Mahr of ${state.mahrText}. Do you accept him as your husband?”"
             },
             color = Color.White, fontSize = 23.sp, fontFamily = SerifRegular,
@@ -1226,7 +1291,7 @@ private fun NkStepWitnesses(
     val iAmGroom = myUid == state.groomUid
     val myWitness = state.witnessNameBySide[myUid] ?: ""
     val partnerWitness = state.witnessNameBySide[partnerUid] ?: ""
-    val partnerFirst = nkFirst(state.certNameOf(partnerUid))
+    val partnerFirst = nkCeremonyFirst(state, partnerUid, myUid)
     if (myWitness.isNotBlank()) {
         Column(Modifier.fillMaxWidth()) {
             Text(
@@ -1307,7 +1372,7 @@ private fun NkStepSignatures(
     Spacer(Modifier.height(9.dp))
     NkSub("With your own hand — the signature that seals the covenant.")
     Spacer(Modifier.height(16.dp))
-    val partnerFirst = nkFirst(state.certNameOf(partnerUid))
+    val partnerFirst = nkCeremonyFirst(state, partnerUid, myUid)
     val partnerSig = state.sigPngB64BySide[partnerUid] ?: ""
     val mySigned = state.sigDoneBySide[myUid] == true
     val partnerIsBride = partnerUid == state.brideUid
@@ -1319,7 +1384,7 @@ private fun NkStepSignatures(
     } else {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             Text(
-                "Your signature · ${state.certNameOf(myUid)}",
+                "Your signature · ${nkCeremonyName(state, myUid, myUid)}",
                 color = NkSubC, fontSize = 13.sp, fontWeight = FontWeight.Medium,
                 fontFamily = InterFamily,
                 modifier = Modifier.weight(1f).padding(start = 4.dp),
@@ -1345,7 +1410,7 @@ private fun NkStepSignatures(
     }
     Spacer(Modifier.height(18.dp))
     Text(
-        "${state.certNameOf(partnerUid)} · ${if (partnerIsBride) "Bride" else "Groom"}'s signature",
+        "${nkCeremonyName(state, partnerUid, myUid)} · ${if (partnerIsBride) "Bride" else "Groom"}'s signature",
         color = NkSubC, fontSize = 13.sp, fontWeight = FontWeight.Medium,
         fontFamily = InterFamily, modifier = Modifier.fillMaxWidth().padding(start = 4.dp),
     )
@@ -1416,13 +1481,13 @@ private fun NkStepDua(state: NikahUiState, myUid: String, gateOpen: Boolean, cb:
         )
     }
     Spacer(Modifier.height(14.dp))
-    NkSub("By the mercy of Allah, ${state.groomCertName} and ${state.brideCertName} are now husband and wife. May your days be filled with sakina, mawaddah and rahmah. Ameen.")
+    NkSub("By the mercy of Allah, ${nkCeremonyName(state, state.groomUid, myUid)} and ${nkCeremonyName(state, state.brideUid, myUid)} are now husband and wife. May your days be filled with sakina, mawaddah and rahmah. Ameen.")
     Spacer(Modifier.height(16.dp))
     NkAmeenBoxes(state, myUid, state.dua)
     Spacer(Modifier.height(20.dp))
     if (state.dua[myUid] == true) {
         val partnerUid = if (myUid == state.groomUid) state.brideUid else state.groomUid
-        NkButton("Waiting for ${nkFirst(state.certNameOf(partnerUid))}'s Ameen…", enabled = false) {}
+        NkButton("Waiting for ${nkCeremonyFirst(state, partnerUid, myUid)}'s Ameen…", enabled = false) {}
     } else {
         NkButton("Ameen", enabled = gateOpen) { cb.onDuaAmeen() }
     }

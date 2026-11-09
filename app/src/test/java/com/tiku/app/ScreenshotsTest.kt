@@ -1126,6 +1126,21 @@ class ScreenshotsTest {
             composeRule.onAllNodesWithText("🤵").fetchSemanticsNodes().isNotEmpty() &&
                 composeRule.onAllNodesWithText("👰").fetchSemanticsNodes().isNotEmpty(),
         )
+        // CI-106 (Defect 2): the name-waiting partner's avatar must
+        // carry the generic label — her chat DISPLAY name ("Meera",
+        // and the groom's "Aarav") must appear NOWHERE in the ceremony.
+        org.junit.Assert.assertTrue(
+            "lobby must not label any side with a chat display name",
+            composeRule.onAllNodesWithText("Meera", substring = true)
+                .fetchSemanticsNodes().isEmpty() &&
+                composeRule.onAllNodesWithText("Aarav", substring = true)
+                    .fetchSemanticsNodes().isEmpty(),
+        )
+        org.junit.Assert.assertTrue(
+            "lobby must label the name-waiting partner generically",
+            composeRule.onAllNodesWithText("Your partner")
+                .fetchSemanticsNodes().isNotEmpty(),
+        )
         shot("52-nikah-lobby-name-waiting.png")
     }
 
@@ -1157,7 +1172,16 @@ class ScreenshotsTest {
         shot("53-nikah-qabool-bride-waiting.png")
     }
 
-    @Test fun shot54_nikahCertificateV4() {
+    // CI-106 (Defect 3): the certificate card is TALLER than the
+    // class window (w360dp-h800dp-480dpi = 1080×2400px), so shots
+    // 54/55 captured only its top — the grid's third row, the
+    // signatures + seal row and the CERTIFICATE NO. footer were
+    // clipped out of the PNGs. These two tests run in a taller
+    // window in the SAME pattern/density (h1400dp = 4200px), which
+    // fits the full card plus the keepsake overlay's chrome.
+    @Test
+    @Config(qualifiers = "w360dp-h1400dp-480dpi")
+    fun shot54_nikahCertificateV4() {
         // The v4 Nikah Nama with the staged sample family (shared
         // fixture with shots 39/55): fathers, mahr, witnesses,
         // signatures, seal, deterministic number.
@@ -1191,13 +1215,45 @@ class ScreenshotsTest {
                 "CERTIFICATE NO. ${nikahCertNo(keepsake)}", substring = true,
             ).fetchSemanticsNodes().isNotEmpty(),
         )
+        // CI-106 (Defect 1): the Hijri cell must be the staged date's
+        // real Hijri date (9 Nov 2026), composed from the Islamic
+        // calendar's own fields — not formatter-pattern garbage.
+        org.junit.Assert.assertTrue(
+            "certificate hijri date must be 28 Jumada al-awwal 1448 AH",
+            composeRule.onAllNodesWithText("28 Jumada al-awwal 1448 AH", substring = true)
+                .fetchSemanticsNodes().isNotEmpty(),
+        )
+        // CI-106 (Defect 3 acceptance): the rows the old viewport
+        // clipped — witnesses (both names), both signature captions,
+        // and the seal — must all be composed in the full-card capture.
+        org.junit.Assert.assertTrue(
+            "certificate must carry both witnesses",
+            composeRule.onAllNodesWithText("Imran Sheikh", substring = true)
+                .fetchSemanticsNodes().isNotEmpty() &&
+                composeRule.onAllNodesWithText("Bilal Ahmad", substring = true)
+                    .fetchSemanticsNodes().isNotEmpty(),
+        )
+        org.junit.Assert.assertTrue(
+            "certificate must carry both signature captions and the seal",
+            composeRule.onAllNodesWithText("SIGNATURE OF THE GROOM", substring = true)
+                .fetchSemanticsNodes().isNotEmpty() &&
+                composeRule.onAllNodesWithText("SIGNATURE OF THE BRIDE", substring = true)
+                    .fetchSemanticsNodes().isNotEmpty() &&
+                composeRule.onAllNodesWithText("TIKU")
+                    .fetchSemanticsNodes().isNotEmpty(),
+        )
         shot("54-nikah-certificate-v4.png")
     }
 
-    @Test fun shot55_nikahKeepsakeReopen() {
+    @Test
+    @Config(qualifiers = "w360dp-h1400dp-480dpi")
+    fun shot55_nikahKeepsakeReopen() {
         // The keepsake re-open from the chat card: the SAME certificate
         // renderer over the SAME payload must show the identical
         // certificate (same names, same deterministic number).
+        // CI-106: same taller window as shot54 (see there) — the
+        // overlay's full column (mascot + heading + card + footer)
+        // must fit the capture, signatures/seal/cert-no included.
         val keepsake = nikahSampleKeepsake()
         frame {
             NikahCertificateOverlay(keepsake) {}
@@ -1215,6 +1271,22 @@ class ScreenshotsTest {
             composeRule.onAllNodesWithText(
                 "CERTIFICATE NO. ${nikahCertNo(keepsake)}", substring = true,
             ).fetchSemanticsNodes().isNotEmpty(),
+        )
+        // CI-106 (Defect 3 acceptance): the previously clipped bottom
+        // of the card must be composed in the re-open capture too —
+        // witnesses, the officiant line and both signature captions.
+        org.junit.Assert.assertTrue(
+            "keepsake re-open must carry witnesses + officiant + signatures",
+            composeRule.onAllNodesWithText("Imran Sheikh", substring = true)
+                .fetchSemanticsNodes().isNotEmpty() &&
+                composeRule.onAllNodesWithText("Bilal Ahmad", substring = true)
+                    .fetchSemanticsNodes().isNotEmpty() &&
+                composeRule.onAllNodesWithText("Tiku — in-app ceremony", substring = true)
+                    .fetchSemanticsNodes().isNotEmpty() &&
+                composeRule.onAllNodesWithText("SIGNATURE OF THE GROOM", substring = true)
+                    .fetchSemanticsNodes().isNotEmpty() &&
+                composeRule.onAllNodesWithText("SIGNATURE OF THE BRIDE", substring = true)
+                    .fetchSemanticsNodes().isNotEmpty(),
         )
         shot("55-nikah-keepsake-reopen.png")
     }
