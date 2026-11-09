@@ -50,6 +50,7 @@ import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.PathOperation
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
@@ -155,7 +156,7 @@ fun nikahCertNo(k: NikahKeepsake): String {
 
 /** First name of a full real name (the prototype's turn/waiting lines
  *  address each partner by first name). */
-fun nkFirst(full: String): String = full.trim().split(Regex("\s+")).firstOrNull() ?: ""
+fun nkFirst(full: String): String = full.trim().split(Regex("\\s+")).firstOrNull() ?: ""
 
 
 /** Callbacks the ceremony content renders against — the overlay wires
@@ -1727,13 +1728,10 @@ private fun NkStar8(modifier: Modifier = Modifier) {
         val rect = androidx.compose.ui.geometry.Rect(inset, inset, w - inset, h - inset)
         val stroke = Stroke(width = w * 0.045f)
         drawRect(NkAntiqueGold, topLeft = rect.topLeft,
-            size = androidx.compose.ui.geometry.Size(rect.width, rect.height), style = stroke)
-        with(drawContext.canvas) {
-            save()
-            rotate(45f, rect.center)
+            size = Size(rect.width, rect.height), style = stroke)
+        withTransform({ rotate(45f, rect.center) }) {
             drawRect(NkAntiqueGold, topLeft = rect.topLeft,
-                size = androidx.compose.ui.geometry.Size(rect.width, rect.height), style = stroke)
-            restore()
+                size = Size(rect.width, rect.height), style = stroke)
         }
         drawCircle(NkAntiqueGold, radius = w * 0.08f, center = center)
     }
@@ -1755,7 +1753,7 @@ private fun NkCrescent(modifier: Modifier = Modifier) {
             addOval(androidx.compose.ui.geometry.Rect(bc.x - br, bc.y - br, bc.x + br, bc.y + br))
         }
         val crescent = androidx.compose.ui.graphics.Path().apply {
-            op(moon, bite, PathOperation.Difference, this)
+            op(moon, bite, PathOperation.Difference)
         }
         drawPath(crescent, gold)
         // small four-point star at the crescent's upper right
