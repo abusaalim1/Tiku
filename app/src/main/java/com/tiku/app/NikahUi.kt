@@ -41,6 +41,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -72,7 +73,13 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
+import kotlin.coroutines.resume
 import java.text.SimpleDateFormat
 import android.icu.util.Calendar as IcuCalendar
 import java.util.Date
@@ -1508,6 +1515,8 @@ private fun NkStepNama(state: NikahUiState, cb: NikahCallbacks, motion: Boolean 
     )
     Spacer(Modifier.height(18.dp))
     NkButton("Done") { cb.onClose() }
+    Spacer(Modifier.height(10.dp))
+    NkCertificateDownloadButton(state.keepsake())
 }
 
 /** Confetti in the prototype's colours — a single deterministic burst
@@ -1869,6 +1878,108 @@ private fun NkCertSignature(pngB64: String, label: String, modifier: Modifier = 
     }
 }
 
+/** ROUND 66 (amendment): the certificate PNG renders at exactly this
+ *  width in px — a fixed ~1240 px canvas, independent of the phone's
+ *  screen size or density, so both partners' downloads are equally
+ *  crisp. The height follows the card's own full-paper height at
+ *  that width; nothing is cropped. */
+private const val NK_CERT_PNG_WIDTH = 1240
+
+private tailrec fun android.content.Context.findNkActivity(): android.app.Activity? =
+    when (this) {
+        is android.app.Activity -> this
+        is android.content.ContextWrapper -> baseContext.findNkActivity()
+        else -> null
+    }
+
+/**
+ * ROUND 66 (amendment): render the certificate — the SAME
+ * [NikahCertificateCard] composable both certificate screens
+ * display, fed the SAME [k] payload the screen is showing (real
+ * names, mahr, dates, witnesses, drawn signatures, seal, cert no.)
+ * — to a PNG-ready bitmap. The card is composed on an off-screen
+ * ComposeView attached to the activity's decor view (translated
+ * fully off-screen; it never flashes on screen), measured at
+ * exactly [NK_CERT_PNG_WIDTH] px wide with its natural full height,
+ * and captured by drawing the view into a bitmap once it has laid
+ * out. Returns null
+ * on any failure (no activity, no layout within 5 s, capture error)
+ * — the caller then shows the failure toast and nothing is saved.
+ * Must be called from the main thread.
+ */
+suspend fun renderNikahCertificateBitmap(
+    ctx: android.content.Context, k: NikahKeepsake,
+): android.graphics.Bitmap? {
+    val activity = ctx.findNkActivity() ?: return null
+    val parent = activity.window?.decorView as? android.view.ViewGroup ?: return null
+    val view = androidx.compose.ui.platform.ComposeView(activity)
+    view.setViewCompositionStrategy(
+        androidx.compose.ui.platform.ViewCompositionStrategy.DisposeOnDetachedFromWindow,
+    )
+    view.setContent { NikahCertificateCard(k) }
+    parent.addView(
+        view,
+        android.view.ViewGroup.LayoutParams(
+            NK_CERT_PNG_WIDTH, android.view.ViewGroup.LayoutParams.WRAP_CONTENT,
+        ),
+    )
+    view.translationX = -NK_CERT_PNG_WIDTH * 2f
+    return try {
+        withTimeoutOrNull(5_000) {
+            suspendCancellableCoroutine { cont ->
+                val listener = object : android.view.ViewTreeObserver.OnGlobalLayoutListener {
+                    override fun onGlobalLayout() {
+                        if (view.height <= 0) return
+                        view.viewTreeObserver.removeOnGlobalLayoutListener(this)
+                        view.post {
+                            val bmp = runCatching {
+                                val b = android.graphics.Bitmap.createBitmap(
+                                    view.width, view.height,
+                                    android.graphics.Bitmap.Config.ARGB_8888,
+                                )
+                                view.draw(android.graphics.Canvas(b))
+                                b
+                            }.getOrNull()
+                            if (cont.isActive) cont.resume(bmp)
+                        }
+                    }
+                }
+                view.viewTreeObserver.addOnGlobalLayoutListener(listener)
+                cont.invokeOnCancellation {
+                    view.viewTreeObserver.removeOnGlobalLayoutListener(listener)
+                }
+                view.requestLayout()
+            }
+        }
+    } finally {
+        parent.removeView(view)
+    }
+}
+
+/** ROUND 66 (amendment): the Download action shared by the
+ *  ceremony's certificate step and the keepsake re-open view — an
+ *  existing-style ghost button; the save itself is
+ *  [MediaSaver.saveCertificatePng] (Downloads, no partial file). */
+@Composable
+private fun NkCertificateDownloadButton(k: NikahKeepsake) {
+    val ctx = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var busy by remember { mutableStateOf(false) }
+    NkGhostButton(if (busy) "Saving…" else "Download") {
+        if (!busy) {
+            busy = true
+            scope.launch {
+                val bmp = runCatching { renderNikahCertificateBitmap(ctx, k) }.getOrNull()
+                val ok = bmp != null && withContext(Dispatchers.IO) {
+                    MediaSaver.saveCertificatePng(ctx, bmp, "Nikah-Nama-${nikahCertNo(k)}.png")
+                }
+                AppState.toast(if (ok) "Saved to Downloads" else "Couldn't save the certificate")
+                busy = false
+            }
+        }
+    }
+}
+
 /** Full-screen keepsake view (from the chat's keepsake card) — the
  *  same v4 certificate screen as the ceremony's final step. */
 @Composable
@@ -1896,6 +2007,8 @@ fun NikahCertificateOverlay(k: NikahKeepsake, onClose: () -> Unit) {
                     textAlign = TextAlign.Center, lineHeight = 18.sp,
                 )
                 Spacer(Modifier.height(18.dp))
+                NkCertificateDownloadButton(k)
+                Spacer(Modifier.height(10.dp))
                 NkGhostButton("Close", onClose)
             }
         }

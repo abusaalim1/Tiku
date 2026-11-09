@@ -171,6 +171,52 @@ object MediaSaver {
         }
     }.getOrDefault(false)
 
+    /** ROUND 66 (amendment): the Nikah certificate PNG — the same
+     *  explicit-save discipline as chat media, but the destination is
+     *  the device Downloads folder (the owner asked for a Download,
+     *  not a gallery save). API 29+: a MediaStore Downloads entry
+     *  written under IS_PENDING and only published once the PNG bytes
+     *  are fully written — any failure deletes the pending entry, so
+     *  no partial file is ever left behind. Below 29: the
+     *  app-specific Downloads folder, the same fallback shape as the
+     *  writers above. */
+    fun saveCertificatePng(ctx: android.content.Context, bmp: Bitmap, name: String): Boolean = runCatching {
+        if (android.os.Build.VERSION.SDK_INT >= 29) {
+            val values = android.content.ContentValues().apply {
+                put(android.provider.MediaStore.Downloads.DISPLAY_NAME, name)
+                put(android.provider.MediaStore.Downloads.MIME_TYPE, "image/png")
+                put(android.provider.MediaStore.Downloads.RELATIVE_PATH,
+                    android.os.Environment.DIRECTORY_DOWNLOADS)
+                put(android.provider.MediaStore.Downloads.IS_PENDING, 1)
+            }
+            val uri = ctx.contentResolver.insert(
+                android.provider.MediaStore.Downloads.EXTERNAL_CONTENT_URI, values,
+            ) ?: return false
+            try {
+                ctx.contentResolver.openOutputStream(uri)?.use { out ->
+                    if (!bmp.compress(Bitmap.CompressFormat.PNG, 100, out)) {
+                        throw IllegalStateException("certificate PNG encode failed")
+                    }
+                } ?: throw IllegalStateException("certificate output stream unavailable")
+                val done = android.content.ContentValues().apply {
+                    put(android.provider.MediaStore.Downloads.IS_PENDING, 0)
+                }
+                ctx.contentResolver.update(uri, done, null, null)
+                true
+            } catch (e: Exception) {
+                ctx.contentResolver.delete(uri, null, null)
+                false
+            }
+        } else {
+            val dir = java.io.File(
+                ctx.getExternalFilesDir(android.os.Environment.DIRECTORY_DOWNLOADS), "Tiku",
+            ).apply { mkdirs() }
+            java.io.File(dir, name).outputStream().use { out ->
+                bmp.compress(Bitmap.CompressFormat.PNG, 100, out)
+            }
+        }
+    }.getOrDefault(false)
+
     /** ROUND 15: video save — same MediaStore pattern as audio, into
      *  Movies/Tiku on API 29+ (app-specific Movies/Tiku below that). */
     private fun writeVideo(ctx: android.content.Context, src: java.io.File, name: String, mime: String): Boolean = runCatching {

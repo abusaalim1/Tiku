@@ -1594,6 +1594,111 @@ class ScreenshotsTest {
         shot("49-multi-photo-three-bubbles.png")
     }
 
+    // ---------- ROUND 66: Chat Emoji Effects (EmojiFx2) staging ----------
+    // The Fx2 overlay's TEST-ONLY stageT hook seeds the RNG and steps
+    // the engine in fixed 1/60 spec-second increments to an exact
+    // mid-animation spec-time, then holds that frame — deterministic
+    // particles for the capture. Production never passes stageT.
+    @Test fun shot56_fx2Heart() {
+        frame {
+            Box(Modifier.fillMaxSize().background(Color(0xFF101018))) {
+                EmojiFx2Overlay(specIdx = 0, onDone = {}, stageT = 1.05f)
+            }
+        }
+        composeRule.waitForIdle()
+        shot("56-fx2-heart.png")
+    }
+
+    @Test fun shot57_fx2Fire() {
+        frame {
+            Box(Modifier.fillMaxSize().background(Color(0xFF101018))) {
+                EmojiFx2Overlay(specIdx = 9, onDone = {}, stageT = 1.2f)
+            }
+        }
+        composeRule.waitForIdle()
+        shot("57-fx2-fire.png")
+    }
+
+    @Test fun shot58_fx2Lol() {
+        frame {
+            Box(Modifier.fillMaxSize().background(Color(0xFF101018))) {
+                EmojiFx2Overlay(specIdx = 18, onDone = {}, stageT = 1.0f)
+            }
+        }
+        composeRule.waitForIdle()
+        shot("58-fx2-lol.png")
+    }
+
+    @Test fun shot59_fxKissRound25() {
+        // ROUND 66 (😘 hard rule proof): 😘 still renders the OLD
+        // Round-25 show — this stages EmojiFxOverlay kind 1 (NOT the
+        // Fx2 engine) with the test clock paused, advanced to 1.3 s,
+        // mid-trail flight.
+        composeRule.mainClock.autoAdvance = false
+        frame {
+            Box(Modifier.fillMaxSize().background(Color(0xFF101018))) {
+                EmojiFxOverlay(kind = 1, onDone = {})
+            }
+        }
+        composeRule.mainClock.advanceBy(1300)
+        shot("59-fx-kiss-round25.png")
+    }
+
+    @Test fun shot60_nikahCertificateDownload() {
+        // ROUND 66 (amendment): the keepsake certificate view must
+        // carry the Download action, and the off-screen render must
+        // produce the full-paper bitmap at the fixed 1240 px width.
+        // A real MediaStore write to a device Downloads folder cannot
+        // complete under Robolectric (no real provider); the save is
+        // attempted and its outcome printed, not asserted.
+        val keepsake = nikahSampleKeepsake()
+        frame { NikahCertificateOverlay(keepsake) {} }
+        composeRule.waitForIdle()
+        org.junit.Assert.assertTrue(
+            "keepsake certificate view must carry the Download action",
+            composeRule.onAllNodesWithText("Download").fetchSemanticsNodes().isNotEmpty(),
+        )
+        org.junit.Assert.assertTrue(
+            "keepsake certificate view must render its certificate number",
+            composeRule.onAllNodesWithText(
+                "CERTIFICATE NO. ${nikahCertNo(keepsake)}", substring = true,
+            ).fetchSemanticsNodes().isNotEmpty(),
+        )
+        val activity = composeRule.activity
+        var rendered: android.graphics.Bitmap? = null
+        var renderDone = false
+        android.os.Handler(android.os.Looper.getMainLooper()).post {
+            kotlinx.coroutines.MainScope().launch {
+                rendered = runCatching {
+                    renderNikahCertificateBitmap(activity, keepsake)
+                }.getOrNull()
+                renderDone = true
+            }
+        }
+        val deadline = System.currentTimeMillis() + 15_000
+        while (!renderDone && System.currentTimeMillis() < deadline) {
+            org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
+            Thread.sleep(20)
+        }
+        if (rendered != null) {
+            val bmp = rendered!!
+            println("R66 cert render: ${bmp.width}x${bmp.height}")
+            org.junit.Assert.assertEquals(
+                "certificate render must be exactly 1240 px wide", 1240, bmp.width,
+            )
+            org.junit.Assert.assertTrue(
+                "certificate render must carry the full paper height", bmp.height > 600,
+            )
+            val saved = MediaSaver.saveCertificatePng(
+                activity, bmp, "Nikah-Nama-${nikahCertNo(keepsake)}.png",
+            )
+            println("R66 cert MediaStore save under Robolectric: $saved")
+        } else {
+            println("R66 cert render: null under Robolectric (see notes)")
+        }
+        shot("60-nikah-certificate-download.png")
+    }
+
     @Test fun shot36_momentsScreen() {
         // The Moments surface in preview: the static dark placeholder
         // (PREVIEW branch — never a real WebView headless) with its

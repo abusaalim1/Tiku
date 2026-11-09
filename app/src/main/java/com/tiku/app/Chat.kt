@@ -340,10 +340,13 @@ private fun singleEmojiOverlayKind(m: TikuMessage): String? {
         // ROUND 25: ❤ and 😘 are NOT here any more — they belong to
         // the owner's supplied design kinds ([singleEmojiDesignKind])
         // and every caller checks that mapping first.
-        "💖", "💕", "💗", "💓", "💞", "🥰", "😍" -> "hearts"
+        // ROUND 66: 🥰, 😍, 🔥 and 🤣 are NOT here any more either —
+        // they belong to the owner's Chat Emoji Effects file
+        // ([singleEmojiFx2Kind]) and every caller checks that mapping
+        // before this one. 😂 alone keeps the Round-24 laugh kind.
+        "💖", "💕", "💗", "💓", "💞" -> "hearts"
         "🎉", "🎊", "🥳" -> "confetti"
-        "🔥" -> "fire"
-        "😂", "🤣" -> "laugh"
+        "😂" -> "laugh"
         "✨", "🌟", "⭐" -> "sparkles"
         else -> null
     }
@@ -368,6 +371,47 @@ private fun singleEmojiDesignKind(m: TikuMessage): Int? {
         "👀" -> 3
         "😚" -> 4
         "🤭" -> 5
+        else -> null
+    }
+}
+
+/** ROUND 66: the owner's "Chat Emoji Effects" file (EmojiFx2.kt) —
+ *  a lone emoji covered by that file's spec table plays the file's
+ *  own native show via [EmojiFx2Overlay] INSTEAD of any Round-24/25
+ *  effect. Returns the demo's SP spec index, or null. Same
+ *  qualification gate as [singleEmojiDesignKind] (plain TEXT, no fx
+ *  field, not undecryptable/tombstone, exactly one strict grapheme).
+ *  Every caller checks this BEFORE [singleEmojiDesignKind] and
+ *  [singleEmojiOverlayKind] — with ONE deliberate exception by
+ *  construction: 😘 has NO entry here (the file's 'kiss' spec is
+ *  never routed, per the owner's order), so 😘 falls through to
+ *  [singleEmojiDesignKind] kind 1 and keeps its Round-25 show
+ *  byte-for-byte. ❤ accepts U+2764 with or without VS16 (the compare
+ *  strips it, like the mappings above). */
+private fun singleEmojiFx2Kind(m: TikuMessage): Int? {
+    if (m.kind != MsgKind.TEXT || m.fx != null || m.undecryptable || m.deletedForEveryone) return null
+    val g = singleEmojiGrapheme(m.text) ?: return null
+    return when (g.replace("\uFE0F", "")) {
+        "❤" -> 0
+        "😍" -> 2
+        "🥰" -> 3
+        "🫶" -> 4
+        "👄" -> 5
+        "😏" -> 6
+        "😎" -> 7
+        "🍑" -> 8
+        "🔥" -> 9
+        "🫣" -> 10
+        "🤭" -> 11
+        "👀" -> 12
+        "🥺" -> 13
+        "😭" -> 14
+        "💔" -> 15
+        "🤬" -> 16
+        "🖕" -> 17
+        "🤣" -> 18
+        "😴" -> 19
+        "🙄" -> 20
         else -> null
     }
 }
@@ -1955,7 +1999,7 @@ private fun RdBubbleRow(
                                             }
                                         }
                                     }
-                                    else if (m.fx != null || singleEmojiOverlayKind(m) != null || singleEmojiDesignKind(m) != null) onFxTap(m)
+                                    else if (m.fx != null || singleEmojiOverlayKind(m) != null || singleEmojiDesignKind(m) != null || singleEmojiFx2Kind(m) != null) onFxTap(m)
                                     // image opens its viewer once decoded;
                                     // a video tap either opens its player
                                     // (loaded) or starts the tap-to-load —
@@ -3555,6 +3599,12 @@ private fun RdChatContent(thread: ChatThread) {
      *  screen at a time, exactly like the single-state Round-24
      *  design. */
     var emojiFxPlay by remember(threadId) { mutableStateOf<Pair<Int, String>?>(null) }
+    /** ROUND 66: the running EmojiFx2Overlay playback (the owner's
+     *  Chat Emoji Effects file): SP spec index to play key, same
+     *  "<msgId>#<n>" scheme. Mutually exclusive with [fxPlay] and
+     *  [emojiFxPlay] — starting any one playback clears the other
+     *  two, so a single effect owns the screen at a time. */
+    var emojiFx2Play by remember(threadId) { mutableStateOf<Pair<Int, String>?>(null) }
     /** Bubble anchors by message id. A plain map on purpose: it is
      *  read only at play time, so layout callbacks never recompose. */
     val fxAnchorMap = remember(threadId) { mutableMapOf<String, FxAnchor>() }
@@ -3611,6 +3661,7 @@ private fun RdChatContent(thread: ChatThread) {
     fun playFx(kind: String, msgId: String, anchored: Boolean = false) {
         fxPlaySeq += 1
         emojiFxPlay = null
+        emojiFx2Play = null
         fxPlayAnchor = if (anchored) fxAnchorMap[msgId] else null
         fxPlay = kind to "$msgId#$fxPlaySeq"
     }
@@ -3621,7 +3672,18 @@ private fun RdChatContent(thread: ChatThread) {
         fxPlaySeq += 1
         fxPlay = null
         fxPlayAnchor = null
+        emojiFx2Play = null
         emojiFxPlay = kindIdx to "$msgId#$fxPlaySeq"
+    }
+    /** ROUND 66: start an EmojiFx2Overlay playback. Screen-wide by
+     *  design (the file's stage IS the full chat), so any running
+     *  RdFxOverlay / EmojiFxOverlay playback is cleared. */
+    fun playEmojiFx2(specIdx: Int, msgId: String) {
+        fxPlaySeq += 1
+        fxPlay = null
+        fxPlayAnchor = null
+        emojiFxPlay = null
+        emojiFx2Play = specIdx to "$msgId#$fxPlaySeq"
     }
     fun openGift(id: String) {
         if (id in openedGifts) return
@@ -4664,11 +4726,19 @@ private fun RdChatContent(thread: ChatThread) {
                             // this ONE durable played log, so a message
                             // auto-plays exactly once per account,
                             // whichever engine renders it.
-                            val dk = singleEmojiDesignKind(m)
-                            val ek = if (dk == null) singleEmojiOverlayKind(m) else null
-                            if ((dk != null || ek != null) && !emojiFxPlayedLog.seen(m.id)) {
+                            // ROUND 66: the owner's Chat Emoji Effects
+                            // file routes FIRST (EmojiFx2Overlay) —
+                            // except 😘, which has no Fx2 entry by
+                            // construction and falls through to the
+                            // Round-25 design kind 1 exactly as before.
+                            val fk = singleEmojiFx2Kind(m)
+                            val dk = if (fk == null) singleEmojiDesignKind(m) else null
+                            val ek = if (fk == null && dk == null) singleEmojiOverlayKind(m) else null
+                            if ((fk != null || dk != null || ek != null) && !emojiFxPlayedLog.seen(m.id)) {
                                 emojiFxPlayedLog.mark(m.id)
-                                if (dk != null) playEmojiFx(dk, m.id) else playFx(ek!!, m.id)
+                                if (fk != null) playEmojiFx2(fk, m.id)
+                                else if (dk != null) playEmojiFx(dk, m.id)
+                                else playFx(ek!!, m.id)
                             }
                         }
                     }
@@ -4864,14 +4934,21 @@ private fun RdChatContent(thread: ChatThread) {
                                     when (msg.fx) {
                                         "gift" -> openGift(msg.id)
                                         "fire", "confetti", "hearts" -> playFx(msg.fx!!, msg.id, anchored = true)
-                                        // ROUND 24 + 25: a lone-emoji
+                                        // ROUND 24 + 25 + 66: a lone-emoji
                                         // message replays its text-derived
-                                        // effect — the owner's design kinds
-                                        // first, Round-24 families after.
+                                        // effect — the owner's Chat Emoji
+                                        // Effects file first (😘 has no
+                                        // entry there and falls through),
+                                        // the Round-25 design kinds next,
+                                        // Round-24 families last.
                                         null -> {
-                                            val dk = singleEmojiDesignKind(msg)
-                                            if (dk != null) playEmojiFx(dk, msg.id)
-                                            else singleEmojiOverlayKind(msg)?.let { playFx(it, msg.id) }
+                                            val fk = singleEmojiFx2Kind(msg)
+                                            if (fk != null) playEmojiFx2(fk, msg.id)
+                                            else {
+                                                val dk = singleEmojiDesignKind(msg)
+                                                if (dk != null) playEmojiFx(dk, msg.id)
+                                                else singleEmojiOverlayKind(msg)?.let { playFx(it, msg.id) }
+                                            }
                                         }
                                     }
                                 },
@@ -5631,6 +5708,20 @@ private fun RdChatContent(thread: ChatThread) {
             key(playKey) {
                 EmojiFxOverlay(kindIdx) {
                     if (emojiFxPlay?.second == playKey) emojiFxPlay = null
+                }
+            }
+        }
+
+        // ---- ROUND 66: the owner's Chat Emoji Effects overlay ----
+        // Same host position and key-checked clear as the Round-25
+        // overlay above. key(playKey) gives every playback a FRESH
+        // overlay (fresh Fx2 engine), so a tap replay mid-flight
+        // restarts the show cleanly. The overlay is transparent and
+        // carries no pointer input.
+        emojiFx2Play?.let { (specIdx, playKey) ->
+            key(playKey) {
+                EmojiFx2Overlay(specIdx) {
+                    if (emojiFx2Play?.second == playKey) emojiFx2Play = null
                 }
             }
         }
