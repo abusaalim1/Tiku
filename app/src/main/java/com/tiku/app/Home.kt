@@ -1424,7 +1424,7 @@ fun OwnerSection(
         "Open straight to the sign-in box — no double-tap",
         OwnerPrefs.skipHome,
     ) {
-        OwnerPrefs.setSkipHome(!OwnerPrefs.skipHome)
+        OwnerPrefs.applySkipHome(!OwnerPrefs.skipHome)
     }
     // ROUND 31 — the view-once override: with this on, photos and
     // videos OTHERS sent as view once / view twice never run out of

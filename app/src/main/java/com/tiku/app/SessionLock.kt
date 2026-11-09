@@ -117,8 +117,12 @@ object OwnerPrefs {
         prefs?.edit()?.putBoolean("app_lock", on)?.apply()
     }
 
-    /** ROUND 57 (Fix 5): persist the owner's direct-entry choice. */
-    fun setSkipHome(on: Boolean) {
+    /** ROUND 57 (Fix 5): persist the owner's direct-entry choice.
+     *  Named applySkipHome, NOT setSkipHome — the delegated property's
+     *  own JVM setter already owns setSkipHome(Z)V (platform
+     *  declaration clash, same trap as setGateOnce below; CI caught
+     *  this on the first R57 run). */
+    fun applySkipHome(on: Boolean) {
         skipHome = on
         prefs?.edit()?.putBoolean("skip_home", on)?.apply()
     }
