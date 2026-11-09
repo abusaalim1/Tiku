@@ -63,18 +63,29 @@ object OwnerState {
  * never synced, never on the server). Round 9 kept them for the owner
  * account; Round 18 made them every signed-in user's ("har koi unlock ya
  * lock kr sakta hai") — the Settings rows simply surface them to all.
- * FAIL-SAFE defaults: until [init] has run the values read as
- * notifications OFF and App lock ON (= build-35 law), so an uninitialized
- * read can only ever mean MORE lock, never less.
+ * FAIL-SAFE defaults: until [init] has run the lock value reads as
+ * App lock ON (= build-35 law), so an uninitialized read can only
+ * ever mean MORE lock, never less. The notifications preference is
+ * the exception by design (ROUND 63): it defaults ON — WhatsApp-style,
+ * on out of the box for every user, and theirs to turn off.
  */
 object OwnerPrefs {
     private const val PREF = "tiku_owner"
     private var prefs: SharedPreferences? = null
 
-    /** LEGACY (ROUND 62): the old opt-in message-alerts flag. Still
-     *  stored for prefs compatibility, but READ NOWHERE in the
-     *  display path — notifications are always on for every user. */
-    var notifyOn by mutableStateOf(false)
+    /** ROUND 63 — THE per-user notifications preference (despite the
+     *  store's legacy name, this is every signed-in user's switch,
+     *  the owner included — Round 18 made this device-local store
+     *  everyone's). DEFAULTS TO ON, in memory and in [init]: a user
+     *  who never touched Settings gets notifications; turning the
+     *  Settings ▸ Notifications switch off writes false here, and
+     *  the FCM display gate (TikuFcmService.handle) reads this flag
+     *  and shows nothing while it is off — exactly like muting
+     *  everything. Storage stays the existing additive "notify" key;
+     *  only its default changed (a device that never set it — the
+     *  Round-62 frozen-on builds never wrote it from the switch —
+     *  reads ON either way). */
+    var notifyOn by mutableStateOf(true)
         private set
 
     /** ON (default) = the password gate guards every entry. OFF = this
@@ -103,7 +114,7 @@ object OwnerPrefs {
     fun init(ctx: Context) {
         val p = ctx.applicationContext.getSharedPreferences(PREF, Context.MODE_PRIVATE)
         prefs = p
-        notifyOn = p.getBoolean("notify", false)
+        notifyOn = p.getBoolean("notify", true)
         appLockOn = p.getBoolean("app_lock", true)
         skipHome = p.getBoolean("skip_home", true)
         gateOnce = p.getBoolean("gate_once", false)
@@ -248,9 +259,10 @@ object ChatSession {
         // ROUND 58: lock() used to also end the alert session here
         // (NotifyGate.sessionEnded stopped the foreground service).
         // With FCM there is no service to stop and nothing to end:
-        // pushes are gated at DISPLAY time in TikuFcmService (ROUND 62:
-        // always on for every signed-in user), independent of the lock —
-        // that independence is the point of the FCM switch.
+        // pushes are gated at DISPLAY time in TikuFcmService (ROUND 63:
+        // signed-in + local identity + the user's Notifications
+        // preference, default ON), independent of the lock — that
+        // independence is the point of the FCM switch.
         // ROUND 10 (Watch lock safety): this lock() is the single choke point
         // every lock path funnels through (quick exit, Back-out, backgrounding
         // via MainActivity.onStop, the explicit "Lock now").
@@ -312,11 +324,12 @@ object ChatSession {
         // the same bootstrap point where the deleted alert service
         // used to start. Fire-and-forget: a token failure never gates
         // the unlock or messaging. The Android 13+ notification
-        // permission is also asked here, once — ROUND 62: for EVERY
-        // user, since the display gate is now always-on — but only
-        // when the caller handed us a real Activity (the gate routes
-        // do; background callers pass the app context and simply
-        // skip the ask).
+        // permission is also asked here, once — ROUND 62/63: for EVERY
+        // user at first unlock (the in-app Notifications preference
+        // defaults ON, and without the OS permission Android shows
+        // nothing regardless) — but only when the caller handed us a
+        // real Activity (the gate routes do; background callers pass
+        // the app context and simply skip the ask).
         FcmTokenSync.register(c)
         (ctx as? android.app.Activity)?.let { PushAlerts.maybeRequestPermission(it) }
         val onboarded = c.getSharedPreferences("tiku_prefs", Context.MODE_PRIVATE)

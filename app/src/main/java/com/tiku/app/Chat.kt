@@ -135,7 +135,7 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.layout.layout
+import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.layout.positionInRoot
@@ -711,9 +711,13 @@ private fun bubbleTimeText(m: TikuMessage): String =
  *  compact tick rides beside it once the send has landed: ✓ sent,
  *  ✓✓ seen by the peer — the per-bubble form of the read state the
  *  Seen/Sent caption under the last own message also reports.
- *  ROUND 61c: TEXT bubbles render this via [RdTimedText] (an overlay
+ *  ROUND 61c: TEXT bubbles rendered this via [RdTimedText] (an overlay
  *  beside the last text line, zero added height); the media, game
- *  and view-once bubbles below still place it directly. */
+ *  and view-once bubbles below still place it directly.
+ *  ROUND 63: [RdTimedText] is now an IN-FLOW custom Layout — this chip
+ *  is a real measured child placed beside the last text line or, when
+ *  that line leaves no room, on its own line below the text. The
+ *  overlay form is gone (see RdTimedText's doc for the diagnosis). */
 @Composable
 private fun RdBubbleTime(m: TikuMessage, color: Color, showTicks: Boolean) {
     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -728,48 +732,76 @@ private fun RdBubbleTime(m: TikuMessage, color: Color, showTicks: Boolean) {
     }
 }
 
-/** ROUND 61c — where a text bubble's LAST line ends, from the text's
- *  own layout result: the right edge of the last line, plus the text
- *  block's full width/height. [RdTimedText] anchors the in-bubble
- *  time to these numbers. */
-private data class RdTimeAnchor(val lastLineRight: Dp, val textWidth: Dp, val textHeight: Dp)
+/** ROUND 63 — where a text bubble's LAST line sits, in raw pixels from
+ *  the text's own layout result: the last line's right edge, its top
+ *  edge, and the text block's full size. [RdTimedText] places its
+ *  in-flow time chip from these numbers. */
+private data class RdTimeAnchor(
+    val lastLineRight: Int,
+    val lastLineTop: Int,
+    val textWidth: Int,
+    val textHeight: Int,
+)
 
-/** ROUND 61c — a TEXT bubble's message text with its Round 57
- *  in-bubble time (and ticks) rendered at ZERO added layout height —
- *  the fix for the resting-position regression Round 57's layout row
- *  caused (see round61-implementer-notes.md §2: the row's ~18 dp per
- *  bubble pushed medium conversations over the list's fit threshold,
- *  so they opened settled at the tail instead of resting whole).
+/** ROUND 63 — a TEXT bubble's message text with its Round 57 in-bubble
+ *  time (and ticks) as a REAL, MEASURED part of the layout — the fix
+ *  for the collision in the owner's screenshot (a reply bubble whose
+ *  near-full last line, ending in an emoji, had "12:54 PM ✓✓" drawn
+ *  straight over its words).
  *
- *  How it works: the text renders EXACTLY as RdLinkedText rendered
- *  it (same plain / linkified paths, same link tap handling — the
- *  message's semantics text stays precisely the message string,
- *  because the time remains its own composable, never appended
- *  characters). The time chip is an overlay sibling in the same Box,
- *  wrapped in a layout modifier that reports 0×0, so it contributes
- *  NOTHING to any ancestor's measured size; it is positioned purely
- *  from the text's onTextLayout result:
+ *  Why Round 61c's overlay broke (the diagnosed mechanism): the chip
+ *  was a sibling overlay wrapped in a layout modifier reporting 0×0,
+ *  placed from the text's onTextLayout result. Its "beside" test
+ *  compared lastLineRight + gap + an ESTIMATED chip width against
+ *  the old maxContentWidth parameter — the bubble's theoretical cap,
+ *  not space any layout had actually reserved. When the last line ran
+ *  to within an estimated chip width of that cap — exactly the reply /
+ *  long-wrapped-line geometry — the code took its fallback branch and
+ *  placed the chip at textHeight − chipEstH + 10 dp: i.e. mostly INSIDE
+ *  the last line's line box, over the bubble's 11 dp bottom-padding
+ *  strip. That only clears the text if the last line's glyphs stop
+ *  ~5 dp above the line box's bottom edge (the "bottom leading below
+ *  the baseline" the 61c notes assumed). With the chat's emoji
+ *  fallback font the line box is tight — the final emoji and the
+ *  letters' descenders reach the bottom of the box — so the chip,
+ *  ~15 dp tall against an 11 dp strip, landed ON the glyphs. The
+ *  estimate was the second failure in the same branch: the real
+ *  Poppins chip can be wider than the 0.69 em/char guess, so a line
+ *  judged "beside fits" could also leave the real chip touching the
+ *  text it was placed next to.
  *
- *  - Normal case (last line + gap + chip fits the bubble's content
- *    width): the chip sits BESIDE the last line, bottom-aligned with
- *    it — WhatsApp's inline placement, without inline content. A
- *    zero-height spacer reserves exactly the beside-the-line width,
- *    so a short message's bubble widens to contain the chip: the
- *    chip can never escape the bubble or touch the text (the text
- *    line and the chip occupy disjoint layout boxes on that line).
- *  - Full-last-line case (the last line runs to within a chip's
- *    width of the content cap): no beside space exists at any width
- *    the bubble may take, so the chip drops to the bubble's
- *    bottom-end corner, drawn over the bubble's own 11 dp bottom
- *    padding strip (its bottom edge 1 dp above the bubble's edge) —
- *    the same corner the photo bubbles use. Height still unchanged.
+ *  The replacement — an in-flow custom [Layout] with two measured
+ *  children (message text, time chip), WhatsApp's geometry:
+ *  - The text is ALWAYS measured at the layout's full incoming width,
+ *    so its wrap — and therefore its onTextLayout anchor — is exactly
+ *    what the plain bubble would produce, in both placements. The
+ *    anchor can never oscillate between placements.
+ *  - BESIDE case (the measured chip fits in the empty tail of the
+ *    last line: lastLineRight + 8 dp gap + chip width ≤ available
+ *    width, and the chip is no taller than the last line's box): the
+ *    chip is placed in that tail, bottom-aligned with the text. The
+ *    layout's reported width GROWS to lastLineRight + gap + chip
+ *    width when the text block itself is narrower, so the chip is
+ *    contained inside the bubble; the reported height is the text's
+ *    own height — short and multi-line bubbles keep their exact
+ *    pre-Round-57 height, nothing is reserved above or below.
+ *  - FLOW-DOWN case (the last line genuinely leaves no room): the
+ *    chip is placed on its own line below the text, right-aligned,
+ *    and the layout's reported height grows by exactly the chip's
+ *    height + 2 dp — the ONLY case that adds height, and only for
+ *    bubbles whose last line is near-full.
+ *  In both cases the chip occupies a rectangle no glyph can reach:
+ *  beside, it starts a full gap past the last line's measured right
+ *  edge and stays inside that line's vertical band (the height
+ *  guard); below, it starts under the text block entirely. No
+ *  estimates anywhere — the chip is measured with its real font.
  *
- *  [maxContentWidth] is the bubble Column's content cap (280 dp
- *  bubble − 2×16 dp padding = 248 dp; 268 dp for the 300 dp AI
- *  bubble). The chip width used for placement is a deliberate
- *  over-estimate (0.69 em per time character at the chip's 10.5 sp,
- *  plus the tick cluster when it will actually render), so the real
- *  chip is never wider than the space reserved for it. */
+ *  The message text renders EXACTLY as RdLinkedText rendered it (same
+ *  plain / linkified paths, same link tap handling) — its semantics
+ *  string stays precisely the message string, because the time
+ *  remains its own composable, never appended characters. Until the
+ *  first onTextLayout lands (one frame) the chip provisionally takes
+ *  the flow-down slot; it settles before any idle frame completes. */
 @Composable
 private fun RdTimedText(
     m: TikuMessage,
@@ -780,75 +812,69 @@ private fun RdTimedText(
     fontFamily: FontFamily?,
     timeColor: Color,
     showTicks: Boolean,
-    maxContentWidth: Dp,
 ) {
-    val density = LocalDensity.current
-    val timeStr = bubbleTimeText(m)
-    val ticksShown = showTicks && m.me && m.status == SendStatus.SENT
-    val chipEstW = with(density) {
-        (timeStr.length * 7.2f).sp.toDp() +
-            (if (ticksShown) 20.sp.toDp() + 4.dp else 0.dp) + 6.dp
-    }
-    val chipEstH = with(density) { 15.sp.toDp() }
-    var anchor by remember(m.id, text) { mutableStateOf<RdTimeAnchor?>(null) }
+    var anchor by remember(m.id, text, fontSize) { mutableStateOf<RdTimeAnchor?>(null) }
     val onLayout: (TextLayoutResult) -> Unit = { lr ->
         val last = (lr.lineCount - 1).coerceAtLeast(0)
-        anchor = with(density) {
-            RdTimeAnchor(
-                lastLineRight = lr.getLineRight(last).toDp(),
-                textWidth = lr.size.width.toDp(),
-                textHeight = lr.size.height.toDp(),
-            )
-        }
+        anchor = RdTimeAnchor(
+            lastLineRight = lr.getLineRight(last).toInt(),
+            lastLineTop = lr.getLineTop(last).toInt(),
+            textWidth = lr.size.width,
+            textHeight = lr.size.height,
+        )
     }
-    val a = anchor
-    val gap = 8.dp
-    val beside = a != null && a.lastLineRight + gap + chipEstW <= maxContentWidth
-    val reserveW = if (a != null && beside) {
-        minOf(a.lastLineRight + gap + chipEstW, maxContentWidth)
-    } else 0.dp
-    Box {
-        val hasLink = remember(text) { firstLinkIn(text) != null }
-        if (!hasLink) {
-            Text(
-                text, color = color, fontSize = fontSize, fontFamily = fontFamily,
-                onTextLayout = onLayout,
-            )
-        } else {
-            val annotated = remember(text, linkColor) { linkifyMessageText(text, linkColor) }
-            val ctx = LocalContext.current
-            var layout by remember { mutableStateOf<TextLayoutResult?>(null) }
-            Text(
-                annotated,
-                color = color, fontSize = fontSize, fontFamily = fontFamily,
-                onTextLayout = { layout = it; onLayout(it) },
-                modifier = Modifier.pointerInput(annotated) {
-                    detectTapGestures(onTap = { pos ->
-                        val off = layout?.getOffsetForPosition(pos) ?: return@detectTapGestures
-                        annotated.getStringAnnotations(LINK_ANNOTATION, off, off)
-                            .firstOrNull()?.let { openLinkInBrowser(ctx, it.item) }
-                    })
-                },
-            )
-        }
-        if (reserveW > 0.dp) {
-            // Zero height: widens the bubble just enough that the
-            // chip beside the last line is INSIDE the bubble.
-            Spacer(Modifier.width(reserveW).height(0.dp))
-        }
-        if (a != null) {
-            val chipX = if (beside) a.lastLineRight + gap else a.textWidth - chipEstW
-            val chipY = if (beside) a.textHeight - chipEstH else a.textHeight - chipEstH + 10.dp
-            Box(
-                Modifier.offset(x = chipX, y = chipY)
-                    .layout { measurable, constraints ->
-                        // Report 0×0: the chip is pure overlay and
-                        // must never feed the bubble's measured size.
-                        val placeable = measurable.measure(constraints)
-                        layout(0, 0) { placeable.placeRelative(0, 0) }
+    Layout(
+        content = {
+            val hasLink = remember(text) { firstLinkIn(text) != null }
+            if (!hasLink) {
+                Text(
+                    text, color = color, fontSize = fontSize, fontFamily = fontFamily,
+                    onTextLayout = onLayout,
+                )
+            } else {
+                val annotated = remember(text, linkColor) { linkifyMessageText(text, linkColor) }
+                val ctx = LocalContext.current
+                var layout by remember { mutableStateOf<TextLayoutResult?>(null) }
+                Text(
+                    annotated,
+                    color = color, fontSize = fontSize, fontFamily = fontFamily,
+                    onTextLayout = { layout = it; onLayout(it) },
+                    modifier = Modifier.pointerInput(annotated) {
+                        detectTapGestures(onTap = { pos ->
+                            val off = layout?.getOffsetForPosition(pos) ?: return@detectTapGestures
+                            annotated.getStringAnnotations(LINK_ANNOTATION, off, off)
+                                .firstOrNull()?.let { openLinkInBrowser(ctx, it.item) }
+                        })
                     },
-            ) {
-                RdBubbleTime(m, color = timeColor, showTicks = showTicks)
+                )
+            }
+            RdBubbleTime(m, color = timeColor, showTicks = showTicks)
+        },
+    ) { measurables, constraints ->
+        val loose = constraints.copy(minWidth = 0, minHeight = 0)
+        val textP = measurables[0].measure(loose)
+        val chipP = measurables[1].measure(loose)
+        val gapPx = 8.dp.roundToPx()
+        val a = anchor
+        val beside = a != null &&
+            a.lastLineRight + gapPx + chipP.width <= constraints.maxWidth &&
+            chipP.height <= textP.height - a.lastLineTop
+        if (beside) {
+            val w = maxOf(textP.width, a!!.lastLineRight + gapPx + chipP.width)
+                .coerceAtMost(constraints.maxWidth)
+            layout(w, textP.height) {
+                textP.placeRelative(0, 0)
+                chipP.placeRelative(
+                    a.lastLineRight + gapPx,
+                    textP.height - chipP.height,
+                )
+            }
+        } else {
+            val downGapPx = 2.dp.roundToPx()
+            val w = maxOf(textP.width, chipP.width).coerceAtMost(constraints.maxWidth)
+            layout(w, textP.height + downGapPx + chipP.height) {
+                textP.placeRelative(0, 0)
+                chipP.placeRelative(w - chipP.width, textP.height + downGapPx)
             }
         }
     }
@@ -2024,13 +2050,14 @@ private fun RdBubbleRow(
                                         // text is not composed at all, so
                                         // nothing can be fetched for it.
                                         val msgLink = remember(m.text) { firstLinkIn(m.text) }
-                                        // ROUND 61c: the text carries its
-                                        // in-bubble time as a zero-height
-                                        // overlay beside its last line
-                                        // (RdTimedText) — the Round 57
-                                        // layout row under the text is
-                                        // gone, so the bubble is back to
-                                        // its build-93 height.
+                                        // ROUND 63: the text carries its
+                                        // in-bubble time IN FLOW beside
+                                        // its last line (RdTimedText) —
+                                        // no layout row under the text
+                                        // (Round 57) and no overlay
+                                        // (Round 61c), so the bubble
+                                        // keeps its build-93 height
+                                        // unless the last line is full.
                                         RdTimedText(
                                             m = m,
                                             text = m.text, color = bubbleText,
@@ -2039,7 +2066,6 @@ private fun RdBubbleRow(
                                             fontFamily = emojiFont,
                                             timeColor = bubbleText.copy(alpha = 0.65f),
                                             showTicks = true,
-                                            maxContentWidth = 248.dp,
                                         )
                                         if (msgLink != null) {
                                             Spacer(Modifier.height(8.dp))
@@ -2053,11 +2079,12 @@ private fun RdBubbleRow(
                                                 onLongPress = onMenu,
                                             )
                                         }
-                                        // ROUND 61c: no time row here any
-                                        // more — the time rides beside the
-                                        // text's last line inside
-                                        // RdTimedText above (zero added
-                                        // height). The sealed gift above
+                                        // ROUND 63: no time row here —
+                                        // the time rides in flow beside
+                                        // the text's last line inside
+                                        // RdTimedText above (or on its
+                                        // own line under a full last
+                                        // line). The sealed gift above
                                         // never reaches this branch; an
                                         // opened gift does, like any text.
                                     }
@@ -2182,20 +2209,37 @@ private fun RdImageBubble(m: TikuMessage) {
         if (bmp != null) {
             Image(bmp.asImageBitmap(), null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
         }
-        if (m.text.isNotEmpty()) {
-            Text(
-                m.text, color = Color.White, fontSize = 13.sp,
-                modifier = Modifier.align(Alignment.BottomStart).padding(12.dp), fontFamily = emojiFont,)
-        }
         // ROUND 57 (Fix 1): the time chip over the photo's bottom-end
         // corner (WhatsApp's media layout), on a small dark scrim so it
         // stays readable over any photo.
-        Box(
-            Modifier.align(Alignment.BottomEnd).padding(8.dp)
-                .clip(RoundedCornerShape(999.dp)).background(Color.Black.copy(0.45f))
-                .padding(horizontal = 7.dp, vertical = 3.dp),
+        // ROUND 63: caption and chip now share ONE bottom Row inside
+        // the photo frame — the caption takes the Row's weighted slot
+        // and wraps inside it, the chip keeps its bottom-end corner,
+        // so a long caption's last line can never run under the chip
+        // (previously the caption was a full-width BottomStart Text
+        // and the chip a BottomEnd overlay in the same corner — the
+        // same collision family as the text bubbles). With no caption
+        // the weighted spacer leaves the chip exactly where it was.
+        Row(
+            Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(8.dp),
+            verticalAlignment = Alignment.Bottom,
         ) {
-            RdBubbleTime(m, color = Color.White.copy(alpha = 0.92f), showTicks = true)
+            if (m.text.isNotEmpty()) {
+                Text(
+                    m.text, color = Color.White, fontSize = 13.sp,
+                    modifier = Modifier.weight(1f).padding(start = 4.dp, bottom = 4.dp),
+                    fontFamily = emojiFont,
+                )
+                Spacer(Modifier.width(8.dp))
+            } else {
+                Spacer(Modifier.weight(1f))
+            }
+            Box(
+                Modifier.clip(RoundedCornerShape(999.dp)).background(Color.Black.copy(0.45f))
+                    .padding(horizontal = 7.dp, vertical = 3.dp),
+            ) {
+                RdBubbleTime(m, color = Color.White.copy(alpha = 0.92f), showTicks = true)
+            }
         }
     }
 }
@@ -2230,7 +2274,11 @@ private fun RdVideoBubble(m: TikuMessage) {
             Icon(Icons.Filled.Videocam, null, tint = Color.White, modifier = Modifier.size(14.dp))
             Spacer(Modifier.width(6.dp))
             Text(fmtDurSec(m.voiceDurSec), color = Color.White, fontSize = 12.sp, fontFamily = PoppinsFamily)
-            Spacer(Modifier.weight(1f))
+            // ROUND 63: the load/size label takes the bar's weighted
+            // slot, end-aligned and ellipsised — it used to sit after a
+            // weighted spacer at natural width, so a long label plus
+            // the time could exceed the fixed 220 dp bar and squeeze
+            // the time at its end. In flow, the label yields first.
             Text(
                 when {
                     !loaded && m.mediaBytes > 0 -> "Tap to load · ${fmtMediaSize(m.mediaBytes)}"
@@ -2238,7 +2286,12 @@ private fun RdVideoBubble(m: TikuMessage) {
                     m.mediaBytes > 0 -> fmtMediaSize(m.mediaBytes)
                     else -> ""
                 },
-                color = Color.White.copy(0.85f), fontSize = 11.5.sp, fontFamily = PoppinsFamily,)
+                color = Color.White.copy(0.85f), fontSize = 11.5.sp, fontFamily = PoppinsFamily,
+                modifier = Modifier.weight(1f).padding(start = 6.dp),
+                textAlign = androidx.compose.ui.text.style.TextAlign.End,
+                maxLines = 1,
+                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+            )
             // ROUND 57 (Fix 1): the time at the bar's end — the video
             // bubble's bottom corner.
             Spacer(Modifier.width(8.dp))
@@ -2530,19 +2583,17 @@ private fun RdAiBubbleRow(
                     }
                     .padding(horizontal = 16.dp, vertical = 11.dp),
             ) {
-                // ROUND 61c: same zero-height conversion as the
-                // ordinary text bubble — the AI bubble shares the
-                // RdLinkedText + time-row structure exactly, so it
-                // takes the same RdTimedText (no ticks — the bubble
-                // renders as Tika's, whichever member's client
-                // posted it).
+                // ROUND 63: same in-flow conversion as the ordinary
+                // text bubble — the AI bubble shares the RdLinkedText
+                // structure exactly, so it takes the same RdTimedText
+                // (no ticks — the bubble renders as Tika's, whichever
+                // member's client posted it).
                 RdTimedText(
                     m = m,
                     text = aiText, color = aiInk, linkColor = RdRose,
                     fontSize = textSp.sp, fontFamily = rememberChatFontFamily(),
                     timeColor = aiInk.copy(alpha = 0.6f),
                     showTicks = false,
-                    maxContentWidth = 268.dp,
                 )
                 if (aiLink != null) {
                     Spacer(Modifier.height(8.dp))
@@ -2556,9 +2607,8 @@ private fun RdAiBubbleRow(
                         onLongPress = onMenu,
                     )
                 }
-                // ROUND 61c: no time row here any more — the time
-                // rides beside the text's last line inside
-                // RdTimedText above (zero added height).
+                // ROUND 63: no time row here — the time rides in
+                // flow inside RdTimedText above.
             }
         }
     }
@@ -3630,13 +3680,47 @@ private fun RdChatContent(thread: ChatThread) {
 
     // Photo picker: decode -> the real encrypted image send. (Video and
     // audio-file pickers live with the round-15 launchers below.)
-    val pickMedia = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
-        if (uri != null) {
+    // ROUND 63 (multi-photo): PickMultipleVisualMedia capped at 10 by
+    // the picker itself (the system picker enforces maxItems where it
+    // provides the UI; the fallback contract returns what it returns,
+    // so the cap is ALSO enforced in-app below with the owner's toast).
+    // Every selected image becomes its OWN ordinary encrypted photo
+    // message through the exact single-photo pipeline (sendPhotoVo ->
+    // deliverMedia) — no new message shape, so old builds receive and
+    // render them as ordinary photo messages. The decode+dispatch loop
+    // runs sequentially, in selection order, on a background
+    // dispatcher: the composer never blocks, each send's optimistic
+    // bubble lands in order, and one image's failure (unreadable file,
+    // or its delivery failing later) neither stops nor silently drops
+    // the rest — a failed delivery surfaces exactly like a failed
+    // single photo (FAILED bubble + tap-to-retry in RdBubbleRow).
+    val pickMedia = rememberLauncherForActivityResult(
+        ActivityResultContracts.PickMultipleVisualMedia(maxItems = 10),
+    ) { uris ->
+        if (uris.isNotEmpty()) {
             // ROUND 31: the armed view-once allowance rides this pick
-            // and is consumed by it (the media twin of the fx arm).
+            // and is consumed by it (the media twin of the fx arm) —
+            // with a multi-pick the whole batch is the one pick, so
+            // the allowance applies to every photo in it.
             val vo = armedVo; armedVo = null
-            ctx.contentResolver.openInputStream(uri)?.use { s ->
-                BitmapFactory.decodeStream(s)?.let { AppState.repo.sendPhotoVo(threadId, it, vo) }
+            val picked = if (uris.size > 10) {
+                AppState.toast("Max 10 photos")
+                uris.take(10)
+            } else uris
+            val resolver = ctx.contentResolver
+            scope.launch {
+                for (uri in picked) {
+                    val bmp = withContext(Dispatchers.IO) {
+                        runCatching {
+                            resolver.openInputStream(uri)?.use { s -> BitmapFactory.decodeStream(s) }
+                        }.getOrNull()
+                    }
+                    if (bmp != null) {
+                        AppState.repo.sendPhotoVo(threadId, bmp, vo)
+                    } else {
+                        AppState.toast("Couldn't read one photo — the rest still sent")
+                    }
+                }
             }
         }
     }

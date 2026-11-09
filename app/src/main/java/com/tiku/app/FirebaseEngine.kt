@@ -2601,6 +2601,40 @@ object FirebaseEngine : ChatRepo {
     private suspend fun deliverNikahCard(
         id: String, peerUid: String, local: TikuMessage, onLanded: (String) -> Unit,
     ) {
+        // ROUND 63 (Nikah invite trace): the whole delivery is retried
+        // up to 3 attempts before the send is marked FAILED — the
+        // Round-62 Bug A discipline, applied to the one Nikah write
+        // that is NOT a session transaction. The trace (see
+        // round63-implementer-notes.md) showed why this write is the
+        // fragile hop: it is the ONLY early ceremony step that needs
+        // convKeyOrNull (a peer-key read) PLUS a second Firestore
+        // write, its local optimistic copy renders as a perfectly
+        // normal invite card whether or not the write lands, and a
+        // Nikah card never renders RdBubbleRow's FAILED/retry row —
+        // so a single transient failure (key fetch hiccup, quota 429)
+        // used to strand the invite on the creator's phone forever,
+        // invisible, while the session doc (a plain set, no key read)
+        // had already succeeded and the lobby/banner worked. The
+        // retry is safe: the write is a set() of one fixed doc id, so
+        // re-attempts are idempotent.
+        var lastErr: Exception? = null
+        repeat(3) { attempt ->
+            try {
+                deliverNikahCardOnce(id, peerUid, local, onLanded)
+                return
+            } catch (e: Exception) {
+                lastErr = e
+                if (attempt < 2) delay(600L * (attempt + 1))
+            }
+        }
+        Log.e("TikuSend", "nikah card send failed in chat $id (msg ${local.id})", lastErr)
+        AppState.setMessageStatus(id, local.id, SendStatus.FAILED)
+        AppState.toast("Couldn't send — ${sendFailureReason(lastErr ?: IllegalStateException("send failed"))}")
+    }
+
+    private suspend fun deliverNikahCardOnce(
+        id: String, peerUid: String, local: TikuMessage, onLanded: (String) -> Unit,
+    ) {
         try {
             ensureChatDoc(id, peerUid)
             val key = convKeyOrNull(id, peerUid)
@@ -2636,9 +2670,10 @@ object FirebaseEngine : ChatRepo {
             touchChat(id)
             onLanded(local.id)
         } catch (e: Exception) {
-            Log.e("TikuSend", "nikah card send failed in chat $id (msg ${local.id})", e)
-            AppState.setMessageStatus(id, local.id, SendStatus.FAILED)
-            AppState.toast("Couldn't send — ${sendFailureReason(e)}")
+            // ROUND 63: failures PROPAGATE to deliverNikahCard's retry
+            // loop (marking FAILED + the toast happen there, once,
+            // after the last attempt) — never swallowed per attempt.
+            throw e
         }
     }
 
@@ -3009,7 +3044,15 @@ object FirebaseEngine : ChatRepo {
         AppState.setMessageStatus(id, msgId, SendStatus.SENDING)
         scope.launch {
             when (m.kind) {
-                MsgKind.TEXT -> deliverText(id, th.person.uid, m)
+                // ROUND 63: a Nikah card retries through its OWN
+                // delivery — deliverText would rewrite the doc WITHOUT
+                // the additive `nk` marker and the partner would get a
+                // plain fallback bubble instead of the invite card.
+                MsgKind.TEXT -> if (m.nikah != null) {
+                    deliverNikahCard(id, th.person.uid, m)
+                } else {
+                    deliverText(id, th.person.uid, m)
+                }
                 MsgKind.IMAGE -> {
                     val bmp = m.photo
                     if (bmp == null) {

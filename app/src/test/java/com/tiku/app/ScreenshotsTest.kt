@@ -63,7 +63,10 @@ class ScreenshotsTest {
         // ROUND 9: clean owner slate for every shot — non-owner by default;
         // the owner pair (shots 28/31) flips the seam inside its own test.
         OwnerState.previewOverride = null
-        OwnerPrefs.setNotify(false)
+        // ROUND 63: the notifications preference DEFAULTS ON for every
+        // user — the harness slate starts from that default (shot48
+        // flips it off inside its own test; this line resets it).
+        OwnerPrefs.setNotify(true)
         OwnerPrefs.setAppLock(true)
         OwnerPrefs.consumeGateOnce()
         // ROUND 13: the facade's bundled drama pack (dramas + stories).
@@ -362,6 +365,14 @@ class ScreenshotsTest {
         AppState.homeTab = HomeTab.ME
         AppState.goTik(3) // the Round-14 shell routes on tikDestination, not homeTab
         frame { HomeScreen() }
+        // ROUND 63: the Notifications row is a REAL switch again and
+        // it is ON here by default — via the per-user preference
+        // (OwnerPrefs.notifyOn, default true), not a frozen always-on
+        // presentation. shot48 proves the switch flips it.
+        org.junit.Assert.assertTrue(
+            "notifications preference must default ON",
+            OwnerPrefs.notifyOn,
+        )
         shot("14-settings-main.png")
     }
 
@@ -1081,6 +1092,184 @@ class ScreenshotsTest {
             field.boundsInRoot.height <= capPx,
         )
         shot("43-composer-many-lines-capped.png")
+    }
+
+    // ---------- ROUND 63: in-bubble time must never touch text ----------
+    // Each fixture uses a FRESH cleared thread (the shot40 pattern) with
+    // tsMs = 0, so bubbleTimeText falls back to the message's own `time`
+    // string — the in-bubble clock reads exactly "12:54 PM" and the time
+    // is its own semantics node (RdBubbleTime), assertable on its own.
+    private fun bubbleFixtureThread(vararg msgs: TikuMessage) {
+        val p = PreviewStore.people.first()
+        val id = PreviewRepo.startThreadWith(p)
+        AppState.updateThread(id) { it.messages.clear() }
+        msgs.forEach { AppState.upsertMessage(id, it) }
+        AppState.go(Screen.Chat(id))
+        frame { ChatScreen(id) }
+        composeRule.waitForIdle()
+    }
+
+    /** The time node and the message-text node must occupy disjoint
+     *  rectangles: beside (the chip starts at/after the text block's
+     *  right edge) or below (it starts at/after the block's bottom
+     *  edge). In-flow layout guarantees one of the two; the overlay
+     *  this round replaced guaranteed neither. */
+    private fun assertTimeClearOfText(text: String, time: String) {
+        val t = composeRule.onAllNodesWithText(text).fetchSemanticsNodes().firstOrNull()
+        val c = composeRule.onAllNodesWithText(time).fetchSemanticsNodes().firstOrNull()
+        org.junit.Assert.assertNotNull("bubble must render its text", t)
+        org.junit.Assert.assertNotNull("bubble must render its in-bubble time '$time'", c)
+        val tb = t!!.boundsInRoot
+        val cb = c!!.boundsInRoot
+        org.junit.Assert.assertTrue(
+            "time must never overlap text (text=$tb chip=$cb)",
+            cb.left >= tb.right - 1f || cb.top >= tb.bottom - 1f,
+        )
+    }
+
+    @Test fun shot44_bubbleTimeShort() {
+        // (1) plain short message, own + seen (✓✓ rides the chip).
+        bubbleFixtureThread(TikuMessage(
+            id = "bt-short", senderUid = "me", kind = MsgKind.TEXT,
+            text = "See you at five", time = "12:54 PM", me = true, tsMs = 0,
+            seenByPeer = true))
+        assertTimeClearOfText("See you at five", "12:54 PM")
+        org.junit.Assert.assertTrue(
+            "own seen message must carry its ✓✓ ticks beside the time",
+            composeRule.onAllNodesWithText("✓✓").fetchSemanticsNodes().isNotEmpty(),
+        )
+        shot("44-bubble-time-short.png")
+    }
+
+    @Test fun shot45_bubbleTimeLong() {
+        // (2) plain long multi-line message: beside a short last line
+        // or below a full one — both are in-flow and disjoint by
+        // construction, so this shot pins existence + the resting
+        // look; the strict rectangle proof lives in 44/46/47, whose
+        // geometry is fully controlled.
+        bubbleFixtureThread(TikuMessage(
+            id = "bt-long", senderUid = PreviewStore.people.first().uid, kind = MsgKind.TEXT,
+            text = "The venue photos came out so well, especially the ones from the terrace at sunset — you should see the whole set tonight",
+            time = "12:54 PM", me = false, tsMs = 0))
+        org.junit.Assert.assertTrue(
+            "long message must render its text",
+            composeRule.onAllNodesWithText("The venue photos came out so well", substring = true)
+                .fetchSemanticsNodes().isNotEmpty(),
+        )
+        org.junit.Assert.assertTrue(
+            "long message must render its in-bubble time",
+            composeRule.onAllNodesWithText("12:54 PM").fetchSemanticsNodes().isNotEmpty(),
+        )
+        shot("45-bubble-time-long.png")
+    }
+
+    @Test fun shot46_bubbleTimeReply() {
+        // (3) THE OWNER'S FAILING GEOMETRY: a REPLY bubble — quote on
+        // top, reply text below whose final line (explicit lines, so
+        // the geometry is deterministic) runs near-full and ends in
+        // an emoji, own + seen. The chip must flow onto its own line
+        // (or sit past the last line's right edge) — never on the words.
+        val replyText = "Done, sending them now\nevery single one from the trip\nthe last one is my favourite 😍"
+        bubbleFixtureThread(TikuMessage(
+            id = "bt-reply", senderUid = "me", kind = MsgKind.TEXT,
+            text = replyText, time = "12:54 PM", me = true, tsMs = 0,
+            seenByPeer = true,
+            replyQuote = "Send me the venue photos tonight", replyToId = "q1"))
+        org.junit.Assert.assertTrue(
+            "reply bubble must render its quote line on top",
+            composeRule.onAllNodesWithText("Send me the venue photos tonight", substring = true)
+                .fetchSemanticsNodes().isNotEmpty(),
+        )
+        assertTimeClearOfText(replyText, "12:54 PM")
+        shot("46-bubble-time-reply.png")
+    }
+
+    @Test fun shot47_bubbleTimeCaption() {
+        // (4) a media bubble WITH a caption long enough to wrap: the
+        // caption and the time chip share one bottom Row in the photo
+        // frame, so their rectangles are disjoint slots by layout.
+        val bmp = android.graphics.Bitmap.createBitmap(600, 400, android.graphics.Bitmap.Config.ARGB_8888)
+        val canvas = android.graphics.Canvas(bmp)
+        canvas.drawColor(android.graphics.Color.rgb(240, 200, 170))
+        val caption = "Golden hour at the venue, this one is my favourite from the whole evening"
+        bubbleFixtureThread(TikuMessage(
+            id = "bt-cap", senderUid = "me", kind = MsgKind.IMAGE,
+            text = caption, time = "12:54 PM", me = true, tsMs = 0,
+            seenByPeer = true, photo = bmp))
+        assertTimeClearOfText(caption, "12:54 PM")
+        shot("47-bubble-time-caption.png")
+    }
+
+    @Test fun shot48_notificationToggleOff() {
+        // ROUND 63 (amendment #1): the Settings ▸ Notifications switch
+        // is REAL again — tapping it must flip the very preference
+        // TikuFcmService's display gate reads (OwnerPrefs.notifyOn),
+        // which @Before has set to the default-ON slate (and resets
+        // for the next shot).
+        org.junit.Assert.assertTrue(
+            "notifications must default ON via the preference",
+            OwnerPrefs.notifyOn,
+        )
+        AppState.homeTab = HomeTab.ME
+        AppState.goTik(3) // the Round-14 shell routes on tikDestination, not homeTab
+        frame { HomeScreen() }
+        composeRule.waitForIdle()
+        if (composeRule.onAllNodesWithText("Notifications")
+                .fetchSemanticsNodes().isEmpty()
+        ) {
+            composeRule.onNode(hasScrollAction()).performScrollToNode(hasText("Notifications"))
+            composeRule.waitForIdle()
+        }
+        composeRule.onAllNodesWithText("Notifications")[0]
+            .performScrollTo()
+            .performTouchInput { click() }
+        composeRule.waitForIdle()
+        org.junit.Assert.assertFalse(
+            "tapping the switch must turn the preference OFF",
+            OwnerPrefs.notifyOn,
+        )
+        org.junit.Assert.assertTrue(
+            "the row must report its Off state",
+            composeRule.onAllNodesWithText("Off").fetchSemanticsNodes().isNotEmpty(),
+        )
+        shot("48-notification-toggle-off.png")
+    }
+
+    @Test fun shot49_multiPhotoThreeBubbles() {
+        // ROUND 63 (multi-photo): the system picker cannot be driven
+        // headless, so this stages the picker's RESULT side exactly as
+        // the new loop consumes it — one sendPhotoVo call per selected
+        // image (the exact call the old single-pick callback made
+        // once), three times in selection order — and proves three
+        // independent photo messages land and render as three photo
+        // bubbles. (The picker contract + 10-cap live in Chat.kt's
+        // pickMedia; see round63-implementer-notes.md.)
+        val p = PreviewStore.people.first()
+        val id = PreviewRepo.startThreadWith(p)
+        AppState.updateThread(id) { it.messages.clear() }
+        fun photoBmp(r: Int, g: Int, b: Int) =
+            android.graphics.Bitmap.createBitmap(120, 90, android.graphics.Bitmap.Config.ARGB_8888)
+                .also { android.graphics.Canvas(it).drawColor(android.graphics.Color.rgb(r, g, b)) }
+        AppState.repo.sendPhotoVo(id, photoBmp(240, 200, 170), null)
+        AppState.repo.sendPhotoVo(id, photoBmp(170, 220, 190), null)
+        AppState.repo.sendPhotoVo(id, photoBmp(180, 190, 240), null)
+        val imgs = AppState.thread(id)?.messages?.filter { it.kind == MsgKind.IMAGE } ?: emptyList()
+        org.junit.Assert.assertEquals(
+            "three picks must land as three separate photo messages",
+            3, imgs.size,
+        )
+        org.junit.Assert.assertTrue(
+            "each photo message is its own message (distinct ids, all mine)",
+            imgs.map { it.id }.distinct().size == 3 && imgs.all { it.me },
+        )
+        AppState.go(Screen.Chat(id))
+        frame { ChatScreen(id) }
+        composeRule.waitForIdle()
+        org.junit.Assert.assertEquals(
+            "three photo bubbles must render (one in-bubble time chip each)",
+            3, composeRule.onAllNodesWithText("now").fetchSemanticsNodes().size,
+        )
+        shot("49-multi-photo-three-bubbles.png")
     }
 
     @Test fun shot36_momentsScreen() {

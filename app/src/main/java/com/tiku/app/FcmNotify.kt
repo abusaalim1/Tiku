@@ -9,6 +9,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
+import android.util.Log
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -47,8 +48,10 @@ import java.net.URL
  *    verifies the sender's ID token, checks chat membership, reads
  *    the receiver's stored token and forwards a data-only FCM push.
  *  - RECEIVE: [TikuFcmService] gets the data payload, gates it
- *    (ROUND 62: always on for every signed-in user with a local
- *    identity — the Round-58 Notifications-toggle gate is gone),
+ *    (ROUND 63: signed-in + local identity + the user's own
+ *    Notifications preference — [OwnerPrefs.notifyOn], DEFAULT ON
+ *    for every user, owner included; off = show nothing. Round 62's
+ *    frozen always-on switch is reversed),
  *    decrypts text ON-DEVICE with the same engine machinery the old
  *    service bootstrap used (loadLocalIdentity + the conversation
  *    key + Crypto.decrypt — see FirebaseEngine.decryptForNotify),
@@ -239,9 +242,9 @@ object PushAlerts {
         }
     }
 
-    /** Clear anything of ours still on the shade. (ROUND 62: no
-     *  toggle flips off any more; kept for callers that need a
-     *  full clear.) */
+    /** Clear anything of ours still on the shade. (ROUND 63: the
+     *  Notifications switch gates NEW displays in TikuFcmService;
+     *  this stays for callers that need a full clear.) */
     fun cancelAll(ctx: Context) {
         runCatching {
             (ctx.applicationContext.getSystemService(Context.NOTIFICATION_SERVICE)
@@ -250,12 +253,14 @@ object PushAlerts {
     }
 
     /** Android 13+ runtime permission, asked ONCE from the unlock /
-     *  resume path. ROUND 62: notifications are always on for every
-     *  user, so the ask fires for EVERY signed-in user at first
-     *  unlock — there is no toggle gate on it any more. The Settings
-     *  Notifications row keeps its own tap-to-request in the
-     *  "Permission needed" state. A denial is remembered: the
-     *  system dialog is never re-nagged from here. */
+     *  resume path. ROUND 62/63 (KEPT by the Round-63 correction):
+     *  the ask fires for EVERY signed-in user at first unlock — the
+     *  in-app Notifications preference defaults ON, and without the
+     *  OS permission Android shows nothing regardless of it. The
+     *  Settings Notifications row's "Permission needed — tap"
+     *  subtitle remains the honest surface for a missing permission,
+     *  and turning the switch ON re-fires the request. A denial is
+     *  remembered: the system dialog is never re-nagged from here. */
     fun maybeRequestPermission(activity: Activity) {
         runCatching {
             if (Build.VERSION.SDK_INT < 33) return
@@ -418,7 +423,11 @@ object PushSender {
 
     private suspend fun send(receiverId: String, chatId: String, msgId: String,
                              type: String, ct: String?, iv: String?) {
-        runCatching {
+        // ROUND 63 (push audit): the result is captured so a thrown
+        // send (transport, token task, JSON) is logged instead of
+        // swallowed whole. The signed-out early return inside stays
+        // silent by design — that is not a failed attempt.
+        val result = runCatching {
             val user = FirebaseAuth.getInstance().currentUser ?: return
             val senderName = FirebaseEngine.myPerson.name
                 .takeIf { it.isNotBlank() && it != "You" }
@@ -446,7 +455,14 @@ object PushSender {
             if (idToken.isNullOrBlank()) {
                 idToken = fetchIdToken(user, forceRefresh = true)
             }
-            if (idToken.isNullOrBlank()) return
+            if (idToken.isNullOrBlank()) {
+                // ROUND 63 (push audit): a push attempt that dies here
+                // must at least be VISIBLE in logcat — previously this
+                // return (and every failure below) was completely
+                // silent, which is how the chain stayed unproven.
+                Log.w("TikuPush", "push skipped for chat $chatId: no ID token after forced-refresh retry")
+                return
+            }
             var code = runCatching { post(idToken, body) }.getOrDefault(-1)
             if (code == 401) {
                 // 401 = the ID token went stale between Firestore
@@ -457,7 +473,14 @@ object PushSender {
                     code = runCatching { post(fresh, body) }.getOrDefault(-1)
                 }
             }
+            // ROUND 63 (push audit): the Worker's verdict is logged
+            // (status only — never the body, which is drained unread
+            // in post()). A non-2xx no longer vanishes without a trace.
+            if (code !in 200..299) {
+                Log.w("TikuPush", "push POST for chat $chatId answered HTTP $code")
+            }
         }
+        result.onFailure { Log.w("TikuPush", "push send failed for chat $chatId", it) }
     }
 
     /** ROUND 61: one ID-token fetch; null on ANY failure (thrown
@@ -499,13 +522,15 @@ object PushSender {
  * was ever unlocked in-process: the persisted Firebase Auth session
  * and the device-Keystore-wrapped local identity are what identify
  * this phone's account (the exact cold bootstrap the deleted alert
- * service performed). Display gate (ROUND 62 — owner decision
- * 2026-11-09, superseding the Round-58 toggle gate):
+ * service performed). Display gate (ROUND 63 — owner correction
+ * 2026-11-09, superseding Round 62's frozen always-on):
  *
  *  1. signed out, or no local identity on this device → show nothing;
- *  2. every other signed-in user → always show (WhatsApp-style;
- *     push notifications are always on for every user, no toggle
- *     gates them).
+ *  2. the user's Notifications preference OFF ([OwnerPrefs.notifyOn]
+ *     — the real Settings switch, DEFAULT ON for every user, the
+ *     owner included) → show nothing, exactly like muting everything;
+ *  3. otherwise → show (WhatsApp-style: on out of the box, under the
+ *     user's own control).
  *
  * A muted chat never pushes (same rule the old judge enforced, when
  * the thread is loaded in this process). The exact chat open in the
@@ -536,7 +561,10 @@ class TikuFcmService : FirebaseMessagingService() {
             } catch (e: Exception) {
                 // The push path can never crash the process; a failed
                 // push simply shows nothing (Firestore still holds
-                // the message for the next sync).
+                // the message for the next sync). ROUND 63: it is at
+                // least LOGGED — an invisible catch hid every receiver
+                // failure behind total silence.
+                Log.e("TikuPush", "push handle failed", e)
             }
         }
     }
@@ -548,9 +576,20 @@ class TikuFcmService : FirebaseMessagingService() {
         if (!FirebaseEngine.signedIn) return
         // The cold bootstrap: device-wrapped identity, NO journal
         // password (it is never available here, and never needed).
-        if (!FirebaseEngine.loadLocalIdentity(ctx)) return
-        // ROUND 62: no further display gate — every signed-in user
-        // with a local identity is shown pushes by default.
+        // ROUND 63: guarded — securePrefs/deviceUnwrap failures must
+        // degrade to "no identity" (show nothing, this time), never
+        // throw past this point into the caller's catch-all.
+        if (!runCatching { FirebaseEngine.loadLocalIdentity(ctx) }.getOrDefault(false)) return
+        // ROUND 63: the user's own Notifications preference gates
+        // display for EVERY user, the owner included (reversing
+        // Round 62's frozen always-on). TikuApp.onCreate already ran
+        // OwnerPrefs.init in this process; the re-init here makes a
+        // cold FCM-only process read the persisted switch value for
+        // certain. OFF = show nothing at all — messages and call
+        // rings alike, exactly like muting everything. The gates
+        // below (open-chat suppression, per-chat mute) are unchanged.
+        runCatching { OwnerPrefs.init(ctx) }
+        if (!OwnerPrefs.notifyOn) return
 
         val chatId = data["chatId"]?.takeIf { it.isNotBlank() } ?: return
         val type = data["type"]?.takeIf { it.isNotBlank() } ?: "text"
@@ -570,7 +609,19 @@ class TikuFcmService : FirebaseMessagingService() {
                 video = type == "video_call", callerName = senderName,
             )
             else -> {
-                val body = decryptedBody(chatId, type, data) ?: genericBody(type)
+                // ROUND 63 (push audit — the always-show guarantee):
+                // decryptForNotify already returns null on ANY failure
+                // and the generic line takes over; the runCatching here
+                // is belt-and-braces so NO failure anywhere in the
+                // decrypt path (key state, malformed payload, peer
+                // lookup) can ever drop the notification entirely — a
+                // valid push for a member chat always surfaces at
+                // least "New message". The only intentional
+                // suppressions are the gates above: signed-out / no
+                // identity, the preference gate, open-chat, per-chat
+                // mute (plus the OS permission check inside postMessage).
+                val body = runCatching { decryptedBody(chatId, type, data) }
+                    .getOrNull() ?: genericBody(type)
                 PushAlerts.postMessage(ctx, chatId, senderName, body)
             }
         }
