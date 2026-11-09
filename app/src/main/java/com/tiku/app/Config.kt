@@ -50,6 +50,17 @@ object Config {
 
     /** Ringing timeout: unanswered calls delete themselves after this long. */
     const val CALL_RING_TIMEOUT_MS = 40_000L
+
+    /**
+     * ROUND 58 — the tiku-notify Worker's push endpoint (FCM switch).
+     * After a message/call write lands in Firestore, the sender POSTs
+     * here with its Firebase ID token; the Worker verifies it, checks
+     * chat membership, and forwards a data-only FCM push to the peer's
+     * stored token. The payload carries the message's existing
+     * ciphertext only — the Worker never sees plaintext (see
+     * PushSender / TikuFcmService in FcmNotify.kt).
+     */
+    const val NOTIFY_URL = "https://tiku-notify.tiku-notify-abu.workers.dev/notify"
 }
 
 /** One ICE server entry (STUN or TURN). */

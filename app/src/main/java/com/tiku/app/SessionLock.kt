@@ -42,7 +42,7 @@ object SecretEntry {
  * the stable identity the owner named). Since ROUND 18 the only surface
  * still keyed to it is the Me ▸ Owner settings section: the password gate
  * and the notification service became universal (every user's own
- * device-local toggles decide — see [OwnerGate] / NotifyGate), so they no
+ * device-local toggles decide — see [OwnerGate] / OwnerPrefs), so they no
  * longer consult [isOwner].
  */
 object OwnerState {
@@ -243,14 +243,12 @@ object ChatSession {
 
     /** Drop keys + decrypted state from RAM and snap back to the drama facade. */
     fun lock(ctx: Context) {
-        val c = ctx.applicationContext
-        // ROUND 29: this lock() is the choke point EVERY lock path
-        // funnels through (one-Back re-lock, quick exit with App lock
-        // on, backgrounding via MainActivity.onStop, "Lock now") — so
-        // it is also where the alert session ends: the persisted
-        // unlocked flag clears and the foreground service stops.
-        // Locked app = no service = no alerts.
-        NotifyGate.sessionEnded(c)
+        // ROUND 58: lock() used to also end the alert session here
+        // (NotifyGate.sessionEnded stopped the foreground service).
+        // With FCM there is no service to stop and nothing to end:
+        // pushes are gated at DISPLAY time in TikuFcmService (owner =
+        // always on; others = their toggle), independent of the lock —
+        // that independence is the point of the FCM switch.
         // ROUND 10 (Watch lock safety): this lock() is the single choke point
         // every lock path funnels through (quick exit, Back-out, backgrounding
         // via MainActivity.onStop, the explicit "Lock now").
@@ -308,10 +306,16 @@ object ChatSession {
         // restore password, or the App-lock-OFF gate-skip) — consume any
         // pending one-shot gate left by an explicit "Lock now".
         OwnerPrefs.consumeGateOnce()
-        // ROUND 29: an unlock is the alert service's start signal —
-        // record the live session (it can now outlive this process)
-        // and reconcile the service with the Notifications toggle.
-        NotifyGate.sessionStarted(c)
+        // ROUND 58: an unlock is where the push token is (re)stored —
+        // the same bootstrap point where the deleted alert service
+        // used to start. Fire-and-forget: a token failure never gates
+        // the unlock or messaging. The Android 13+ notification
+        // permission is also asked here, once, when this phone's
+        // display gate could show an alert — but only when the caller
+        // handed us a real Activity (the gate routes do; background
+        // callers pass the app context and simply skip the ask).
+        FcmTokenSync.register(c)
+        (ctx as? android.app.Activity)?.let { PushAlerts.maybeRequestPermission(it) }
         val onboarded = c.getSharedPreferences("tiku_prefs", Context.MODE_PRIVATE)
             .getBoolean("onboarded", false)
         // from here on the user is inside the gated flow — any exit must re-lock

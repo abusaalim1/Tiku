@@ -54,11 +54,14 @@ class TikuApp : Application() {
         // thread so the first transient emoji surface (reaction-bar popup,
         // picker) never paints with the device fallback mid-load.
         EmojiArt.preload(this)
-        // NOTE: zero chat notifications by design — no notification channel is
-        // created at startup, ever. ROUND 9 exception (owner account only, his
-        // own phone, opt-in): OwnerNotify creates ONE channel lazily at the
-        // first actual alert when — and only when — the owner enabled it.
-        // For every other account that code path never runs.
+        // ROUND 58: the two FCM alert channels (messages + incoming
+        // calls, both IMPORTANCE_HIGH) are created at app start so a
+        // push landing in a cold FCM-only process always finds them
+        // ready (PushAlerts). Creating a channel posts nothing — a
+        // notification still exists only while a real event stands,
+        // and the display gate lives in TikuFcmService (owner always
+        // on; everyone else only with their Notifications toggle on).
+        PushAlerts.ensureChannels(this)
     }
 }
 
@@ -84,12 +87,13 @@ class MainActivity : ComponentActivity() {
         if (OwnerState.isOwner && OwnerPrefs.skipHome) {
             SecretEntry.openGate(this, lifecycleScope)
         }
-        // ROUND 15: app start is one of the notify service's choke points
-        // (OwnerPrefs was initialized in TikuApp.onCreate, before this).
-        NotifyGate.sync(this)
-        // ROUND 29: a call alert may have launched us — same handling
-        // as a redelivered intent (see onNewIntent).
+        // ROUND 29 → ROUND 58: a call or message alert may have
+        // launched us — same handling as a redelivered intent (see
+        // onNewIntent). (The Round-15 NotifyGate.sync reconcile that
+        // used to sit here died with the alert service: FCM needs no
+        // start-of-app reconcile.)
         handleCallAlertIntent(intent)
+        handleChatAlertIntent(intent)
         // ROUND 18: in-app update check (throttled to one fetch per 6h,
         // silent on failure; sets UpdateState + a one-per-build
         // notification when a newer build is published).
@@ -99,7 +103,7 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    /** ROUND 29: a tap on an incoming-call alert (OwnerNotify) brings
+    /** ROUND 29 → ROUND 58: a tap on an incoming-call alert (PushAlerts) brings
      *  the app forward carrying the ringing chat's id. When the
      *  session is live, re-running the engine start re-attaches the
      *  call watchers, whose fresh snapshot hands the still-ringing
@@ -112,13 +116,28 @@ class MainActivity : ComponentActivity() {
         super.onNewIntent(intent)
         setIntent(intent)
         handleCallAlertIntent(intent)
+        handleChatAlertIntent(intent)
     }
 
     private fun handleCallAlertIntent(intent: android.content.Intent?) {
-        if (intent?.getStringExtra(TikuAlertService.EXTRA_CALL_THREAD) == null) return
+        if (intent?.getStringExtra(PushAlerts.EXTRA_CALL_THREAD) == null) return
         if (Config.PREVIEW_UI_ONLY) return
         if (ChatSession.unlocked && FirebaseEngine.signedIn) {
             FirebaseEngine.start(this)
+        }
+    }
+
+    /** ROUND 58: a tap on a message alert (PushAlerts) carries the
+     *  chat's id — with a live unlocked session, open that exact chat
+     *  (the same openThread + go pair the chat list's own tap uses).
+     *  Locked, there is nothing to open into — the tap simply lands
+     *  on the facade/gate, and the chat is one tap away after unlock. */
+    private fun handleChatAlertIntent(intent: android.content.Intent?) {
+        val threadId = intent?.getStringExtra(PushAlerts.EXTRA_CHAT_THREAD) ?: return
+        if (Config.PREVIEW_UI_ONLY) return
+        if (ChatSession.unlocked && FirebaseEngine.signedIn) {
+            AppState.repo.openThread(threadId)
+            AppState.go(Screen.Chat(threadId))
         }
     }
 
@@ -131,9 +150,13 @@ class MainActivity : ComponentActivity() {
         // unfreezes the renderer; it never forces playback (expanding
         // the pane is what plays — see WatchControl.requestResume).
         WatchControl.requestResume()
-        // ROUND 15: returning to the app re-reconciles the notify service
-        // with its run gate (settings may have changed while we were away).
-        NotifyGate.sync(this)
+        // ROUND 58: returning to the app means any standing push
+        // alerts have been seen — clear them (the old judge's
+        // foreground clear, kept), and take the one-time Android 13+
+        // permission ask if this phone's display gate could show an
+        // alert and it hasn't been asked yet.
+        PushAlerts.clearStanding(this)
+        PushAlerts.maybeRequestPermission(this)
         // presence reflects being INSIDE ChatRoot only — never the facade
         if (!Config.PREVIEW_UI_ONLY && ChatSession.unlocked && FirebaseEngine.signedIn && isOnboarded()) {
             FirebaseEngine.setPresence(true)
@@ -156,12 +179,10 @@ class MainActivity : ComponentActivity() {
         // ROUND 13: the pause goes through WatchControl to the ACTIVE pane's
         // WebView; no pane composed = nothing playing (view destroyed).
         WatchControl.requestPause()
-        // ROUND 15: leaving the app is the moment background alerts start
-        // to matter — sync starts the notify service now if its gate
-        // holds (e.g. an in-app unlock just consumed a Lock-now one-shot),
-        // and stops it if the gate broke. Called while still foreground,
-        // so a foreground-service start is always legal here.
-        NotifyGate.sync(this)
+        // ROUND 58: no notify reconcile on pause any more — FCM
+        // delivery is the platform's job while the app is away; the
+        // old foreground service that needed a legal start window here
+        // is deleted.
         if (!Config.PREVIEW_UI_ONLY && ChatSession.unlocked && FirebaseEngine.signedIn) {
             FirebaseEngine.setPresence(false)
         }

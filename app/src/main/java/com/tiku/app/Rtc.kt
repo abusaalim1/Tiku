@@ -768,6 +768,11 @@ object CallController {
                 val offer = s.createOffer()
                 CallSignal.createCall(threadId, callId, if (video) "video" else "audio",
                     FirebaseEngine.uid, peer.uid, offer)
+                // ROUND 58: the call doc exists NOW — fire the peer's
+                // FCM call push (best-effort, background, failures
+                // swallowed; this is what replaced the deleted alert
+                // service's closed-app ringing).
+                PushSender.notifyCall(threadId, peer.uid, callId, video)
                 // the call doc exists NOW — release any ICE candidates that
                 // gathered while the offer was being created (see ice gate)
                 openIceGate()

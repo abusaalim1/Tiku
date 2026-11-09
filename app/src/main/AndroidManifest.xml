@@ -6,30 +6,18 @@
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
     <uses-permission android:name="android.permission.VIBRATE" />
-    <!-- Notification permission, used ONLY by the opt-in, per-user
-         message alerts (OwnerNotify — any account that turns its own
-         Notifications toggle on; default OFF). Nothing posts at toggle
-         time. ROUND 29 (owner's knowing reversal of Round 20): while —
-         and only while — an unlocked session has the toggle ON, the
-         TikuAlertService foreground service below keeps the alert
-         pipeline alive with ONE small permanent silent shade entry;
-         every other notification still exists only while a real event
-         (message / call / app update) stands. -->
+    <!-- Notification permission for the FCM message/call alerts
+         (ROUND 58 — PushAlerts in FcmNotify.kt): the OWNER account is
+         always on; every other account shows alerts only while its
+         own Notifications toggle is ON (default OFF). Nothing posts
+         at toggle time and there is no standing shade entry any more:
+         a notification exists only while a real event (message /
+         call / app update) stands. ROUND 58 also REMOVED the old
+         alert foreground service's permissions (FOREGROUND_SERVICE /
+         FOREGROUND_SERVICE_DATA_SYNC) and the Round-49 battery-
+         exemption permission (REQUEST_IGNORE_BATTERY_OPTIMIZATIONS)
+         — FCM delivery needs neither. -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
-    <!-- Foreground-service permissions for TikuAlertService (ROUND 29).
-         FOREGROUND_SERVICE_DATA_SYNC is the API-34 typed companion of
-         the dataSync service type declared below; both are inert
-         unless the service actually starts (unlocked + toggle ON). -->
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
-    <!-- ROUND 49: lets Settings offer the battery-optimization exemption
-         for THIS package only (ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
-         fired from the Settings "Turant notifications" row — never from a
-         popup, never automatically). Without the exemption, Doze defers
-         the alert service's network and message alerts arrive late even
-         on a perfect connection. The permission alone changes nothing;
-         only the user's own tap in Settings asks. -->
-    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
     <!-- ROUND 32: the media-projection companion of the screen-share
          service below. Inert unless a user in a live call taps
          "Share screen" and grants the system consent dialog. -->
@@ -70,28 +58,21 @@
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
         </activity>
-        <!-- ROUND 29: the alert service (see NotifyService.kt). Never
-             exported, never started at boot or before an unlock: it
-             runs only inside an unlocked session whose owner turned
-             Notifications on, and stops at lock / toggle-off /
-             sign-out. dataSync is the standard type for an app
-             keeping its own data pipeline in step while closed. -->
+        <!-- ROUND 58: the FCM receiving service (FcmNotify.kt). Data-
+             only pushes from the tiku-notify Worker land here; the
+             service gates, decrypts on-device and posts the alert
+             itself. Never exported; the MESSAGING_EVENT filter is the
+             standard FCM entry point. (This replaces the deleted
+             Round-29 TikuAlertService + Round-49 AlertReviveReceiver:
+             FCM wakes this service itself, so no foreground service,
+             watchdog or standing banner exists any more.) -->
         <service
-            android:name=".TikuAlertService"
-            android:exported="false"
-            android:foregroundServiceType="dataSync" />
-        <!-- ROUND 49: the alert watchdog's ear. Explicit intents ONLY
-             (no intent-filter, never exported): AlarmManager nudges from
-             AlertWatchdog (NotifyService.kt) land here when the alert
-             service has died while its gate is still on — OEM task
-             kills, the dataSync time cap, system stops. The receiver
-             re-validates the persisted gate before reviving anything,
-             so a stale alarm after lock / toggle-off / sign-out is a
-             no-op. Never a boot receiver: the unlock-only lifetime law
-             is untouched. -->
-        <receiver
-            android:name=".AlertReviveReceiver"
-            android:exported="false" />
+            android:name=".TikuFcmService"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.google.firebase.MESSAGING_EVENT" />
+            </intent-filter>
+        </service>
         <!-- ROUND 32: screen-share projection service (ScreenShare.kt).
              Never exported, never started outside a live call: it runs
              only while a user is actively sharing their screen, which

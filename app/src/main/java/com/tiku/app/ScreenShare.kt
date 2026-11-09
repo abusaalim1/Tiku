@@ -53,8 +53,7 @@ class ScreenShareService : Service() {
     /** The share's standing entry: LOW importance (silent, no
      *  heads-up), the app icon, and a tap that returns to the app (the
      *  live call screen / floating window is where stopping lives).
-     *  Its channel is created HERE, lazily, like TikuAlertService's —
-     *  never at app startup. */
+     *  Its channel is created HERE, lazily — never at app startup. */
     private fun shareNotification(): Notification {
         val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         if (nm.getNotificationChannel(SERVICE_CHANNEL_ID) == null) {
@@ -81,8 +80,7 @@ class ScreenShareService : Service() {
     }
 
     companion object {
-        /** The share entry's stable notification id (distinct from
-         *  TikuAlertService's 0x291D). */
+        /** The share entry's stable notification id. */
         private const val FOREGROUND_ID = 0x32A1
 
         private const val SERVICE_CHANNEL_ID = "tiku_screen_share"

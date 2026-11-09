@@ -90,6 +90,10 @@ dependencies {
     implementation(platform("com.google.firebase:firebase-bom:33.4.0"))
     implementation("com.google.firebase:firebase-auth")
     implementation("com.google.firebase:firebase-firestore")
+    // ROUND 58: FCM push (data-only) via the tiku-notify Worker — the
+    // TikuAlertService foreground-service replacement (see FcmNotify.kt).
+    // Version comes from the Firebase BoM platform above, like auth/firestore.
+    implementation("com.google.firebase:firebase-messaging")
     // No firebase-storage: the owner is on the free Spark plan; media lives in
     // Firestore chunks (see MediaStore.kt). The storage-only bucket is unused.
     implementation("androidx.credentials:credentials:1.3.0")

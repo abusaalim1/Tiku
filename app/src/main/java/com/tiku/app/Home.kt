@@ -1,13 +1,9 @@
 package com.tiku.app
 
 import android.Manifest
-import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.BitmapFactory
-import android.net.Uri
 import android.os.Build
-import android.os.PowerManager
-import android.provider.Settings
 import androidx.core.content.ContextCompat
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.Image
@@ -66,7 +62,6 @@ import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.text.AnnotatedString
@@ -962,9 +957,10 @@ fun SettingsScreen() {
                     }
                 },
                 onLogout = {
-                    // ROUND 15: the notify service dies with the session —
-                    // signed out means the owner condition is broken.
-                    NotifyService.stop(ctx)
+                    // ROUND 58: signOut itself retires the FCM token
+                    // (FcmTokenSync.clearOnSignOut, inside the engine) —
+                    // the Round-15 notify-service stop that used to sit
+                    // here died with that service.
                     if (Config.PREVIEW_UI_ONLY) AppState.go(Screen.Welcome)
                     else FirebaseEngine.signOut(ctx)
                 },
@@ -1082,21 +1078,22 @@ private fun SettingsMain(
                 val on = !OwnerPrefs.appLockOn
                 OwnerPrefs.setAppLock(on)
                 SettingsStore.setToggle("al", on)
-                NotifyGate.sync(ctx)
                 AppState.toast(if (on) "App lock on" else "App lock off — the password won't be asked on open")
             }
         }
         item {
             // ROUND 15 (owner order): the Notifications toggle lives
-            // HERE, directly under App lock — the Owner section's copy at
-            // the bottom of Settings keeps working off the same
-            // OwnerPrefs.notifyOn (one state, two surfaces).
+            // HERE, directly under App lock.
             // ROUND 18 (owner order): visible and functional for EVERY
             // signed-in user — same OwnerPrefs binding, same default
             // (OFF), same POST_NOTIFICATIONS request on enable.
+            // ROUND 58: this toggle is the display gate for every
+            // NON-owner account (TikuFcmService reads it at push time);
+            // the Owner section's row is a separate always-on rendering,
+            // because the owner account's pushes ignore this pref.
             ToggleRow(
                 "Notifications",
-                "A quiet “New message” alert on this phone, even when the app isn't open — while your journal is unlocked",
+                "A quiet “New message” alert on this phone, even when the app isn't open",
                 OwnerPrefs.notifyOn,
             ) {
                 val on = !OwnerPrefs.notifyOn
@@ -1108,79 +1105,14 @@ private fun SettingsMain(
                     ) {
                         permLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
                     }
-                    NotifyGate.sync(ctx)
+                    // ROUND 58: enabling the toggle is one of the
+                    // token (re)store points — pushes can only reach
+                    // this phone once its fcmToken is on the user doc.
+                    FcmTokenSync.register(ctx)
                     AppState.toast("Notifications on — only on this phone, only for you")
                 } else {
-                    NotifyGate.sync(ctx)
-                    OwnerNotify.cancelAll(ctx)
+                    PushAlerts.cancelAll(ctx)
                     AppState.toast("Notifications off")
-                }
-            }
-        }
-        item {
-            // ROUND 49 (owner's device complaint: "notification turant
-            // aata hi nahi hai" on a good network): while Notifications
-            // are ON, show this phone's battery-optimization status
-            // right under the toggle. Without the exemption Doze defers
-            // the alert service's network, so alerts land late however
-            // good the connection is. Settings row ONLY — no popup, no
-            // nagging: not exempt → the row + its button fire the
-            // system's own per-app exemption dialog; exempt → a calm
-            // confirmation line. The state re-reads on every ON_RESUME
-            // so returning from the system dialog updates the row.
-            if (OwnerPrefs.notifyOn) {
-                val pm = ctx.getSystemService(android.content.Context.POWER_SERVICE) as? PowerManager
-                var batteryExempt by remember {
-                    mutableStateOf(pm?.isIgnoringBatteryOptimizations(ctx.packageName) ?: false)
-                }
-                val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
-                DisposableEffect(lifecycleOwner) {
-                    val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
-                        if (event == androidx.lifecycle.Lifecycle.Event.ON_RESUME) {
-                            batteryExempt =
-                                pm?.isIgnoringBatteryOptimizations(ctx.packageName) ?: batteryExempt
-                        }
-                    }
-                    lifecycleOwner.lifecycle.addObserver(observer)
-                    onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
-                }
-                val askExemption: () -> Unit = {
-                    runCatching {
-                        ctx.startActivity(
-                            Intent(
-                                Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
-                                Uri.parse("package:" + ctx.packageName),
-                            ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                        )
-                    }.onFailure {
-                        // OEM without the per-app dialog: the system
-                        // battery-optimization list is the fallback.
-                        runCatching {
-                            ctx.startActivity(
-                                Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)
-                                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                            )
-                        }
-                    }
-                    Unit
-                }
-                if (batteryExempt) {
-                    CardRow({}, idx = 0) {
-                        TwoLine(
-                            "Instant notifications",
-                            "Battery restriction removed ✓",
-                            Modifier.weight(1f),
-                        )
-                    }
-                } else {
-                    CardRow(askExemption, idx = 0) {
-                        TwoLine(
-                            "Instant notifications",
-                            "Remove the battery restriction for instant notifications — with it on, message alerts can arrive late",
-                            Modifier.weight(1f),
-                        )
-                        Pill("Remove", Modifier.padding(start = 10.dp), true, askExemption)
-                    }
                 }
             }
         }
@@ -1379,27 +1311,28 @@ fun OwnerSection(
         ActivityResultContracts.RequestPermission(),
     ) { }
     Section("Owner")
+    // ROUND 58 (owner decision): the OWNER account's notifications are
+    // ALWAYS ON — every new message pushes, no toggle can turn them
+    // off (the FCM display gate checks OwnerState.isOwner before it
+    // ever looks at OwnerPrefs.notifyOn). The row therefore renders
+    // its always-on state and only explains itself; the shared
+    // Settings ▸ Notifications toggle above stays harmless for the
+    // owner for the same reason. Tapping also (re)stores this phone's
+    // push token, so an owner who never touched any toggle is still
+    // registered.
     ToggleRow(
         "Notifications",
-        "A quiet “New message” alert on this phone when something arrives — even when the app isn't open, while your journal is unlocked — only for your account",
-        OwnerPrefs.notifyOn,
+        "Always on for your account — a quiet “New message” alert on this phone when something arrives, even when the app isn't open",
+        true,
     ) {
-        val on = !OwnerPrefs.notifyOn
-        OwnerPrefs.setNotify(on)
-        if (on) {
-            if (Build.VERSION.SDK_INT >= 33 &&
-                ContextCompat.checkSelfPermission(ctx, Manifest.permission.POST_NOTIFICATIONS) !=
-                PackageManager.PERMISSION_GRANTED
-            ) {
-                permLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
-            }
-            NotifyGate.sync(ctx)
-            AppState.toast("Notifications on — only on this phone, only for you")
-        } else {
-            NotifyGate.sync(ctx)
-            OwnerNotify.cancelAll(ctx)
-            AppState.toast("Notifications off")
+        if (Build.VERSION.SDK_INT >= 33 &&
+            ContextCompat.checkSelfPermission(ctx, Manifest.permission.POST_NOTIFICATIONS) !=
+            PackageManager.PERMISSION_GRANTED
+        ) {
+            permLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
         }
+        FcmTokenSync.register(ctx)
+        AppState.toast("Notifications are always on for your account")
     }
     ToggleRow(
         "App lock",
@@ -1409,7 +1342,6 @@ fun OwnerSection(
         val on = !OwnerPrefs.appLockOn
         OwnerPrefs.setAppLock(on)
         SettingsStore.setToggle("al", on)
-        NotifyGate.sync(ctx)
         AppState.toast(if (on) "App lock on" else "App lock off — the password won't be asked on open")
     }
     // ROUND 57 (Fix 5) — owner direct entry: with this on (the
@@ -1491,9 +1423,6 @@ fun OwnerSection(
     ) {
         OwnerPrefs.requestGateOnce()
         ChatSession.lock(ctx)
-        // ROUND 15: a locked vault is a silent vault — the one-shot gate
-        // breaks the notify service's run gate until the next unlock.
-        NotifyGate.sync(ctx)
     }
 }
 

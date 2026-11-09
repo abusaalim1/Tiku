@@ -97,35 +97,18 @@ object FirebaseEngine : ChatRepo {
 
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate + TikuEngineHandler)
 
-    /** ROUND 29: true while this process's listeners are attached
-     *  (set by [start], cleared by [stop] — lock and sign-out both run
-     *  through stop). [TikuAlertService] reads it to decide whether a
-     *  cold process must bootstrap the engine itself or the UI already
-     *  did — the engine is started exactly once per process either
-     *  way, so its snapshots can never be double-fed to the judge. */
+    /** True while this process's listeners are attached (set by
+     *  [start], cleared by [stop] — lock and sign-out both run through
+     *  stop). ROUND 58: with the alert foreground service deleted, the
+     *  engine lives only inside an unlocked in-app session again —
+     *  closed-app alerts are FCM's job now (FcmNotify.kt), and the
+     *  Round-29/49 service-session + listener-keepalive machinery
+     *  (serviceSession, lastAlertActivityAt, alertKeepaliveCheck) is
+     *  removed with the service it existed for. */
     @Volatile var listenersActive: Boolean = false
         private set
 
-    /** ROUND 29: true while the alert service holds a background
-     *  session in a UI-less (restarted) process. The listener-error
-     *  retries below re-attach while EITHER the in-app session is
-     *  unlocked OR this is set — same law, both lives of the session.
-     *  Set by the service's bootstrap; cleared by [stop]. */
-    @Volatile var serviceSession: Boolean = false
-
-    private fun sessionLive(): Boolean = ChatSession.unlocked || serviceSession
-
-    /** ROUND 49 (this engine hook exists ONLY for the alert service's
-     *  keepalive — see TikuAlertService / alertKeepaliveCheck): the
-     *  wall-clock time of the last alert-relevant snapshot activity
-     *  (threads or any per-chat preview listener). Stamped by [start]
-     *  on attach and by both listeners on every successful snapshot.
-     *  Firestore gives app code no heartbeat, so a LONG silence is the
-     *  only stall signal available; the threads listener's own error
-     *  retries and the preview listeners' error self-heal below cover
-     *  the known-error cases, and this stamp covers the silent ones. */
-    @Volatile var lastAlertActivityAt: Long = 0L
-        private set
+    private fun sessionLive(): Boolean = ChatSession.unlocked
 
     // ---------- identity ----------
     private var myPrivBytes: ByteArray? = null
@@ -746,6 +729,30 @@ object FirebaseEngine : ChatRepo {
     private suspend fun convKeyOrNull(chatId: String, peerUid: String): SecretKey? =
         runCatching { convKey(chatId, peerUid) }.getOrNull()
 
+    /** ROUND 58 — true while [chatId]'s chat screen is open in this
+     *  process (the build-90 open-chat set the preview/open listeners
+     *  already key on). TikuFcmService reads it for push suppression:
+     *  a push for the exact chat he is looking at never posts. */
+    fun isChatOpen(chatId: String): Boolean = openChatIds.contains(chatId)
+
+    /** ROUND 58 — the FCM service's decrypt path: the SAME machinery
+     *  the deleted alert service's cold bootstrap used — the caller
+     *  ([TikuFcmService]) loads the device-wrapped identity via
+     *  [loadLocalIdentity] (which fills myPrivBytes; no journal
+     *  password is involved), then this derives the conversation key
+     *  through [convKeyOrNull] (ECDH + HKDF, peer public key fetched
+     *  and cached exactly as the in-app paths do) and opens the
+     *  payload with Crypto.decryptText. Null on ANY failure — missing
+     *  identity, peer key not ready, retired-key ciphertext — and the
+     *  caller falls back to a generic notification body. There is no
+     *  second crypto path: this is the one derivation every read in
+     *  the app uses. */
+    suspend fun decryptForNotify(chatId: String, peerUid: String, ct: String, iv: String): String? =
+        runCatching {
+            val key = convKeyOrNull(chatId, peerUid) ?: return null
+            Crypto.decryptText(key, iv, ct)
+        }.getOrNull()
+
     // ================= LISTENERS =================
     private var threadsReg: ListenerRegistration? = null
     /** Round 5: bounded re-attach attempts when a threads snapshot had to skip
@@ -946,9 +953,6 @@ object FirebaseEngine : ChatRepo {
         pinPrefs = ctx.getSharedPreferences("tiku_pins", Context.MODE_PRIVATE)
         if (uid.isEmpty()) return
         listenersActive = true
-        // ROUND 49: attaching (or re-attaching) is itself activity —
-        // the keepalive's staleness clock starts from here.
-        lastAlertActivityAt = System.currentTimeMillis()
         threadsReg?.remove()
         // ROUND 6 — BUGS 2+3 SHARED ROOT CAUSE (proven server-side before this
         // round): this query used to add .orderBy("updatedAt", DESCENDING).
@@ -982,7 +986,6 @@ object FirebaseEngine : ChatRepo {
                     return@addSnapshotListener
                 }
                 threadsErrorRetries = 0
-                lastAlertActivityAt = System.currentTimeMillis()
                 scope.launch {
                     runCatching {
                         var skipped = 0
@@ -1092,8 +1095,8 @@ object FirebaseEngine : ChatRepo {
                                 // mutedFor, ORed with the legacy local
                                 // ThreadMuteStore so the ChatDetails
                                 // toggle keeps working unchanged. This
-                                // also makes OwnerNotify's long-standing
-                                // muted check live for the first time.
+                                // derivation is what the push gate reads
+                                // (ROUND 58: TikuFcmService's muted check).
                                 muted = uid in mutedForList || ThreadMuteStore.isMuted(doc.id),
                                 callsMuted = uid in mutedCallsForList,
                                 nickname = nickname,
@@ -1206,7 +1209,6 @@ object FirebaseEngine : ChatRepo {
                             }
                             return@addSnapshotListener
                         }
-                        lastAlertActivityAt = System.currentTimeMillis()
                         val docs = snap?.documents ?: return@addSnapshotListener
                         scope.launch { runCatching { applyPreviewSnapshot(tid, docs) } }
                     }
@@ -1356,12 +1358,10 @@ object FirebaseEngine : ChatRepo {
         // UNOPENED chat is swept from here (opened chats are covered by
         // the message listener's pass in attachMessages).
         sweepExpiredAiImages(id, msgs)
-        // ROUND 9: the owner's opt-in alert hook sees this same freshly
-        // decrypted preview window (regular messages AND call events).
-        // OwnerNotify itself checks owner + toggle + foreground and
-        // baselines history before ever posting, so for every other
-        // account — and for the owner with the toggle off — this is a no-op.
-        OwnerNotify.onPreviewMessages(appCtx, id, msgs)
+        // ROUND 58: no alert hook here any more — the Round-9→52
+        // in-process delta judge (OwnerNotify) is deleted; alerts are
+        // FCM pushes triggered by the SENDER at write time (PushSender),
+        // so this preview path is purely display state again.
     }
 
     // ================= CALL SIGNALING WATCHERS =================
@@ -1369,9 +1369,12 @@ object FirebaseEngine : ChatRepo {
      *  ringing call presents in-app ONLY while unlocked, foregrounded
      *  AND that chat is the one open on screen (checked in
      *  handleIncomingCall) — never merely because the app came to the
-     *  foreground. Outside that, a call goes to the silent alert
-     *  pipeline (Round 29/52, background only) or stays invisible until
-     *  the chat is opened, where openThread's reconcile presents it. */
+     *  foreground. Outside that, a call stays invisible until the chat
+     *  is opened, where openThread's reconcile presents it; closed-app
+     *  call alerts are the FCM push the CALLER fires at placement time
+     *  (ROUND 58 — PushSender.notifyCall / TikuFcmService), which
+     *  replaced the Round-29/52 in-process alert branch that used to
+     *  sit in handleIncomingCall. */
     private fun syncCallWatchers(threadIds: Set<String>) {
         (callsRegs.keys - threadIds).forEach { callsRegs.remove(it)?.remove() }
         threadIds.forEach { tid ->
@@ -1427,14 +1430,16 @@ object FirebaseEngine : ChatRepo {
                     // visible when he opens the chat, never on its own
                     // while he is anywhere else in the app (the list,
                     // Settings, another chat). While he is elsewhere
-                    // the snapshot falls through to the OwnerNotify
-                    // branch below, which self-suppresses in the
-                    // foreground — so nothing presents — and the call
-                    // surfaces later, still inside its ring window,
-                    // through openThread's reconcile when he opens
-                    // this chat. A call that starts while he is already
-                    // inside this chat still presents right here: the
-                    // chat being open IS the presentation context.
+                    // the snapshot falls through to NOTHING in-process
+                    // — so nothing presents — and the call surfaces
+                    // later, still inside its ring window, through
+                    // openThread's reconcile when he opens this chat.
+                    // A call that starts while he is already inside
+                    // this chat still presents right here: the chat
+                    // being open IS the presentation context.
+                    // (ROUND 58: the old fall-through alert branch is
+                    // gone with the alert service — closed-app calls
+                    // arrive as FCM pushes instead.)
                     ChatSession.unlocked && ChatSession.foreground &&
                         openChatIds.contains(chatId) -> {
                         val person = fetchPerson(caller)
@@ -1442,22 +1447,13 @@ object FirebaseEngine : ChatRepo {
                         // controller — accept() uses the cached copy first.
                         CallController.onIncoming(chatId, callId, kind, person, offerEnc)
                     }
-                    // ROUND 29: not in front, but the alert service holds
-                    // a live unlocked session — the call alerts instead of
-                    // ringing in-app. OwnerNotify dedupes per call id
-                    // (this watcher re-fires on every ICE write) and the
-                    // alert dies at the ring timeout; if he answers by
-                    // opening the app, the foreground ring takes over,
-                    // and if he never does, the call still lands later
-                    // as a missed-call message for the delta judge.
-                    OwnerNotify.pipelineLive -> {
-                        val person = fetchPerson(caller)
-                        OwnerNotify.onIncomingCall(
-                            appCtx, chatId, callId, kind == "video", person.name)
-                    }
-                    // not inside Tik right now and no alert session: the
-                    // call simply never rings; it times out and deletes
-                    // itself on the caller's side.
+                    // ROUND 58: no in-process alert branch any more.
+                    // Not in front (backgrounded or closed): the call
+                    // alerts through the FCM push the caller fired when
+                    // placing it, or — if that push never landed — it
+                    // simply never rings here; it times out and deletes
+                    // itself on the caller's side, and the caller
+                    // records the missed-call event in the chat.
                 }
             }
         }
@@ -1466,7 +1462,8 @@ object FirebaseEngine : ChatRepo {
     /** ROUND 52 (item 5) — INCOMING-CALL RECONCILE. The watcher rings
      *  only at snapshot time, gated on unlocked+foreground THEN; a call
      *  that started while the receiver was elsewhere (YouTube, shade,
-     *  another app) took the OwnerNotify branch, and when he came back
+     *  another app) took no in-app branch (ROUND 58: FCM pushes cover
+     *  the closed-app case the old alert branch served), and when he came back
      *  seconds later nothing re-ran the watcher — the still-ringing
      *  call never surfaced (his exact report). This pass is the
      *  baseline-free counterpart: a one-shot query of the calls
@@ -1563,7 +1560,6 @@ object FirebaseEngine : ChatRepo {
 
     fun stop() {
         listenersActive = false
-        serviceSession = false
         // ROUND 56: the AI-share listeners + state die with the session.
         AiShare.stop()
         threadsReg?.remove(); msgsReg?.remove()
@@ -1572,45 +1568,6 @@ object FirebaseEngine : ChatRepo {
         myDocReg?.remove(); myDocReg = null
         noteRegs.values.forEach { it?.remove() }; noteRegs.clear()
     }
-
-    /** ROUND 49 — listener-health keepalive, called ONLY by
-     *  [TikuAlertService]'s 5-minute tick while the alert gate holds.
-     *  If no alert-relevant snapshot (threads or any preview listener)
-     *  has landed for over [ALERT_STALE_MS], the listeners are assumed
-     *  silently stalled (the failure mode the error callbacks cannot
-     *  see: a wedged sync stream after a network switch or a long
-     *  Doze) and are force-rebuilt — preview registrations dropped and
-     *  the proven full re-attach ([start], the same path the threads
-     *  error retries use) re-run, whose first snapshot re-syncs every
-     *  preview listener. The stamp is reset BEFORE the rebuild so a
-     *  slow re-attach cannot retrigger on the next tick. The delta
-     *  judge makes the rebuild safe: its per-thread baselines and
-     *  prev-id sets survive in-process, so a rebuilt listener's first
-     *  snapshot diffs against the pre-stall window — a message that
-     *  arrived DURING the stall is a genuine delta and alerts (that is
-     *  the point), and nothing already seen can re-alert.
-     *
-     *  Honest cost: on a genuinely quiet account this rebuild also
-     *  fires (silence is indistinguishable from a stall without a
-     *  heartbeat) — bounded to at most once per [ALERT_STALE_MS] while
-     *  the gate is on, and a re-attach's initial snapshots are served
-     *  from the local cache the listeners already maintain. No message
-     *  data is polled: between rebuilds this is one timestamp compare
-     *  per service tick. */
-    fun alertKeepaliveCheck() {
-        runCatching {
-            if (!listenersActive || !sessionLive()) return
-            val now = System.currentTimeMillis()
-            if (now - lastAlertActivityAt <= ALERT_STALE_MS) return
-            lastAlertActivityAt = now
-            previewRegs.values.forEach { it.remove() }; previewRegs.clear()
-            if (::appCtx.isInitialized) start(appCtx)
-        }
-    }
-
-    /** ROUND 49: silence longer than this (with the gate on) reads as
-     *  a stalled listener rather than a quiet account. */
-    private const val ALERT_STALE_MS = 10 * 60_000L
 
     // ================= ROUND 14: MY DOC (block list + my note) =================
     /** One listener on users/{me}: feeds AppState.blockedUids (+ the resolved
@@ -1762,9 +1719,6 @@ object FirebaseEngine : ChatRepo {
         // the app cache (dl_*.m4a) — a chat trace that used to outlive the
         // lock. They simply re-download on the next unlock.
         msgCache.clear(); hasOlderCache.clear(); clearedBeforeCache.clear(); loadingOlder.clear()
-        // ROUND 9: the owner's alert bookkeeping baselines die with the
-        // session too — after a re-lock, history can never re-alert.
-        OwnerNotify.reset()
         runCatching {
             appCtx.cacheDir.listFiles()?.forEach { f ->
                 if (f.name.startsWith("dl_") && f.name.endsWith(".m4a")) f.delete()
@@ -1910,11 +1864,6 @@ object FirebaseEngine : ChatRepo {
             .orderBy("ts", Query.Direction.DESCENDING).limit(PAGE_SIZE)
             .addSnapshotListener { snap, _ ->
                 if (snap == null) return@addSnapshotListener
-                // ROUND 49: an open chat's traffic is listener activity
-                // too (its preview listener stands down while open) —
-                // without this stamp a long open chat would read as a
-                // stall to the alert keepalive.
-                lastAlertActivityAt = System.currentTimeMillis()
                 // round 4: while this chat is OPEN on screen, incoming messages
                 // are marked seen as they land (drives the sender's "Seen").
                 if (openChatIds.contains(id)) markIncomingSeen(id, snap.documents)
@@ -2161,8 +2110,8 @@ object FirebaseEngine : ChatRepo {
     /** ROUND 52: mute MESSAGE alerts for this chat (chat doc mutedFor
      *  array). Optimistic thread update; the threads listener re-derives
      *  thread.muted from the doc (ORed with the legacy local store), and
-     *  OwnerNotify's judge — which reads thread.muted before posting —
-     *  skips the chat from the next snapshot on. */
+     *  the push gate — which reads thread.muted before posting (ROUND
+     *  58: TikuFcmService) — skips the chat from the next snapshot on. */
     override fun setThreadMuted(id: String, on: Boolean) {
         AppState.threads.value = AppState.threads.value.map {
             if (it.id == id) it.copy(muted = on) else it
@@ -2565,6 +2514,13 @@ object FirebaseEngine : ChatRepo {
             if (local.ai) docData["ai"] = true
             msgRef(id, local.id).set(docData).await()
             AppState.setMessageStatus(id, local.id, SendStatus.SENT)
+            // ROUND 58: the write landed — fire the peer's FCM push
+            // (best-effort, background, failures swallowed; the
+            // message's own ct/iv ride for text, ai_text for Tika's
+            // answers, which are normal outgoing sends from the asker).
+            PushSender.notifyMessage(
+                id, peerUid, local.id,
+                if (local.ai) "ai_text" else "text", ct, iv)
             liftHideOnSend(id)
             touchChat(id)
         } catch (e: Exception) {
@@ -2857,6 +2813,18 @@ object FirebaseEngine : ChatRepo {
             val chunks = MediaStore.upload(db, id, local.id, ctBytes)
             ref.update("mediaChunks", chunks).await()
             AppState.setMessageStatus(id, local.id, SendStatus.SENT)
+            // ROUND 58: the media write fully landed (doc + chunks) —
+            // fire the peer's FCM push, metadata only (media pushes
+            // never carry ciphertext). Kinds with no Worker type —
+            // AUDIO files and GAME — send no push; the peer still gets
+            // the message on next sync (documented spec gap: the
+            // Worker's type vocabulary has no audio-file/game type).
+            when (local.kind) {
+                MsgKind.IMAGE -> PushSender.notifyMessage(id, peerUid, local.id, "photo")
+                MsgKind.VIDEO -> PushSender.notifyMessage(id, peerUid, local.id, "video")
+                MsgKind.VOICE -> PushSender.notifyMessage(id, peerUid, local.id, "voice")
+                else -> Unit
+            }
             // the recording temp file is only cleaned up once delivery landed —
             // a FAILED voice note keeps its file so tap-to-retry can resend it.
             if (local.kind == MsgKind.VOICE) local.localPath?.let { runCatching { File(it).delete() } }
@@ -3915,11 +3883,11 @@ object FirebaseEngine : ChatRepo {
     }
 
     fun signOut(ctx: Context) {
-        // ROUND 29: sign-out ends the alert session authoritatively —
-        // the persisted unlocked flag clears and the service stops
-        // (Home's logout also calls NotifyService.stop; both are
-        // idempotent).
-        NotifyGate.sessionEnded(ctx)
+        // ROUND 58: sign-out retires this device's push registration —
+        // the FCM token is deleted and the users/{me}.fcmToken field
+        // cleared FIRST, while the auth session is still live (the
+        // cleanup fires its writes synchronously; see FcmTokenSync).
+        FcmTokenSync.clearOnSignOut()
         stop()
         auth.signOut()
         myPrivBytes = null
