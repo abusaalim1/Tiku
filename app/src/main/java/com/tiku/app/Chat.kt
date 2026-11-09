@@ -3300,7 +3300,8 @@ fun RdChatInput(
                     exit = fadeOut(tween(120)) + shrinkHorizontally(shrinkTowards = Alignment.Start),
                 ) {
                     Box(
-                        Modifier.padding(end = 6.dp).size(40.dp).clip(CircleShape).background(accent).rdPress(onCamera),
+                        Modifier.padding(end = 6.dp).size(40.dp).clip(CircleShape).background(accent)
+                            .testTag("composer_camera").rdPress(onCamera),
                         contentAlignment = Alignment.Center,
                     ) {
                         Icon(Icons.Filled.PhotoCamera, null, tint = Color.White, modifier = Modifier.size(20.dp))
@@ -3868,9 +3869,16 @@ private fun RdChatContent(thread: ChatThread) {
         }
         // ROUND 31 + 43: the allowance snapshotted at launch rides
         // this capture; the send consumes the live arm too.
+        // ROUND 67: the send itself is guarded too — a synchronous
+        // throw out of this callback would kill the process exactly
+        // like the launch-side crash did.
         armedVo = null
-        AppState.repo.sendPhotoVo(threadId, bmp, vo)
+        val sent = runCatching { AppState.repo.sendPhotoVo(threadId, bmp, vo) }
         runCatching { f.delete() }
+        if (sent.isFailure) {
+            Log.e("TikuCamera", "camera photo send failed", sent.exceptionOrNull())
+            AppState.toast("Couldn't send that photo — please try again")
+        }
     }
     val recordVideoCapture = rememberLauncherForActivityResult(ActivityResultContracts.CaptureVideo()) { ok ->
         val path = camVideoPath
@@ -3880,8 +3888,15 @@ private fun RdChatContent(thread: ChatThread) {
         val f = path?.let { File(it) }
         if (ok && f != null && f.exists() && f.length() > 0) {
             // ROUND 31 + 43: launch-time allowance snapshot, as above.
+            // ROUND 67: guarded send, same reasoning as takePhoto.
             armedVo = null
-            AppState.repo.sendVideoVo(threadId, f, "video/mp4", mediaDurationSec(f), vo)
+            val sent = runCatching {
+                AppState.repo.sendVideoVo(threadId, f, "video/mp4", mediaDurationSec(f), vo)
+            }
+            if (sent.isFailure) {
+                Log.e("TikuCamera", "camera video send failed", sent.exceptionOrNull())
+                AppState.toast("Couldn't send that video — please try again")
+            }
         } else {
             if (f != null) runCatching { f.delete() }
             // ROUND 43: a "successful" capture with no usable file is
@@ -3889,19 +3904,114 @@ private fun RdChatContent(thread: ChatThread) {
             if (ok) AppState.toast("Couldn't send that video — please try again")
         }
     }
+    // ---- ROUND 67 — WHY OPENING THE CAMERA KILLED THE APP (owner,
+    // build 111: "Tiku keeps stopping" the moment the camera opens
+    // from a chat) ----
+    // The launch side of this path was the ONE unguarded surface the
+    // Round-43 hardening never touched: launchCameraPhoto/Video
+    // called FileProvider.getUriForFile + launcher.launch(...) bare,
+    // synchronously inside the chooser row's tap handler, with NO
+    // permission check and NO handler check. ActivityResultLauncher
+    // .launch() THROWS on exactly the devices where a step fails:
+    // ActivityNotFoundException when no activity can handle
+    // ACTION_IMAGE_CAPTURE / ACTION_VIDEO_CAPTURE (camera app
+    // disabled or removed, a restricted profile, or a device with
+    // no camera at all — the manifest declares the camera feature
+    // required=false, so the app installs there), SecurityException
+    // on OEM builds that enforce the caller's CAMERA permission
+    // around capture intents (the app declares CAMERA but never
+    // checked or requested it on this path), IllegalArgumentException
+    // out of FileProvider, IllegalStateException out of a launcher
+    // whose lifecycle moved on. Any of them propagated uncaught out
+    // of the tap and took the process down — the system dialog.
+    // The fix keeps the working path byte-identical (same contracts,
+    // same cache files, same FileProvider authority, same result
+    // handling above) and changes only what happens AROUND it:
+    //  1. CAMERA permission is verified BEFORE any open attempt; if
+    //     it is missing it is requested and AWAITED — the camera
+    //     opens only from the permission callback, on grant. The
+    //     pending kind rides rememberSaveable (the Round-43 lesson:
+    //     plain remember state dies with a mid-flight recreation).
+    //  2. Denial is spoken and routes to the gallery: a toast plus
+    //     the attach sheet (whose Photo row IS the gallery picker).
+    //  3. The open attempt itself (file, FileProvider URI, launch)
+    //     runs inside runCatching end-to-end; ANY failure is logged
+    //     with its exception and lands on the same graceful surface
+    //     (toast + gallery sheet) instead of process death. A failed
+    //     open also drops the pending-capture state and the session
+    //     lock's external-activity grace, since no external activity
+    //     is in fact starting.
+    /** The graceful camera-failure surface: log the real exception,
+     *  clear the pending capture + lock grace, toast, and offer the
+     *  gallery (the attach sheet) as the fallback. */
+    fun failCameraOpen(e: Throwable) {
+        Log.e("TikuCamera", "camera open failed", e)
+        camPhotoPath = null
+        camVideoPath = null
+        camVoCode = -1
+        ChatSession.expectExternalActivity = false
+        AppState.toast("Camera couldn't open — try the gallery")
+        attachOpen = true
+    }
+    fun launchCameraPhotoNow() {
+        runCatching {
+            val f = File(ctx.cacheDir, "cap_${System.currentTimeMillis()}.jpg")
+            camPhotoPath = f.absolutePath
+            camVoCode = armedVo ?: -1
+            ChatSession.expectExternalActivity = true
+            takePhoto.launch(FileProvider.getUriForFile(ctx, "tiku.app.fileprovider", f))
+        }.onFailure { failCameraOpen(it) }
+    }
+    fun launchCameraVideoNow() {
+        runCatching {
+            val f = File(ctx.cacheDir, "cap_${System.currentTimeMillis()}.mp4")
+            camVideoPath = f.absolutePath
+            camVoCode = armedVo ?: -1
+            ChatSession.expectExternalActivity = true
+            recordVideoCapture.launch(FileProvider.getUriForFile(ctx, "tiku.app.fileprovider", f))
+        }.onFailure { failCameraOpen(it) }
+    }
+    /** Which capture the in-flight CAMERA permission request belongs
+     *  to: 0 = none, 1 = photo, 2 = video. rememberSaveable for the
+     *  same reason as the pending capture paths above. */
+    var pendingCamKind by rememberSaveable { mutableStateOf(0) }
+    val askCameraPerm = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        val kind = pendingCamKind
+        pendingCamKind = 0
+        if (granted) {
+            when (kind) {
+                1 -> launchCameraPhotoNow()
+                2 -> launchCameraVideoNow()
+            }
+        } else {
+            // Denial is a graceful in-app surface, never a dead end:
+            // say so, and offer the gallery (attach sheet) instead.
+            Log.w("TikuCamera", "CAMERA permission denied (pending kind=$kind)")
+            AppState.toast("Camera permission needed — you can pick from the gallery instead")
+            attachOpen = true
+        }
+    }
     fun launchCameraPhoto() {
-        val f = File(ctx.cacheDir, "cap_${System.currentTimeMillis()}.jpg")
-        camPhotoPath = f.absolutePath
-        camVoCode = armedVo ?: -1
-        ChatSession.expectExternalActivity = true
-        takePhoto.launch(FileProvider.getUriForFile(ctx, "tiku.app.fileprovider", f))
+        if (ContextCompat.checkSelfPermission(ctx, Manifest.permission.CAMERA) ==
+            PackageManager.PERMISSION_GRANTED
+        ) {
+            launchCameraPhotoNow()
+        } else {
+            pendingCamKind = 1
+            runCatching { askCameraPerm.launch(Manifest.permission.CAMERA) }
+                .onFailure { pendingCamKind = 0; failCameraOpen(it) }
+        }
     }
     fun launchCameraVideo() {
-        val f = File(ctx.cacheDir, "cap_${System.currentTimeMillis()}.mp4")
-        camVideoPath = f.absolutePath
-        camVoCode = armedVo ?: -1
-        ChatSession.expectExternalActivity = true
-        recordVideoCapture.launch(FileProvider.getUriForFile(ctx, "tiku.app.fileprovider", f))
+        if (ContextCompat.checkSelfPermission(ctx, Manifest.permission.CAMERA) ==
+            PackageManager.PERMISSION_GRANTED
+        ) {
+            launchCameraVideoNow()
+        } else {
+            pendingCamKind = 2
+            runCatching { askCameraPerm.launch(Manifest.permission.CAMERA) }
+                .onFailure { pendingCamKind = 0; failCameraOpen(it) }
+        }
     }
 
     // recording clock + waveform sampling + 3-minute hard cap (build 47)

@@ -21,6 +21,7 @@ import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.longClick
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onAllNodesWithText
+import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performScrollTo
@@ -1717,5 +1718,70 @@ class ScreenshotsTest {
             composeRule.onAllNodesWithText("Memories").fetchSemanticsNodes().isNotEmpty(),
         )
         shot("36-moments-screen.png")
+    }
+
+    // ---------- ROUND 67: opening the camera must never kill the app ----------
+    @Test fun shot61_cameraOpenGraceful() {
+        // The composer camera entry, exercised in the one environment
+        // with NO usable camera path: Robolectric has no camera app
+        // behind the capture intent, and the CAMERA permission is
+        // explicitly denied below. PRE-FIX (build 111) this exact tap
+        // sequence threw out of the unguarded launcher.launch(...)
+        // inside launchCameraPhoto and killed the process — the
+        // owner's "Tiku keeps stopping". POST-FIX the taps must leave
+        // the app alive on the same chat, on a graceful surface: a
+        // camera toast, the gallery (attach sheet) offered as the
+        // fallback, or — if the harness grants the permission and its
+        // shadow activity accepts the intent — a capture intent
+        // actually dispatched (the unchanged working path).
+        runCatching {
+            org.robolectric.Shadows.shadowOf(ctx as android.app.Application)
+                .denyPermissions(android.Manifest.permission.CAMERA)
+        }
+        val th = AppState.threads.value.first()
+        AppState.go(Screen.Chat(th.id))
+        frame { ChatScreen(th.id) }
+        composeRule.waitForIdle()
+        // The composer camera button exists only while the field is
+        // empty + unfocused (Round 15) — tap it to open the chooser.
+        composeRule.onNodeWithTag("composer_camera").performTouchInput { click() }
+        composeRule.waitForIdle()
+        org.junit.Assert.assertTrue(
+            "camera chooser must offer Take photo",
+            composeRule.onAllNodesWithText("Take photo").fetchSemanticsNodes().isNotEmpty(),
+        )
+        org.junit.Assert.assertTrue(
+            "camera chooser must offer Record video",
+            composeRule.onAllNodesWithText("Record video").fetchSemanticsNodes().isNotEmpty(),
+        )
+        shot("61-camera-chooser.png")
+        // THE TAP THAT CRASHED BUILD 111.
+        composeRule.onAllNodesWithText("Take photo")[0].performTouchInput { click() }
+        composeRule.waitForIdle()
+        // Survival: still on the same chat. (The failure mode is the
+        // process/test dying — reaching this line is half the proof.)
+        org.junit.Assert.assertEquals(
+            "camera tap must leave the app alive on the same chat",
+            Screen.Chat(th.id), AppState.screen,
+        )
+        val toastSaysCamera = AppState.toastText?.contains("Camera") == true
+        // The attach sheet is the gallery offer: its "Audio file" row
+        // exists nowhere else (the camera chooser has no such row).
+        val galleryOffered = composeRule.onAllNodesWithText("Audio file")
+            .fetchSemanticsNodes().isNotEmpty()
+        val captureDispatched = runCatching {
+            org.robolectric.Shadows.shadowOf(composeRule.activity)
+                .peekNextStartedActivityForResult()?.intent?.action ==
+                android.provider.MediaStore.ACTION_IMAGE_CAPTURE
+        }.getOrDefault(false)
+        println(
+            "R67 camera graceful: toast=${AppState.toastText} " +
+                "gallery=$galleryOffered capture=$captureDispatched",
+        )
+        org.junit.Assert.assertTrue(
+            "camera failure must surface gracefully (toast, gallery fallback, or a dispatched capture)",
+            toastSaysCamera || galleryOffered || captureDispatched,
+        )
+        shot("62-camera-graceful.png")
     }
 }
