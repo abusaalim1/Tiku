@@ -2280,6 +2280,11 @@ object FirebaseEngine : ChatRepo {
                         witnessBride = j.optString("wBride"),
                         sigGroomPngB64 = j.optString("sigGroom"),
                         sigBridePngB64 = j.optString("sigBride"),
+                        // ROUND 65: additive father keys — payloads
+                        // from older builds lack them → "" → the
+                        // certificate's display-name fallback.
+                        groomFather = j.optString("gFather"),
+                        brideFather = j.optString("bFather"),
                     )
                 }.getOrNull()
             }
@@ -2658,6 +2663,9 @@ object FirebaseEngine : ChatRepo {
                     .put("dateMs", k.dateMs).put("mahr", k.mahr)
                     .put("wGroom", k.witnessGroom).put("wBride", k.witnessBride)
                     .put("sigGroom", k.sigGroomPngB64).put("sigBride", k.sigBridePngB64)
+                    // ROUND 65: additive father keys (same shape as
+                    // NikahKeepsake.toJson in Nikah.kt).
+                    .put("gFather", k.groomFather).put("bFather", k.brideFather)
                     .toString()
                 val (ksIv, ksCt) = Crypto.encryptText(key, json)
                 docData["ksCt"] = ksCt

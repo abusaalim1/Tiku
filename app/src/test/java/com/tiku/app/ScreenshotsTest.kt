@@ -862,95 +862,139 @@ class ScreenshotsTest {
     // seeds a session whose partner presence stamp is fresh, exactly as
     // a live partner's heartbeat would make it — one device drives both
     // sides by choosing which uid is "me".
+    // ROUND 65: the DISPLAY names (Aarav/Meera) deliberately DIFFER from
+    // the REAL names (Danish Iqbal / Maryam Siddiqui) — every ceremony
+    // assertion below pins the REAL names, proving display names drive
+    // nothing in the ceremony any more.
     private fun nikahFakeState(
         step: String,
         groomQabool: Int = 0,
+        brideQabool: Int = 0,
+        groomUid: String = "me",
+        brideUid: String = "p-meera",
+        groomReal: String = "Danish Iqbal",
+        brideReal: String = "Maryam Siddiqui",
+        nameDone: Map<String, Boolean> = emptyMap(),
     ): NikahUiState {
         val now = System.currentTimeMillis()
         return NikahUiState(
             exists = true, status = "active", step = step,
-            creatorUid = "me", groomUid = "me", brideUid = "p-meera",
+            creatorUid = "me", groomUid = groomUid, brideUid = brideUid,
             groomName = "Aarav", brideName = "Meera",
-            presence = mapOf("me" to now, "p-meera" to now),
-            mahrPhase = "accepted", mahrText = "₹21,000",
-            groomQabool = groomQabool,
+            groomRealName = groomReal, groomFatherName = "Mohammad Iqbal",
+            brideRealName = brideReal, brideFatherName = "Abdul Siddiqui",
+            nameDoneBySide = nameDone.ifEmpty {
+                mapOf(groomUid to true, brideUid to true)
+            },
+            presence = mapOf(groomUid to now, brideUid to now),
+            mahrPhase = "accepted", mahrText = "₹51,000 + a gold ring",
+            groomQabool = groomQabool, brideQabool = brideQabool,
         )
     }
 
-    @Test fun shot37_nikahLobby() {
-        val now = System.currentTimeMillis()
-        frame {
-            Box(Modifier.fillMaxSize().background(Color(0xFF121214))) {
-                NikahCeremonyContent(
-                    state = nikahFakeState(NikahSteps.LOBBY),
-                    myUid = "me", nowMs = now, cb = NikahCallbacks(),
-                )
-            }
-        }
-        composeRule.waitForIdle()
-        org.junit.Assert.assertTrue(
-            "nikah lobby must carry its title",
-            composeRule.onAllNodesWithText("NIKAH").fetchSemanticsNodes().isNotEmpty(),
-        )
-        org.junit.Assert.assertTrue(
-            "nikah lobby must offer Ready to both partners",
-            composeRule.onAllNodesWithText("I'm Ready", substring = true)
-                .fetchSemanticsNodes().isNotEmpty(),
-        )
-        shot("37-nikah-lobby.png")
-    }
-
-    @Test fun shot38_nikahQaboolWaiting() {
-        // The BRIDE's view of the groom's Qabool: two rings filled live,
-        // her controls locked behind the turn line.
-        val now = System.currentTimeMillis()
-        frame {
-            Box(Modifier.fillMaxSize().background(Color(0xFF121214))) {
-                NikahCeremonyContent(
-                    state = nikahFakeState(NikahSteps.QABOOL_GROOM, groomQabool = 2),
-                    myUid = "p-meera", nowMs = now, cb = NikahCallbacks(),
-                )
-            }
-        }
-        composeRule.waitForIdle()
-        org.junit.Assert.assertTrue(
-            "waiting side must be told who is saying Qabool",
-            composeRule.onAllNodesWithText("is saying Qabool", substring = true)
-                .fetchSemanticsNodes().isNotEmpty(),
-        )
-        org.junit.Assert.assertTrue(
-            "waiting side's controls must be locked with the turn line",
-            composeRule.onAllNodesWithText("turn — please wait", substring = true)
-                .fetchSemanticsNodes().isNotEmpty(),
-        )
-        shot("38-nikah-qabool-waiting.png")
-    }
-
-    @Test fun shot39_nikahCertificate() {
-        // A signature drawn on a tiny canvas, PNG'd + base64'd exactly as
-        // the keepsake payload carries it.
+    /** A signature drawn on a tiny canvas, PNG'd + base64'd exactly as
+     *  the keepsake payload carries it. */
+    private fun nikahSigB64(): String {
         val sigBmp = android.graphics.Bitmap.createBitmap(220, 64, android.graphics.Bitmap.Config.ARGB_8888)
         val c = android.graphics.Canvas(sigBmp)
-        val p = android.graphics.Paint().apply {
+        val paint = android.graphics.Paint().apply {
             color = android.graphics.Color.rgb(255, 217, 228); strokeWidth = 4f
             style = android.graphics.Paint.Style.STROKE
         }
         val path = android.graphics.Path().apply {
             moveTo(10f, 44f); cubicTo(60f, 4f, 120f, 60f, 210f, 22f)
         }
-        c.drawPath(path, p)
+        c.drawPath(path, paint)
         val out = java.io.ByteArrayOutputStream()
         sigBmp.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, out)
-        val sigB64 = Crypto.b64(out.toByteArray())
-        val keepsake = NikahKeepsake(
-            groomName = "Aarav", brideName = "Meera",
-            dateMs = 1794192000000L, mahr = "₹21,000",
-            witnessGroom = "Ahmed", witnessBride = "Yusuf",
-            sigGroomPngB64 = sigB64, sigBridePngB64 = sigB64,
+        return Crypto.b64(out.toByteArray())
+    }
+
+    /** ROUND 65: the staged certificate fixture — the v4 prototype's
+     *  own sample family, with REAL names, fathers, mahr, witnesses
+     *  and drawn signatures. Shots 39, 54 and 55 share it, so the
+     *  in-ceremony certificate and the keepsake re-open are asserted
+     *  (and captured) from byte-identical payload data. */
+    private fun nikahSampleKeepsake(): NikahKeepsake {
+        val sig = nikahSigB64()
+        return NikahKeepsake(
+            groomName = "Danish Iqbal", brideName = "Maryam Siddiqui",
+            dateMs = 1794192000000L, mahr = "₹51,000 + a gold ring",
+            witnessGroom = "Imran Sheikh", witnessBride = "Bilal Ahmad",
+            sigGroomPngB64 = sig, sigBridePngB64 = sig,
+            groomFather = "Mohammad Iqbal", brideFather = "Abdul Siddiqui",
         )
+    }
+
+    @Test fun shot37_nikahLobby() {
+        val now = System.currentTimeMillis()
+        frame {
+            Box(Modifier.fillMaxSize().background(Color(0xFF050507))) {
+                NikahCeremonyContent(
+                    state = nikahFakeState(NikahSteps.LOBBY),
+                    myUid = "me", nowMs = now, cb = NikahCallbacks(),
+                    motion = false,
+                )
+            }
+        }
+        composeRule.waitForIdle()
+        org.junit.Assert.assertTrue(
+            "nikah lobby must carry its heading",
+            composeRule.onAllNodesWithText("Lobby", substring = true).fetchSemanticsNodes().isNotEmpty(),
+        )
+        org.junit.Assert.assertTrue(
+            "nikah lobby must offer Ready to both partners",
+            composeRule.onAllNodesWithText("I'm Ready", substring = true)
+                .fetchSemanticsNodes().isNotEmpty(),
+        )
+        org.junit.Assert.assertTrue(
+            "lobby avatars must be the REAL names, never display names",
+            composeRule.onAllNodesWithText("Danish Iqbal", substring = true)
+                .fetchSemanticsNodes().isNotEmpty() &&
+                composeRule.onAllNodesWithText("Maryam Siddiqui", substring = true)
+                    .fetchSemanticsNodes().isNotEmpty(),
+        )
+        org.junit.Assert.assertTrue(
+            "lobby couple representation must be the iOS emoji rings",
+            composeRule.onAllNodesWithText("🤵").fetchSemanticsNodes().isNotEmpty() &&
+                composeRule.onAllNodesWithText("👰").fetchSemanticsNodes().isNotEmpty(),
+        )
+        shot("37-nikah-lobby.png")
+    }
+
+    @Test fun shot38_nikahQaboolWaiting() {
+        // The BRIDE's view of the groom's Qabool: two rings filled live,
+        // her controls locked behind the turn line — addressed by the
+        // groom's REAL first name (his display name is "Aarav").
+        val now = System.currentTimeMillis()
+        frame {
+            Box(Modifier.fillMaxSize().background(Color(0xFF050507))) {
+                NikahCeremonyContent(
+                    state = nikahFakeState(NikahSteps.QABOOL_GROOM, groomQabool = 2),
+                    myUid = "p-meera", nowMs = now, cb = NikahCallbacks(),
+                    motion = false,
+                )
+            }
+        }
+        composeRule.waitForIdle()
+        org.junit.Assert.assertTrue(
+            "waiting side must be told who is saying Qabool — by REAL name",
+            composeRule.onAllNodesWithText("Danish said Qabool Hai", substring = true)
+                .fetchSemanticsNodes().isNotEmpty(),
+        )
+        org.junit.Assert.assertTrue(
+            "waiting side's controls must be locked with the turn line",
+            composeRule.onAllNodesWithText("Danish's turn — please wait", substring = true)
+                .fetchSemanticsNodes().isNotEmpty(),
+        )
+        shot("38-nikah-qabool-waiting.png")
+    }
+
+    @Test fun shot39_nikahCertificate() {
+        val keepsake = nikahSampleKeepsake()
         frame {
             Box(
-                Modifier.fillMaxSize().background(Color(0xFF121214))
+                Modifier.fillMaxSize().background(Color(0xFF050507))
                     .padding(22.dp),
             ) {
                 NikahCertificateCard(keepsake)
@@ -962,11 +1006,217 @@ class ScreenshotsTest {
             composeRule.onAllNodesWithText("NIKAH NAMA").fetchSemanticsNodes().isNotEmpty(),
         )
         org.junit.Assert.assertTrue(
-            "certificate must name both partners",
-            composeRule.onAllNodesWithText("Aarav", substring = true)
+            "certificate must name both partners by REAL name",
+            composeRule.onAllNodesWithText("DANISH IQBAL", substring = true)
+                .fetchSemanticsNodes().isNotEmpty() &&
+                composeRule.onAllNodesWithText("MARYAM SIDDIQUI", substring = true)
+                    .fetchSemanticsNodes().isNotEmpty(),
+        )
+        org.junit.Assert.assertTrue(
+            "certificate must carry the deterministic number",
+            composeRule.onAllNodesWithText("CERTIFICATE NO. NN-2026-", substring = true)
                 .fetchSemanticsNodes().isNotEmpty(),
         )
         shot("39-nikah-certificate.png")
+    }
+
+    // ---------- ROUND 65: real-name flow + v4 certificate proof ----------
+
+    @Test fun shot50_nikahNamesGroom() {
+        // The GROOM's name entry: neither side has submitted yet.
+        val now = System.currentTimeMillis()
+        frame {
+            Box(Modifier.fillMaxSize().background(Color(0xFF050507))) {
+                NikahCeremonyContent(
+                    state = nikahFakeState(
+                        NikahSteps.NAMES,
+                        groomReal = "", brideReal = "",
+                        nameDone = mapOf("me" to false, "p-meera" to false),
+                    ),
+                    myUid = "me", nowMs = now, cb = NikahCallbacks(),
+                    motion = false,
+                )
+            }
+        }
+        composeRule.waitForIdle()
+        org.junit.Assert.assertTrue(
+            "name step must carry the v4 heading",
+            composeRule.onAllNodesWithText("real name", substring = true)
+                .fetchSemanticsNodes().isNotEmpty(),
+        )
+        org.junit.Assert.assertTrue(
+            "groom's form must label his full-name field",
+            composeRule.onAllNodesWithText("Your full name · Groom", substring = true)
+                .fetchSemanticsNodes().isNotEmpty(),
+        )
+        org.junit.Assert.assertTrue(
+            "name step must carry the Nikah Nama note, de-decorated",
+            composeRule.onAllNodesWithText(
+                "These names appear on your Nikah Nama — app usernames are never used.",
+                substring = true,
+            ).fetchSemanticsNodes().isNotEmpty(),
+        )
+        org.junit.Assert.assertTrue(
+            "name step must offer the v4 submit",
+            composeRule.onAllNodesWithText("My name is set", substring = true)
+                .fetchSemanticsNodes().isNotEmpty(),
+        )
+        shot("50-nikah-names-groom.png")
+    }
+
+    @Test fun shot51_nikahNamesBride() {
+        // The BRIDE's name entry: the groom has already submitted on
+        // HIS phone — her status line names him by his REAL first name.
+        val now = System.currentTimeMillis()
+        frame {
+            Box(Modifier.fillMaxSize().background(Color(0xFF050507))) {
+                NikahCeremonyContent(
+                    state = nikahFakeState(
+                        NikahSteps.NAMES,
+                        groomUid = "p-danish", brideUid = "me",
+                        brideReal = "",
+                        nameDone = mapOf("p-danish" to true, "me" to false),
+                    ),
+                    myUid = "me", nowMs = now, cb = NikahCallbacks(),
+                    motion = false,
+                )
+            }
+        }
+        composeRule.waitForIdle()
+        org.junit.Assert.assertTrue(
+            "bride's form must label her full-name field",
+            composeRule.onAllNodesWithText("Your full name · Bride", substring = true)
+                .fetchSemanticsNodes().isNotEmpty(),
+        )
+        org.junit.Assert.assertTrue(
+            "partner-done line must use the partner's REAL first name",
+            composeRule.onAllNodesWithText("Danish added his name on his phone", substring = true)
+                .fetchSemanticsNodes().isNotEmpty(),
+        )
+        shot("51-nikah-names-bride.png")
+    }
+
+    @Test fun shot52_nikahLobbyNameWaiting() {
+        // Lobby reached with the BRIDE's name still missing (the
+        // legacy/rejoin edge the NAMES step normally gates): Ready
+        // stays locked and the status line names what is missing,
+        // while the emoji rings + entered REAL name already render.
+        val now = System.currentTimeMillis()
+        frame {
+            Box(Modifier.fillMaxSize().background(Color(0xFF050507))) {
+                NikahCeremonyContent(
+                    state = nikahFakeState(
+                        NikahSteps.LOBBY,
+                        brideReal = "",
+                        nameDone = mapOf("me" to true, "p-meera" to false),
+                    ),
+                    myUid = "me", nowMs = now, cb = NikahCallbacks(),
+                    motion = false,
+                )
+            }
+        }
+        composeRule.waitForIdle()
+        org.junit.Assert.assertTrue(
+            "lobby must name the missing name while Ready is locked",
+            composeRule.onAllNodesWithText("still missing", substring = true)
+                .fetchSemanticsNodes().isNotEmpty(),
+        )
+        org.junit.Assert.assertTrue(
+            "lobby rings must be the iOS emoji pair",
+            composeRule.onAllNodesWithText("🤵").fetchSemanticsNodes().isNotEmpty() &&
+                composeRule.onAllNodesWithText("👰").fetchSemanticsNodes().isNotEmpty(),
+        )
+        shot("52-nikah-lobby-name-waiting.png")
+    }
+
+    @Test fun shot53_nikahQaboolBrideWaiting() {
+        // The GROOM's view of the bride's Qabool: the wait-line and
+        // the live count address her by her REAL first name (her
+        // display name is "Meera").
+        val now = System.currentTimeMillis()
+        frame {
+            Box(Modifier.fillMaxSize().background(Color(0xFF050507))) {
+                NikahCeremonyContent(
+                    state = nikahFakeState(NikahSteps.QABOOL_BRIDE, brideQabool = 1),
+                    myUid = "me", nowMs = now, cb = NikahCallbacks(),
+                    motion = false,
+                )
+            }
+        }
+        composeRule.waitForIdle()
+        org.junit.Assert.assertTrue(
+            "bride's turn line must use her REAL first name",
+            composeRule.onAllNodesWithText("Maryam's turn — please wait", substring = true)
+                .fetchSemanticsNodes().isNotEmpty(),
+        )
+        org.junit.Assert.assertTrue(
+            "live count must use her REAL first name",
+            composeRule.onAllNodesWithText("Maryam said Qabool Hai · 1 of 3", substring = true)
+                .fetchSemanticsNodes().isNotEmpty(),
+        )
+        shot("53-nikah-qabool-bride-waiting.png")
+    }
+
+    @Test fun shot54_nikahCertificateV4() {
+        // The v4 Nikah Nama with the staged sample family (shared
+        // fixture with shots 39/55): fathers, mahr, witnesses,
+        // signatures, seal, deterministic number.
+        val keepsake = nikahSampleKeepsake()
+        frame {
+            Box(
+                Modifier.fillMaxSize().background(Color(0xFF050507))
+                    .padding(22.dp),
+            ) {
+                NikahCertificateCard(keepsake)
+            }
+        }
+        composeRule.waitForIdle()
+        org.junit.Assert.assertTrue(
+            "certificate must carry both fathers",
+            composeRule.onAllNodesWithText("MOHAMMAD IQBAL", substring = true)
+                .fetchSemanticsNodes().isNotEmpty() &&
+                composeRule.onAllNodesWithText("ABDUL SIDDIQUI", substring = true)
+                    .fetchSemanticsNodes().isNotEmpty(),
+        )
+        org.junit.Assert.assertTrue(
+            "certificate must carry the fixed venue + officiant lines",
+            composeRule.onAllNodesWithText("Online ceremony, conducted on Tiku", substring = true)
+                .fetchSemanticsNodes().isNotEmpty() &&
+                composeRule.onAllNodesWithText("Tiku — in-app ceremony", substring = true)
+                    .fetchSemanticsNodes().isNotEmpty(),
+        )
+        org.junit.Assert.assertTrue(
+            "certificate number must be the deterministic NN-2026 number",
+            composeRule.onAllNodesWithText(
+                "CERTIFICATE NO. ${nikahCertNo(keepsake)}", substring = true,
+            ).fetchSemanticsNodes().isNotEmpty(),
+        )
+        shot("54-nikah-certificate-v4.png")
+    }
+
+    @Test fun shot55_nikahKeepsakeReopen() {
+        // The keepsake re-open from the chat card: the SAME certificate
+        // renderer over the SAME payload must show the identical
+        // certificate (same names, same deterministic number).
+        val keepsake = nikahSampleKeepsake()
+        frame {
+            NikahCertificateOverlay(keepsake) {}
+        }
+        composeRule.waitForIdle()
+        org.junit.Assert.assertTrue(
+            "keepsake re-open must render the same couple",
+            composeRule.onAllNodesWithText("DANISH IQBAL", substring = true)
+                .fetchSemanticsNodes().isNotEmpty() &&
+                composeRule.onAllNodesWithText("MARYAM SIDDIQUI", substring = true)
+                    .fetchSemanticsNodes().isNotEmpty(),
+        )
+        org.junit.Assert.assertTrue(
+            "keepsake re-open must render the identical certificate number",
+            composeRule.onAllNodesWithText(
+                "CERTIFICATE NO. ${nikahCertNo(keepsake)}", substring = true,
+            ).fetchSemanticsNodes().isNotEmpty(),
+        )
+        shot("55-nikah-keepsake-reopen.png")
     }
 
     @Test fun shot40_chatFewMessagesResting() {

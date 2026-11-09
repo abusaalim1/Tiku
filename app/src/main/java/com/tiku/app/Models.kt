@@ -201,6 +201,16 @@ data class NikahKeepsake(
     val witnessBride: String = "",
     val sigGroomPngB64: String = "",
     val sigBridePngB64: String = "",
+    // ---- ROUND 65 (appended last, same discipline) ----
+    /** The couple's fathers' names, from the ceremony's encrypted
+     *  real-name step (JSON keys `gFather`/`bFather` — additive:
+     *  payloads saved by older builds lack both keys and read "",
+     *  and the certificate then falls back to the display names in
+     *  [groomName]/[brideName] with no SON OF / DAUGHTER OF line).
+     *  From round 65 on, [groomName]/[brideName] themselves carry the
+     *  couple's REAL names (never app usernames) — see Nikah.kt. */
+    val groomFather: String = "",
+    val brideFather: String = "",
 )
 
 /** One 1:1 conversation. */

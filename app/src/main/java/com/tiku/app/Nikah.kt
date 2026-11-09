@@ -36,8 +36,9 @@ import java.io.ByteArrayOutputStream
  * step, creatorUid, groomUid, brideUid, ready / khutbah / dua (uid -> bool
  * maps), presence (uid -> heartbeat epoch ms), mahrPhase
  * (picking|proposed|accepted), groomQabool / brideQabool counters,
- * witGroomDone / witBrideDone / sigGroomDone / sigBrideDone booleans,
- * inviteMsgId, createdAt / completedMs timestamps.
+ * nameGroomDone / nameBrideDone / witGroomDone / witBrideDone /
+ * sigGroomDone / sigBrideDone booleans, inviteMsgId, createdAt /
+ * completedMs timestamps.
  *
  * ENCRYPTED on the doc (personal content — AES-256-GCM ct/iv pairs under
  * the conversation key, through the engine's ONE derivation
@@ -45,10 +46,15 @@ import java.io.ByteArrayOutputStream
  * opened with Crypto.encryptText / Crypto.decryptText /
  * Crypto.encrypt / Crypto.decrypt — no second crypto path exists):
  * mahrCt/mahrIv (the mahr text — the groom's live pick streams here),
- * witGroomCt/witGroomIv + witBrideCt/witBrideIv (each side's witness
- * name), sigGroomCt/sigGroomIv + sigBrideCt/sigBrideIv (each side's
- * signature PNG bytes). Names are NEVER stored: the UI resolves them
- * from the chat's own display names + the role uids.
+ * nameGroomCt/nameGroomIv + nameBrideCt/nameBrideIv (ROUND 65: each
+ * side's REAL full name + father's name, as one JSON {"full","father"}
+ * — the same protection class as the mahr/witness/signature fields;
+ * app usernames/display names are NEVER written to the doc and never
+ * appear on the ceremony or the certificate), witGroomCt/witGroomIv +
+ * witBrideCt/witBrideIv (each side's witness name),
+ * sigGroomCt/sigGroomIv + sigBrideCt/sigBrideIv (each side's
+ * signature PNG bytes). The chat display names the UI shows in WAITING
+ * copy are resolved locally from the chat (never stored here).
  *
  * Both phones render from this doc's snapshot listener — it is the
  * single source of truth. Every step transition is written by the client
@@ -56,6 +62,12 @@ import java.io.ByteArrayOutputStream
  * transaction, so two phones racing the same transition converge.
  */
 object NikahSteps {
+    /** ROUND 65: the real-name step — first, before the lobby Ready
+     *  step. Each participant enters their real full name + father's
+     *  name on their OWN phone (encrypted, see the file header); both
+     *  entries land before the ceremony proper begins. Sessions written
+     *  by older builds never carry this step value. */
+    const val NAMES = "names"
     const val LOBBY = "lobby"
     const val KHUTBAH = "khutbah"
     const val MAHR = "mahr"
@@ -67,10 +79,11 @@ object NikahSteps {
     const val NAMA = "nama"
 
     val ORDER = listOf(
-        LOBBY, KHUTBAH, MAHR, QABOOL_GROOM, QABOOL_BRIDE,
+        NAMES, LOBBY, KHUTBAH, MAHR, QABOOL_GROOM, QABOOL_BRIDE,
         WITNESSES, SIGNATURES, DUA, NAMA,
     )
     val LABELS = mapOf(
+        NAMES to "Your Name",
         LOBBY to "Welcome", KHUTBAH to "Khutbah", MAHR to "Mahr",
         QABOOL_GROOM to "Qabool · Groom", QABOOL_BRIDE to "Qabool · Bride",
         WITNESSES to "Witnesses", SIGNATURES to "Signatures",
@@ -97,8 +110,21 @@ data class NikahUiState(
     val creatorUid: String = "",
     val groomUid: String = "",
     val brideUid: String = "",
+    /** The chat DISPLAY names (resolved locally in [NikahStore.watch]).
+     *  ROUND 65: these are used ONLY for waiting copy and as the
+     *  certificate fallback when no real name was entered — never as
+     *  the couple's names on ceremony screens or the certificate when
+     *  real names exist (see [groomCertName] / [brideCertName]). */
     val groomName: String = "",
     val brideName: String = "",
+    /** ROUND 65: the couple's REAL names from the encrypted name step
+     *  ("" until that side submits). */
+    val groomRealName: String = "",
+    val groomFatherName: String = "",
+    val brideRealName: String = "",
+    val brideFatherName: String = "",
+    /** uid of the side -> that side submitted its real names. */
+    val nameDoneBySide: Map<String, Boolean> = emptyMap(),
     val ready: Map<String, Boolean> = emptyMap(),
     val khutbah: Map<String, Boolean> = emptyMap(),
     val dua: Map<String, Boolean> = emptyMap(),
@@ -127,16 +153,30 @@ data class NikahUiState(
         else -> ""
     }
 
+    /** ROUND 65: the name the ceremony + certificate use for the groom —
+     *  his REAL name once entered, the chat display name only as the
+     *  pre-entry / legacy fallback. */
+    val groomCertName: String get() = groomRealName.ifBlank { groomName }
+    /** ROUND 65: the bride's ceremony/certificate name (see above). */
+    val brideCertName: String get() = brideRealName.ifBlank { brideName }
+    fun certNameOf(uid: String): String = when (uid) {
+        groomUid -> groomCertName
+        brideUid -> brideCertName
+        else -> ""
+    }
+
     /** The certificate payload, assembled from decrypted live state —
-     *  the exact shape the keepsake card stores (see [NikahKeepsake]). */
+     *  the exact shape the keepsake card stores (see [NikahKeepsake]).
+     *  ROUND 65: carries the REAL names + fathers (never usernames). */
     fun keepsake(): NikahKeepsake = NikahKeepsake(
-        groomName = groomName, brideName = brideName,
+        groomName = groomCertName, brideName = brideCertName,
         dateMs = if (completedMs > 0L) completedMs else System.currentTimeMillis(),
         mahr = mahrText,
         witnessGroom = witnessNameBySide[groomUid] ?: "",
         witnessBride = witnessNameBySide[brideUid] ?: "",
         sigGroomPngB64 = sigPngB64BySide[groomUid] ?: "",
         sigBridePngB64 = sigPngB64BySide[brideUid] ?: "",
+        groomFather = groomFatherName, brideFather = brideFatherName,
     )
 }
 
@@ -225,6 +265,21 @@ object NikahStore {
         }
         val witGroom = decText("witGroomCt", "witGroomIv")
         val witBride = decText("witBrideCt", "witBrideIv")
+        // ROUND 65: the real names ride the same encrypted channel as
+        // the witness names — one JSON {"full","father"} per side.
+        // Absent on sessions from older builds → "" (the name step
+        // simply never completes against an old build; messaging is
+        // unaffected, exactly the accepted cross-version shape).
+        fun decNames(ctF: String, ivF: String): Pair<String, String> {
+            val raw = decText(ctF, ivF)
+            if (raw.isBlank()) return "" to ""
+            return runCatching {
+                val j = JSONObject(raw)
+                j.optString("full") to j.optString("father")
+            }.getOrDefault("" to "")
+        }
+        val (groomReal, groomFather) = decNames("nameGroomCt", "nameGroomIv")
+        val (brideReal, brideFather) = decNames("nameBrideCt", "nameBrideIv")
         out.value = NikahUiState(
             exists = true,
             status = snap.getString("status") ?: "active",
@@ -232,6 +287,12 @@ object NikahStore {
             creatorUid = snap.getString("creatorUid") ?: "",
             groomUid = groomUid, brideUid = brideUid,
             groomName = nameFor(groomUid), brideName = nameFor(brideUid),
+            groomRealName = groomReal, groomFatherName = groomFather,
+            brideRealName = brideReal, brideFatherName = brideFather,
+            nameDoneBySide = mapOf(
+                groomUid to (snap.getBoolean("nameGroomDone") == true),
+                brideUid to (snap.getBoolean("nameBrideDone") == true),
+            ).filterKeys { it.isNotEmpty() },
             ready = boolMap(snap.get("ready")),
             khutbah = boolMap(snap.get("khutbah")),
             dua = boolMap(snap.get("dua")),
@@ -355,7 +416,9 @@ object NikahStore {
                 sessionRef(chatId).set(
                     mapOf(
                         "status" to "active",
-                        "step" to NikahSteps.LOBBY,
+                        // ROUND 65: a new ceremony starts at the
+                        // real-name step, before the lobby.
+                        "step" to NikahSteps.NAMES,
                         "creatorUid" to me,
                         "groomUid" to groomUid,
                         "brideUid" to brideUid,
@@ -366,6 +429,8 @@ object NikahStore {
                         "mahrPhase" to "picking",
                         "groomQabool" to 0L,
                         "brideQabool" to 0L,
+                        "nameGroomDone" to false,
+                        "nameBrideDone" to false,
                         "sigGroomDone" to false,
                         "sigBrideDone" to false,
                         "witGroomDone" to false,
@@ -471,6 +536,43 @@ object NikahStore {
                 if (next >= 3) {
                     fields["step"] = if (groomSide) NikahSteps.QABOOL_BRIDE else NikahSteps.WITNESSES
                 }
+                txn.set(ref, fields, SetOptions.merge())
+            }
+        }
+    }
+
+    /** ROUND 65 — one side's real-name entry (the NAMES step): the
+     *  full name + father's name are encrypted as ONE JSON pair under
+     *  the conversation key (the witness-name protection class — the
+     *  session doc's plaintext gains only the side's Done boolean),
+     *  and the second side's entry advances the step to the lobby
+     *  inside the same transaction. */
+    fun submitNames(
+        chatId: String, peerUid: String, groomSide: Boolean,
+        fullName: String, fatherName: String,
+    ) {
+        scope.launch {
+            val key = FirebaseEngine.nikahKey(chatId, peerUid) ?: run {
+                AppState.toast("Encryption key not ready yet")
+                return@launch
+            }
+            val json = JSONObject()
+                .put("full", fullName.trim()).put("father", fatherName.trim())
+                .toString()
+            val (iv, ct) = Crypto.encryptText(key, json)
+            tx(chatId) { txn ->
+                val ref = sessionRef(chatId)
+                val snap = txn.get(ref)
+                if (snap.getString("status") != "active") return@tx
+                if (snap.getString("step") != NikahSteps.NAMES) return@tx
+                val fields = mutableMapOf<String, Any?>(
+                    if (groomSide) "nameGroomCt" to ct else "nameBrideCt" to ct,
+                    if (groomSide) "nameGroomIv" to iv else "nameBrideIv" to iv,
+                    if (groomSide) "nameGroomDone" to true else "nameBrideDone" to true,
+                )
+                val groomDone = (if (groomSide) true else snap.getBoolean("nameGroomDone") == true)
+                val brideDone = (if (groomSide) snap.getBoolean("nameBrideDone") == true else true)
+                if (groomDone && brideDone) fields["step"] = NikahSteps.LOBBY
                 txn.set(ref, fields, SetOptions.merge())
             }
         }
@@ -596,6 +698,9 @@ fun NikahKeepsake.toJson(): JSONObject = JSONObject()
     .put("dateMs", dateMs).put("mahr", mahr)
     .put("wGroom", witnessGroom).put("wBride", witnessBride)
     .put("sigGroom", sigGroomPngB64).put("sigBride", sigBridePngB64)
+    // ROUND 65: additive father keys — older builds ignore them,
+    // older payloads lack them (read as "" → certificate fallback).
+    .put("gFather", groomFather).put("bFather", brideFather)
 
 /**
  * The signature pad (prototype: a finger-drawn canvas). A plain Android
@@ -609,7 +714,12 @@ class NikahSignatureView(ctx: Context) : View(ctx) {
     private val strokes = mutableListOf<Path>()
     private var current: Path? = null
     private val ink = Paint().apply {
-        color = 0xFFFFD9E4.toInt()
+        // ROUND 65: dark maroon-brown ink — v4's signature canvas is
+        // CREAM (#FBF5E8) with dark ink, and the certificate/partner
+        // boxes tint strokes to this same colour on paper. (Older
+        // builds' light-pink signature PNGs still render correctly:
+        // every paper surface tints by alpha, never by source colour.)
+        color = 0xFF5A2333.toInt()
         strokeWidth = 7f
         style = Paint.Style.STROKE
         strokeCap = Paint.Cap.ROUND
