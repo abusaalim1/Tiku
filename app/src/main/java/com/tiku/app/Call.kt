@@ -3,6 +3,7 @@ package com.tiku.app
 import android.Manifest
 import android.app.Activity
 import android.content.Context
+import android.content.ContextWrapper
 import android.content.pm.PackageManager
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -82,9 +83,24 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import kotlinx.coroutines.delay
 import org.webrtc.RendererCommon
 import org.webrtc.SurfaceViewRenderer
+
+/** ROUND 61 (Bug 4): walk a context chain to its host Activity (the
+ *  same lookup MainActivity's restoreStatusBars does by direct cast,
+ *  made wrapper-proof). Null on any non-activity context — e.g. the
+ *  Robolectric harness — so callers can no-op safely. */
+private fun Context.findActivity(): Activity? {
+    var c: Context? = this
+    while (c is ContextWrapper) {
+        if (c is Activity) return c
+        c = c.baseContext
+    }
+    return null
+}
 
 /** Manages phone vibration during calls.
  *  ROUND 52 (item 4, owner's explicit order): calls are SILENT — the
@@ -297,6 +313,44 @@ fun CallScreen(threadId: String, video: Boolean) {
     DisposableEffect(Unit) {
         onDispose {
             CallFeedbackManager.stopAll()
+        }
+    }
+
+    // ROUND 61 (Bug 4) — IMMERSIVE SYSTEM BARS on the call surface.
+    // The owner: on Instagram the system navigation bar hides during
+    // calls; here it stayed visible. CallScreen is the ONE surface
+    // for every call presentation — Outgoing, Incoming (ringing),
+    // Connected and Failed all render here, inside the single
+    // MainActivity — so hiding here covers the ringing presentation
+    // too, and nowhere else: no other screen composes this effect,
+    // and there is no global/app-wide behaviour change. The bars
+    // hide with BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE (an edge swipe
+    // reveals them briefly, then they sink again). Restore happens
+    // in this same effect's onDispose — the exact moment CallScreen
+    // leaves composition (call ended / rejected / minimized to the
+    // floating window / session locked) — showing systemBars() back
+    // and re-asserting the app-wide light status-bar icons that
+    // TikuRoot keeps everywhere else. Hiding also collapses
+    // TikuRoot's windowInsetsPadding(systemBars) around this screen
+    // to zero, so the call UI (remote video included) goes truly
+    // full-bleed while the bars are gone and re-insets on restore.
+    // Best-effort (runCatching + null-safe activity lookup): in the
+    // preview harness there is no real window to drive and the
+    // effect simply no-ops.
+    DisposableEffect(Unit) {
+        val controller = ctx.findActivity()?.window?.let { w ->
+            WindowInsetsControllerCompat(w, w.decorView)
+        }
+        runCatching {
+            controller?.systemBarsBehavior =
+                WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            controller?.hide(WindowInsetsCompat.Type.systemBars())
+        }
+        onDispose {
+            runCatching {
+                controller?.show(WindowInsetsCompat.Type.systemBars())
+                controller?.isAppearanceLightStatusBars = true
+            }
         }
     }
 

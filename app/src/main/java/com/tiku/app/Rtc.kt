@@ -31,7 +31,9 @@ import org.webrtc.MediaConstraints
 import org.webrtc.MediaStream
 import org.webrtc.PeerConnection
 import org.webrtc.PeerConnectionFactory
+import org.webrtc.RtpParameters
 import org.webrtc.RtpReceiver
+import org.webrtc.RtpSender
 import org.webrtc.RtpTransceiver
 import org.webrtc.ScreenCapturerAndroid
 import org.webrtc.SdpObserver
@@ -205,6 +207,28 @@ class RtcSession(
 
     var events: Events? = null
 
+    // ROUND 61 (Bug 3) — 1:1 video-call quality profile. Before this
+    // round the camera captured 960x720@24 and the video sender's
+    // RtpParameters were NEVER touched anywhere in the app: no
+    // maxBitrate, no maxFramerate, no degradationPreference — so the
+    // encoder ran on the WebRTC defaults, whose adaptation sacrifices
+    // RESOLUTION first when bandwidth tightens. That is exactly the
+    // owner's screenshot: his PiP (the raw local capture) looked fine
+    // while the REMOTE fullscreen video — the encoded stream the peer
+    // receives — arrived heavily blurred/pixelated. The profile:
+    // capture up to 720p, an ADAPTIVE encoder bitrate capped at
+    // 2.0 Mbps (inside the 1.5–2.5 Mbps band), and
+    // MAINTAIN_RESOLUTION so framerate is sacrificed before
+    // resolution. No simulcast (a 1:1 call has one viewer).
+    private companion object {
+        const val CAMERA_CAPTURE_WIDTH = 1280
+        const val CAMERA_CAPTURE_HEIGHT = 720
+        const val CAMERA_CAPTURE_FPS = 30
+        const val VIDEO_MAX_BITRATE_BPS = 2_000_000
+        const val VIDEO_MIN_BITRATE_BPS = 300_000
+        const val VIDEO_MAX_FRAMERATE = 30
+    }
+
     private val appCtx = ctx.applicationContext
     private val audioManager = appCtx.getSystemService(Context.AUDIO_SERVICE) as AudioManager
     private var pc: PeerConnection? = null
@@ -212,6 +236,10 @@ class RtcSession(
     private var audioTrack: AudioTrack? = null
     private var videoSource: VideoSource? = null
     private var videoTrack: VideoTrack? = null
+    /** ROUND 61: the video track's sender — kept so the quality
+     *  profile (see [configureVideoSender]) can be applied at session
+     *  setup and re-applied once the local description is set. */
+    private var videoSender: RtpSender? = null
     private var videoCapturer: CameraVideoCapturer? = null
     private var captureHelper: SurfaceTextureHelper? = null
     // ROUND 32 — screen share state. The share feeds the SAME
@@ -314,17 +342,54 @@ class RtcSession(
         if (capturer != null) {
             captureHelper = SurfaceTextureHelper.create("tiku-capture", eglContext)
             capturer.initialize(captureHelper, appCtx, videoSource!!.capturerObserver)
-            runCatching { capturer.startCapture(960, 720, 24) }
+            // ROUND 61: request 720p (1280x720) at 30 fps. The camera
+            // capturer negotiates the closest format the device
+            // actually supports at or below the request, so a camera
+            // without a 720p mode gracefully falls back on its own —
+            // startCapture does not fail for a lower-capability camera.
+            runCatching { capturer.startCapture(CAMERA_CAPTURE_WIDTH, CAMERA_CAPTURE_HEIGHT, CAMERA_CAPTURE_FPS) }
             videoTrack?.setEnabled(cameraOn)
         } else {
             videoTrack?.setEnabled(false)
         }
-        pc?.addTrack(videoTrack, listOf("tiku-stream"))
+        videoSender = pc?.addTrack(videoTrack, listOf("tiku-stream"))
+        configureVideoSender()
         // audio route for the call
         runCatching {
             audioManager.mode = AudioManager.MODE_IN_COMMUNICATION
             @Suppress("DEPRECATION")
             audioManager.isSpeakerphoneOn = speakerOn
+        }
+    }
+
+    /**
+     * ROUND 61 (Bug 3) — apply the 1:1 video quality profile to the
+     * video sender: adaptive bitrate with a 2.0 Mbps cap (floor
+     * 300 kbps so adaptation has room to breathe instead of a hard
+     * fixed rate), framerate capped at the capture rate, and
+     * MAINTAIN_RESOLUTION degradation — under bandwidth pressure the
+     * encoder drops frames before it drops pixels. A single encoding
+     * only: no simulcast layers are added or enabled. Applied to
+     * EVERY session's video sender (a voice call's blank track
+     * included) so a mid-call screen share — which rides this same
+     * track/sender — gets the same profile. Best-effort by design:
+     * any failure leaves the sender exactly as it was and can never
+     * break call setup. Audio is not touched here or anywhere in
+     * this round.
+     */
+    private fun configureVideoSender() {
+        val sender = videoSender ?: return
+        runCatching {
+            val params = sender.parameters ?: return@runCatching
+            params.degradationPreference = RtpParameters.DegradationPreference.MAINTAIN_RESOLUTION
+            val encoding = params.encodings.firstOrNull()
+            if (encoding != null) {
+                encoding.active = true
+                encoding.maxBitrateBps = VIDEO_MAX_BITRATE_BPS
+                encoding.minBitrateBps = VIDEO_MIN_BITRATE_BPS
+                encoding.maxFramerate = VIDEO_MAX_FRAMERATE
+            }
+            sender.setParameters(params)
         }
     }
 
@@ -353,7 +418,14 @@ class RtcSession(
             onCreated = { offer ->
                 conn.setLocalDescription(sdpObserver(
                     onCreated = {},
-                    onDone = { if (cont.isActive) cont.resume(offer) },
+                    onDone = {
+                        // ROUND 61: re-apply the video quality profile
+                        // now that the local description is set — some
+                        // stacks only honour sender parameters from
+                        // this point on; re-applying is idempotent.
+                        configureVideoSender()
+                        if (cont.isActive) cont.resume(offer)
+                    },
                     onError = { e -> if (cont.isActive) cont.resumeWithException(RuntimeException(e)) },
                 ), offer)
             },
@@ -373,7 +445,12 @@ class RtcSession(
                     onCreated = { answer ->
                         conn.setLocalDescription(sdpObserver(
                             onCreated = {},
-                            onDone = { if (cont.isActive) cont.resume(answer) },
+                            onDone = {
+                                // ROUND 61: same post-description
+                                // re-application as the caller side.
+                                configureVideoSender()
+                                if (cont.isActive) cont.resume(answer)
+                            },
                             onError = { e -> if (cont.isActive) cont.resumeWithException(RuntimeException(e)) },
                         ), answer)
                     },
@@ -501,7 +578,7 @@ class RtcSession(
     private fun restoreCameraAfterShare() {
         if (disposed) return
         if (hasVideo && videoCapturer != null) {
-            runCatching { videoCapturer?.startCapture(960, 720, 24) }
+            runCatching { videoCapturer?.startCapture(CAMERA_CAPTURE_WIDTH, CAMERA_CAPTURE_HEIGHT, CAMERA_CAPTURE_FPS) }
             runCatching { videoTrack?.setEnabled(cameraPref) }
         } else {
             runCatching { videoTrack?.setEnabled(false) }

@@ -958,6 +958,46 @@ class ScreenshotsTest {
         shot("39-nikah-certificate.png")
     }
 
+    @Test fun shot40_chatFewMessagesResting() {
+        // ROUND 61 (Bug 2 proof): a SHORT conversation (exactly three
+        // messages, in a fresh thread with no seeded history) in its
+        // resting state — the pre-Round-57 behaviour the owner calls
+        // the conversation resting "in the middle": the bubbles hang
+        // from the list's top padding under the floating header, the
+        // whole conversation visible at once, NOT clustered against
+        // the composer. The message list's scaffolding (LazyColumn
+        // arrangement / contentPadding / state anchors) is byte-for-
+        // byte build 93's; this shot pins the resting state so any
+        // future drift is visible in the PNG.
+        val p = PreviewStore.people.first { person ->
+            AppState.threads.value.none { it.person.uid == person.uid }
+        }
+        val id = PreviewRepo.startThreadWith(p)
+        AppState.upsertMessage(id, TikuMessage(
+            id = "few1", senderUid = p.uid, kind = MsgKind.TEXT,
+            text = "Hi, are we still on for tomorrow?", time = "9:30", me = false, tsMs = 1))
+        AppState.upsertMessage(id, TikuMessage(
+            id = "few2", senderUid = "me", kind = MsgKind.TEXT,
+            text = "Yes, all set from my side", time = "9:31", me = true, tsMs = 2))
+        AppState.upsertMessage(id, TikuMessage(
+            id = "few3", senderUid = p.uid, kind = MsgKind.TEXT,
+            text = "Great, see you then", time = "9:32", me = false, tsMs = 3))
+        AppState.go(Screen.Chat(id))
+        frame { ChatScreen(id) }
+        composeRule.waitForIdle()
+        org.junit.Assert.assertTrue(
+            "few-message chat must show its first message at rest",
+            composeRule.onAllNodesWithText("Hi, are we still on for tomorrow?")
+                .fetchSemanticsNodes().isNotEmpty(),
+        )
+        org.junit.Assert.assertTrue(
+            "few-message chat must show its last message at rest (whole conversation visible)",
+            composeRule.onAllNodesWithText("Great, see you then")
+                .fetchSemanticsNodes().isNotEmpty(),
+        )
+        shot("40-chat-few-messages-resting.png")
+    }
+
     @Test fun shot36_momentsScreen() {
         // The Moments surface in preview: the static dark placeholder
         // (PREVIEW branch — never a real WebView headless) with its
