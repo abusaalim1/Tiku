@@ -3049,7 +3049,10 @@ object FirebaseEngine : ChatRepo {
                 // the additive `nk` marker and the partner would get a
                 // plain fallback bubble instead of the invite card.
                 MsgKind.TEXT -> if (m.nikah != null) {
-                    deliverNikahCard(id, th.person.uid, m)
+                    // No landing callback on a retry (the keepsake
+                    // caller omits it too): it only records the fresh
+                    // send's id into the ceremony session.
+                    deliverNikahCard(id, th.person.uid, m, onLanded = {})
                 } else {
                     deliverText(id, th.person.uid, m)
                 }
