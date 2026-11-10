@@ -468,8 +468,9 @@ internal fun MessagesScreen(
                         "Your note", myNote?.text ?: "Share a thought", myNote == null,
                         heart = false, idx = 0,
                         onClick = { onNote(NoteTarget.Me) },
+                        avatar = { AvMe(58) },
                         hasMusic = myNote?.music != null,
-                    ) { AvMe(58) }
+                    )
                 }
                 itemsIndexed(notedThreads) { idx, th ->
                     val n = notes[th.person.uid]
@@ -477,8 +478,9 @@ internal fun MessagesScreen(
                         th.displayName, n?.text ?: "", placeholder = false,
                         heart = myUidKey() in (n?.hearts ?: emptySet()), idx = idx + 1,
                         onClick = { onNote(NoteTarget.Peer(th)) },
+                        avatar = { Av(th.person, 58) },
                         hasMusic = n?.music != null,
-                    ) { Av(th.person, 58) }
+                    )
                 }
             }
         }

@@ -378,6 +378,7 @@ class RtcSession(
      * break call setup. Audio is not touched here or anywhere in
      * this round. (Round 61's profile was 720p / 2.0 Mbps / 300 kbps
      * floor; the constants above are the shipped Round-68 values.)
+     */
     private fun configureVideoSender() {
         val sender = videoSender ?: return
         runCatching {

@@ -2731,7 +2731,7 @@ private fun RdGameCard(
                             // ROUND 68 (WS6): a received game is an invite —
                             // the card says so; own games keep the old line.
                             if (m.me) "2-player · tap to play"
-                            else "${person.displayName} invited you to play · tap to join",
+                            else "${person.name} invited you to play · tap to join",
                             color = GameCardInk.copy(alpha = 0.55f), fontSize = 11.5.sp, fontFamily = PoppinsFamily,)
                     }
                 }
