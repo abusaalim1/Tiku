@@ -1796,8 +1796,12 @@ class ScreenshotsTest {
         // exists nowhere else (the camera chooser has no such row).
         val galleryOffered = composeRule.onAllNodesWithText("Audio file")
             .fetchSemanticsNodes().isNotEmpty()
+        // ROUND 68: createComposeRule() has no `.activity` (that broke
+        // test compilation since R67 — the suite never ran in CI).
+        // Robolectric's foreground activity is the rule's host activity.
         val captureDispatched = runCatching {
-            org.robolectric.Shadows.shadowOf(composeRule.activity)
+            val fg = org.robolectric.Robolectric.getForegroundActivity()
+            fg != null && org.robolectric.Shadows.shadowOf(fg)
                 .peekNextStartedActivityForResult()?.intent?.action ==
                 android.provider.MediaStore.ACTION_IMAGE_CAPTURE
         }.getOrDefault(false)
