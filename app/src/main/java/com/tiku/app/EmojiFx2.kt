@@ -26,6 +26,44 @@ package com.tiku.app
 // The overlay is transparent, full-screen over chat, carries no
 // pointer input, and is hosted by Chat.kt's playback shell next to
 // the Round-25 overlay (one playback at a time).
+//
+// ================= ROUND 68 — WORKSTREAM 16: the v10 file ==========
+// Source of truth: ~/workspace/user/files/emoji_fx_v10_0_rh54.html
+// (2,675,617 B). The v10 demo is the same engine with a revised spec
+// table: 25 specs (21 carried over, 4 new: 'lips' 💋, 'yum' 😋,
+// 'moon' 🌚, 'sweat' 💦), new engine bits (L.say word-pops in
+// Playfair italic, the 'dp' pink drop + 'dm' diamond sprites,
+// orbitX, waterD, the per-spec spy emitter-rate flag, hero glow
+// .26 -> .20), and several specs rewritten (lips2; the gy: pops in
+// lol/sleep/giggle/roll/eyes/peach/mid replaced or removed).
+// Ported the same mechanical way as Round 66, with two deviations
+// recorded in the worker-B report (r68-work/workerB-report.md):
+//   * D-WS16-1: the v10 GY word-pops use Playfair Display italic,
+//     which is not bundled in the app; they render in the platform
+//     serif italic instead (same size/layout, same colours). The
+//     old sans-800 glyph() is kept untouched for the two EXCEPTION
+//     specs' pops (see below); v10 pops go through glyphSay() via
+//     the "gs:" sprite prefix.
+//   * D-WS16-2: SP2 keeps the Round-66 order (indices 0-20
+//     unchanged) and appends the 4 new specs at 21-24. The v10
+//     file's ORD sort only orders its demo button bar (the app has
+//     no bar); re-sorting would have renumbered every existing
+//     route and harness shot for zero effect difference.
+//   * EXCEPTIONS (owner order, kept byte-identical to build 111):
+//     🍑 (index 8) and 🖕 (index 17) keep their Round-66 spec data
+//     VERBATIM — including their old gy: pops and their old .26
+//     hero glow (Spec2.heroGlow) and their old emitter rate (they
+//     carry spy = true, so the step factor stays 1.0 as in R66).
+//     😘 (index 1) now FOLLOWS the v10 file per the owner's
+//     "baki sabko change krdena" (only 🖕/🍑 named as keep) — its
+//     v10 hit at t=2.0 is transcribed, and Chat.kt must route 😘
+//     to index 1 (HOOK in the worker-B report); the Round-25
+//     kind-1 show is no longer reachable for 😘 once routed.
+//   * ART: every IMG key shared with v3 is byte-identical (MD5
+//     verified) — the bundled art is reused. The 5 NEW keys ship
+//     as lossless WebP (same R66-D8 treatment, visible pixels
+//     verified identical): ios2_yum, ios2_moon, ios2_sweat,
+//     ios2_cherry, ios2_zzz.
 
 import android.content.Context
 import android.graphics.Bitmap
@@ -147,6 +185,11 @@ private val DRAW2 = mapOf(
     "spark" to R.drawable.ios_spark, "hand" to R.drawable.ios2_hand,
     "h1" to R.drawable.ios_h1, "h2" to R.drawable.ios_h2, "h3" to R.drawable.ios_h3,
     "lips" to R.drawable.ios_lips,
+    // ROUND 68 / WS16 — the v10 file's 5 NEW art keys (lossless WebP,
+    // visible pixels verified identical to the file's PNGs).
+    "yum" to R.drawable.ios2_yum, "moon" to R.drawable.ios2_moon,
+    "sweat" to R.drawable.ios2_sweat, "cherry" to R.drawable.ios2_cherry,
+    "zzz" to R.drawable.ios2_zzz,
 )
 
 private class Fx2Sprites(private val ctx: Context) {
@@ -164,8 +207,14 @@ private class Fx2Sprites(private val ctx: Context) {
         name.startsWith("gl:") -> glass(name.substring(3))
         name.startsWith("i:") -> bmp(name.substring(2))
         name == "dr" -> dropBmp
+        name == "dp" -> dropPBmp // ROUND 68: v10's pink drop
+        name == "dm" -> diaBmp // ROUND 68: v10's glass diamond
         name == "bd" -> bdropBmp
         name.startsWith("sh:") -> shard(name.substring(3))
+        name.startsWith("gs:") -> { // ROUND 68: v10-style word-pop (see glyphSay)
+            val parts = name.split(":")
+            if (parts.size >= 3) glyphSay(parts[1], parts[2]) else null
+        }
         name.startsWith("gy:") -> {
             val parts = name.split(":")
             if (parts.size >= 3) glyph(parts[1], parts[2]) else null
@@ -253,6 +302,78 @@ private class Fx2Sprites(private val ctx: Context) {
         bmp
     }
 
+    /** JS dropP (ROUND 68, v10): the pink glass tear drop, 200×300.
+     *  Same construction as [dropBmp] with the v10 file's pink stops. */
+    val dropPBmp: Bitmap by lazy {
+        val w = 200; val h = 300
+        val bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+        val c = ACanvas(bmp)
+        val path = dropPath(w.toFloat())
+        val paint = Paint(Paint.ANTI_ALIAS_FLAG)
+        c.save(); c.clipPath(path)
+        paint.style = Paint.Style.FILL
+        paint.shader = LinearGradient(
+            0f, 0f, w.toFloat(), 0f,
+            argbOf("255,215,230", .55f), argbOf("255,100,150", .75f), Shader.TileMode.CLAMP,
+        )
+        c.drawRect(0f, 0f, w.toFloat(), w * 1.5f, paint)
+        paint.shader = null
+        paint.style = Paint.Style.STROKE; paint.strokeWidth = 30f
+        paint.color = argbOf("#ff5a9a", .45f); paint.setShadowLayer(26f, 0f, 0f, argbOf("#ff5a9a", 1f))
+        c.drawPath(path, paint)
+        c.restore()
+        paint.strokeWidth = 7f; paint.color = argbOf("#ffb3d1", 1f)
+        paint.setShadowLayer(18f, 0f, 0f, argbOf("#ffa0c4", 1f))
+        c.drawPath(path, paint)
+        paint.strokeWidth = 3f; paint.color = argbOf("#ffffff", .7f)
+        paint.setShadowLayer(0f, 0f, 0f, 0)
+        c.drawPath(path, paint)
+        paint.style = Paint.Style.FILL; paint.color = argbOf("#ffffff", .85f)
+        c.save(); c.translate(w * .34f, w * .7f); c.rotate(.3f * 180f / PI.toFloat())
+        c.drawOval(RectF(-w * .05f, -w * .11f, w * .05f, w * .11f), paint)
+        c.restore()
+        bmp
+    }
+
+    /** JS DIA (ROUND 68, v10): the glass diamond, 240×320. */
+    val diaBmp: Bitmap by lazy {
+        val w = 240; val h = 320
+        val bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+        val c = ACanvas(bmp)
+        val pts = arrayOf(
+            floatArrayOf(120f, 12f), floatArrayOf(216f, 130f),
+            floatArrayOf(120f, 306f), floatArrayOf(24f, 130f),
+        )
+        val path = APath()
+        for (i in pts.indices) {
+            if (i == 0) path.moveTo(pts[i][0], pts[i][1]) else path.lineTo(pts[i][0], pts[i][1])
+        }
+        path.close()
+        val paint = Paint(Paint.ANTI_ALIAS_FLAG); paint.strokeJoin = Paint.Join.ROUND
+        paint.style = Paint.Style.FILL
+        paint.shader = LinearGradient(
+            24f, 0f, 216f, 0f,
+            argbOf("190,235,255", .35f), argbOf("80,170,255", .55f), Shader.TileMode.CLAMP,
+        )
+        c.drawPath(path, paint)
+        paint.shader = null
+        paint.style = Paint.Style.STROKE; paint.strokeWidth = 11f
+        paint.color = argbOf("#6fd0ff", 1f); paint.setShadowLayer(26f, 0f, 0f, argbOf("#6fd0ff", 1f))
+        c.drawPath(path, paint)
+        paint.strokeWidth = 4f; paint.color = argbOf("#e8f8ff", 1f)
+        paint.setShadowLayer(8f, 0f, 0f, argbOf("#6fd0ff", 1f))
+        c.drawPath(path, paint)
+        paint.strokeWidth = 3f; paint.color = argbOf("#ffffff", .55f)
+        paint.setShadowLayer(0f, 0f, 0f, 0)
+        val inner = APath().apply {
+            moveTo(24f, 130f); lineTo(216f, 130f)
+            moveTo(120f, 12f); lineTo(76f, 130f); lineTo(120f, 306f)
+            moveTo(120f, 12f); lineTo(164f, 130f); lineTo(120f, 306f)
+        }
+        c.drawPath(inner, paint)
+        bmp
+    }
+
     /** JS shard(col): a glass triangle, 160×160. */
     fun shard(col: String): Bitmap = shardCache.getOrPut(col) {
         val bmp = Bitmap.createBitmap(160, 160, Bitmap.Config.ARGB_8888)
@@ -299,6 +420,38 @@ private class Fx2Sprites(private val ctx: Context) {
         c.drawText(txt, w / 2f, baseline, paint)
         paint.strokeWidth = 4f; paint.color = AColor.WHITE
         paint.setShadowLayer(8f, 0f, 0f, argbOf(col, 1f))
+        c.drawText(txt, w / 2f, baseline, paint)
+        bmp
+    }
+
+    private val glyphSayCache = HashMap<String, Bitmap>()
+
+    /** JS GY(txt,col) as the v10 file redefined it (ROUND 68): fs 150,
+     *  italic 600 Playfair Display, no stroke — a solid colour fill
+     *  with a 38-blur glow, then a .95-alpha white fill with a
+     *  12-blur glow. Playfair is not bundled in the app, so this
+     *  renders in the platform serif italic at the same size and
+     *  layout (deviation D-WS16-1). Kept separate from [glyph] so
+     *  the two EXCEPTION specs' old sans-800 pops stay untouched. */
+    fun glyphSay(txt: String, col: String): Bitmap = glyphSayCache.getOrPut(txt + col) {
+        val fs = 150f
+        val paint = Paint(Paint.ANTI_ALIAS_FLAG)
+        paint.typeface = if (Build.VERSION.SDK_INT >= 28) {
+            Typeface.create(Typeface.SERIF, 600, true)
+        } else {
+            Typeface.create(Typeface.SERIF, Typeface.ITALIC)
+        }
+        paint.textSize = fs; paint.textAlign = Paint.Align.CENTER; paint.strokeJoin = Paint.Join.ROUND
+        val w = ceil(paint.measureText(txt)).toInt() + 90
+        val h = (fs + 90f).toInt()
+        val bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+        val c = ACanvas(bmp)
+        val baseline = h / 2f + 4f - (paint.fontMetrics.ascent + paint.fontMetrics.descent) / 2f
+        paint.style = Paint.Style.FILL
+        paint.color = argbOf(col, 1f); paint.setShadowLayer(38f, 0f, 0f, argbOf(col, 1f))
+        c.drawText(txt, w / 2f, baseline, paint)
+        paint.alpha = (0.95f * 255f).roundToInt(); paint.color = AColor.WHITE
+        paint.setShadowLayer(12f, 0f, 0f, argbOf(col, 1f))
         c.drawText(txt, w / 2f, baseline, paint)
         bmp
     }
@@ -378,6 +531,15 @@ private class Spec2(
     val em: List<E2> = emptyList(),
     val hit: List<Pair<Float, HitFn>> = emptyList(),
     val water: Boolean = false,
+    /** ROUND 68 (v10): sp.spy — emitters run at full rate (×1.0)
+     *  instead of the ×0.75 the v10 step applies to every other spec.
+     *  The two EXCEPTION specs carry spy = true so their Round-66
+     *  emitter rates stay exactly as in build 111. */
+    val spy: Boolean = false,
+    /** ROUND 68 (v10): the hero-glow alpha in drawAll is .20 for
+     *  every v10 spec; the two EXCEPTION specs keep the Round-66
+     *  value .26 (their heroGlow = .26f). */
+    val heroGlow: Float = .2f,
 )
 
 // ---------- the engine (JS state + trig/spawn/step + L) ------------
@@ -484,6 +646,12 @@ private class Fx2 {
         )
     }
 
+    /** JS L.say(txt,x,y,sz) (ROUND 68, v10): a v10-style word-pop —
+     *  "gs:" routes to [Fx2Sprites.glyphSay], always #ffc2e0. */
+    fun say(txt: String, x: Float, y: Float, sz: Float) {
+        pop("gs:$txt:#ffc2e0", x, y, sz, 1.2f, rO = rnd(-5f, 5f), vyO = -30f * d)
+    }
+
     // ----- spawn / splash / step -----
     private fun spawn(e: E2, hp: HPos, S: Float) {
         val m = if (rng.nextBoolean()) -1f else 1f
@@ -537,7 +705,8 @@ private class Fx2 {
         val hpz = hpos(t); val sHS = hs(); val sp = SP2[kind]
         for (e in ems) {
             if (t >= e.t0 && t < min(e.t1, DUR2 - .7f)) {
-                e.acc += dt
+                // ROUND 68 (v10): e.acc += dt * (sp.spy ? 1 : .75).
+                e.acc += dt * (if (sp.spy) 1f else .75f)
                 while (e.acc > 1f / e.rate) { e.acc -= 1f / e.rate; spawn(e, hpz, hpz.s) }
             }
         }
@@ -702,6 +871,41 @@ private class Dr(val fx: Fx2, val c: ACanvas) {
         }
     }
 
+    /** JS orbitX(tt,hx,hy,front,names) (ROUND 68, v10): the 'yum'
+     *  spec's orbiting fruit — same motion as [orbit] but the
+     *  caller supplies the sprite names. */
+    fun orbitX(tt: Float, hx: Float, hy: Float, front: Boolean, names: List<String>) {
+        val S = fx.hs()
+        for ((i, n) in names.withIndex()) {
+            val a = tt * 1.6f + i * T2 / names.size; val sn = sin(a)
+            if ((sn >= 0f) != front) continue
+            spr(fx.sprites.spr(n), hx + cos(a) * S * .8f, hy + sn * S * .3f,
+                W * .12f * (.8f + .25f * sn), 0f, clamp2(tt / .6f, 0f, 1f))
+        }
+    }
+
+    /** JS waterD(t,env) (ROUND 68, v10): the pool along the bottom
+     *  edge — the same water the 'cry' spec draws inline (see its
+     *  bg), factored out here for the 'sweat' spec. */
+    fun waterD(t: Float, env: Float) {
+        val lv = env * H * .05f
+        fun wl(x: Float) = H - lv + sin(x / W * 9f + t * 3f) * 8f * D
+        val fill = basePaint(); fill.style = Paint.Style.FILL
+        fill.color = argbOf("60,120,255", .12f * env)
+        val wpath = APath(); wpath.moveTo(0f, H)
+        var x = 0f
+        while (x <= W + 20f * D) { wpath.lineTo(x, wl(x)); x += 20f * D }
+        wpath.lineTo(W, H); wpath.close()
+        c.drawPath(wpath, fill)
+        val lpath = APath()
+        x = 0f
+        while (x <= W + 20f * D) {
+            if (x == 0f) lpath.moveTo(x, wl(x)) else lpath.lineTo(x, wl(x))
+            x += 20f * D
+        }
+        c.drawPath(lpath, neonPaint("#8fd0ff", 3f * D, 18f, env))
+    }
+
     /** JS shine(): a light sweep clipped to the hero face. */
     fun shine(key: String, x: Float, y: Float, S: Float, o: Pose2, pos: Float) {
         val hero = fx.sprites.bmp(key) ?: return
@@ -832,7 +1036,9 @@ private class Dr(val fx: Fx2, val c: ACanvas) {
         sp.bg?.invoke(this, t, env, hp)
         for (p in fx.parts) if (!p.top) dp(p)
         val S = fx.hs(); val o = hp.o
-        glow(hp.x, hp.y, S * .85f, sp.col, .26f * min(1f, t / .4f))
+        // ROUND 68 (v10): hero glow alpha .20 (was .26 in the v3 file);
+        // the two EXCEPTION specs keep .26 via Spec2.heroGlow.
+        glow(hp.x, hp.y, S * .85f, sp.col, sp.heroGlow * min(1f, t / .4f))
         val hero = fx.sprites.bmp(sp.k)
         if (hero != null) {
             val p = basePaint()
@@ -847,8 +1053,10 @@ private class Dr(val fx: Fx2, val c: ACanvas) {
     }
 }
 
-// ---------- the specs (JS SP, same order; index 1 'kiss' is
-// transcribed but NEVER routed — 😘 stays on Round-25 kind 1) --------
+// ---------- the specs (JS SP, Round-66 order kept; indices 0-20
+// unchanged, v10's 4 new specs appended at 21-24 — see D-WS16-2.
+// 😘 (index 1) is now ROUTED to the v10 kiss show; 🍑 (8) and 🖕
+// (17) keep their Round-66 data verbatim) --------
 private val SP2: List<Spec2> = listOf(
     // 0 — heart ❤️
     Spec2(
@@ -872,7 +1080,8 @@ private val SP2: List<Spec2> = listOf(
             b to f
         },
     ),
-    // 1 — kiss 😘 (TRANSCRIBED ONLY — never routed, see header)
+    // 1 — kiss 😘 (ROUND 68: v10 — now ROUTED, see header; the v10
+    // file adds the t=2.0 triple-lips hit below)
     Spec2(
         k = "kiss", col = "255,60,150", px = .3f, py = .2f,
         h = { t ->
@@ -898,6 +1107,13 @@ private val SP2: List<Spec2> = listOf(
             pop(gl(PC), x, y, w * .5f, 2.2f)
             burst(x, y, 14, listOf(gl(PC), "i:h1", "i:h3", "i:heart", "i:lips"),
                 floatArrayOf(300f, 750f), floatArrayOf(.06f, .14f), floatArrayOf(1.2f, 2f))
+        }, 2f to hitFn { _: HPos, _: Float ->
+            // ROUND 68 (v10): the extra hit — three lips pops low.
+            for (i in 0 until 3) {
+                pop("i:lips", w * (.2f + .3f * i) + rnd(-.05f, .05f) * w,
+                    h * (.55f + .08f * i), w * .2f, 1.2f,
+                    rO = rnd(-25f, 25f), vyO = 0f)
+            }
         }),
     ),
     // 2 — hearteyes 😍
@@ -952,23 +1168,44 @@ private val SP2: List<Spec2> = listOf(
                 s = floatArrayOf(.02f, .045f), vx = floatArrayOf(0f, 0f), vy = floatArrayOf(0f, 0f)),
         ),
     ),
-    // 5 — lips2 👄
+    // 5 — lips2 👄 (ROUND 68: v10 rewrite — puckering sy pulse,
+    // new shine times, new emitter rates, puff + word-pop hits)
     Spec2(
-        k = "lips2", col = "220,30,70",
-        h = { t -> Pose2().apply { s = 1f + .05f * sin(t * 3f); r = -4f * sin(t * 2f) } },
-        bg = { t, env, _ -> vig("190,15,55", .1f + .08f * sin(t * 2.5f) * env) },
+        k = "lips2", col = "220,30,70", spy = true,
+        h = { t ->
+            val p = if (t > .3f) (t - .3f) % 1f else 9f
+            var sy = 1f
+            if (p < .35f) sy = 1f - .14f * sin(p / .35f * PI.toFloat())
+            else if (p < .6f) {
+                val q = (p - .35f) / .25f
+                sy = 1f + .06f * exp(-q * 4f) * sin(q * 14f)
+            }
+            Pose2().apply {
+                s = 1f + .03f * sin(t * 3f); this.sy = sy; r = -3f * sin(t * 2f)
+            }
+        },
+        bg = { t, env, _ -> vig("190,15,55", .12f + .1f * sin(t * 3f) * env) },
         fg = { t, x, y, s, o ->
-            for (tt in floatArrayOf(.8f, 1.9f, 3f)) {
-                if (t >= tt && t < tt + .7f) shine("lips2", x, y, s, o, (t - tt) / .7f)
+            for (tt in floatArrayOf(.65f, 1.65f, 2.65f)) {
+                if (t >= tt && t < tt + .6f) shine("lips2", x, y, s, o, (t - tt) / .6f)
             }
         },
         em = listOf(
-            E2(sp = listOf(gl(RD)), rate = 2f, s = floatArrayOf(.08f, .16f), vy = floatArrayOf(-60f, -140f)),
-            E2(k = "fl", o = "bot", col = "220,30,70", rate = 6f, s = floatArrayOf(.15f, .3f),
-                vy = floatArrayOf(-40f, -90f), life = floatArrayOf(1.6f, 2.4f), shr = true),
-            E2(k = "st", o = "any", rate = 5f, life = floatArrayOf(.6f, .9f),
-                s = floatArrayOf(.02f, .045f), vx = floatArrayOf(0f, 0f), vy = floatArrayOf(0f, 0f)),
+            E2(sp = listOf(gl(RD)), rate = 1.8f, s = floatArrayOf(.06f, .12f),
+                vy = floatArrayOf(-130f, -60f)),
+            E2(k = "fl", o = "bot", col = "220,30,70", rate = 7f, s = floatArrayOf(.15f, .3f),
+                vy = floatArrayOf(-90f, -40f), life = floatArrayOf(1.6f, 2.4f), shr = true),
+            E2(k = "st", o = "any", rate = 4f, life = floatArrayOf(.6f, .9f),
+                s = floatArrayOf(.02f, .04f), vx = floatArrayOf(0f, 0f), vy = floatArrayOf(0f, 0f)),
         ),
+        hit = listOf(.9f, 1.9f, 2.9f).mapIndexed { i, b ->
+            val f: HitFn = { hp, s ->
+                puff(hp.x, hp.y + s * .25f, "255,200,215", 6)
+                if (i == 0) say("mmm~", hp.x + s * .4f, hp.y - s * .5f, w * .3f)
+                if (i == 1) say("bite~", hp.x - s * .4f, hp.y - s * .5f, w * .3f)
+            }
+            b to f
+        },
     ),
     // 6 — smirk 😏
     Spec2(
@@ -1036,9 +1273,11 @@ private val SP2: List<Spec2> = listOf(
             },
         ),
     ),
-    // 8 — peach 🍑
+    // 8 — peach 🍑 — EXCEPTION (owner order): Round-66 data kept
+    // VERBATIM below. spy = true + heroGlow = .26f preserve the
+    // build-111 emitter rate and hero glow exactly.
     Spec2(
-        k = "peach", col = "255,160,120",
+        k = "peach", col = "255,160,120", spy = true, heroGlow = .26f,
         h = { t ->
             val S = hs()
             var dx = 0f; var r = 0f; var s = 1f; var sy = 1f
@@ -1193,9 +1432,7 @@ private val SP2: List<Spec2> = listOf(
                 parts += P2(k = "tk", x = hp.x, y = hp.y, sHero = hs(), max = .5f)
                 burst(hp.x, hp.y - s * .4f, 3, listOf(gl("#ff6ec7"), "i:h1", "i:spark"),
                     floatArrayOf(200f, 420f), floatArrayOf(.05f, .09f), floatArrayOf(1f, 1.4f))
-                pop("gy:" + pick(listOf("hehe", "hihi")) + ":#ff9ee0",
-                    hp.x + rnd(-.35f, .35f) * s, hp.y - s * .7f, w * rnd(.2f, .3f), 1f,
-                    rO = rnd(-15f, 15f), vyO = -rnd(40f, 80f) * d)
+                // ROUND 68 (v10): the v3 gy: "hehe"/"hihi" pop is gone.
             }
             (.4f + i * .5f) to f
         },
@@ -1255,11 +1492,11 @@ private val SP2: List<Spec2> = listOf(
                     }
                     c.drawPath(path, p)
                 }
-                spr(fx.sprites.glyph("!", "#6fd0ff"), W / 2f, fy, W * .2f * back2(u), 0f, 1f)
+                // ROUND 68 (v10): the v3 '!' glyph pop at the focus is gone.
             }
         },
         em = listOf(
-            E2(o = "low", sp = listOf("gy:?:#6fd0ff"), rate = 3f, t1 = 2.4f,
+            E2(o = "low", sp = listOf("dm"), rate = 3f, t1 = 2.4f,
                 vx = floatArrayOf(-8f, 8f), vy = floatArrayOf(-15f, -40f),
                 s = floatArrayOf(.08f, .16f), life = floatArrayOf(2.2f, 3f), lit = true),
             E2(k = "mt", o = "any", rate = 5f, t1 = 2.4f,
@@ -1457,9 +1694,11 @@ private val SP2: List<Spec2> = listOf(
             },
         ),
     ),
-    // 17 — mid 🖕
+    // 17 — mid 🖕 — EXCEPTION (owner order): Round-66 data kept
+    // VERBATIM below. spy = true + heroGlow = .26f preserve the
+    // build-111 emitter rate and hero glow exactly.
     Spec2(
-        k = "mid", col = "255,90,140", np = true, py = .34f,
+        k = "mid", col = "255,90,140", np = true, py = .34f, spy = true, heroGlow = .26f,
         h = { t ->
             val S = hs()
             val dd = if (t < .5f) 0f
@@ -1523,9 +1762,7 @@ private val SP2: List<Spec2> = listOf(
                 vx = floatArrayOf(160f, 420f), vy = floatArrayOf(-300f, -620f), g = 1500f,
                 s = floatArrayOf(.03f, .06f), life = floatArrayOf(1f, 1.6f),
                 r = floatArrayOf(0f, 0f), vr = floatArrayOf(0f, 0f)),
-            E2(o = "hero", sp = listOf("gy:HA:#ffd23a", "gy:HAHA:#ffb43a"), rate = 3f, t0 = .3f,
-                s = floatArrayOf(.14f, .22f), vx = floatArrayOf(-60f, 60f), vy = floatArrayOf(-120f, -200f),
-                life = floatArrayOf(.9f, 1.3f), grow = true, r = floatArrayOf(-25f, 25f)),
+            // ROUND 68 (v10): the v3 gy: "HA"/"HAHA" hero emitter is gone.
             E2(k = "st", o = "any", rate = 8f, col = "#ffe27a", life = floatArrayOf(.6f, .9f),
                 s = floatArrayOf(.02f, .045f), vx = floatArrayOf(0f, 0f), vy = floatArrayOf(0f, 0f)),
         ),
@@ -1540,7 +1777,7 @@ private val SP2: List<Spec2> = listOf(
         },
         bg = { t, env, _ -> vig("30,50,160", .12f + .06f * sin(t * 1.5f) * env) },
         em = listOf(
-            E2(o = "mouthR", sp = listOf("gy:Z:#9fb4ff", "gy:z:#7f98ff"), rate = 1.6f,
+            E2(o = "mouthR", sp = listOf("i:zzz"), rate = 1.6f,
                 vx = floatArrayOf(30f, 70f), vy = floatArrayOf(-70f, -130f),
                 s = floatArrayOf(.08f, .18f), life = floatArrayOf(2f, 2.8f),
                 grow = true, sw = .03f, r = floatArrayOf(-15f, 15f)),
@@ -1576,8 +1813,177 @@ private val SP2: List<Spec2> = listOf(
         ),
         hit = listOf(1.75f to hitFn { hp: HPos, s: Float ->
             puff(hp.x, hp.y + s * .25f, "180,195,215", 8)
-            pop("gy:...:#9fb0c8", hp.x, hp.y - s * .6f, w * .26f, 1.4f)
+            // ROUND 68 (v10): the v3 gy: "..." pop is gone.
         }),
+    ),
+
+    // ---- ROUND 68 (v10): the 4 NEW specs, appended after roll so
+    // the Round-66 indices 0-20 never shift (see D-WS16-2). ----
+
+    // 21 — lips 💋 (v10 'lips' — the kiss-mark hero)
+    Spec2(
+        k = "lips", col = "255,40,100", py = .26f, spy = true,
+        h = { t ->
+            Pose2().apply {
+                s = 1f + .07f * sin(t * 6f) + .2f * exp(-abs(t - .3f) * 9f)
+                r = -6f * sin(t * 3f)
+            }
+        },
+        bg = { t, env, _ -> vig("255,30,90", .08f + .07f * sin(t * 4f) * env) },
+        fg = { t, x, y, s, o ->
+            for (tt in floatArrayOf(.8f, 2f)) {
+                if (t >= tt && t < tt + .7f) shine("lips", x, y, s, o, (t - tt) / .7f)
+            }
+        },
+        em = listOf(
+            E2(k = "fl", o = "bot", col = "255,40,90", rate = 6f, s = floatArrayOf(.15f, .3f),
+                vy = floatArrayOf(-90f, -40f), life = floatArrayOf(1.6f, 2.4f), shr = true),
+            E2(sp = listOf(gl(RD), "i:h1"), rate = 2f, s = floatArrayOf(.06f, .12f)),
+            E2(k = "st", o = "any", rate = 5f, life = floatArrayOf(.6f, .9f),
+                s = floatArrayOf(.02f, .04f), vx = floatArrayOf(0f, 0f), vy = floatArrayOf(0f, 0f)),
+        ),
+        hit = (0 until 8).map { i ->
+            val f: HitFn = { _: HPos, _: Float ->
+                val x = w * (if (i % 2 == 1) .68f else .32f) + rnd(-.04f, .04f) * w
+                val y = h * (.42f + i * .06f)
+                pop("i:lips", x, y, w * .22f, 1.3f,
+                    rO = if (i % 2 == 1) rnd(8f, 22f) else rnd(-22f, -8f), vyO = 0f)
+                if (i % 2 == 0) hring(x, y, w * .05f, w * .18f, gl(RD), .6f)
+                if (i == 0) say("mwah~", x, y - w * .2f, w * .34f)
+                if (i == 5) say("more~", x, y - w * .2f, w * .3f)
+            }
+            (.35f + i * .2f) to f
+        },
+    ),
+    // 22 — yum 😋 (v10 'yum' — face savouring food)
+    Spec2(
+        k = "yum", col = "255,160,80", spy = true,
+        h = { t ->
+            Pose2().apply {
+                r = 9f * sin(t * 9f) * min(1f, t * 3f)
+                sy = 1f - .07f * max(0f, sin(t * 9f + 1f))
+                dy = -6f * d * abs(sin(t * 5f))
+                s = 1f + .04f * sin(t * 5f)
+            }
+        },
+        bg = { t, env, hp ->
+            vig("255,120,60", .07f * env)
+            orbitX(t, hp.x, hp.y, false,
+                listOf("i:peach", "i:cherry", "i:peach", "i:cherry"))
+        },
+        fg = { t, x, y, s, o ->
+            orbitX(t, x, y, true, listOf("i:peach", "i:cherry", "i:peach", "i:cherry"))
+            for (tt in floatArrayOf(.8f, 1.8f, 2.8f)) {
+                if (t >= tt && t < tt + .6f) shine("yum", x, y, s, o, (t - tt) / .6f)
+            }
+        },
+        em = listOf(
+            E2(o = "mouthR", sp = listOf("dp"), rate = 3f, t0 = .5f,
+                vx = floatArrayOf(0f, 10f), vy = floatArrayOf(40f, 90f), g = 700f,
+                s = floatArrayOf(.025f, .04f), life = floatArrayOf(1.2f, 1.8f),
+                r = floatArrayOf(0f, 0f), vr = floatArrayOf(0f, 0f)),
+            E2(k = "fl", o = "hero", col = "255,150,90", rate = 4f, s = floatArrayOf(.08f, .16f),
+                vy = floatArrayOf(-80f, -30f), life = floatArrayOf(1f, 1.6f), shr = true),
+            E2(k = "st", o = "any", rate = 5f, life = floatArrayOf(.6f, .9f),
+                s = floatArrayOf(.02f, .04f), vx = floatArrayOf(0f, 0f), vy = floatArrayOf(0f, 0f)),
+        ),
+        hit = listOf(.7f, 1.7f, 2.7f).mapIndexed { i, b ->
+            val f: HitFn = { hp, s ->
+                burst(hp.x, hp.y, 6, listOf("i:peach", "i:cherry", "i:h1"),
+                    floatArrayOf(200f, 420f), floatArrayOf(.06f, .11f), floatArrayOf(.9f, 1.3f))
+                if (i == 0) say("yum~", hp.x + s * .35f, hp.y - s * .6f, w * .3f)
+                if (i == 2) say("mmm~", hp.x - s * .35f, hp.y - s * .6f, w * .3f)
+            }
+            b to f
+        },
+    ),
+    // 23 — moon 🌚 (v10 'moon' — new moon face)
+    Spec2(
+        k = "moon", col = "150,110,255", np = true, spy = true,
+        h = { t ->
+            val S = hs()
+            Pose2().apply {
+                dx = w * .45f * (1f - ease2(min(t / .9f, 1f)))
+                r = -8f * ease2(min(t, 1f)) + (if (t > 1f) 4f * sin((t - 1f) * 2.2f) else 0f)
+                s = back2(min(t / .6f, 1f))
+                dy = if (t > 1f) -S * .03f * sin((t - 1f) * 3f) else 0f
+            }
+        },
+        bg = { t, env, _ -> vig("110,60,255", .08f + .05f * sin(t * 2f) * env) },
+        fg = { t, x, y, s, o ->
+            for (tt in floatArrayOf(1.2f, 2.5f)) {
+                if (t >= tt && t < tt + .8f) shine("moon", x, y, s, o, (t - tt) / .8f)
+            }
+            if (t > 1.7f && t < 2.3f) {
+                star(x + s * .16f, y - s * .06f,
+                    s * .2f * sin((t - 1.7f) / .6f * PI.toFloat()), 1f, null)
+            }
+        },
+        em = listOf(
+            E2(k = "fl", o = "bot", cols = listOf("150,100,255", "255,100,170"),
+                rate = 7f, s = floatArrayOf(.15f, .3f), vy = floatArrayOf(-70f, -30f),
+                life = floatArrayOf(2f, 3f), shr = true),
+            E2(sp = listOf(gl(VT), gl(PC)), rate = 1.4f, s = floatArrayOf(.06f, .12f),
+                vy = floatArrayOf(-90f, -40f)),
+            E2(k = "st", o = "any", rate = 6f, life = floatArrayOf(.8f, 1.4f),
+                s = floatArrayOf(.012f, .03f), vx = floatArrayOf(0f, 0f), vy = floatArrayOf(0f, 0f)),
+        ),
+        hit = listOf(
+            .9f to hitFn { hp: HPos, s: Float -> say("hey~", hp.x + s * .35f, hp.y - s * .55f, w * .28f) },
+            2.1f to hitFn { hp: HPos, s: Float -> say("come here~", hp.x, hp.y - s * .6f, w * .42f) },
+        ),
+    ),
+    // 24 — sweat 💦 (v10 'sweat' — splashing sweat droplets)
+    Spec2(
+        k = "sweat", col = "80,170,255", spy = true, water = true,
+        h = { t ->
+            Pose2().apply {
+                s = 1f + .04f * sin(t * 5f); dy = -4f * d * sin(t * 3f)
+            }
+        },
+        bg = { t, env, _ ->
+            vig("40,120,255", .06f * env)
+            waterD(t, env)
+            val bx = -W * .3f + (t / 4f) * W * 1.8f
+            val p = Paint(Paint.ANTI_ALIAS_FLAG)
+            p.shader = LinearGradient(
+                bx - W * .2f, 0f, bx + W * .2f, H * .4f,
+                intArrayOf(
+                    argbOf("#ffffff", 0f), argbOf("#ffffff", .07f * env), argbOf("#ffffff", 0f),
+                ),
+                floatArrayOf(0f, .5f, 1f), Shader.TileMode.CLAMP,
+            )
+            c.drawRect(0f, 0f, W, H, p)
+        },
+        fg = { t, x, y, s, o ->
+            for (tt in floatArrayOf(.9f, 2f)) {
+                if (t >= tt && t < tt + .6f) shine("sweat", x, y, s, o, (t - tt) / .6f)
+            }
+        },
+        em = listOf(
+            E2(o = "hero", sp = listOf("dr"), rate = 36f, t0 = .2f, t1 = 2.6f,
+                vx = floatArrayOf(-420f, 420f), vy = floatArrayOf(-760f, -260f), g = 1500f,
+                s = floatArrayOf(.025f, .055f), life = floatArrayOf(1.1f, 1.7f),
+                spl = true, r = floatArrayOf(0f, 0f), vr = floatArrayOf(0f, 0f)),
+            E2(k = "fl", o = "hero", col = "170,215,255", rate = 5f, s = floatArrayOf(.1f, .2f),
+                vy = floatArrayOf(-60f, -20f), life = floatArrayOf(1f, 1.6f), shr = true),
+            E2(k = "st", o = "any", rate = 4f, life = floatArrayOf(.6f, .9f),
+                s = floatArrayOf(.02f, .04f), vx = floatArrayOf(0f, 0f), vy = floatArrayOf(0f, 0f)),
+        ),
+        hit = listOf(
+            .3f to hitFn { hp: HPos, s: Float ->
+                burst(hp.x, hp.y, 14, listOf("dr"),
+                    floatArrayOf(300f, 700f), floatArrayOf(.025f, .05f),
+                    floatArrayOf(1f, 1.5f), gOpt = 1200f)
+                say("oops~", hp.x + s * .35f, hp.y - s * .6f, w * .28f)
+            },
+            1.6f to hitFn { hp: HPos, s: Float ->
+                burst(hp.x, hp.y, 12, listOf("dr"),
+                    floatArrayOf(300f, 700f), floatArrayOf(.025f, .05f),
+                    floatArrayOf(1f, 1.5f), gOpt = 1200f)
+                say("mmm~", hp.x - s * .35f, hp.y - s * .6f, w * .3f)
+            },
+        ),
     ),
 )
 

@@ -1618,7 +1618,13 @@ object FirebaseEngine : ChatRepo {
      *  ROUND 62 (Bug C): the doc's `noteLikes` (hearts this user GAVE,
      *  ownerUid -> noteAt ms) is folded too, and the published hearts
      *  are DERIVED by [publishNotes] — a heart lives on the LIKER's
-     *  doc, never written to the owner's (the rules forbid that). */
+     *  doc, never written to the owner's (the rules forbid that).
+     *  ROUND 68: the additive `noteMentions` (WS8, list of {uid,
+     *  username, displayName} maps) and `noteMusic` (WS10, {videoId,
+     *  title, startSec, endSec} map) fold the same way — read-only
+     *  here, written only onto the owner's OWN doc by [setMyNoteFull].
+     *  Docs written by older builds lack both fields and read as
+     *  empty / null, so old notes render exactly as before. */
     private fun applyNoteSnapshot(ownerUid: String, snap: com.google.firebase.firestore.DocumentSnapshot) {
         val text = snap.getString("noteText")?.trim().orEmpty()
         val atMs = snap.getTimestamp("noteAt")?.toDate()?.time ?: 0L
@@ -1628,11 +1634,31 @@ object FirebaseEngine : ChatRepo {
         val likes = (snap.get("noteLikes") as? Map<String, Any?>)?.mapNotNull { (k, v) ->
             (v as? Number)?.toLong()?.let { k to it }
         }?.toMap() ?: emptyMap()
+        @Suppress("UNCHECKED_CAST")
+        val mentions = (snap.get("noteMentions") as? List<Map<String, Any?>>)?.mapNotNull { m ->
+            val uid = (m["uid"] as? String).orEmpty()
+            if (uid.isEmpty()) null else NoteMention(
+                uid = uid,
+                username = (m["username"] as? String).orEmpty(),
+                displayName = (m["displayName"] as? String).orEmpty(),
+            )
+        } ?: emptyList()
+        @Suppress("UNCHECKED_CAST")
+        val musicMap = snap.get("noteMusic") as? Map<String, Any?>
+        val music = musicMap?.let {
+            val videoId = (it["videoId"] as? String).orEmpty()
+            if (videoId.isEmpty()) null else NoteMusic(
+                videoId = videoId,
+                title = (it["title"] as? String).orEmpty(),
+                startSec = (it["startSec"] as? Number)?.toInt()?.coerceAtLeast(0) ?: 0,
+                endSec = (it["endSec"] as? Number)?.toInt()?.coerceAtLeast(0) ?: 0,
+            )
+        }?.takeIf { it.endSec > it.startSec }
         noteLikesByUser[ownerUid] = likes
         val fresh = text.isNotEmpty() && atMs > 0L &&
             System.currentTimeMillis() - atMs < 24L * 3600 * 1000
         if (fresh) {
-            noteBase[ownerUid] = NoteUi(ownerUid, text, hearts, atMs)
+            noteBase[ownerUid] = NoteUi(ownerUid, text, hearts, atMs, mentions, music)
         } else {
             noteBase.remove(ownerUid)
         }
@@ -3935,18 +3961,43 @@ object FirebaseEngine : ChatRepo {
     }
 
     override fun setMyNote(text: String) {
+        setMyNoteFull(text, emptyList(), null)
+    }
+
+    /** ROUND 68 (WS8 + WS10): publish/replace MY note WITH its @mentions
+     *  and attached song. One own-doc write (users/{me}) — the only
+     *  users-doc write the deployed rules allow — carrying the additive
+     *  `noteMentions` (list of {uid, username, displayName} maps) and
+     *  `noteMusic` ({videoId, title, startSec, endSec} map) fields
+     *  alongside the existing noteText / noteAt / noteHearts. Older
+     *  builds ignore both new fields and render the plain text note.
+     *  Called from HomeScreen via a cast (AppState.repo is the ChatRepo
+     *  interface, which this round does not change); preview mode falls
+     *  back to [setMyNote]. */
+    fun setMyNoteFull(text: String, mentions: List<NoteMention>, music: NoteMusic?) {
         val t = text.trim().take(60)
         if (t.isEmpty()) { deleteMyNote(); return }
+        val cleanMusic = music?.takeIf { it.videoId.isNotBlank() && it.endSec > it.startSec }
+        val cleanMentions = mentions.filter { it.uid.isNotEmpty() && it.username.isNotEmpty() }
         AppState.notes.value = AppState.notes.value +
-            (uid to NoteUi(uid, t, emptySet(), System.currentTimeMillis()))
+            (uid to NoteUi(uid, t, emptySet(), System.currentTimeMillis(), cleanMentions, cleanMusic))
         scope.launch {
             runCatching {
                 db.collection(Schema.Users.COLL).document(uid).update(mapOf(
                     "noteText" to t,
                     "noteAt" to FieldValue.serverTimestamp(),
                     "noteHearts" to emptyList<String>(),
+                    "noteMentions" to cleanMentions.map { m ->
+                        mapOf("uid" to m.uid, "username" to m.username, "displayName" to m.displayName)
+                    },
+                    "noteMusic" to (cleanMusic?.let { m ->
+                        mapOf(
+                            "videoId" to m.videoId, "title" to m.title,
+                            "startSec" to m.startSec, "endSec" to m.endSec,
+                        )
+                    } ?: FieldValue.delete()),
                 )).await()
-            }.onFailure { Log.e("TikuChat", "setMyNote failed", it) }
+            }.onFailure { Log.e("TikuChat", "setMyNoteFull failed", it) }
         }
     }
 
@@ -3958,6 +4009,8 @@ object FirebaseEngine : ChatRepo {
                     "noteText" to FieldValue.delete(),
                     "noteAt" to FieldValue.delete(),
                     "noteHearts" to emptyList<String>(),
+                    "noteMentions" to FieldValue.delete(),
+                    "noteMusic" to FieldValue.delete(),
                 )).await()
             }.onFailure { Log.e("TikuChat", "deleteMyNote failed", it) }
         }

@@ -261,6 +261,41 @@ import kotlin.coroutines.resume
 // AndroidView update block no longer re-assigns layoutParams
 // (hence requestLayout) on unrelated recompositions.
 // ============================================================================
+// ROUND 68 (WS12) — THE MINI, TWO OWNER REQUIREMENTS (2026-11-10).
+// (a) NO MINI WITHOUT PLAYBACK. hasSession used to go live the moment
+//     a /watch page LOADED (and goHome() raised it before anything
+//     played), so opening Watch and switching tabs floated a mini
+//     window over a video that had never played. The mini (and the
+//     "Now watching" bar) now render only while WatchSession.isPlaying
+//     is true — a live probe of the page's video element, owned by the
+//     pane in every mode, with two-probe hysteresis against
+//     buffering/element-swap flicker. The pane itself stays composed
+//     while a session lives (its lifetime is unchanged): when nothing
+//     is playing the host simply paints the mini bounds at alpha 0 —
+//     the same hide-without-uncompose the call path already uses — so
+//     a video that starts playing a moment later (autoplay after load)
+//     still surfaces its mini, and nothing is ever destroyed
+//     mid-playback by a probe racing the player.
+// (b) THE VIDEO MUST VISIBLY PLAY INSIDE THE MINI. Three hardening
+//     changes, all inside this file: (1) every play/pause/probe/scroll
+//     touch now addresses the MAIN player element first
+//     (#movie_player video, falling back to the first <video>): the
+//     old bare querySelector('video') could land on a hidden/secondary
+//     element while the visible player sat paused — audio audible,
+//     video invisible, exactly the 2026-11-05 symptom. (2) Entering
+//     MINI now VERIFIES playback with a probe after the settle and
+//     re-presses play (bounded: at most 2 extra presses, 1 s apart,
+//     never on an ended video, never during a call) — the single
+//     play() Round 27 kept could still land before the relayout's
+//     video surface had settled, and nothing ever checked. (3) A
+//     proven stall nudge now also re-frames the player once, so a
+//     stall that coincides with the player being docked/scrolled out
+//     of the mini's viewport heals visibly instead of playing
+//     off-screen. The Round-27 rules stand: no play/scroll on page or
+//     history events, no scrolling from the probe loop, ended videos
+//     are never restarted, and the bar's ✕ still stops the video
+//     FULLY (WatchControl.stop is untouched).
+// ============================================================================
 
 /** Plain session state for Watch — NO View references, ever. */
 object WatchSession {
@@ -277,6 +312,17 @@ object WatchSession {
     var lastPlayableUrl by mutableStateOf("")
     var lastTitle by mutableStateOf("")
     var hasSession by mutableStateOf(false)
+
+    /** ROUND 68 (WS12a) — playback truth: true ONLY while a video
+     *  element is actually playing (probed live by the pane — see the
+     *  playback-probe effect in WatchPane). The floating mini window
+     *  and the "Now watching" bar render ONLY while this is true:
+     *  opening Watch, browsing, or a paused video never shows a
+     *  mini window. Set false on clear; the pane's probe owns the
+     *  live value while a pane is composed, with hysteresis (two
+     *  consecutive not-playing probes) so one buffering/swap probe
+     *  never flickers a playing mini away. */
+    var isPlaying by mutableStateOf(false)
 
     /** ROUND 19: Back on a playable page (or any explicit minimize)
      *  arms this: WatchHost renders MINI even while the Watch tab is
@@ -316,6 +362,7 @@ object WatchSession {
         lastPlayableUrl = ""
         lastTitle = ""
         hasSession = false
+        isPlaying = false
         forceMini = false
     }
 }
@@ -675,7 +722,13 @@ private fun destroyWatchWebView(wv: WebView) {
 private fun pauseWatchWebView(wv: WebView) {
     runCatching {
         wv.evaluateJavascript(
-            "(function(){var v=document.querySelector('video');if(v&&!v.paused){v.pause();}})();",
+            // ROUND 68 (WS12b): the MAIN player element first
+            // (#movie_player video, falling back to the first
+            // <video> — same lookup as the probe). Pausing a
+            // hidden/secondary element while the visible player kept
+            // playing was half of the "audio audible, video
+            // invisible" symptom.
+            "(function(){var v=document.querySelector('#movie_player video')||document.querySelector('video');if(v&&!v.paused){v.pause();}})();",
             null,
         )
     }
@@ -694,7 +747,10 @@ private fun resumeWatchWebView(wv: WebView, autoplay: Boolean) {
     if (autoplay) {
         runCatching {
             wv.evaluateJavascript(
-                "(function(){var v=document.querySelector('video');if(v&&v.paused){v.play();}})();",
+                // ROUND 68 (WS12b): same main-player-first lookup as
+                // the probe — pressing play on a secondary element
+                // left the visible player paused while audio played.
+                "(function(){var v=document.querySelector('#movie_player video')||document.querySelector('video');if(v&&v.paused){v.play();}})();",
                 null,
             )
         }
@@ -723,7 +779,14 @@ private fun resumeWatchWebView(wv: WebView, autoplay: Boolean) {
 private const val WATCH_VIDEO_PROBE_JS = """
 (function(){
   try {
-    var v = document.querySelector('video');
+    // ROUND 68 (WS12b): the MAIN player element first
+    // (#movie_player video) — m.youtube can carry secondary <video>
+    // elements (ads, previews); probing the first one in DOM order
+    // could report a hidden element's state while the visible player
+    // sat paused, which is the "audio audible, video invisible"
+    // symptom. Fall back to the first <video> on pages without a
+    // movie_player (Shorts/live layouts).
+    var v = document.querySelector('#movie_player video') || document.querySelector('video');
     if (!v) return '';
     return (v.paused ? 1 : 0) + ',' + (v.ended ? 1 : 0) + ',' + (v.readyState || 0);
   } catch(e) { return ''; }
@@ -783,7 +846,10 @@ private fun scrollWatchPlayerIntoView(wv: WebView) {
             (function(){
               try { window.scrollTo(0, 0); } catch(e) {}
               var v = null;
-              try { v = document.querySelector('video'); } catch(e) {}
+              // ROUND 68 (WS12b): frame the MAIN player element
+              // first (see the probe) — a secondary <video> could
+              // scroll the wrong element into the mini's viewport.
+              try { v = document.querySelector('#movie_player video') || document.querySelector('video'); } catch(e) {}
               if (!v) {
                 // ROUND 21: no <video> element yet (page still
                 // settling) — frame the PLAYER CONTAINER instead, so
@@ -1034,6 +1100,30 @@ fun WatchPane(chromeInsets: Boolean = true, boundedAboveNav: Boolean = false) {
                     scrollWatchPlayerIntoView(webView)
                 }
             }
+            // ROUND 68 (WS12b) — VERIFY the mini is actually playing.
+            // The single play() above can still land before the
+            // relayout's video surface has settled (the Round-20
+            // diagnosis) — and before this round nothing ever checked.
+            // Probe after a 1 s beat; if the video is still paused,
+            // press play again — at most 2 extra presses, 1 s apart.
+            // Never on an ended video (play() would restart it),
+            // never during a live call (the pane is deliberately
+            // frozen then), never once the mode flips back. No scroll
+            // here: the framing scroll above already ran once.
+            repeat(2) {
+                delay(1000)
+                if (chromeInsetsState.value) return@repeat
+                val callBusyNow = runCatching {
+                    CallController.state.value !is CallUiState.Idle
+                }.getOrDefault(false)
+                if (callBusyNow) return@repeat
+                val cur = runCatching { probeWatchVideo(webView) }.getOrNull()
+                if (cur != null && cur.ended) return@repeat
+                if (cur != null && !cur.paused) return@repeat
+                // Still paused (or no element yet): press play once
+                // more — the surface may only just have settled.
+                resumeWatchWebView(webView, autoplay = true)
+            }
             // ROUND 27 stall-nudge loop (see the probe block above).
             // Runs for the whole MINI session; cancelled by the
             // effect key when the mode flips or the WebView heals.
@@ -1061,6 +1151,15 @@ fun WatchPane(chromeInsets: Boolean = true, boundedAboveNav: Boolean = false) {
                 if (st.paused && st.readyState >= 2) {
                     if (pausedLastProbe && nudges < 3) {
                         resumeWatchWebView(webView, autoplay = true)
+                        // ROUND 68 (WS12b): a proven stall can also
+                        // mean the player docked/scrolled out of the
+                        // mini's viewport — re-frame it once, on the
+                        // nudge only (max 3 per stall episode). This
+                        // is NOT the Round-27 loop: nothing here
+                        // scrolls on a timer or on page/history
+                        // events, and a playing video is never
+                        // touched.
+                        scrollWatchPlayerIntoView(webView)
                         nudges++
                         pausedLastProbe = false
                     } else {
@@ -1072,6 +1171,35 @@ fun WatchPane(chromeInsets: Boolean = true, boundedAboveNav: Boolean = false) {
                     // so the nudge budget refreshes.
                     if (!st.paused) nudges = 0
                 }
+            }
+        }
+    }
+
+    // ROUND 68 (WS12a) — playback truth, probed live in EVERY mode.
+    // The mini window and the "Now watching" bar render only while
+    // WatchSession.isPlaying is true, so this loop is what decides
+    // whether the floating window may exist at all. It polls the
+    // live video element every 2 s: playing flips the flag on at
+    // once, while clearing it takes TWO consecutive not-playing
+    // probes — one bad probe (buffering, an SPA element swap, a
+    // renderer busy under a call) must never flicker a playing mini
+    // away. Deliberate pauses clear the flag within ~4 s; a video
+    // that starts playing (autoplay after load) surfaces its mini
+    // within ~2 s. Runs for the whole pane lifetime — expanded AND
+    // mini — so a tab switch decides on fresh truth, not on a stale
+    // flag from when the pane was last expanded.
+    LaunchedEffect(webView) {
+        var notPlayingStreak = 0
+        while (true) {
+            delay(2000)
+            val st = runCatching { probeWatchVideo(webView) }.getOrNull()
+            val playing = st != null && !st.paused && !st.ended && st.readyState >= 2
+            if (playing) {
+                notPlayingStreak = 0
+                WatchSession.isPlaying = true
+            } else {
+                notPlayingStreak++
+                if (notPlayingStreak >= 2) WatchSession.isPlaying = false
             }
         }
     }
@@ -1119,6 +1247,10 @@ fun WatchPane(chromeInsets: Boolean = true, boundedAboveNav: Boolean = false) {
             if (WatchControl.resumePlayback != null) WatchControl.resumePlayback = null
             if (WatchControl.stopPlayback != null) WatchControl.stopPlayback = null
             if (WatchControl.miniRevive != null) WatchControl.miniRevive = null
+            // ROUND 68 (WS12a): this pane's probe loop dies with it —
+            // drop the playback flag so a healed/new pane cannot
+            // inherit a stale "playing" from a dead renderer.
+            WatchSession.isPlaying = false
             // Save BEFORE destroy; epoch-guarded so a lock-time clear wins.
             WatchSession.recordOnLeave(currentUrl, pageTitle, paneEpoch)
             if (WatchFullscreen.view != null) {
@@ -1212,7 +1344,11 @@ fun WatchFullscreenLayer() {
  *   WatchScreen's chrome), bottom bounded above the NavPill band by
  *   [WatchNavBlock] (the pane's own 12.dp inset finishes the job).
  * - MINI (destination != 2 with a session alive, OR forceMini armed by
- *   Back on the Watch tab itself): the same live pane at 208x117
+ *   Back on the Watch tab itself) AND a video actually playing
+ *   (ROUND 68, WS12a: WatchSession.isPlaying — the pane's live probe;
+ *   without playback the host keeps the pane composed but paints the
+ *   mini bounds at alpha 0, so no floating window ever appears for a
+ *   merely-opened Watch tab): the same live pane at 208x117
  *   (16:9), radius 12, border + shadow. Resting spot: bottom-right,
  *   12.dp from the right edge, [WatchMiniBottomClearance] from the
  *   bottom — i.e. directly above the "Now watching" bar, which stays
@@ -1267,7 +1403,15 @@ fun WatchHost() {
             WatchControl.requestMiniRevive()
         }
     }
-    val hideMini = !expanded && callActive
+    val hideMini = !expanded && (callActive || !WatchSession.isPlaying)
+    // ROUND 68 (WS12a): the second half of the hide — a live call
+    // owns the screen and the audio (as before), and a video that is
+    // NOT actually playing never shows a floating window at all.
+    // Hiding is alpha-0 at kept bounds (the call path's own pattern),
+    // never an uncompose: the pane and its session survive, so a
+    // video that starts playing a moment later surfaces its mini
+    // without a reload — and the gesture layer below stays off while
+    // hidden, so an invisible window can never be tapped.
     // The host floats ABOVE the chat/details/moments overlays now, so
     // the mini's drag/tap/✕ layer stays live over them; only the call
     // UI and the story viewer (siblings composed above this host in
@@ -1492,7 +1636,11 @@ fun WatchHost() {
 @Composable
 fun NowWatchingBar(modifier: Modifier = Modifier) {
     val pal = LocalPalette.current
-    val show = WatchSession.hasSession &&
+    // ROUND 68 (WS12a): the bar is a "Now watching" bar — it shows
+    // only while a video is actually playing, like the mini window.
+    // (The bar's ✕ still stops the video FULLY — WatchControl.stop
+    // is untouched by this round.)
+    val show = WatchSession.hasSession && WatchSession.isPlaying &&
         AppState.homeTab != HomeTab.WATCH &&
         AppState.screen is Screen.Home &&
         ChatSession.unlocked

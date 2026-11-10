@@ -1633,10 +1633,13 @@ class ScreenshotsTest {
     }
 
     @Test fun shot59_fxKissRound25() {
-        // ROUND 66 (😘 hard rule proof): 😘 still renders the OLD
-        // Round-25 show — this stages EmojiFxOverlay kind 1 (NOT the
-        // Fx2 engine) with the test clock paused, advanced to 1.3 s,
-        // mid-trail flight.
+        // ROUND 66 (😘 hard rule proof — SUPERSEDED by ROUND 68/WS16):
+        // this stages the legacy Round-25 EmojiFxOverlay kind 1 engine
+        // itself (NOT the Fx2 engine) with the test clock paused,
+        // advanced to 1.3 s, mid-trail flight. The engine is retained,
+        // but since R68 😘 no longer ROUTES to it in chat — it plays
+        // the v10 'kiss' spec via Fx2 index 1 (see shot62 below).
+        // The owner's 2026-11-10 order named only 🖕/🍑 as keepers.
         composeRule.mainClock.autoAdvance = false
         frame {
             Box(Modifier.fillMaxSize().background(Color(0xFF101018))) {
@@ -1645,6 +1648,30 @@ class ScreenshotsTest {
         }
         composeRule.mainClock.advanceTimeBy(1300)
         shot("59-fx-kiss-round25.png")
+    }
+
+    // ---------- ROUND 68 (WS16): v10 effects — new routings ----------
+    @Test fun shot62_fx2KissV10() {
+        // 😘 now routes to the v10 'kiss' spec (Fx2 index 1): the
+        // t=2.0 triple-lips hit is mid-flight at stageT 2.0.
+        frame {
+            Box(Modifier.fillMaxSize().background(Color(0xFF101018))) {
+                EmojiFx2Overlay(specIdx = 1, onDone = {}, stageT = 2.0f)
+            }
+        }
+        composeRule.waitForIdle()
+        shot("62-fx2-kiss-v10.png")
+    }
+
+    @Test fun shot63_fx2LipsV10() {
+        // 💋 is a brand-new v10 spec (Fx2 index 21).
+        frame {
+            Box(Modifier.fillMaxSize().background(Color(0xFF101018))) {
+                EmojiFx2Overlay(specIdx = 21, onDone = {}, stageT = 1.0f)
+            }
+        }
+        composeRule.waitForIdle()
+        shot("63-fx2-lips-v10.png")
     }
 
     @Test fun shot60_nikahCertificateDownload() {

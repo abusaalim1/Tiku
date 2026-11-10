@@ -290,6 +290,24 @@ fun HomeScreen() {
                             onDelete = { AppState.repo.deleteMyNote(); AppState.toast("Note deleted"); noteTarget = null },
                             onHeart = {},
                             onReply = {},
+                            // ROUND 68 (WS8 + WS10): mentions + song ride the
+                            // note; candidates are thread partners (the only
+                            // people who can see a note). The repo interface
+                            // is unchanged this round, so the full write
+                            // goes to the real engine directly; preview
+                            // falls back to the plain setMyNote above.
+                            mentions = notes[myUidKey()]?.mentions ?: emptyList(),
+                            music = notes[myUidKey()]?.music,
+                            mentionCandidates = threads.map { it.person },
+                            onShareFull = { t, mentioned, song ->
+                                if (t.isBlank()) AppState.toast("Write something first")
+                                else {
+                                    (AppState.repo as? FirebaseEngine)?.setMyNoteFull(t, mentioned, song)
+                                        ?: AppState.repo.setMyNote(t)
+                                    AppState.toast("Note shared")
+                                }
+                                noteTarget = null
+                            },
                         )
                         is NoteTarget.Peer -> {
                             val person = nt.thread.person
@@ -313,6 +331,10 @@ fun HomeScreen() {
                                     }
                                     noteTarget = null
                                 },
+                                // ROUND 68 (WS8 + WS10): render the note's
+                                // mentions highlighted and offer its song.
+                                mentions = note?.mentions ?: emptyList(),
+                                music = note?.music,
                             )
                         }
                     }
@@ -446,6 +468,7 @@ internal fun MessagesScreen(
                         "Your note", myNote?.text ?: "Share a thought", myNote == null,
                         heart = false, idx = 0,
                         onClick = { onNote(NoteTarget.Me) },
+                        hasMusic = myNote?.music != null,
                     ) { AvMe(58) }
                 }
                 itemsIndexed(notedThreads) { idx, th ->
@@ -454,6 +477,7 @@ internal fun MessagesScreen(
                         th.displayName, n?.text ?: "", placeholder = false,
                         heart = myUidKey() in (n?.hearts ?: emptySet()), idx = idx + 1,
                         onClick = { onNote(NoteTarget.Peer(th)) },
+                        hasMusic = n?.music != null,
                     ) { Av(th.person, 58) }
                 }
             }
@@ -467,14 +491,14 @@ internal fun MessagesScreen(
             // "AI companion" until the first exchange, then the last
             // companion message (TikaBotStore.preview).
             val tikaPreview by TikaBotStore.preview.collectAsState()
+            val tikaNick by TikaBotStore.nickname.collectAsState()
             CardRow({ AppState.go(Screen.TikaBot) }, idx = 2) {
-                Image(
-                    painterResource(R.drawable.tika_mascot), null,
-                    Modifier.size(50.dp).clip(CircleShape),
-                    contentScale = ContentScale.Crop,
-                )
+                // ROUND 68 — the chosen ghost-blob avatar (assets,
+                // TikaAvatar); it replaces the old mascot drawable
+                // on this card completely.
+                TikaAvatar(Modifier.size(50.dp).clip(CircleShape))
                 TwoLine(
-                    "Tika", tikaPreview,
+                    tikaNick ?: "Tika", tikaPreview,
                     Modifier.weight(1f).padding(start = 14.dp),
                 )
                 Icon(Icons.Filled.KeyboardArrowRight, null, tint = Sub, modifier = Modifier.size(22.dp))

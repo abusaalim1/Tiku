@@ -36,14 +36,26 @@ export const SnapDetailModal: React.FC<SnapDetailModalProps> = ({
 
   return (
     <AnimatePresence>
-      <div className="fixed inset-0 z-50 flex items-center justify-center p-4 overflow-y-auto">
+      {/* ROUND 68 (WS13): the wrapper must be a motion element or
+        AnimatePresence exit animations never run; the backdrop must
+        NOT use backdrop-blur (a full-page backdrop-filter + a
+        spring-transformed sibling is the classic Android-WebView
+        compositing failure — the modal stuck blurred with the white
+        card peeking at the bottom, exactly the owner's screenshot).
+        Plain translucent backdrop + a short tween entrance instead. */}
+      <motion.div
+        className="fixed inset-0 z-50 flex items-center justify-center p-4 overflow-y-auto"
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        exit={{ opacity: 0 }}
+      >
         {/* Backdrop */}
         <motion.div
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
           onClick={onClose}
-          className="fixed inset-0 bg-black/40 backdrop-blur-md cursor-pointer"
+          className="fixed inset-0 bg-black/50 cursor-pointer"
         />
 
         {/* Modal Content */}
@@ -51,7 +63,7 @@ export const SnapDetailModal: React.FC<SnapDetailModalProps> = ({
           initial={{ opacity: 0, scale: 0.9, y: 24, rotate: snap.rotationDeg || -2 }}
           animate={{ opacity: 1, scale: 1, y: 0, rotate: 0 }}
           exit={{ opacity: 0, scale: 0.9, y: 20, rotate: 2 }}
-          transition={{ type: 'spring', damping: 25, stiffness: 300 }}
+          transition={{ duration: 0.25, ease: "easeOut" }}
           className="relative w-full max-w-lg glass-modal rounded-[36px] p-5 sm:p-7 border border-[#FDE2E7] max-h-[92vh] overflow-y-auto no-scrollbar z-10 shadow-[0_24px_60px_rgba(244,125,144,0.2)] bg-white text-[#2D1F27]"
         >
           {/* Washi Tape Graphic */}
@@ -203,7 +215,7 @@ export const SnapDetailModal: React.FC<SnapDetailModalProps> = ({
             </button>
           </div>
         </motion.div>
-      </div>
+      </motion.div>
     </AnimatePresence>
   );
 };

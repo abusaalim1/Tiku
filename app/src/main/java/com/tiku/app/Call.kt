@@ -40,17 +40,9 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Call
-import androidx.compose.material.icons.filled.CallEnd
-import androidx.compose.material.icons.filled.Cameraswitch
-import androidx.compose.material.icons.filled.KeyboardArrowDown
-import androidx.compose.material.icons.filled.Mic
-import androidx.compose.material.icons.filled.MicOff
-import androidx.compose.material.icons.filled.Videocam
-import androidx.compose.material.icons.filled.VideocamOff
-import androidx.compose.material.icons.filled.VolumeUp
-import androidx.compose.material3.Icon
+// ROUND 68 (WS7a): the call screen uses the owner design's drawn
+// TikuIcon set only — the Material icon imports are gone with the
+// last Material glyph (the minimize chevron, now TikuIcon "chev").
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -217,12 +209,16 @@ private fun RtcVideoView(local: Boolean, modifier: Modifier, fit: Boolean = fals
     )
 }
 
-/** Call-dock button (ROUND 45 reskin): the inactive state is the app's
- *  real liquid glass — [glassSurface] on a circle, the same brush, sheen
- *  and edge light the gate/Settings surfaces use; the ACTIVE state flips
- *  to a near-white gradient disc with a dark glyph. Icons are the owner
- *  design's drawn set (TikuIcon names). Skin only — same size, same
- *  click target, same states. */
+/** Call-dock button (ROUND 45 reskin, ROUND 68 premium pass): the inactive
+ *  state is the app's real liquid glass — [glassSurface] on a circle, the
+ *  same brush, sheen and edge light the gate/Settings surfaces use; the
+ *  ACTIVE state flips to a near-white gradient disc with a dark glyph.
+ *  Icons are the owner design's drawn set (TikuIcon names). ROUND 68
+ *  (WS7a): the dock glyphs were thin 24 dp strokes that read cheap at
+ *  a glance — they are now bolder (2.0 stroke) and larger (26 dp) in
+ *  the same drawn set and the same discs, so the dock reads premium
+ *  without a new icon download or a new glyph language. Skin only —
+ *  same size, same click target, same states. */
 @Composable
 private fun CallToggle(icon: String, active: Boolean, onClick: () -> Unit) {
     Box(
@@ -240,7 +236,7 @@ private fun CallToggle(icon: String, active: Boolean, onClick: () -> Unit) {
             .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null, onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {
-        TikuIcon(icon, size = 24.dp, tint = if (active) Color(0xFF16141C) else Color.White)
+        TikuIcon(icon, size = 26.dp, strokeWidthDp = 2.0f, tint = if (active) Color(0xFF16141C) else Color.White)
     }
 }
 
@@ -278,12 +274,13 @@ private fun CallGlassDisc(
 }
 
 /** End call: the red glass disc with the phone glyph rotated 135°
- *  (the classic hang-up pose). Red stays unmistakably red. */
+ *  (the classic hang-up pose). Red stays unmistakably red. ROUND 68
+ *  (WS7a): the glyph is bolder/larger like the rest of the dock. */
 @Composable
 private fun CallEndButton(onClick: () -> Unit) {
     CallGlassDisc(58.dp, listOf(Color(0xFFFF7A85), Color(0xFFE5313F)), onClick) {
         TikuIcon(
-            "call", size = 24.dp, tint = Color.White,
+            "call", size = 26.dp, strokeWidthDp = 2.0f, tint = Color.White,
             modifier = Modifier.graphicsLayer { rotationZ = 135f },
         )
     }
@@ -432,6 +429,26 @@ fun CallScreen(threadId: String, video: Boolean) {
     val connected = callState as? CallUiState.Connected
     val incoming = callState as? CallUiState.Incoming
 
+    // ROUND 68 (WS7b) — connected-call controls auto-hide. Three
+    // seconds after the call connects (and three seconds after the
+    // controls are last re-shown or touched), every control sinks
+    // away and only the 3-dot button stays, on the right edge; tapping
+    // it brings the controls back and restarts the timer. Ringing /
+    // outgoing never hide: the accept/reject and the outgoing End
+    // button are always on screen. [controlsHideKey] is bumped by
+    // every control tap and every re-show, restarting the timer.
+    var controlsVisible by remember(connected?.callId) { mutableStateOf(true) }
+    var controlsHideKey by remember { mutableIntStateOf(0) }
+    LaunchedEffect(connected?.callId, controlsHideKey) {
+        if (connected == null) return@LaunchedEffect
+        delay(3000)
+        controlsVisible = false
+    }
+    fun pokeControls() {
+        controlsVisible = true
+        controlsHideKey++
+    }
+
     // connected-call clock
     var nowMs by remember { mutableLongStateOf(System.currentTimeMillis()) }
     LaunchedEffect(connected?.callId) {
@@ -512,39 +529,70 @@ fun CallScreen(threadId: String, video: Boolean) {
                 ),
             )
         }
-        // self-view PiP (top-end, as designed: 98x138, r24, white .4 edge).
+        // self-view PiP (98x138, r24, white .4 edge, resting top-end).
         // ROUND 32: also composed while I share my screen on a voice
         // call — the PiP binds the same video track, so it previews
         // exactly what the peer is seeing.
+        // ROUND 68 (WS7d): the PiP is DRAGGABLE — the same
+        // detectDragGestures + clamp pattern FloatingCallWindow uses
+        // (drag deltas in px, clamped to the screen with an 8.dp
+        // margin, position kept across recompositions). Dragging moves
+        // only this window; the renderers underneath are untouched.
         if (isVideo || connected?.sharingScreen == true) {
-            Box(Modifier.fillMaxSize().padding(top = 24.dp, end = 20.dp)) {
-                // ROUND 47: the live self-view only while the camera
-                // is actually sending (or the screen is — the PiP then
-                // previews the share). Camera off falls through to the
-                // "You" glass placeholder: the disabled track's stale
-                // last frame must never pose as a live camera.
-                if (!Config.PREVIEW_UI_ONLY && rtcSession != null && (connected != null || callState is CallUiState.Outgoing) &&
-                    (connected?.sharingScreen == true || rtcSession?.cameraEnabled == true)) {
-                    RtcVideoView(
-                        local = true,
-                        modifier = Modifier.size(98.dp, 138.dp).align(Alignment.TopEnd)
-                            .shadow(12.dp, RoundedCornerShape(24.dp))
-                            .clip(RoundedCornerShape(24.dp))
-                            .border(1.5.dp, Color.White.copy(alpha = 0.45f), RoundedCornerShape(24.dp)),
-                    )
-                } else {
-                    Box(
-                        Modifier.size(98.dp, 138.dp).align(Alignment.TopEnd)
-                            .shadow(12.dp, RoundedCornerShape(24.dp))
-                            .glassSurface(RoundedCornerShape(24.dp)),
-                        contentAlignment = Alignment.Center,
-                    ) { Text("You", fontSize = 12.sp, color = Color.White, fontFamily = InterTight) }
+            BoxWithConstraints(Modifier.fillMaxSize()) {
+                val pipW = 98.dp
+                val pipH = 138.dp
+                var pipX by remember { mutableStateOf(maxWidth - pipW - 20.dp) }
+                var pipY by remember { mutableStateOf(24.dp) }
+                LaunchedEffect(maxWidth, maxHeight) {
+                    pipX = pipX.coerceIn(8.dp, (maxWidth - pipW - 8.dp).coerceAtLeast(8.dp))
+                    pipY = pipY.coerceIn(8.dp, (maxHeight - pipH - 8.dp).coerceAtLeast(8.dp))
+                }
+                Box(
+                    Modifier.offset(x = pipX, y = pipY).size(pipW, pipH)
+                        .pointerInput(Unit) {
+                            detectDragGestures { change, drag ->
+                                change.consume()
+                                pipX = (pipX + with(density) { drag.x.toDp() })
+                                    .coerceIn(8.dp, (maxWidth - pipW - 8.dp).coerceAtLeast(8.dp))
+                                pipY = (pipY + with(density) { drag.y.toDp() })
+                                    .coerceIn(8.dp, (maxHeight - pipH - 8.dp).coerceAtLeast(8.dp))
+                            }
+                        },
+                ) {
+                    // ROUND 47: the live self-view only while the camera
+                    // is actually sending (or the screen is — the PiP then
+                    // previews the share). Camera off falls through to the
+                    // "You" glass placeholder: the disabled track's stale
+                    // last frame must never pose as a live camera.
+                    if (!Config.PREVIEW_UI_ONLY && rtcSession != null && (connected != null || callState is CallUiState.Outgoing) &&
+                        (connected?.sharingScreen == true || rtcSession?.cameraEnabled == true)) {
+                        RtcVideoView(
+                            local = true,
+                            modifier = Modifier.fillMaxSize()
+                                .shadow(12.dp, RoundedCornerShape(24.dp))
+                                .clip(RoundedCornerShape(24.dp))
+                                .border(1.5.dp, Color.White.copy(alpha = 0.45f), RoundedCornerShape(24.dp)),
+                        )
+                    } else {
+                        Box(
+                            Modifier.fillMaxSize()
+                                .shadow(12.dp, RoundedCornerShape(24.dp))
+                                .glassSurface(RoundedCornerShape(24.dp)),
+                            contentAlignment = Alignment.Center,
+                        ) { Text("You", fontSize = 12.sp, color = Color.White, fontFamily = InterTight) }
+                    }
                 }
             }
         }
         // ROUND 8: explicit minimize control (same action as Back) — shrinks
         // the call to the floating window so messaging can continue.
-        if (connected != null || callState is CallUiState.Outgoing) {
+        // ROUND 68 (WS7a/WS7b): the chevron is the drawn set's own
+        // "chev" (one icon language on the whole screen — the Material
+        // chevron it replaced is gone), and the control hides with the
+        // rest of the dock once the call connects (it stays on screen
+        // while outgoing, when it is the only minimize path besides Back).
+        if ((connected != null && controlsVisible) || callState is CallUiState.Outgoing) {
             Box(
                 Modifier.align(Alignment.TopStart).padding(16.dp).size(40.dp)
                     .glassSurface(CircleShape)
@@ -552,7 +600,23 @@ fun CallScreen(threadId: String, video: Boolean) {
                         CallController.minimizeCall()
                     },
                 contentAlignment = Alignment.Center,
-            ) { Icon(Icons.Filled.KeyboardArrowDown, null, Modifier.size(22.dp), tint = Color.White) }
+            ) { TikuIcon("chev", size = 22.dp, strokeWidthDp = 2.0f, tint = Color.White) }
+        }
+        // ROUND 68 (WS7b): the 3-dot button — the ONE control that
+        // stays once the call connects. It sits on the RIGHT edge,
+        // vertically centred (clear of the top-end PiP and the bottom
+        // dock), in the same glass as the dock. Tapping it brings the
+        // controls back (and restarts the 3-second timer); tapping it
+        // while the controls are showing hides them at once.
+        if (connected != null) {
+            Box(
+                Modifier.align(Alignment.CenterEnd).padding(end = 14.dp).size(44.dp)
+                    .glassSurface(CircleShape)
+                    .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {
+                        if (controlsVisible) controlsVisible = false else pokeControls()
+                    },
+                contentAlignment = Alignment.Center,
+            ) { TikuIcon("dots", size = 22.dp, tint = Color.White) }
         }
         Column(
             Modifier.fillMaxSize().padding(top = 70.dp, bottom = 50.dp),
@@ -602,7 +666,10 @@ fun CallScreen(threadId: String, video: Boolean) {
                 // language as .cltop. Mine carries the Stop action;
                 // the peer's is a plain label (their stream is already
                 // letterboxed full-screen behind this column).
-                if (connected?.sharingScreen == true) {
+                // ROUND 68 (WS7b): the indicator is a control surface
+                // (mine carries Stop), so it hides with the dock once
+                // the call connects — the 3-dot button brings it back.
+                if (connected?.sharingScreen == true && controlsVisible) {
                     Spacer(Modifier.height(10.dp))
                     Row(
                         Modifier
@@ -622,7 +689,7 @@ fun CallScreen(threadId: String, video: Boolean) {
                             ) { CallController.stopScreenShare() },
                         )
                     }
-                } else if (remoteSharingNow && connected != null) {
+                } else if (remoteSharingNow && connected != null && controlsVisible) {
                     Spacer(Modifier.height(10.dp))
                     Row(
                         Modifier
@@ -637,14 +704,22 @@ fun CallScreen(threadId: String, video: Boolean) {
                 }
             }
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    TikuLockIcon(Modifier.size(12.dp), tint = pal.tx.copy(alpha = 0.6f))
-                    Spacer(Modifier.width(5.dp))
-                    Text("End-to-end encrypted", fontSize = 12.sp, color = pal.tx.copy(alpha = 0.6f), fontFamily = PoppinsFamily)
+                // ROUND 68 (WS7b): the encryption line rides with the
+                // dock — it hides with the controls once connected
+                // (ringing/outgoing always show it, like the dock).
+                if (connected == null || controlsVisible) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        TikuLockIcon(Modifier.size(12.dp), tint = pal.tx.copy(alpha = 0.6f))
+                        Spacer(Modifier.width(5.dp))
+                        Text("End-to-end encrypted", fontSize = 12.sp, color = pal.tx.copy(alpha = 0.6f), fontFamily = PoppinsFamily)
+                    }
+                    Spacer(Modifier.height(18.dp))
                 }
-                Spacer(Modifier.height(18.dp))
                 if (incoming != null) {
-                    // ringing: accept / reject — rejecting deletes the call record entirely
+                    // ringing: accept / reject — rejecting deletes the call record entirely.
+                    // ROUND 68 (WS7b): ringing NEVER auto-hides (the
+                    // timer only runs while connected), so this row is
+                    // unconditional.
                     Row(horizontalArrangement = Arrangement.spacedBy(28.dp)) {
                         CallEndButton { CallController.reject() }
                         // accept: green stays green, finished as glass
@@ -653,26 +728,38 @@ fun CallScreen(threadId: String, video: Boolean) {
                             58.dp, listOf(Color(0xFF3ED97E), Color(0xFF1F9D55)),
                             onClick = { acceptWithPerms() },
                         ) {
-                            TikuIcon("call", size = 24.dp, tint = Color.White)
+                            TikuIcon("call", size = 26.dp, strokeWidthDp = 2.0f, tint = Color.White)
                         }
                     }
-                } else {
-                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                        if (connected != null) {
-                            CallToggle(if (connected.muted) "micOff" else "mic", connected.muted) { CallController.toggleMute() }
-                            CallToggle("spk", connected.speakerOn) { CallController.toggleSpeaker() }
+                } else if (connected != null) {
+                    // ROUND 68 (WS7b): the connected dock exists only
+                    // while the controls are showing — 3 seconds after
+                    // connect (and after every re-show/touch) it sinks
+                    // away, leaving the 3-dot button. Every dock tap
+                    // pokes the timer first, so a second tap still
+                    // lands before the dock hides again.
+                    if (controlsVisible) {
+                        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                            CallToggle(if (connected.muted) "micOff" else "mic", connected.muted) { pokeControls(); CallController.toggleMute() }
+                            CallToggle("spk", connected.speakerOn) { pokeControls(); CallController.toggleSpeaker() }
                             // ROUND 32: share screen — on every connected
                             // call (voice calls included: sharing lights
                             // up the blank video track). While sharing,
                             // the camera controls step aside (the camera
                             // is not the live source; its on/off is kept
                             // and returns with the camera).
-                            CallToggle("shareScr", connected.sharingScreen) { toggleShare() }
+                            CallToggle("shareScr", connected.sharingScreen) { pokeControls(); toggleShare() }
                             if (connected.video && !connected.sharingScreen) {
-                                CallToggle(if (connected.cameraOn) "vid" else "vidOff", !connected.cameraOn) { CallController.toggleCamera() }
-                                CallToggle("flip", false) { CallController.switchCamera() }
+                                CallToggle(if (connected.cameraOn) "vid" else "vidOff", !connected.cameraOn) { pokeControls(); CallController.toggleCamera() }
+                                CallToggle("flip", false) { pokeControls(); CallController.switchCamera() }
                             }
+                            CallEndButton { CallController.hangup() }
                         }
+                    }
+                } else {
+                    // Outgoing: only the End button — always on screen
+                    // (the auto-hide timer never runs before connect).
+                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                         CallEndButton { CallController.hangup() }
                     }
                 }
@@ -711,6 +798,16 @@ fun CallScreen(threadId: String, video: Boolean) {
  * factory-owned), so the brief overlap while the call screen's exit
  * animation runs can neither crash nor steal the peer's frames, and
  * the RTC session itself is never paused or renegotiated.
+ *
+ * ROUND 68 (WS7e) — VERIFIED, no change: Back once during a live
+ * call already lands here (CallScreen's BackHandler calls
+ * minimizeCall() for Connected/Outgoing, which flips pipMinimized
+ * and navigates to the chat while the RTC session keeps running
+ * untouched); this window then plays the PARTNER's live remote video
+ * tile over the chat, and tapping it restores the full call via
+ * restoreCall(). Voice calls show the avatar tile + clock instead.
+ * The signalling/FCM path and the build-90 "incoming presents only
+ * when that chat is opened" behaviour are untouched by this round.
  */
 @Composable
 fun FloatingCallWindow() {

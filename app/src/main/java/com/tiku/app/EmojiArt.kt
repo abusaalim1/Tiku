@@ -30,8 +30,8 @@ import androidx.compose.ui.unit.sp
  *
  * FONT FILE DECISION: the font ships as TWO fonttools SUBSET files of the
  * original 47,175,752-byte upload — ios_emoji_a.ttf (codepoints < U+1F500,
- * 19,411,500 B, 679 cmap entries, 1,867 glyphs) and ios_emoji_b.ttf
- * (codepoints >= U+1F500, 12,909,332 B, 688 cmap entries, 1,433 glyphs) —
+ * 19,514,920 B, 685 cmap entries, 1,880 glyphs) and ios_emoji_b.ttf
+ * (codepoints >= U+1F500, 14,324,572 B, 706 cmap entries, 1,534 glyphs) —
  * because a single 45 MB file exceeds the GitHub API blob-upload limit and
  * could not be pushed to the repo at all. Both parts keep exactly the
  * codepoints the app uses (the full EMOJI_CATEGORIES catalogue + reaction
@@ -40,6 +40,8 @@ import androidx.compose.ui.unit.sp
  * features retained so ZWJ sequences and skin-tone variants still shape;
  * [rememberEmojiFontFamily] chains both files into one FontFamily and the
  * platform falls back per glyph, so callers see a single emoji font.
+ * (ROUND 68 sizes: A grew +103,420 B and B +1,415,184 B over the R23
+ * files — the WS5 ligature fix; see the R23/WS5 note below.)
  * Validated after subsetting: CBDT + CBLC + GSUB present in both parts.
  *
  * ROUND 23 — WHY SOME EMOJIS WERE NOT iOS ON DEVICE, AND THE FIX:
@@ -65,6 +67,39 @@ import androidx.compose.ui.unit.sp
  *  3. Both typefaces are preloaded on a background thread at app start
  *     ([preload], called from TikuApp.onCreate), so a transient surface
  *     (the reaction-bar popup) never races a cold font load.
+ *
+ * ROUND 68 — WS5: THE ZWJ LIGATURE HOLE IN THAT "BY CONSTRUCTION" CLAIM,
+ * AND THE FIX. The R23 claim in point 2 above was WRONG for one class of
+ * sequences: ZWJ sequences whose components STRADDLE the U+1F500 split
+ * (25 of them in the picker catalogue — 😶‍🌫️ face-in-clouds, 🙂‍↔️/🙂‍↕️
+ * head-shakes, ❤️‍🔥/❤️‍🩹, 👁️‍🗨️, 🐕‍🦺, 🐦‍🔥, 🍋‍🟩, 🍄‍🟫, 😵‍💫, 😮‍💨 and
+ * all twelve 🧑‍-profession emoji). fonttools' subsetter keeps a GSUB
+ * ligature only when EVERY component glyph survives in that subset, so
+ * a cross-boundary ligature was dropped from BOTH parts: neither file
+ * holds it, and the single-part render falls back per-component to the
+ * device font — the missing component (cloud / arrow / star / laptop…)
+ * draws as a system glyph stacked OVER the iOS base. That is exactly
+ * the owner's WS5 screenshot (cloud/arrow/star overlays on faces).
+ * Fix (font files only, no rendering-code change needed): both parts
+ * were re-subset from the original 47 MB font (source zip in
+ * ~/workspace/user/files/iOS17.4-ANSHULDIXIT_0_xip3.zip) with their
+ * shipped cmap as the base PLUS the missing component codepoint of
+ * every cross-boundary sequence starting in that part (A +6:
+ * U+1F525, U+1FA79, U+1F5E8, U+1F9BA, U+1F7E9, U+1F7EB; B +18:
+ * U+1F32B, U+1F4A8, U+2194, U+2195, U+1F4AB, U+2695, U+1F393,
+ * U+1F3EB, U+2696, U+1F33E, U+1F373, U+1F3ED, U+1F4BC, U+1F4BB,
+ * U+1F3A4, U+1F3A8, U+2708, U+1F384). Verified with fontTools after
+ * the rebuild: each part's cmap is a strict superset of the shipped
+ * one (A 679→685, B 688→706, nothing lost), zero ligatures lost
+ * (A 1816→1830, B 848→1014), all 25 cross-boundary ligatures now
+ * present in their routed part, shared glyphs' CBDT bitmaps
+ * byte-identical, and part B's distinct family name re-applied.
+ * Cost: A +103,420 B, B +1,415,184 B (the B closure also retains the
+ * skin-tone variants of the twelve profession ligatures) — see the
+ * worker-B report for the APK-budget consequence. With the ligatures
+ * restored, point 2's routing rule is now TRUE as written, and no
+ * picker-cell code had to change: one EmojiArt per cell, centred,
+ * was always the correct layout — the font was the bug.
  *
  * DATA stays standard unicode everywhere (Firestore/local stores keep the real
  * chars for reactions, selections, avatar markers). Only the DISPLAY changed.

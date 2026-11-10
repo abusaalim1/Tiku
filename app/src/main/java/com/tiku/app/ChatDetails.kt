@@ -27,6 +27,8 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.rememberTransformableState
+import androidx.compose.foundation.gestures.transformable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
@@ -52,6 +54,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.MoreVert
@@ -66,6 +69,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -202,6 +206,59 @@ private fun RdInfoAv(person: Person, size: Int) {
                 person.name.take(1).uppercase(), color = Color.White,
                 fontSize = (size * 0.38f).sp, fontWeight = FontWeight.SemiBold, fontFamily = InterTight,)
         }
+    }
+}
+
+/** ROUND 68 (WS9): tap a profile picture → the full profile picture.
+ *  Full-screen black overlay over the details screen (same pinch-zoom
+ *  pattern as Chat.kt's ImageViewerOverlay): the uploaded photo large,
+ *  falling back to the same emoji/initial avatar when there is no
+ *  photo. ✕ or system Back closes. No Save button — this is a profile
+ *  photo, not a shared message. No other visual change anywhere. */
+@Composable
+// ROUND 68 (WS9): internal (not private) so the chat header in
+// Chat.kt can open the same viewer.
+internal fun RdIProfilePhotoViewer(person: Person, onClose: () -> Unit) {
+    BackHandler { onClose() }
+    var zoom by remember { mutableFloatStateOf(1f) }
+    var panX by remember { mutableFloatStateOf(0f) }
+    var panY by remember { mutableFloatStateOf(0f) }
+    val transformState = rememberTransformableState { zoomChange, panChange, _ ->
+        zoom = (zoom * zoomChange).coerceIn(1f, 4f)
+        if (zoom > 1f) { panX += panChange.x; panY += panChange.y } else { panX = 0f; panY = 0f }
+    }
+    Box(
+        Modifier.fillMaxSize().background(Color(0xF2000000)),
+        contentAlignment = Alignment.Center,
+    ) {
+        val bmp = person.photoBitmap
+        Box(
+            Modifier.fillMaxSize().padding(12.dp)
+                .graphicsLayer {
+                    scaleX = zoom; scaleY = zoom
+                    translationX = panX; translationY = panY
+                }
+                .transformable(transformState),
+            contentAlignment = Alignment.Center,
+        ) {
+            when {
+                bmp != null -> Image(bmp.asImageBitmap(), null, Modifier.fillMaxSize(), contentScale = ContentScale.Fit)
+                person.photoUrl.isNotEmpty() -> coil.compose.AsyncImage(
+                    person.photoUrl, null, Modifier.fillMaxSize(), contentScale = ContentScale.Fit,
+                )
+                EmojiArt.assetName(person.emoji) != null -> EmojiArt(person.emoji, 160.dp)
+                else -> Text(
+                    person.name.take(1).uppercase(), color = Color.White,
+                    fontSize = 120.sp, fontWeight = FontWeight.SemiBold, fontFamily = InterTight,
+                )
+            }
+        }
+        Box(
+            Modifier.align(Alignment.TopStart).padding(14.dp).size(40.dp).clip(CircleShape)
+                .background(RdICard).border(1.dp, Color.White.copy(0.12f), CircleShape)
+                .rdIPress(onClose),
+            contentAlignment = Alignment.Center,
+        ) { Icon(Icons.Filled.Close, null, tint = Color.White, modifier = Modifier.size(20.dp)) }
     }
 }
 
@@ -376,8 +433,11 @@ fun InfoScreen(threadId: String) {
     val threads by AppState.threads.collectAsState()
     val thread = threads.firstOrNull { it.id == threadId }
     var sub by remember { mutableStateOf<String?>(null) }
+    // ROUND 68 (WS9): the full profile-picture viewer, above the subpages.
+    var showPhoto by remember { mutableStateOf(false) }
     BackHandler {
-        if (sub != null) sub = null else AppState.go(Screen.Chat(threadId))
+        if (showPhoto) showPhoto = false
+        else if (sub != null) sub = null else AppState.go(Screen.Chat(threadId))
     }
     if (thread == null) {
         Box(Modifier.fillMaxSize().background(Color.Black), contentAlignment = Alignment.Center) {
@@ -402,17 +462,18 @@ fun InfoScreen(threadId: String) {
             label = "infoSub",
         ) { target ->
             when (target) {
-                null -> RdIInfoMain(thread, isMuted, onSub = { sub = it })
-                "profile" -> RdIProfilePage(thread) { sub = null }
+                null -> RdIInfoMain(thread, isMuted, onSub = { sub = it }, onPhotoClick = { showPhoto = true })
+                "profile" -> RdIProfilePage(thread, onPhotoClick = { showPhoto = true }) { sub = null }
                 "search" -> RdISearchPage(thread) { sub = null }
                 "customize" -> RdICustomizePage(thread) { sub = null }
                 "starred" -> RdIStarredPage(thread) { sub = null }
                 "privacy" -> RdIPrivacyPage(thread) { sub = null }
                 "nicknames" -> RdINicknamesPage(thread) { sub = null }
                 "options" -> RdIOptionsPage(thread) { sub = null }
-                else -> RdIInfoMain(thread, isMuted, onSub = { sub = it })
+                else -> RdIInfoMain(thread, isMuted, onSub = { sub = it }, onPhotoClick = { showPhoto = true })
             }
         }
+        if (showPhoto) RdIProfilePhotoViewer(thread.person) { showPhoto = false }
     }
 }
 
@@ -423,7 +484,7 @@ fun InfoScreen(threadId: String) {
 fun ChatDetailsScreen(threadId: String) = InfoScreen(threadId)
 
 @Composable
-private fun RdIInfoMain(thread: ChatThread, muted: Boolean, onSub: (String) -> Unit) {
+private fun RdIInfoMain(thread: ChatThread, muted: Boolean, onSub: (String) -> Unit, onPhotoClick: () -> Unit = {}) {
     val ctx = LocalContext.current
     val person = thread.person
     val starred = thread.messages.filter { it.starredByMe && !it.deletedForMe && !it.deletedForEveryone }
@@ -445,11 +506,13 @@ private fun RdIInfoMain(thread: ChatThread, muted: Boolean, onSub: (String) -> U
                     infiniteRepeatable(tween(1600, easing = RdIEase), RepeatMode.Reverse),
                     label = "g",
                 )
+                // ROUND 68 (WS9): tapping the profile picture opens it full-screen.
                 Box(
                     Modifier.size(116.dp)
                         .shadow(glow.dp, CircleShape, ambientColor = RdIRose, spotColor = RdIRose)
                         .clip(CircleShape)
-                        .border(3.dp, RdIRose, CircleShape),
+                        .border(3.dp, RdIRose, CircleShape)
+                        .rdIPress(onPhotoClick),
                     contentAlignment = Alignment.Center,
                 ) { RdInfoAv(person, 104) }
                 Spacer(Modifier.height(14.dp))
@@ -567,13 +630,14 @@ private fun RdIInfoMain(thread: ChatThread, muted: Boolean, onSub: (String) -> U
 
 // ================= subpages =================
 @Composable
-private fun RdIProfilePage(thread: ChatThread, onBack: () -> Unit) {
+private fun RdIProfilePage(thread: ChatThread, onPhotoClick: () -> Unit = {}, onBack: () -> Unit) {
     val startCall = rememberCallStarter()
     RdISubPage(bottom = 40.dp) {
         item { RdISubHeader("Profile", onBack) }
         item {
             Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
-                RdInfoAv(thread.person, 96)
+                // ROUND 68 (WS9): tapping the profile picture opens it full-screen.
+                Box(Modifier.rdIPress(onPhotoClick)) { RdInfoAv(thread.person, 96) }
                 Spacer(Modifier.height(12.dp))
                 Text(
                     thread.displayName, color = Color.White, fontSize = 24.sp,

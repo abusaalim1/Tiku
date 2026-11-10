@@ -1137,9 +1137,16 @@ fun wallTint(wallpaper: WallpaperMode, isDark: Boolean): Color = when (wallpaper
     WallpaperMode.COUPLE -> if (isDark) Color(0xFF170E13) else Color(0xFFFBEEF2)
 }
 
-/** An emoji rendered through the bundled Fluent 3D asset when one exists for
- *  it, otherwise as plain text — the spec's sanctioned fallback for surfaces
- *  like the full emoji picker, whose catalogue is larger than the asset set. */
+/** One emoji rendered through the bundled iOS emoji font
+ *  ([EmojiArt] — deterministic single-part routing by first
+ *  codepoint). ROUND 68 / WS5: the picker cells' wrong/stacked glyphs
+ *  were NOT a layout bug — the two font parts were missing the GSUB
+ *  ligatures for the 25 ZWJ sequences whose components straddle the
+ *  A/B split (😶‍🌫️, 🙂‍↔️, ❤️‍🔥, 🧑‍💻, …), so the device font drew the
+ *  missing component over the iOS base. The fonts were rebuilt with
+ *  those ligatures restored (see EmojiArt.kt, R68/WS5 note); the cell
+ *  itself — one EmojiArt, centred, 26.dp — was already correct and
+ *  is unchanged. */
 @Composable
 fun EmojiGlyph(emoji: String, size: Dp) {
     if (EmojiArt.assetName(emoji) != null) {

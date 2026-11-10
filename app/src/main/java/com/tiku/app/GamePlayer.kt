@@ -470,8 +470,92 @@ private fun GameLoadError(modifier: Modifier = Modifier, onRetry: () -> Unit) {
     }
 }
 
+/** ROUND 68 (WS6) — the partner's full-screen game invite. The game
+ *  card in the chat is what carries the invite; this is the screen
+ *  the partner actually answers on. Accept starts the shared session
+ *  (the caller then composes the WebView host); "Not now" closes the
+ *  player without joining — nothing is written anywhere either way,
+ *  so declining leaves no trace and the card can simply be tapped
+ *  again later. English only, same cream/ink as the player chrome. */
+@Composable
+private fun GameInviteScreen(
+    title: String,
+    peerName: String,
+    onAccept: () -> Unit,
+    onDecline: () -> Unit,
+) {
+    Column(
+        Modifier.fillMaxSize().padding(32.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Spacer(Modifier.weight(1f))
+        EmojiGlyph("🎮", 56.dp)
+        Spacer(Modifier.size(20.dp))
+        Text(
+            "$peerName invited you to play",
+            color = GameInk, fontSize = 20.sp, fontWeight = FontWeight.SemiBold,
+            fontFamily = InterTight,
+        )
+        Spacer(Modifier.size(6.dp))
+        Text(
+            title,
+            color = GameInk.copy(alpha = 0.75f), fontSize = 16.sp,
+            fontWeight = FontWeight.SemiBold, fontFamily = InterTight,
+        )
+        Spacer(Modifier.size(10.dp))
+        Text(
+            "Do you want to join?",
+            color = GameInk.copy(alpha = 0.55f), fontSize = 13.5.sp, fontFamily = PoppinsFamily,
+        )
+        Spacer(Modifier.size(28.dp))
+        Box(
+            Modifier.clip(RoundedCornerShape(20.dp)).background(GameInk)
+                .clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null,
+                ) { onAccept() }
+                .padding(horizontal = 26.dp, vertical = 12.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(
+                "Join game", color = GameCream, fontSize = 14.sp,
+                fontWeight = FontWeight.SemiBold, fontFamily = PoppinsFamily,
+            )
+        }
+        Spacer(Modifier.size(8.dp))
+        Box(
+            Modifier.clip(RoundedCornerShape(20.dp))
+                .clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null,
+                ) { onDecline() }
+                .padding(horizontal = 22.dp, vertical = 12.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(
+                "Not now", color = GameInk.copy(alpha = 0.55f), fontSize = 13.5.sp,
+                fontFamily = PoppinsFamily,
+            )
+        }
+        Spacer(Modifier.weight(1f))
+        Text(
+            "2-player · the game starts for you only when you join",
+            color = GameInk.copy(alpha = 0.45f), fontSize = 11.5.sp, fontFamily = PoppinsFamily,
+        )
+    }
+}
+
 /**
  * The full-screen game player (see the file header). Back closes it.
+ * ROUND 68 (WS6) — FULL SCREEN, verified in code: this overlay is
+ * fillMaxSize and composed topmost in ChatScreen (Chat.kt, the
+ * gamePlayerMsg slot), so a tap on a loaded game card opens the game
+ * over the whole screen. The "small window" is the card's own 210 dp
+ * live preview (RdGamePreview in Chat.kt) — that preview is by design
+ * and is NOT the player; nothing in this file constrains the player
+ * to it, and no code path here renders the game small. If the owner
+ * still sees a small game on-device, it is a runtime fact the
+ * screenshot harness cannot reproduce — see the round-68 report.
  * The game's HTML comes from the message's decrypted cache file
  * ([TikuMessage.localPath] — set by sendGame for the sender, by
  * fetchMedia for the receiver); the overlay only ever opens on a
@@ -494,6 +578,21 @@ fun GamePlayerOverlay(
     // the explicit uid comparison rides alongside for the copies
     // whose senderUid is populated.
     val role = if (m.me || (myUid.isNotEmpty() && myUid == m.senderUid)) "host" else "guest"
+
+    // ROUND 68 (WS6) — partner invite + Accept gate. The host opens
+    // straight into full-screen play. The partner (guest) first sees
+    // a FULL-SCREEN invite — "<peer> invited you to play '<title>'.
+    // Do you want to join?" — and the shared session (the gamestate
+    // listener + the WebView host that drives it, inside
+    // GameWebViewHost) is composed ONLY after Accept; Decline closes
+    // the player without ever joining. Purely local gating: NO schema
+    // change, no new message field — old builds simply open the game
+    // directly, as before, so cross-version messaging cannot break.
+    // The game card in the chat is the invite's carrier (see HOOK in
+    // the round-68 report: Chat.kt's card copy). Preview mode
+    // auto-accepts (there is no real partner under the harness).
+    val isGuest = role == "guest"
+    var inviteAccepted by remember(m.id) { mutableStateOf(!isGuest || Config.PREVIEW_UI_ONLY) }
 
     // ROUND 51: the load is a small state machine, never a dead end.
     // A missing/unreadable cache file (the OS purges cacheDir) triggers
@@ -544,8 +643,11 @@ fun GamePlayerOverlay(
                     color = GameInk, fontSize = 17.sp, fontWeight = FontWeight.SemiBold,
                     maxLines = 1, overflow = TextOverflow.Ellipsis, fontFamily = InterTight,)
                 Text(
-                    if (role == "host") "You created this game · 2-player"
-                    else "2-player game · you joined",
+                    when {
+                        role == "host" -> "You created this game · 2-player"
+                        inviteAccepted -> "2-player game · you joined"
+                        else -> "Invited you to play"
+                    },
                     color = GameInk.copy(alpha = 0.55f), fontSize = 12.sp, fontFamily = PoppinsFamily,)
             }
             Box(
@@ -579,6 +681,15 @@ fun GamePlayerOverlay(
                             color = GameInk.copy(alpha = 0.55f), fontSize = 12.sp, fontFamily = PoppinsFamily,)
                     }
                 }
+                // ROUND 68 (WS6): the guest's invite gate — the game
+                // (and with it the shared session) opens only on
+                // Accept. The host never sees this branch.
+                !inviteAccepted -> GameInviteScreen(
+                    title = m.gameTitle.ifBlank { "Game" },
+                    peerName = peerName,
+                    onAccept = { inviteAccepted = true },
+                    onDecline = onClose,
+                )
                 webFailed -> GameLoadError(
                     modifier = Modifier.align(Alignment.Center),
                     onRetry = { webFailed = false; webAttempt++ },

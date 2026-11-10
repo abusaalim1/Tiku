@@ -351,12 +351,55 @@ fun ChatThread.effectiveSettings(global: TikuUiSettings): TikuUiSettings {
  *  ROUND 62 (Bug C): [hearts] as published is DERIVED — the owner's
  *  legacy noteHearts plus every partner whose OWN doc carries
  *  `noteLikes[ownerUid] == atMs` (a partner can only write their own
- *  doc under the deployed rules; see FirebaseEngine.publishNotes). */
+ *  doc under the deployed rules; see FirebaseEngine.publishNotes).
+ *  ROUND 68: [mentions] (WS8) and [music] (WS10) ride the owner's own
+ *  doc as the additive `noteMentions` / `noteMusic` fields — same
+ *  own-doc-only write rule, same derivation path. */
 data class NoteUi(
     val uid: String = "",
     val text: String = "",
     val hearts: Set<String> = emptySet(),
     val atMs: Long = 0L,
+    // ---- ROUND 68 (appended last, same discipline as round 15) ----
+    /** WS8: the @mentions typed in this note (Firestore `noteMentions`:
+     *  a list of {uid, username, displayName} maps on the OWNER's own
+     *  user doc, written with the note itself — never onto anyone
+     *  else's doc, so the own-doc-only rules need no change. The note
+     *  TEXT still carries the literal "@username" tokens (60-char
+     *  cap unchanged); this list is the structured render source.
+     *  Older builds ignore the field and render the plain text. */
+    val mentions: List<NoteMention> = emptyList(),
+    /** WS10: the YouTube Music song attached to this note (Firestore
+     *  `noteMusic`: a {videoId, title, startSec, endSec} map on the
+     *  owner's own user doc). Additive — older builds ignore it and
+     *  render the plain text note. Null = no song attached. */
+    val music: NoteMusic? = null,
+)
+
+/** ROUND 68 (WS8): one @mention inside a note. [uid] is the mentioned
+ *  user's Firebase uid; [username]/[displayName] are the render strings
+ *  snapshotted at mention time (the picker only offers thread partners —
+ *  the only people who can see the note — see HomeScreen's candidates).
+ *  Plain data, no behaviour; Firestore stores it as a map. */
+data class NoteMention(
+    val uid: String = "",
+    val username: String = "",
+    val displayName: String = "",
+)
+
+/** ROUND 68 (WS10): one YouTube song attached to a note, with the
+ *  IG-notes-music style clip the author chose. [videoId] is a YouTube
+ *  video id (from a youtube.com / youtu.be / music.youtube.com link —
+ *  see [youtubeThumbId]); playback is the app's existing locked
+ *  nocookie embed ([youtubeEmbedUrl] + start/end params), so no new
+ *  dependency and no API key. [startSec]/[endSec] bound the clip
+ *  (endSec > startSec, both >= 0); viewers play the clip from the
+ *  note. Plain data; Firestore stores it as a map. */
+data class NoteMusic(
+    val videoId: String = "",
+    val title: String = "",
+    val startSec: Int = 0,
+    val endSec: Int = 30,
 )
 
 /** Contact / person. In real mode, username/uid come from Firestore. */

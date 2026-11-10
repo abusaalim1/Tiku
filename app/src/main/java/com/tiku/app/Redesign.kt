@@ -22,6 +22,7 @@ import androidx.compose.animation.scaleOut
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
+import android.webkit.WebView
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -56,10 +57,13 @@ import androidx.compose.material.icons.filled.Email
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.KeyboardArrowRight
+import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Send
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Icon
+import androidx.compose.material3.Slider
+import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -79,13 +83,19 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.viewinterop.AndroidView
 import dev.chrisbanes.haze.HazeState
 import dev.chrisbanes.haze.HazeStyle
 import dev.chrisbanes.haze.HazeTint
@@ -323,8 +333,10 @@ fun MenuItem(label: String, danger: Boolean = false, onClick: () -> Unit, traili
 fun Divider1() = Box(Modifier.fillMaxWidth().height(1.dp).background(Color.White.copy(0.08f)))
 
 // ---- notes (verbatim from the file; avatar is a caller-provided slot) ----
+// ROUND 68: [hasMusic] (WS10) adds a small ♪ marker when the note
+// carries a song — no other visual change to the row.
 @Composable
-fun NoteItem(label: String, note: String, placeholder: Boolean, heart: Boolean, idx: Int, onClick: () -> Unit, avatar: @Composable () -> Unit) {
+fun NoteItem(label: String, note: String, placeholder: Boolean, heart: Boolean, idx: Int, onClick: () -> Unit, avatar: @Composable () -> Unit, hasMusic: Boolean = false) {
     val hp by rememberInfiniteTransition(label = "hp").animateFloat(1f, 1.15f, infiniteRepeatable(tween(900), RepeatMode.Reverse), label = "hp2")
     Column(Modifier.width(76.dp).rise(idx).press(onClick), horizontalAlignment = Alignment.CenterHorizontally) {
         Box(Modifier.height(50.dp).fillMaxWidth(), contentAlignment = Alignment.BottomCenter) {
@@ -332,7 +344,7 @@ fun NoteItem(label: String, note: String, placeholder: Boolean, heart: Boolean, 
                 Modifier.bob(idx).widthIn(max = 76.dp).clip(RoundedCornerShape(16.dp)).background(CardC).border(1.dp, Color.White.copy(0.1f), RoundedCornerShape(16.dp))
                     .padding(horizontal = 8.dp, vertical = 5.dp),
                 contentAlignment = Alignment.Center
-            ) { Text(note, color = if (placeholder) Sub else Color.White, fontSize = 11.sp, lineHeight = 13.sp, textAlign = TextAlign.Center, maxLines = 2, fontFamily = PoppinsFamily) }
+            ) { Text(if (hasMusic) "♪ $note" else note, color = if (placeholder) Sub else Color.White, fontSize = 11.sp, lineHeight = 13.sp, textAlign = TextAlign.Center, maxLines = 2, fontFamily = PoppinsFamily) }
             if (heart) Box(
                 Modifier.align(Alignment.BottomEnd).offset(x = 2.dp, y = 10.dp).graphicsLayer { scaleX = hp; scaleY = hp }.size(24.dp).clip(CircleShape).background(CardC).border(1.dp, Color.White.copy(0.15f), CircleShape),
                 contentAlignment = Alignment.Center
@@ -345,13 +357,126 @@ fun NoteItem(label: String, note: String, placeholder: Boolean, heart: Boolean, 
     }
 }
 
+// ---- ROUND 68 notes helpers (WS8 mentions + WS10 music) ----
+/** A YouTube video id from a pasted link (watch / shorts / embed /
+ *  music.youtube.com — see [youtubeThumbId]) or a bare 11-char id;
+ *  null when the text is not a YouTube link at all. */
+private fun noteMusicVideoId(input: String): String? {
+    val t = input.trim()
+    if (t.isEmpty()) return null
+    youtubeThumbId(t)?.let { return it }
+    if (t.length == 11 && t.all { c -> c.isLetterOrDigit() || c == '-' || c == '_' }) return t
+    return null
+}
+
+/** "0:20" style mm:ss for the clip-trim slider label. */
+private fun noteClipLabel(sec: Int): String = "${sec / 60}:${(sec % 60).toString().padStart(2, '0')}"
+
+/** Render a note's text with its @mentions in Rose + bold; text without
+ *  a matching mention renders plain (older notes carry no mention list
+ *  and read exactly as before). */
+private fun noteMentionAnnotated(text: String, mentions: List<NoteMention>): AnnotatedString {
+    if (mentions.isEmpty() || text.isEmpty()) return AnnotatedString(text)
+    return buildAnnotatedString {
+        var rest = text
+        while (rest.isNotEmpty()) {
+            val hit = mentions
+                .mapNotNull { m ->
+                    val token = "@${m.username}"
+                    val at = rest.indexOf(token).takeIf { it >= 0 }?.let { it to token }
+                    at
+                }
+                .minByOrNull { it.first }
+            if (hit == null) {
+                append(rest)
+                break
+            }
+            val (at, token) = hit
+            append(rest.substring(0, at))
+            withStyle(SpanStyle(color = Rose, fontWeight = FontWeight.Bold)) { append(token) }
+            rest = rest.substring(at + token.length)
+        }
+    }
+}
+
+/** The locked nocookie embed for one note-music clip (WS10) — the app's
+ *  existing [youtubeEmbedUrl] plus the chosen start/end seconds, so the
+ *  viewer hears the trimmed part only. */
+private fun noteMusicEmbedUrl(music: NoteMusic): String =
+    YOUTUBE_EMBED_PREFIX + music.videoId +
+        "?autoplay=1&playsinline=1&rel=0&modestbranding=1&start=${music.startSec}&end=${music.endSec}"
+
+/** One note-music clip player: a small WebView on the app's locked
+ *  nocookie embed (same route as the drama player — see Watch.kt).
+ *  Created with the ACTIVITY context (LocalContext.current — the
+ *  application-context WebView is the R15 black-video lesson) and
+ *  destroyed on release, so closing the sheet stops playback. */
+@Composable
+private fun NoteMusicPlayer(music: NoteMusic) {
+    val ctx = LocalContext.current
+    AndroidView(
+        factory = {
+            WebView(ctx).apply {
+                settings.javaScriptEnabled = true
+                settings.domStorageEnabled = true
+                settings.mediaPlaybackRequiresUserGesture = false
+                loadUrl(noteMusicEmbedUrl(music))
+            }
+        },
+        onRelease = { wv ->
+            runCatching { wv.stopLoading() }
+            runCatching { wv.destroy() }
+        },
+        modifier = Modifier.fillMaxWidth().height(190.dp).clip(RoundedCornerShape(20.dp)).background(Color.Black),
+    )
+}
+
 @Composable
 fun NoteSheet(
     h: HazeState?, mine: Boolean, headerName: String, note: String, hearted: Boolean,
     headerAvatar: @Composable () -> Unit,
-    onShare: (String) -> Unit, onDelete: () -> Unit, onHeart: () -> Unit, onReply: (String) -> Unit
+    onShare: (String) -> Unit, onDelete: () -> Unit, onHeart: () -> Unit, onReply: (String) -> Unit,
+    // ---- ROUND 68 (all defaulted: the pre-68 call shape keeps working) ----
+    /** WS8: the note's stored mentions (peer view renders them; my view
+     *  seeds the editor's picked list so re-sharing keeps them). */
+    mentions: List<NoteMention> = emptyList(),
+    /** WS10: the note's attached song (peer view plays it; my view
+     *  seeds the editor so re-sharing keeps it unless removed). */
+    music: NoteMusic? = null,
+    /** WS8: who "@" can mention — thread partners, passed by HomeScreen
+     *  (the only people who can see the note). */
+    mentionCandidates: List<Person> = emptyList(),
+    /** WS8 + WS10: share with mentions + song; null = the plain
+     *  [onShare] path (preview mode / old callers). */
+    onShareFull: ((String, List<NoteMention>, NoteMusic?) -> Unit)? = null,
 ) {
     var text by remember(headerName, note) { mutableStateOf(if (mine) note else "") }
+    // WS8: the mentions the editor has picked (seeded from the stored note).
+    var pickedMentions by remember(headerName, note) { mutableStateOf(mentions) }
+    // WS10: the editor's song state (seeded from the stored note).
+    var showMusic by remember(headerName, note) { mutableStateOf(music != null) }
+    // Set false by Remove so the stored song is NOT re-attached on Share.
+    var keepMusic by remember(headerName, note) { mutableStateOf(true) }
+    var musicLink by remember(headerName, note) { mutableStateOf("") }
+    var musicTitle by remember(headerName, note) { mutableStateOf(music?.title ?: "") }
+    var clipStart by remember(headerName, note) { mutableStateOf((music?.startSec ?: 0).toFloat()) }
+    var clipLen by remember(headerName, note) { mutableStateOf((music?.endSec ?: 30) - (music?.startSec ?: 0)) }
+    // WS10: the peer view's player toggle (its own state, below).
+    var playingMusic by remember(headerName, note) { mutableStateOf(false) }
+    // WS8: the "@query" tail of the editor text, or null when not mentioning.
+    val atQuery: String? = if (!mine) null else run {
+        val at = text.lastIndexOf('@')
+        if (at < 0) null else {
+            val tail = text.substring(at + 1)
+            if (tail.any { it == ' ' || it == '\n' }) null else tail
+        }
+    }
+    val mentionSuggestions = if (atQuery == null) emptyList() else mentionCandidates
+        .filter { p ->
+            p.uid !in pickedMentions.map { it.uid } &&
+                (p.username.contains(atQuery, ignoreCase = true) ||
+                    p.name.contains(atQuery, ignoreCase = true))
+        }.take(5)
     Column(
         Modifier.padding(14.dp).fillMaxWidth().rdGlass(h, RoundedCornerShape(28.dp), 0.1f)
             .clickable(remember { MutableInteractionSource() }, null) {}.padding(18.dp),
@@ -360,20 +485,164 @@ fun NoteSheet(
         if (mine) {
             Text("Share a thought", color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold, fontFamily = InterTight)
             Box(Modifier.fillMaxWidth().clip(RoundedCornerShape(20.dp)).background(CardC).padding(16.dp)) {
-                if (text.isEmpty()) Text("What's on your mind?", color = Sub, fontSize = 15.sp, fontFamily = PoppinsFamily)
+                if (text.isEmpty()) Text("What's on your mind? Type @ to mention someone", color = Sub, fontSize = 15.sp, fontFamily = PoppinsFamily)
                 BasicTextField(text, { if (it.length <= 60) text = it }, textStyle = TextStyle(fontFamily = PoppinsFamily, color = Color.White, fontSize = 15.sp), cursorBrush = SolidColor(Rose), modifier = Modifier.fillMaxWidth())
             }
+            // WS8: mention picker — appears while "@…" is being typed.
+            if (mentionSuggestions.isNotEmpty()) {
+                Column(
+                    Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(CardC)
+                        .border(1.dp, Color.White.copy(0.1f), RoundedCornerShape(16.dp)).padding(6.dp),
+                    verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(2.dp),
+                ) {
+                    mentionSuggestions.forEach { p ->
+                        Row(
+                            Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).press {
+                                val at = text.lastIndexOf('@')
+                                val before = if (at >= 0) text.substring(0, at) else text
+                                text = "$before@${p.username} "
+                                if (p.uid !in pickedMentions.map { it.uid }) {
+                                    pickedMentions = pickedMentions + NoteMention(p.uid, p.username, p.name)
+                                }
+                            }.padding(horizontal = 10.dp, vertical = 9.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Av(p, 32)
+                            Column(Modifier.padding(start = 10.dp)) {
+                                Text(p.name, color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, fontFamily = PoppinsFamily)
+                                if (p.username.isNotEmpty()) Text("@${p.username}", color = Sub, fontSize = 12.sp, fontFamily = PoppinsFamily)
+                            }
+                        }
+                    }
+                }
+            }
             Text("${text.length}/60 · Visible to friends for 24 hours", color = Sub, fontSize = 12.sp, fontFamily = PoppinsFamily)
+            // WS10: attach a song (YouTube / YouTube Music link + clip trim).
+            if (!showMusic) {
+                Row(
+                    Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(CardC)
+                        .border(1.dp, Color.White.copy(0.1f), RoundedCornerShape(16.dp))
+                        .press { showMusic = true; keepMusic = true }.padding(horizontal = 16.dp, vertical = 13.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Icon(Icons.Filled.MusicNote, null, tint = Rose, modifier = Modifier.size(20.dp))
+                    Text("Add music", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(start = 10.dp), fontFamily = PoppinsFamily)
+                    Spacer(Modifier.weight(1f))
+                    Text("YouTube", color = Sub, fontSize = 12.sp, fontFamily = PoppinsFamily)
+                }
+            } else {
+                Column(
+                    Modifier.fillMaxWidth().clip(RoundedCornerShape(20.dp)).background(CardC).padding(16.dp),
+                    verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(10.dp),
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Filled.MusicNote, null, tint = Rose, modifier = Modifier.size(20.dp))
+                        Text("Song", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(start = 8.dp), fontFamily = PoppinsFamily)
+                        Spacer(Modifier.weight(1f))
+                        Text(
+                            "Remove", color = Sub, fontSize = 12.sp, fontWeight = FontWeight.SemiBold,
+                            modifier = Modifier.press {
+                                showMusic = false; keepMusic = false; musicLink = ""; musicTitle = ""
+                                clipStart = 0f; clipLen = 30
+                            },
+                            fontFamily = PoppinsFamily,
+                        )
+                    }
+                    Box(Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(Color.White.copy(0.06f)).padding(horizontal = 14.dp, vertical = 12.dp)) {
+                        if (musicLink.isEmpty()) Text("Paste a YouTube / YouTube Music link", color = Sub, fontSize = 14.sp, fontFamily = PoppinsFamily)
+                        BasicTextField(musicLink, { musicLink = it }, singleLine = true, textStyle = TextStyle(fontFamily = PoppinsFamily, color = Color.White, fontSize = 14.sp), cursorBrush = SolidColor(Rose), modifier = Modifier.fillMaxWidth())
+                    }
+                    Box(Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(Color.White.copy(0.06f)).padding(horizontal = 14.dp, vertical = 12.dp)) {
+                        if (musicTitle.isEmpty()) Text("Song name (optional)", color = Sub, fontSize = 14.sp, fontFamily = PoppinsFamily)
+                        BasicTextField(musicTitle, { musicTitle = it }, singleLine = true, textStyle = TextStyle(fontFamily = PoppinsFamily, color = Color.White, fontSize = 14.sp), cursorBrush = SolidColor(Rose), modifier = Modifier.fillMaxWidth())
+                    }
+                    Text("Starts at ${noteClipLabel(clipStart.toInt())} · ${clipLen}s clip", color = Sub, fontSize = 12.sp, fontFamily = PoppinsFamily)
+                    Slider(
+                        value = clipStart, onValueChange = { clipStart = it },
+                        valueRange = 0f..180f, steps = 0,
+                        colors = SliderDefaults.colors(thumbColor = Rose, activeTrackColor = Rose, inactiveTrackColor = Color.White.copy(0.14f)),
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    Row(horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(8.dp)) {
+                        listOf(15, 30, 60).forEach { len ->
+                            Box(
+                                Modifier.clip(RoundedCornerShape(999.dp))
+                                    .background(if (clipLen == len) Rose else Color.White.copy(0.1f))
+                                    .press { clipLen = len }
+                                    .padding(horizontal = 14.dp, vertical = 8.dp),
+                                contentAlignment = Alignment.Center,
+                            ) { Text("${len}s", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, fontFamily = PoppinsFamily) }
+                        }
+                    }
+                }
+            }
             Row(horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(10.dp)) {
                 if (note.isNotEmpty()) Pill("Delete", Modifier.weight(1f), false, onDelete)
-                Pill("Share", Modifier.weight(1f), true) { onShare(text) }
+                Pill("Share", Modifier.weight(1f), true) {
+                    // WS10: resolve the pasted link; a bad link stops the
+                    // share with a toast instead of posting a dead song.
+                    val attached: NoteMusic? = if (!showMusic) {
+                        if (keepMusic) music else null
+                    } else if (musicLink.isBlank() && music != null) {
+                        if (keepMusic) music else null
+                    } else if (musicLink.isBlank()) {
+                        null
+                    } else {
+                        val id = noteMusicVideoId(musicLink)
+                        if (id == null) {
+                            AppState.toast("That link didn't look like a YouTube link")
+                            return@Pill
+                        }
+                        val start = clipStart.toInt()
+                        NoteMusic(id, musicTitle.trim().ifEmpty { "Song from YouTube" }, start, start + clipLen)
+                    }
+                    // WS8: keep only mentions whose "@username" still
+                    // appears in the text (a deleted token un-mentions).
+                    val kept = pickedMentions.filter { text.contains("@${it.username}") }
+                    if (onShareFull != null) onShareFull(text, kept, attached) else onShare(text)
+                }
             }
         } else {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 headerAvatar()
                 Text(headerName, color = Color.White, fontSize = 17.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(start = 12.dp), fontFamily = InterTight)
             }
-            Text(note, color = Color.White, fontSize = 17.sp, modifier = Modifier.clip(RoundedCornerShape(20.dp)).background(CardC).padding(horizontal = 16.dp, vertical = 12.dp), fontFamily = rememberChatFontFamily())
+            Text(
+                noteMentionAnnotated(note, mentions), color = Color.White, fontSize = 17.sp,
+                modifier = Modifier.clip(RoundedCornerShape(20.dp)).background(CardC).padding(horizontal = 16.dp, vertical = 12.dp),
+                fontFamily = rememberChatFontFamily(),
+            )
+            // WS10: the attached song — tap Play to hear the clip.
+            if (music != null) {
+                Column(verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(10.dp)) {
+                    Row(
+                        Modifier.fillMaxWidth().clip(RoundedCornerShape(20.dp)).background(CardC)
+                            .press { playingMusic = !playingMusic }.padding(horizontal = 16.dp, vertical = 13.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Icon(Icons.Filled.MusicNote, null, tint = Rose, modifier = Modifier.size(20.dp))
+                        Text(
+                            music.title.ifEmpty { "Song from YouTube" }, color = Color.White, fontSize = 14.sp,
+                            fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f).padding(start = 10.dp),
+                            fontFamily = PoppinsFamily,
+                        )
+                        Text(
+                            "${noteClipLabel(music.startSec)} · ${music.endSec - music.startSec}s",
+                            color = Sub, fontSize = 12.sp, fontFamily = PoppinsFamily,
+                        )
+                        Box(
+                            Modifier.padding(start = 10.dp).size(36.dp).clip(CircleShape).background(Rose),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Icon(
+                                if (playingMusic) Icons.Filled.Close else Icons.Filled.PlayArrow, null,
+                                tint = Color.White, modifier = Modifier.size(18.dp),
+                            )
+                        }
+                    }
+                    if (playingMusic) NoteMusicPlayer(music)
+                }
+            }
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Box(Modifier.size(46.dp).clip(CircleShape).background(Color.White.copy(0.12f)).press(onHeart), contentAlignment = Alignment.Center) {
                     Icon(

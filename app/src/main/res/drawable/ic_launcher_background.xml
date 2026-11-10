@@ -1,4 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- ROUND 68 (Worker E): adaptive-icon background now matches the new app
+     logo tile — rose gradient #FF5C8A -> #E23D74 (same as the tile in
+     ic_launcher_foreground). The foreground is the full rounded tile on
+     transparency, so the background shows only in the corner slivers and
+     blends seamlessly. Replaces the old cream solid. -->
 <shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
-    <solid android:color="#F7E5D0"/>
+    <gradient
+        android:startColor="#FF5C8A"
+        android:endColor="#E23D74"
+        android:angle="270" />
 </shape>

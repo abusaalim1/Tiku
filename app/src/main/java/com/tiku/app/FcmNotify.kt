@@ -8,6 +8,7 @@ import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.graphics.BitmapFactory
 import android.os.Build
 import android.util.Log
 import androidx.compose.runtime.getValue
@@ -115,6 +116,16 @@ object PushAlerts {
             ContextCompat.checkSelfPermission(ctx, android.Manifest.permission.POST_NOTIFICATIONS) ==
             PackageManager.PERMISSION_GRANTED
 
+    /** ROUND 68 (Worker E) — notification branding is the NEW ghost logo:
+     *  the status-bar small icon MUST be monochrome (alpha-only), so it
+     *  is the white ghost silhouette derived from the new mark
+     *  (R.drawable.ic_stat_tiku); the large icon is the full new rose-tile
+     *  logo (R.drawable.tiku_logo). The old orbit-T appears nowhere here —
+     *  the previous builders used the generic system chat glyph. */
+    private fun largeIcon(ctx: Context) =
+        runCatching { BitmapFactory.decodeResource(ctx.resources, R.drawable.tiku_logo) }
+            .getOrNull()
+
     /** ROUND 58: both alert channels are created at APP START
      *  (TikuApp.onCreate) instead of lazily at first post, so a push
      *  landing in a cold FCM-only process always finds them ready.
@@ -169,7 +180,8 @@ object PushAlerts {
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
             )
             val notif = Notification.Builder(c, CHANNEL_ID)
-                .setSmallIcon(android.R.drawable.stat_notify_chat)
+                .setSmallIcon(R.drawable.ic_stat_tiku)
+                .setLargeIcon(largeIcon(c))
                 .setContentTitle(title)
                 .setContentText(body)
                 .setStyle(Notification.BigTextStyle().bigText(body))
@@ -207,7 +219,8 @@ object PushAlerts {
             )
             val name = callerName.takeIf { it.isNotBlank() } ?: "Tiku"
             val notif = Notification.Builder(c, CALL_CHANNEL_ID)
-                .setSmallIcon(android.R.drawable.stat_notify_chat)
+                .setSmallIcon(R.drawable.ic_stat_tiku)
+                .setLargeIcon(largeIcon(c))
                 .setContentTitle(name)
                 .setContentText(if (video) "Incoming video call" else "Incoming voice call")
                 .setCategory(Notification.CATEGORY_CALL)

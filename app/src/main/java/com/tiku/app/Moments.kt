@@ -206,8 +206,18 @@ fun MomentsScreen() {
     }
 
     val webView = remember {
+        // ROUND 68 (WS13): the ACTIVITY context, not applicationContext
+        // — Watch.kt's Round-15 lesson: an application-context WebView
+        // broke video-surface compositing on the owner's phone (black
+        // video). The Memories story viewer (SnapDetailModal) is the
+        // same class of surface — a backdrop-filter blur layer plus a
+        // spring-transformed card — and the application-context WebView
+        // is the one Android-side construction known-bad for it. The
+        // web-side half of the diagnosis is a HOOK note (see report):
+        // the modal's backdrop-blur + spring still needs its own fix
+        // in the moments web source.
         buildMomentsWebView(
-            ctx = ctx.applicationContext,
+            ctx = ctx,
             onProgress = { progressState.intValue = it },
             onMainFrameError = { errorState.value = true },
             onLoadStarted = { errorState.value = false },

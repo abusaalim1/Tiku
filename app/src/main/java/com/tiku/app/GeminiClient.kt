@@ -112,6 +112,45 @@ object GeminiClient {
         return cascadeTextAnswer(body)
     }
 
+    /** ROUND 68 (WS4): the COMPANION's own cascade — the same three
+     *  text models, but fastest first. gemini-3.1-flash-lite is the
+     *  lightest tier (verified answering live 2026-11-05, see
+     *  GeminiConfig), so a companion reply tries it before the
+     *  heavier 3.5-flash; 3.8-flash stays last as the capacity
+     *  fallback. The /tiku path ([answerText]) keeps TEXT_MODELS
+     *  order untouched — only the companion moves. One POST per
+     *  reply either way: no extra round-trips were added anywhere
+     *  (the persona + full history ride in the single
+     *  generateContent body, as before). Streaming was NOT added:
+     *  this client is built on the non-streaming generateContent
+     *  endpoint and the local store appends whole messages — a
+     *  streamGenerateContent path would need incremental UI +
+     *  persist-on-complete, a separate change (see worker A
+     *  report). */
+    private val COMPANION_TEXT_MODELS = listOf(
+        "gemini-3.1-flash-lite",
+        "gemini-3.5-flash",
+        "gemini-3.8-flash",
+    )
+
+    /** The companion cascade — [cascadeTextAnswer]'s exact logic
+     *  over [COMPANION_TEXT_MODELS]. */
+    private suspend fun cascadeCompanionAnswer(body: JSONObject): Outcome<String> {
+        var sawQuota = false
+        for (model in COMPANION_TEXT_MODELS) {
+            when (val r = post(model, body)) {
+                is Raw.Ok -> {
+                    val text = extractText(r.json)
+                    if (!text.isNullOrBlank()) return Outcome.Ok(text.trim())
+                    Log.w("TikaAi", "model $model answered empty — cascading")
+                }
+                Raw.Quota -> sawQuota = true
+                Raw.Failed -> Unit
+            }
+        }
+        return if (sawQuota) Outcome.Quota else Outcome.Failed
+    }
+
     /** ROUND 54 (Part B): one reply from the Tika COMPANION — the
      *  pinned bot at the top of the Messages list. This is the one
      *  deliberate multi-turn conversation the AI ever sees: [history]
@@ -121,8 +160,8 @@ object GeminiClient {
      *  answers (it carries the same identity law as IDENTITY above).
      *  NO other chat's content may ever be passed here — the /tiku
      *  privacy law is untouched; this conversation is the exception
-     *  the owner ordered, and it contains only itself. Same
-     *  TEXT_MODELS cascade as [answerText]. */
+     *  the owner ordered, and it contains only itself. ROUND 68:
+     *  answers via the fastest-first companion cascade above. */
     suspend fun companionReply(
         history: List<Pair<Boolean, String>>,
         persona: String,
@@ -151,7 +190,7 @@ object GeminiClient {
                 put("maxOutputTokens", 1200)
             })
         }
-        return cascadeTextAnswer(body)
+        return cascadeCompanionAnswer(body)
     }
 
     /** ROUND 55 (Part C): the companion LOOKS at a photo — the bot
@@ -166,7 +205,7 @@ object GeminiClient {
      *  any real chat can enter here either — the caller builds the
      *  history from TikaBotStore alone. [jpeg] must already be
      *  downscaled by the caller (≤1024 px on the long edge), exactly
-     *  like the /tiku vision payload. Same TEXT_MODELS cascade. */
+     *  like the /tiku vision payload. Same fastest-first companion cascade. */
     suspend fun companionImageReply(
         history: List<Pair<Boolean, String>>,
         persona: String,
@@ -204,7 +243,7 @@ object GeminiClient {
                 put("maxOutputTokens", 1200)
             })
         }
-        return cascadeTextAnswer(body)
+        return cascadeCompanionAnswer(body)
     }
 
     /** ROUND 43: a /tiku question ABOUT one photo — the vision path.

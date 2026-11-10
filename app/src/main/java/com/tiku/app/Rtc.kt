@@ -207,25 +207,25 @@ class RtcSession(
 
     var events: Events? = null
 
-    // ROUND 61 (Bug 3) — 1:1 video-call quality profile. Before this
-    // round the camera captured 960x720@24 and the video sender's
-    // RtpParameters were NEVER touched anywhere in the app: no
-    // maxBitrate, no maxFramerate, no degradationPreference — so the
-    // encoder ran on the WebRTC defaults, whose adaptation sacrifices
-    // RESOLUTION first when bandwidth tightens. That is exactly the
-    // owner's screenshot: his PiP (the raw local capture) looked fine
-    // while the REMOTE fullscreen video — the encoded stream the peer
-    // receives — arrived heavily blurred/pixelated. The profile:
-    // capture up to 720p, an ADAPTIVE encoder bitrate capped at
-    // 2.0 Mbps (inside the 1.5–2.5 Mbps band), and
-    // MAINTAIN_RESOLUTION so framerate is sacrificed before
-    // resolution. No simulcast (a 1:1 call has one viewer).
+    // ROUND 68 (WS7c) — HIGH 1:1 video-call quality profile. Supersedes
+    // the Round 61 profile (720p@30, 2.0 Mbps cap, MAINTAIN_RESOLUTION):
+    // capture up to 1080p (1920x1080) at 30 fps, an ADAPTIVE encoder
+    // bitrate capped at 4.0 Mbps (floor 500 kbps so adaptation has room
+    // to breathe instead of a hard fixed rate), framerate capped at the
+    // capture rate, and MAINTAIN_RESOLUTION so framerate is sacrificed
+    // before resolution under bandwidth pressure. No simulcast (a 1:1
+    // call has one viewer). The camera capturer negotiates the closest
+    // format the device actually supports at or below the request, so
+    // a camera without a 1080p mode gracefully falls back on its own
+    // — startCapture does not fail for a lower-capability camera, and
+    // the encoder cap simply never binds there. Shipped values:
+    // 1920x1080 @ 30 fps, max 4.0 Mbps / min 0.5 Mbps, MAINTAIN_RESOLUTION.
     private companion object {
-        const val CAMERA_CAPTURE_WIDTH = 1280
-        const val CAMERA_CAPTURE_HEIGHT = 720
+        const val CAMERA_CAPTURE_WIDTH = 1920
+        const val CAMERA_CAPTURE_HEIGHT = 1080
         const val CAMERA_CAPTURE_FPS = 30
-        const val VIDEO_MAX_BITRATE_BPS = 2_000_000
-        const val VIDEO_MIN_BITRATE_BPS = 300_000
+        const val VIDEO_MAX_BITRATE_BPS = 4_000_000
+        const val VIDEO_MIN_BITRATE_BPS = 500_000
         const val VIDEO_MAX_FRAMERATE = 30
     }
 
@@ -342,11 +342,12 @@ class RtcSession(
         if (capturer != null) {
             captureHelper = SurfaceTextureHelper.create("tiku-capture", eglContext)
             capturer.initialize(captureHelper, appCtx, videoSource!!.capturerObserver)
-            // ROUND 61: request 720p (1280x720) at 30 fps. The camera
-            // capturer negotiates the closest format the device
-            // actually supports at or below the request, so a camera
-            // without a 720p mode gracefully falls back on its own —
-            // startCapture does not fail for a lower-capability camera.
+            // ROUND 68 (WS7c): request 1080p (1920x1080) at 30 fps (was
+            // 720p under Round 61). The camera capturer negotiates the
+            // closest format the device actually supports at or below
+            // the request, so a camera without a 1080p mode gracefully
+            // falls back on its own — startCapture does not fail for a
+            // lower-capability camera.
             runCatching { capturer.startCapture(CAMERA_CAPTURE_WIDTH, CAMERA_CAPTURE_HEIGHT, CAMERA_CAPTURE_FPS) }
             videoTrack?.setEnabled(cameraOn)
         } else {
@@ -363,9 +364,9 @@ class RtcSession(
     }
 
     /**
-     * ROUND 61 (Bug 3) — apply the 1:1 video quality profile to the
-     * video sender: adaptive bitrate with a 2.0 Mbps cap (floor
-     * 300 kbps so adaptation has room to breathe instead of a hard
+     * ROUND 68 (WS7c) — apply the HIGH 1:1 video quality profile to the
+     * video sender: adaptive bitrate with a 4.0 Mbps cap (floor
+     * 500 kbps so adaptation has room to breathe instead of a hard
      * fixed rate), framerate capped at the capture rate, and
      * MAINTAIN_RESOLUTION degradation — under bandwidth pressure the
      * encoder drops frames before it drops pixels. A single encoding
@@ -375,8 +376,8 @@ class RtcSession(
      * track/sender — gets the same profile. Best-effort by design:
      * any failure leaves the sender exactly as it was and can never
      * break call setup. Audio is not touched here or anywhere in
-     * this round.
-     */
+     * this round. (Round 61's profile was 720p / 2.0 Mbps / 300 kbps
+     * floor; the constants above are the shipped Round-68 values.)
     private fun configureVideoSender() {
         val sender = videoSender ?: return
         runCatching {

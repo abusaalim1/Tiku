@@ -338,8 +338,9 @@ private fun singleEmojiOverlayKind(m: TikuMessage): String? {
     val g = singleEmojiGrapheme(m.text) ?: return null
     return when (g.replace("\uFE0F", "")) {
         // ROUND 25: ❤ and 😘 are NOT here any more — they belong to
-        // the owner's supplied design kinds ([singleEmojiDesignKind])
-        // and every caller checks that mapping first.
+        // the owner's supplied design kinds ([singleEmojiDesignKind]
+        // for ❤; [singleEmojiFx2Kind] for 😘 since ROUND 68/WS16)
+        // and every caller checks those mappings first.
         // ROUND 66: 🥰, 😍, 🔥 and 🤣 are NOT here any more either —
         // they belong to the owner's Chat Emoji Effects file
         // ([singleEmojiFx2Kind]) and every caller checks that mapping
@@ -353,20 +354,22 @@ private fun singleEmojiOverlayKind(m: TikuMessage): String? {
 }
 
 /** ROUND 25: the owner's own supplied emoji-effect design
- *  (EmojiFx.kt). A lone ❤ / 😘 / 🫣 / 👀 / 😚 / 🤭 plays that
+ *  (EmojiFx.kt). A lone ❤ / 🫣 / 👀 / 😚 / 🤭 plays that
  *  design's centre-stage animation via [EmojiFxOverlay] INSTEAD of a
  *  Round-24 particle kind. Returns the design's kind index
  *  (0=heart, 1=kiss, 2=peek, 3=eyes, 4=kissing, 5=giggle), or null.
  *  Same qualification gate as [singleEmojiOverlayKind]: plain TEXT,
  *  no fx field, exactly one strict grapheme. ❤ accepts U+2764 with
  *  or without VS16 (the compare strips it, like the mapping above).
- *  Every caller checks this BEFORE [singleEmojiOverlayKind]. */
+ *  Every caller checks this BEFORE [singleEmojiOverlayKind].
+ *  ROUND 68 (WS16): 😘 no longer routes here — it plays the v10
+ *  'kiss' spec via [singleEmojiFx2Kind] index 1 (callers check Fx2
+ *  first, so kind 1 is unreachable now and is dropped). */
 private fun singleEmojiDesignKind(m: TikuMessage): Int? {
     if (m.kind != MsgKind.TEXT || m.fx != null || m.undecryptable || m.deletedForEveryone) return null
     val g = singleEmojiGrapheme(m.text) ?: return null
     return when (g.replace("\uFE0F", "")) {
         "❤" -> 0
-        "😘" -> 1
         "🫣" -> 2
         "👀" -> 3
         "😚" -> 4
@@ -382,17 +385,18 @@ private fun singleEmojiDesignKind(m: TikuMessage): Int? {
  *  qualification gate as [singleEmojiDesignKind] (plain TEXT, no fx
  *  field, not undecryptable/tombstone, exactly one strict grapheme).
  *  Every caller checks this BEFORE [singleEmojiDesignKind] and
- *  [singleEmojiOverlayKind] — with ONE deliberate exception by
- *  construction: 😘 has NO entry here (the file's 'kiss' spec is
- *  never routed, per the owner's order), so 😘 falls through to
- *  [singleEmojiDesignKind] kind 1 and keeps its Round-25 show
- *  byte-for-byte. ❤ accepts U+2764 with or without VS16 (the compare
- *  strips it, like the mappings above). */
+ *  [singleEmojiOverlayKind]. ROUND 68 (WS16): the v10 file's specs
+ *  are routed here too — 😘 now plays the v10 'kiss' spec (index 1;
+ *  the owner ordered every covered emoji changed except 🖕/🍑, and
+ *  the 😘 flag to him drew no veto), and the 4 new v10 specs append
+ *  at 21–24 (💋 😋 🌚 💦). ❤ accepts U+2764 with or without VS16
+ *  (the compare strips it, like the mappings above). */
 private fun singleEmojiFx2Kind(m: TikuMessage): Int? {
     if (m.kind != MsgKind.TEXT || m.fx != null || m.undecryptable || m.deletedForEveryone) return null
     val g = singleEmojiGrapheme(m.text) ?: return null
     return when (g.replace("\uFE0F", "")) {
         "❤" -> 0
+        "😘" -> 1
         "😍" -> 2
         "🥰" -> 3
         "🫶" -> 4
@@ -412,6 +416,10 @@ private fun singleEmojiFx2Kind(m: TikuMessage): Int? {
         "🤣" -> 18
         "😴" -> 19
         "🙄" -> 20
+        "💋" -> 21
+        "😋" -> 22
+        "🌚" -> 23
+        "💦" -> 24
         else -> null
     }
 }
@@ -2720,7 +2728,10 @@ private fun RdGameCard(
                             fontWeight = FontWeight.SemiBold,
                             maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis, fontFamily = InterTight,)
                         Text(
-                            "2-player · tap to play",
+                            // ROUND 68 (WS6): a received game is an invite —
+                            // the card says so; own games keep the old line.
+                            if (m.me) "2-player · tap to play"
+                            else "${person.displayName} invited you to play · tap to join",
                             color = GameCardInk.copy(alpha = 0.55f), fontSize = 11.5.sp, fontFamily = PoppinsFamily,)
                     }
                 }
@@ -2962,6 +2973,9 @@ private fun RdChatTopBar(
     onInfo: () -> Unit,
     onCall: () -> Unit,
     onVideoCall: () -> Unit,
+    // ROUND 68 (WS9): tapping the avatar opens the full profile
+    // picture; the name column still opens chat info.
+    onPhotoClick: () -> Unit = {},
 ) {
     Row(
         Modifier.padding(horizontal = 14.dp, vertical = 12.dp).fillMaxWidth().chatGlass(h, RoundedCornerShape(999.dp)).padding(8.dp),
@@ -2971,11 +2985,13 @@ private fun RdChatTopBar(
             Icon(Icons.Filled.ArrowBack, null, tint = Color.White, modifier = Modifier.size(22.dp))
         }
         Row(
-            Modifier.weight(1f).clip(RoundedCornerShape(999.dp)).rdPress(onInfo),
+            Modifier.weight(1f).clip(RoundedCornerShape(999.dp)),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Box(Modifier.padding(horizontal = 6.dp)) { RdAv(person, 38) }
-            Column {
+            // ROUND 68 (WS9): the avatar alone opens the full photo;
+            // the name column alone opens chat info.
+            Box(Modifier.padding(horizontal = 6.dp).rdPress(onPhotoClick)) { RdAv(person, 38) }
+            Column(Modifier.weight(1f).rdPress(onInfo)) {
                 Text(
                     title, color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.SemiBold,
                     maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis, fontFamily = InterTight,)
@@ -3539,6 +3555,8 @@ private fun RdChatContent(thread: ChatThread) {
      *  (GamePlayer.kt), or null. Only ever set for a LOADED game —
      *  the card gates the tap (unloaded → fetchMedia first). */
     var gamePlayerMsg by remember { mutableStateOf<TikuMessage?>(null) }
+    /** ROUND 68 (WS9): the full profile picture is open. */
+    var showPhoto by remember { mutableStateOf(false) }
     // ---- ROUND 60: Nikah ceremony (Nikah.kt / NikahUi.kt) ----
     /** The full-screen live ceremony is open on this chat. */
     var nikahOpen by remember(threadId) { mutableStateOf(false) }
@@ -5150,6 +5168,7 @@ private fun RdChatContent(thread: ChatThread) {
                 onInfo = { AppState.go(Screen.ChatDetails(threadId)) },
                 onCall = { startCall(threadId, false) },
                 onVideoCall = { startCall(threadId, true) },
+                onPhotoClick = { showPhoto = true },
             )
             if (thread.pinnedMsgIds.isNotEmpty()) {
                 val pinId = thread.pinnedMsgIds.last()
@@ -5835,6 +5854,9 @@ private fun RdChatContent(thread: ChatThread) {
                 }
             }
         }
+
+        // ---- ROUND 68 (WS9): full profile picture (topmost) ----
+        if (showPhoto) RdIProfilePhotoViewer(person) { showPhoto = false }
 
         // ---- ROUND 41: full-screen game player (topmost) ----
         gamePlayerMsg?.let { gm ->
