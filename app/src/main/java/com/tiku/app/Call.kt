@@ -7,7 +7,6 @@ import android.content.ContextWrapper
 import android.content.pm.PackageManager
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import android.media.projection.MediaProjectionManager
 import android.os.Build
 import android.os.VibrationEffect
 import android.os.Vibrator
@@ -39,10 +38,24 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Call
+import androidx.compose.material.icons.filled.CallEnd
+import androidx.compose.material.icons.filled.FlipCameraAndroid
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.MicOff
+import androidx.compose.material.icons.filled.MoreHoriz
+import androidx.compose.material.icons.filled.Videocam
+import androidx.compose.material.icons.filled.VideocamOff
+import androidx.compose.material.icons.filled.VolumeUp
+import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
-// ROUND 68 (WS7a): the call screen uses the owner design's drawn
-// TikuIcon set only — the Material icon imports are gone with the
-// last Material glyph (the minimize chevron, now TikuIcon "chev").
+// ROUND 69 (#6): call-control glyphs are Material ImageVectors
+// (material-icons-extended, already a dependency) — see CallToggle.
+// The hand-drawn TikuIcon paths previously used here rendered as
+// blobs (double-scaled stroke in GlassDesign.kt's drawSvgPath); no
+// call-control glyph uses them any more.
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -62,8 +75,8 @@ import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.lerp
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
@@ -181,21 +194,18 @@ fun rememberCallStarter(): (threadId: String, video: Boolean) -> Unit {
 
 /** WebRTC video surface (local PiP or remote full-screen). Preview mode never
  *  reaches here — org.webrtc classes must not load under Robolectric.
- *  ROUND 32: [fit] letterboxes instead of cropping — used when the
- *  remote stream is a shared SCREEN, whose edges carry content that
- *  must never be cut away. Camera streams keep the designed FILL. */
+ *  Camera streams use the designed FILL scaling. (ROUND 69: the
+ *  former FIT/letterbox mode existed only for shared screens;
+ *  screen sharing is removed.) */
 @Composable
-private fun RtcVideoView(local: Boolean, modifier: Modifier, fit: Boolean = false) {
+private fun RtcVideoView(local: Boolean, modifier: Modifier) {
     val session = CallController.currentSession() ?: return
     AndroidView(
         factory = { c ->
             SurfaceViewRenderer(c).apply {
                 init(session.eglContext, null)
                 setMirror(local)
-                setScalingType(
-                    if (fit) RendererCommon.ScalingType.SCALE_ASPECT_FIT
-                    else RendererCommon.ScalingType.SCALE_ASPECT_FILL
-                )
+                setScalingType(RendererCommon.ScalingType.SCALE_ASPECT_FILL)
                 setEnableHardwareScaler(true)
                 if (local) { setZOrderMediaOverlay(true); session.bindLocalView(this) }
                 else session.bindRemoteView(this)
@@ -213,14 +223,14 @@ private fun RtcVideoView(local: Boolean, modifier: Modifier, fit: Boolean = fals
  *  state is the app's real liquid glass — [glassSurface] on a circle, the
  *  same brush, sheen and edge light the gate/Settings surfaces use; the
  *  ACTIVE state flips to a near-white gradient disc with a dark glyph.
- *  Icons are the owner design's drawn set (TikuIcon names). ROUND 68
- *  (WS7a): the dock glyphs were thin 24 dp strokes that read cheap at
- *  a glance — they are now bolder (2.0 stroke) and larger (26 dp) in
- *  the same drawn set and the same discs, so the dock reads premium
- *  without a new icon download or a new glyph language. Skin only —
+ *  ROUND 69 (#6): the glyph is a Material [ImageVector] (24x24
+ *  viewport, official filled path data, rendered by material3 [Icon]
+ *  at 26 dp) — one consistent, instantly readable set. This replaces
+ *  the hand-drawn TikuIcon strings, whose Path strokes were scaled
+ *  twice in GlassDesign.kt and collapsed into blobs. Skin only —
  *  same size, same click target, same states. */
 @Composable
-private fun CallToggle(icon: String, active: Boolean, onClick: () -> Unit) {
+private fun CallToggle(icon: ImageVector, active: Boolean, onClick: () -> Unit) {
     Box(
         (if (active) {
             Modifier.size(58.dp).clip(CircleShape)
@@ -236,7 +246,7 @@ private fun CallToggle(icon: String, active: Boolean, onClick: () -> Unit) {
             .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null, onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {
-        TikuIcon(icon, size = 26.dp, strokeWidthDp = 2.0f, tint = if (active) Color(0xFF16141C) else Color.White)
+        Icon(icon, contentDescription = null, modifier = Modifier.size(26.dp), tint = if (active) Color(0xFF16141C) else Color.White)
     }
 }
 
@@ -273,16 +283,15 @@ private fun CallGlassDisc(
     }
 }
 
-/** End call: the red glass disc with the phone glyph rotated 135°
- *  (the classic hang-up pose). Red stays unmistakably red. ROUND 68
- *  (WS7a): the glyph is bolder/larger like the rest of the dock. */
+/** End call: the red glass disc with Material's CallEnd glyph —
+ *  the standard phone-down handset, already in hang-up orientation
+ *  (no manual rotation). Red stays unmistakably red. ROUND 69 (#6):
+ *  replaces the rotated hand-drawn "call" path that rendered as a
+ *  white mask-like blob on this disc. */
 @Composable
 private fun CallEndButton(onClick: () -> Unit) {
     CallGlassDisc(58.dp, listOf(Color(0xFFFF7A85), Color(0xFFE5313F)), onClick) {
-        TikuIcon(
-            "call", size = 26.dp, strokeWidthDp = 2.0f, tint = Color.White,
-            modifier = Modifier.graphicsLayer { rotationZ = 135f },
-        )
+        Icon(Icons.Filled.CallEnd, contentDescription = null, modifier = Modifier.size(26.dp), tint = Color.White)
     }
 }
 
@@ -296,9 +305,6 @@ fun CallScreen(threadId: String, video: Boolean) {
     val ctx = LocalContext.current
     val callState by CallController.state.collectAsState()
     val rtcSession by CallController.sessionState.collectAsState()
-    // ROUND 32: the peer is sharing their screen (their video stream
-    // is a screen: show it even on voice calls, and letterboxed).
-    val remoteSharingNow by CallController.remoteSharing.collectAsState()
     // ROUND 47: the peer's camera is off (their doc field) — their
     // surface steps aside for the avatar instead of freezing.
     val remoteCameraOffNow by CallController.remoteCameraOff.collectAsState()
@@ -373,26 +379,7 @@ fun CallScreen(threadId: String, video: Boolean) {
         else { pendingAccept = inc; acceptLauncher.launch(needed.toTypedArray()) }
     }
 
-    // ROUND 32 — screen share consent. The system dialog is the ONLY
-    // way to a projection grant, and the grant is single-use: every
-    // share start asks afresh. Grant → the controller starts the
-    // projection service and swaps the session's video source to the
-    // screen; denial simply leaves the call untouched.
-    val shareConsentLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.StartActivityForResult(),
-    ) { res ->
-        val data = res.data
-        if (res.resultCode == Activity.RESULT_OK && data != null) {
-            CallController.beginScreenShare(ctx, data)
-        }
-    }
-    fun toggleShare() {
-        val c = callState as? CallUiState.Connected ?: return
-        if (c.sharingScreen) { CallController.stopScreenShare(); return }
-        if (Config.PREVIEW_UI_ONLY) return
-        val mpm = ctx.getSystemService(Context.MEDIA_PROJECTION_SERVICE) as? MediaProjectionManager ?: return
-        shareConsentLauncher.launch(mpm.createScreenCaptureIntent())
-    }
+    // ROUND 69 (#6): screen sharing removed — no consent launcher remains.
 
     // ROUND 8: Back during a live call MINIMIZES to the floating window
     // (IG behaviour) — it must never hang up by accident. Only the explicit
@@ -495,22 +482,16 @@ fun CallScreen(threadId: String, video: Boolean) {
             },
         contentAlignment = Alignment.Center,
     ) {
-        // Remote video: video calls as before; ROUND 32 also shows
-        // the surface on a VOICE call when the peer starts sharing
-        // their screen (their blank-by-default video track lights
-        // up), or whenever a remote video track actually exists.
-        // ROUND 47: a peer whose camera is OFF loses the surface to
-        // the avatar presentation below (their disabled track would
-        // only freeze on its last frame) — unless they are sharing
-        // their screen, which rides the same track and stays king.
+        // Remote video: video calls as before, or whenever a remote
+        // video track actually exists. ROUND 47: a peer whose camera
+        // is OFF loses the surface to the avatar presentation below
+        // (their disabled track would only freeze on its last frame).
         val showRemoteVideo = connected != null && !Config.PREVIEW_UI_ONLY &&
-            (isVideo || remoteSharingNow || rtcSession?.remoteVideoTrack != null) &&
-            !(remoteCameraOffNow && !remoteSharingNow)
+            (isVideo || rtcSession?.remoteVideoTrack != null) &&
+            !remoteCameraOffNow
         if (showRemoteVideo) {
-            // re-keyed on the share flag too: FIT vs FILL is chosen
-            // at renderer creation, so a share flip rebuilds the view.
-            key(connected!!.tick to remoteSharingNow) {
-                RtcVideoView(local = false, modifier = Modifier.fillMaxSize(), fit = remoteSharingNow)
+            key(connected!!.tick) {
+                RtcVideoView(local = false, modifier = Modifier.fillMaxSize())
             }
             // ROUND 45: video-stage scrims in the new language — soft
             // dark pools top and bottom so the glass chrome (minimize,
@@ -530,15 +511,12 @@ fun CallScreen(threadId: String, video: Boolean) {
             )
         }
         // self-view PiP (98x138, r24, white .4 edge, resting top-end).
-        // ROUND 32: also composed while I share my screen on a voice
-        // call — the PiP binds the same video track, so it previews
-        // exactly what the peer is seeing.
         // ROUND 68 (WS7d): the PiP is DRAGGABLE — the same
         // detectDragGestures + clamp pattern FloatingCallWindow uses
         // (drag deltas in px, clamped to the screen with an 8.dp
         // margin, position kept across recompositions). Dragging moves
         // only this window; the renderers underneath are untouched.
-        if (isVideo || connected?.sharingScreen == true) {
+        if (isVideo) {
             BoxWithConstraints(Modifier.fillMaxSize()) {
                 val pipW = 98.dp
                 val pipH = 138.dp
@@ -561,12 +539,11 @@ fun CallScreen(threadId: String, video: Boolean) {
                         },
                 ) {
                     // ROUND 47: the live self-view only while the camera
-                    // is actually sending (or the screen is — the PiP then
-                    // previews the share). Camera off falls through to the
+                    // is actually sending. Camera off falls through to the
                     // "You" glass placeholder: the disabled track's stale
                     // last frame must never pose as a live camera.
                     if (!Config.PREVIEW_UI_ONLY && rtcSession != null && (connected != null || callState is CallUiState.Outgoing) &&
-                        (connected?.sharingScreen == true || rtcSession?.cameraEnabled == true)) {
+                        rtcSession?.cameraEnabled == true) {
                         RtcVideoView(
                             local = true,
                             modifier = Modifier.fillMaxSize()
@@ -587,11 +564,11 @@ fun CallScreen(threadId: String, video: Boolean) {
         }
         // ROUND 8: explicit minimize control (same action as Back) — shrinks
         // the call to the floating window so messaging can continue.
-        // ROUND 68 (WS7a/WS7b): the chevron is the drawn set's own
-        // "chev" (one icon language on the whole screen — the Material
-        // chevron it replaced is gone), and the control hides with the
-        // rest of the dock once the call connects (it stays on screen
-        // while outgoing, when it is the only minimize path besides Back).
+        // ROUND 69 (#6): the glyph is Material KeyboardArrowDown (the
+        // call screen's one icon language now), and the control hides
+        // with the rest of the dock once the call connects (it stays
+        // on screen while outgoing, when it is the only minimize path
+        // besides Back).
         if ((connected != null && controlsVisible) || callState is CallUiState.Outgoing) {
             Box(
                 Modifier.align(Alignment.TopStart).padding(16.dp).size(40.dp)
@@ -600,7 +577,7 @@ fun CallScreen(threadId: String, video: Boolean) {
                         CallController.minimizeCall()
                     },
                 contentAlignment = Alignment.Center,
-            ) { TikuIcon("chev", size = 22.dp, strokeWidthDp = 2.0f, tint = Color.White) }
+            ) { Icon(Icons.Filled.KeyboardArrowDown, contentDescription = null, modifier = Modifier.size(22.dp), tint = Color.White) }
         }
         // ROUND 68 (WS7b): the 3-dot button — the ONE control that
         // stays once the call connects. It sits on the RIGHT edge,
@@ -616,7 +593,7 @@ fun CallScreen(threadId: String, video: Boolean) {
                         if (controlsVisible) controlsVisible = false else pokeControls()
                     },
                 contentAlignment = Alignment.Center,
-            ) { TikuIcon("dots", size = 22.dp, tint = Color.White) }
+            ) { Icon(Icons.Filled.MoreHoriz, contentDescription = null, modifier = Modifier.size(22.dp), tint = Color.White) }
         }
         Column(
             Modifier.fillMaxSize().padding(top = 70.dp, bottom = 50.dp),
@@ -662,46 +639,6 @@ fun CallScreen(threadId: String, video: Boolean) {
                         fontSize = 19.sp, color = pal.tx)
                     Text(statusText, fontSize = 12.sp, color = pal.tx.copy(alpha = 0.78f), fontFamily = PoppinsFamily)
                 }
-                // ROUND 32 — screen-share indicator, same glass-pill
-                // language as .cltop. Mine carries the Stop action;
-                // the peer's is a plain label (their stream is already
-                // letterboxed full-screen behind this column).
-                // ROUND 68 (WS7b): the indicator is a control surface
-                // (mine carries Stop), so it hides with the dock once
-                // the call connects — the 3-dot button brings it back.
-                if (connected?.sharingScreen == true && controlsVisible) {
-                    Spacer(Modifier.height(10.dp))
-                    Row(
-                        Modifier
-                            .glassSurface(RoundedCornerShape(20.dp))
-                            .padding(horizontal = 16.dp, vertical = 7.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Box(Modifier.size(8.dp).clip(CircleShape).background(Color(0xFF3ED97E)))
-                        Spacer(Modifier.width(8.dp))
-                        Text("You're sharing your screen", fontSize = 12.5.sp, color = Color.White, fontFamily = PoppinsFamily)
-                        Spacer(Modifier.width(12.dp))
-                        Text(
-                            "Stop", fontSize = 12.5.sp, color = pal.danger, fontFamily = PoppinsFamily,
-                            fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
-                            modifier = Modifier.clickable(
-                                interactionSource = remember { MutableInteractionSource() }, indication = null,
-                            ) { CallController.stopScreenShare() },
-                        )
-                    }
-                } else if (remoteSharingNow && connected != null && controlsVisible) {
-                    Spacer(Modifier.height(10.dp))
-                    Row(
-                        Modifier
-                            .glassSurface(RoundedCornerShape(20.dp))
-                            .padding(horizontal = 16.dp, vertical = 7.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Box(Modifier.size(8.dp).clip(CircleShape).background(Color(0xFF3ED97E)))
-                        Spacer(Modifier.width(8.dp))
-                        Text("You're watching their screen", fontSize = 12.5.sp, color = Color.White, fontFamily = PoppinsFamily)
-                    }
-                }
             }
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                 // ROUND 68 (WS7b): the encryption line rides with the
@@ -728,7 +665,7 @@ fun CallScreen(threadId: String, video: Boolean) {
                             58.dp, listOf(Color(0xFF3ED97E), Color(0xFF1F9D55)),
                             onClick = { acceptWithPerms() },
                         ) {
-                            TikuIcon("call", size = 26.dp, strokeWidthDp = 2.0f, tint = Color.White)
+                            Icon(Icons.Filled.Call, contentDescription = null, modifier = Modifier.size(26.dp), tint = Color.White)
                         }
                     }
                 } else if (connected != null) {
@@ -740,18 +677,14 @@ fun CallScreen(threadId: String, video: Boolean) {
                     // lands before the dock hides again.
                     if (controlsVisible) {
                         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                            CallToggle(if (connected.muted) "micOff" else "mic", connected.muted) { pokeControls(); CallController.toggleMute() }
-                            CallToggle("spk", connected.speakerOn) { pokeControls(); CallController.toggleSpeaker() }
-                            // ROUND 32: share screen — on every connected
-                            // call (voice calls included: sharing lights
-                            // up the blank video track). While sharing,
-                            // the camera controls step aside (the camera
-                            // is not the live source; its on/off is kept
-                            // and returns with the camera).
-                            CallToggle("shareScr", connected.sharingScreen) { pokeControls(); toggleShare() }
-                            if (connected.video && !connected.sharingScreen) {
-                                CallToggle(if (connected.cameraOn) "vid" else "vidOff", !connected.cameraOn) { pokeControls(); CallController.toggleCamera() }
-                                CallToggle("flip", false) { pokeControls(); CallController.switchCamera() }
+                            CallToggle(if (connected.muted) Icons.Filled.MicOff else Icons.Filled.Mic, connected.muted) { pokeControls(); CallController.toggleMute() }
+                            CallToggle(Icons.Filled.VolumeUp, connected.speakerOn) { pokeControls(); CallController.toggleSpeaker() }
+                            // ROUND 69 (#6): screen-share button removed
+                            // with the feature — the dock is mic /
+                            // speaker / camera / flip / end.
+                            if (connected.video) {
+                                CallToggle(if (connected.cameraOn) Icons.Filled.Videocam else Icons.Filled.VideocamOff, !connected.cameraOn) { pokeControls(); CallController.toggleCamera() }
+                                CallToggle(Icons.Filled.FlipCameraAndroid, false) { pokeControls(); CallController.switchCamera() }
                             }
                             CallEndButton { CallController.hangup() }
                         }
@@ -814,7 +747,6 @@ fun FloatingCallWindow() {
     val callState by CallController.state.collectAsState()
     val pip by CallController.pipMinimized.collectAsState()
     val rtcSession by CallController.sessionState.collectAsState()
-    val remoteSharingNow by CallController.remoteSharing.collectAsState()
     // ROUND 47: the peer's camera-off flag — the tile falls back to
     // the avatar row instead of a frozen last frame.
     val remoteCameraOffNow by CallController.remoteCameraOff.collectAsState()
@@ -843,16 +775,13 @@ fun FloatingCallWindow() {
         val secs = ((nowMs - connected.atMs) / 1000).coerceAtLeast(0).toInt()
         "%d:%02d".format(secs / 60, secs % 60)
     } else "Calling…"
-    // ROUND 32: the tile also becomes a video tile when a screen is
-    // being shared on a voice call — the peer's shared screen, or (if
-    // the peer sends no video) my own share preview.
-    val tileLocal = connected?.sharingScreen == true && rtcSession?.remoteVideoTrack == null
     // ROUND 47: peer camera off collapses the video tile to the
-    // avatar row — except while a screen share (theirs, or mine as
-    // the tile's local source) is the thing the track is carrying.
-    val showVideo = (video || remoteSharingNow || connected?.sharingScreen == true) &&
+    // avatar row. (ROUND 69: the tile is always the peer's remote
+    // track now — the former local shared-screen tile is gone with
+    // screen sharing.)
+    val showVideo = video &&
         connected != null && !Config.PREVIEW_UI_ONLY && rtcSession != null &&
-        (!remoteCameraOffNow || remoteSharingNow || tileLocal)
+        !remoteCameraOffNow
     val winW = if (showVideo) 108.dp else 184.dp
     val winH = if (showVideo) 156.dp else 64.dp
     val pal = LocalPalette.current
@@ -887,11 +816,8 @@ fun FloatingCallWindow() {
                 },
         ) {
             if (showVideo) {
-                key(connected?.tick to remoteSharingNow) {
-                    RtcVideoView(
-                        local = tileLocal, modifier = Modifier.fillMaxSize(),
-                        fit = remoteSharingNow && !tileLocal,
-                    )
+                key(connected?.tick) {
+                    RtcVideoView(local = false, modifier = Modifier.fillMaxSize())
                 }
                 // ROUND 20: his own tiny self-preview rides the tile's
                 // top-end corner — the same local renderer binding the
@@ -899,9 +825,7 @@ fun FloatingCallWindow() {
                 // track, bound and released with this window only).
                 // Hidden while his camera is off: a black inset would
                 // lie about a camera that is not sending anything.
-                // ROUND 32: also skipped when the tile itself is already
-                // showing the local (shared-screen) track.
-                if (connected?.cameraOn == true && !tileLocal) {
+                if (connected?.cameraOn == true) {
                     RtcVideoView(
                         local = true,
                         modifier = Modifier.align(Alignment.TopEnd).padding(6.dp)
@@ -941,10 +865,7 @@ fun FloatingCallWindow() {
                     30.dp, listOf(Color(0xFFFF7A85), Color(0xFFE5313F)),
                     onClick = { CallController.hangup() },
                 ) {
-                    TikuIcon(
-                        "call", size = 15.dp, tint = Color.White,
-                        modifier = Modifier.graphicsLayer { rotationZ = 135f },
-                    )
+                    Icon(Icons.Filled.CallEnd, contentDescription = null, modifier = Modifier.size(15.dp), tint = Color.White)
                 }
             }
         }

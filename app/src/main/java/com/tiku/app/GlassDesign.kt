@@ -542,12 +542,6 @@ fun TikuIcon(
             }
             "vidOff" -> drawSvgPath("M10 6h3a3 3 0 0 1 3 3v2.5l6-3.5v8l-1.5-.9M16 16v.5a3 3 0 0 1-3 2H5a3 3 0 0 1-3-3V9a3 3 0 0 1 2-2.8M3 3l18 18")
             "flip" -> drawSvgPath("M4 12a8 8 0 0 1 13.7-5.6L20 8M20 4v4h-4M20 12a8 8 0 0 1-13.7 5.6L4 16M4 20v-4h4")
-            // ROUND 32: share-screen glyph — a monitor with an up arrow
-            // rising out of it and a stand line.
-            "shareScr" -> {
-                drawSvgRect(2.5f, 4f, 19f, 13f, 3f)
-                drawSvgPath("M12 13.8V9M9.4 11.4 12 8.8l2.6 2.6M8.5 21h7")
-            }
             "PL" -> drawSvgPath("M8 5v14l11-7z", fill = true)
             "PA" -> drawSvgPath("M9 5v14M15 5v14")
         }

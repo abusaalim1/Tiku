@@ -66,6 +66,8 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import coil.compose.AsyncImage
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -1295,6 +1297,284 @@ fun WatchPane(chromeInsets: Boolean = true, boundedAboveNav: Boolean = false) {
             },
         )
     }
+}
+
+// ============================================================================
+// ROUND 69 (#2) — NOTE SONG PICKER. Build 117 (WS10) made the note's
+// owner PASTE a YouTube / YouTube Music link and parse the id out of
+// it; the owner reports he simply could not add a song that way. This
+// picker replaces pasting with the app's EXISTING YouTube surface —
+// the same m.youtube.com browse/search the Tik Watch pane uses:
+//
+// HOW WATCH PICKS A VIDEO TODAY (the mechanism reused here): the
+// Watch pane (WatchPane / buildWatchWebView above) loads real
+// m.youtube.com pages in a WebView and learns what the user tapped
+// purely from NAVIGATION — WebViewClient.doUpdateVisitedHistory +
+// onPageStarted report every URL (m.youtube is an SPA, so in-page
+// taps arrive via the History API, not full loads), playablePageId()
+// classifies a URL as a playable video (/watch?v=…, /shorts/<id>,
+// /live/<id>) and extracts its id, and WebChromeClient
+// .onReceivedTitle supplies the video's title (the watch page's
+// document title minus the " - YouTube" suffix). Navigation is
+// confined by watchNavAllowed (YouTube hosts + the Google sign-in
+// flow; everything else refused). No JS bridge, no search API, no
+// API key — and this picker copies that recipe 1:1 into its own
+// throwaway WebView: it never touches WatchSession / WatchControl,
+// so opening it cannot raise a Watch session, a mini window, or a
+// "Now watching" bar, and closing it destroys only its own WebView.
+// The user searches, taps a video, taps "Use this song" — videoId +
+// title come back automatically; the user never sees or pastes a
+// link. Playback of the finished note is unchanged (the locked
+// nocookie embed in Redesign.kt's NoteMusicPlayer).
+// ============================================================================
+
+@SuppressLint("SetJavaScriptEnabled")
+private fun buildNotePickerWebView(
+    ctx: Context,
+    onVideoPage: (String) -> Unit,
+    onBrowsePage: () -> Unit,
+    onTitle: (String?, String) -> Unit,
+): WebView {
+    val wv = WebView(ctx)
+    wv.layoutParams = ViewGroup.LayoutParams(
+        ViewGroup.LayoutParams.MATCH_PARENT,
+        ViewGroup.LayoutParams.MATCH_PARENT,
+    )
+    wv.settings.apply {
+        javaScriptEnabled = true
+        domStorageEnabled = true
+        mediaPlaybackRequiresUserGesture = false
+        cacheMode = WebSettings.LOAD_DEFAULT
+        setSupportZoom(false)
+        builtInZoomControls = false
+        displayZoomControls = false
+        allowFileAccess = false
+        allowContentAccess = false
+        @Suppress("DEPRECATION")
+        allowFileAccessFromFileURLs = false
+        @Suppress("DEPRECATION")
+        allowUniversalAccessFromFileURLs = false
+        mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
+        // Same as the Watch pane: keep YouTube's own UA.
+        userAgentString = WebSettings.getDefaultUserAgent(ctx)
+    }
+    wv.setBackgroundColor(android.graphics.Color.BLACK)
+    wv.webViewClient = object : WebViewClient() {
+        // The Watch pane's one navigation policy, unchanged.
+        override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
+            val req = request ?: return false
+            if (!req.isForMainFrame) return false
+            return !watchNavAllowed(req.url)
+        }
+
+        override fun doUpdateVisitedHistory(view: WebView?, url: String?, isReload: Boolean) {
+            super.doUpdateVisitedHistory(view, url, isReload)
+            // SPA taps land here (see the header): a playable URL is
+            // a picked video, anything else is still browsing.
+            if (!url.isNullOrBlank()) {
+                val id = playablePageId(url)
+                if (id != null) onVideoPage(id) else onBrowsePage()
+            }
+        }
+
+        override fun onPageStarted(view: WebView?, url: String?, favicon: android.graphics.Bitmap?) {
+            if (url.isNullOrBlank()) return
+            val id = playablePageId(url)
+            if (id != null) onVideoPage(id) else onBrowsePage()
+        }
+    }
+    wv.webChromeClient = object : WebChromeClient() {
+        override fun onReceivedTitle(view: WebView?, title: String?) {
+            // Same title rule as the Watch pane: the watch page's
+            // document title IS the video title; strip the suffix,
+            // ignore the bare browse-home "YouTube". The id of the
+            // page the title belongs to rides along (from the view's
+            // live URL) so a late title can never be pinned to the
+            // wrong video.
+            val t = title?.removeSuffix(" - YouTube")?.trim().orEmpty()
+            if (t.isNotBlank() && t != "YouTube") {
+                onTitle(playablePageId(view?.url), t)
+            }
+        }
+    }
+    wv.loadUrl(WatchSession.HOME_URL)
+    return wv
+}
+
+/** ROUND 69 (#2) — the full-screen "pick a song" step for a note
+ *  (opened from NoteSheet in Redesign.kt). Browse/search YouTube
+ *  exactly like Tik Watch; landing on a video page raises the
+ *  confirm bar with that video's title; "Use this song" returns
+ *  (videoId, title) via [onPicked]. Back walks the picker's own
+ *  YouTube history first, then dismisses. */
+@Composable
+fun NoteSongPicker(
+    onPicked: (videoId: String, title: String) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false),
+    ) {
+        if (Config.PREVIEW_UI_ONLY) {
+            // Preview / screenshot branch: no WebView (same contract
+            // as WatchPane's preview branch).
+            Box(
+                Modifier.fillMaxSize().background(Color.Black),
+                contentAlignment = Alignment.Center,
+            ) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text(
+                        "Pick a song",
+                        fontFamily = PoppinsFamily, fontSize = 18.sp,
+                        fontWeight = FontWeight.Bold, color = Color.White,
+                    )
+                    Text(
+                        "YouTube opens here on your phone",
+                        fontFamily = PoppinsFamily, fontSize = 13.sp,
+                        color = Color(0xFF9A99A6),
+                        modifier = Modifier.padding(top = 12.dp),
+                    )
+                    Text(
+                        "Close",
+                        fontFamily = PoppinsFamily, fontSize = 14.sp,
+                        fontWeight = FontWeight.SemiBold, color = Color(0xFFFF5C8A),
+                        modifier = Modifier.padding(top = 20.dp)
+                            .clickable { onDismiss() }.padding(8.dp),
+                    )
+                }
+            }
+        } else {
+            NoteSongPickerContent(onPicked, onDismiss)
+        }
+    }
+}
+
+/** The picker's live half (real mode only): owns its own throwaway
+ *  WebView end to end — created here, destroyed here (the WatchPane
+ *  discipline) — and never registers with WatchControl or
+ *  WatchSession, so it cannot disturb Tik Watch. */
+@Composable
+private fun NoteSongPickerContent(
+    onPicked: (videoId: String, title: String) -> Unit,
+    onDismiss: () -> Unit,
+) {
+        val ctx = LocalContext.current
+        // The picked video (id + title) — filled purely from the
+        // WebView's navigation + title callbacks, exactly as the
+        // Watch pane fills WatchSession. [pendingId]/[pendingTitle]
+        // hold a title that arrived before its page's URL commit.
+        var pickedId by remember { mutableStateOf<String?>(null) }
+        var pickedTitle by remember { mutableStateOf("") }
+        var pendingId by remember { mutableStateOf<String?>(null) }
+        var pendingTitle by remember { mutableStateOf("") }
+
+        val webView = remember {
+            buildNotePickerWebView(
+                ctx = ctx,
+                onVideoPage = { id ->
+                    if (pickedId != id) {
+                        pickedId = id
+                        pickedTitle = if (pendingId == id) pendingTitle else ""
+                    }
+                },
+                onBrowsePage = {
+                    pickedId = null
+                    pickedTitle = ""
+                },
+                onTitle = { id, t ->
+                    if (id != null) {
+                        pendingId = id
+                        pendingTitle = t
+                        if (id == pickedId) pickedTitle = t
+                    }
+                },
+            )
+        }
+
+        BackHandler(enabled = true) {
+            if (runCatching { webView.canGoBack() }.getOrDefault(false)) {
+                runCatching { webView.goBack() }
+            } else {
+                onDismiss()
+            }
+        }
+
+        DisposableEffect(webView) {
+            onDispose { destroyWatchWebView(webView) }
+        }
+
+        Box(Modifier.fillMaxSize().background(Color.Black)) {
+            Column(Modifier.fillMaxSize()) {
+                Row(
+                    Modifier.fillMaxWidth().padding(start = 20.dp, end = 20.dp, top = 20.dp, bottom = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            "Pick a song",
+                            fontFamily = PoppinsFamily, fontSize = 18.sp,
+                            fontWeight = FontWeight.Bold, color = Color.White,
+                        )
+                        Text(
+                            if (pickedId == null) "Search YouTube and tap a song"
+                            else "Tap Use this song, then trim the best part",
+                            fontFamily = PoppinsFamily, fontSize = 12.sp,
+                            color = Color(0xFF9A99A6),
+                            modifier = Modifier.padding(top = 2.dp),
+                        )
+                    }
+                    Text(
+                        "Close",
+                        fontFamily = PoppinsFamily, fontSize = 14.sp,
+                        fontWeight = FontWeight.SemiBold, color = Color.White,
+                        modifier = Modifier.clip(RoundedCornerShape(999.dp))
+                            .background(Color.White.copy(0.12f))
+                            .clickable { onDismiss() }
+                            .padding(horizontal = 14.dp, vertical = 8.dp),
+                    )
+                }
+                Box(Modifier.weight(1f).fillMaxWidth()) {
+                    AndroidView(factory = { webView }, modifier = Modifier.fillMaxSize())
+                }
+                val id = pickedId
+                if (id != null) {
+                    Row(
+                        Modifier.fillMaxWidth().background(Color(0xFF16161B))
+                            .padding(horizontal = 16.dp, vertical = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Column(Modifier.weight(1f).padding(end = 12.dp)) {
+                            Text(
+                                pickedTitle.ifEmpty { "Song from YouTube" },
+                                fontFamily = PoppinsFamily, fontSize = 14.sp,
+                                fontWeight = FontWeight.SemiBold, color = Color.White,
+                                maxLines = 1, overflow = TextOverflow.Ellipsis,
+                            )
+                            Text(
+                                "YouTube song",
+                                fontFamily = PoppinsFamily, fontSize = 12.sp,
+                                color = Color(0xFF9A99A6),
+                                modifier = Modifier.padding(top = 2.dp),
+                            )
+                        }
+                        Box(
+                            Modifier.clip(RoundedCornerShape(999.dp))
+                                .background(Color(0xFFFF5C8A))
+                                .clickable { onPicked(id, pickedTitle) }
+                                .padding(horizontal = 18.dp, vertical = 11.dp),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Text(
+                                "Use this song",
+                                fontFamily = PoppinsFamily, fontSize = 14.sp,
+                                fontWeight = FontWeight.SemiBold, color = Color.White,
+                            )
+                        }
+                    }
+                }
+            }
+        }
 }
 
 /**

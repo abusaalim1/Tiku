@@ -1,12 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- ROUND 68 (Worker E): adaptive-icon background now matches the new app
-     logo tile — rose gradient #FF5C8A -> #E23D74 (same as the tile in
-     ic_launcher_foreground). The foreground is the full rounded tile on
-     transparency, so the background shows only in the corner slivers and
-     blends seamlessly. Replaces the old cream solid. -->
+<!-- ROUND 69 (Worker E): new anime app logo. The foreground now carries
+     its own full-bleed pink background edge to edge, so this background
+     only shows if a launcher insets the foreground. Colours re-aligned
+     from the old R68 rose (#FF5C8A -> #E23D74) to the new artwork's own
+     edge pinks (sampled from the image's top/bottom edge bands:
+     #F2A6C9 -> #F9A2C8) so any visible sliver blends seamlessly. -->
 <shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
     <gradient
-        android:startColor="#FF5C8A"
-        android:endColor="#E23D74"
+        android:startColor="#F2A6C9"
+        android:endColor="#F9A2C8"
         android:angle="270" />
 </shape>

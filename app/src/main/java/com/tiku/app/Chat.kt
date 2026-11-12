@@ -45,6 +45,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.animateScrollBy
+import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
@@ -3548,6 +3549,15 @@ private fun RdChatContent(thread: ChatThread) {
      *  (banner ✕) restores normal compose mode. */
     var editingMsg by remember(threadId) { mutableStateOf<TikuMessage?>(null) }
     var menuMsg by remember { mutableStateOf<TikuMessage?>(null) }
+    /** ROUND 69 (#1): scroll states for the long-press menu overlay —
+     *  keyed on the open message so every menu opens at the top. The
+     *  column state lets the whole centred stack scroll when it cannot
+     *  fit the screen; the preview state scrolls a very long message
+     *  INSIDE its capped preview bubble (see the menu overlay below).
+     *  Both are inert for ordinary messages: a stack that fits never
+     *  scrolls, and a short preview never reaches its cap. */
+    val menuColumnScroll = remember(menuMsg?.id) { ScrollState(0) }
+    val menuPreviewScroll = remember(menuMsg?.id) { ScrollState(0) }
     var attachOpen by remember { mutableStateOf(false) }
     var viewerMsg by remember { mutableStateOf<TikuMessage?>(null) }
     var videoViewerMsg by remember { mutableStateOf<TikuMessage?>(null) }
@@ -5331,10 +5341,18 @@ private fun RdChatContent(thread: ChatThread) {
                     contentAlignment = Alignment.Center,
                 ) {
                     Column(
+                        // ROUND 69 (#1): the stack is vertically
+                        // scrollable as a safety net — if reaction bar +
+                        // preview + action menu together ever exceed the
+                        // screen height (very small / landscape screens),
+                        // the menu below stays REACHABLE by scrolling
+                        // instead of being placed off-screen. A stack
+                        // that fits (every ordinary message) never
+                        // scrolls and renders exactly as before.
                         Modifier.fillMaxWidth().padding(horizontal = 16.dp).animateEnterExit(
                             enter = slideInVertically(spring(0.8f, 380f)) { it / 10 } + scaleIn(spring(0.75f, 400f), initialScale = 0.88f) + fadeIn(tween(220)),
                             exit = fadeOut(tween(120)) + scaleOut(tween(160), targetScale = 0.95f),
-                        ),
+                        ).verticalScroll(menuColumnScroll),
                         horizontalAlignment = if (mm.me) Alignment.End else Alignment.Start,
                         verticalArrangement = Arrangement.spacedBy(14.dp),
                     ) {
@@ -5432,12 +5450,27 @@ private fun RdChatContent(thread: ChatThread) {
                                 color = if (chatTheme == null) Color.White
                                     else if (mm.me) chatTheme.ownText else chatTheme.peerText,
                                 fontSize = textSp.sp, fontFamily = rememberChatFontFamily(),
-                                modifier = Modifier.widthIn(max = 280.dp).clip(RoundedCornerShape(22.dp))
+                                // ROUND 69 (#1) — THE FIX: the preview
+                                // used to render the message's FULL text
+                                // with no height limit, so for a very
+                                // long message the preview alone was
+                                // taller than the screen; the centred
+                                // stack overflowed and the action menu
+                                // (placed after the preview) landed
+                                // off-screen — long messages could not
+                                // be deleted. The preview is now capped
+                                // at 160 dp and scrolls internally, so
+                                // reaction bar + preview + full menu
+                                // always fit and Delete is always
+                                // visible. Short previews never reach
+                                // the cap and are pixel-identical.
+                                modifier = Modifier.widthIn(max = 280.dp).heightIn(max = 160.dp).clip(RoundedCornerShape(22.dp))
                                     .background(
                                         if (chatTheme != null) SolidColor(if (mm.me) chatTheme.ownBubble else chatTheme.peerBubble)
                                         else if (mm.me) Brush.linearGradient(listOf(acc.first, acc.second)) else SolidColor(RdCard)
                                     )
-                                    .padding(horizontal = 16.dp, vertical = 11.dp),
+                                    .padding(horizontal = 16.dp, vertical = 11.dp)
+                                    .verticalScroll(menuPreviewScroll),
                             )
                         }
                         Column(

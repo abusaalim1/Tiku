@@ -85,8 +85,27 @@ class MainActivity : ComponentActivity() {
         // Google auth alone never unlocks; the gate's Cancel drops
         // back to this facade). Non-owners never take this branch —
         // their entry is the facade, unchanged.
+        //
+        // ROUND 69 — NO FACADE FLASH: every input to that entry
+        // decision is readable SYNCHRONOUSLY here (OwnerPrefs was
+        // initialised in TikuApp.onCreate from SharedPreferences;
+        // OwnerState.isOwner is a synchronous getter over the
+        // persisted Firebase Auth user), so the destination is now
+        // decided BEFORE setContent below. openGateSync first tries
+        // the synchronous local unlock: when the gate may be skipped
+        // (App lock OFF etc. — OwnerGate.skipGate, unchanged) it
+        // establishes the session and leaves AppState.screen at
+        // Screen.Home, and the facade set just above is never
+        // composed at all. When it may not — the locked case — it
+        // changes nothing and the original openGate runs, leaving the
+        // screen at the episode gate (Screen.TikGate), also before
+        // the first frame. The old code launched unlockFlow in a
+        // coroutine whose two Firestore awaits left the facade
+        // composed for ~2 s before Home landed.
         if (OwnerState.isOwner && OwnerPrefs.skipHome) {
-            SecretEntry.openGate(this, lifecycleScope)
+            if (!SecretEntry.openGateSync(this)) {
+                SecretEntry.openGate(this, lifecycleScope)
+            }
         }
         // ROUND 29 → ROUND 58: a call or message alert may have
         // launched us — same handling as a redelivered intent (see

@@ -360,7 +360,12 @@ fun NoteItem(label: String, note: String, placeholder: Boolean, heart: Boolean, 
 // ---- ROUND 68 notes helpers (WS8 mentions + WS10 music) ----
 /** A YouTube video id from a pasted link (watch / shorts / embed /
  *  music.youtube.com — see [youtubeThumbId]) or a bare 11-char id;
- *  null when the text is not a YouTube link at all. */
+ *  null when the text is not a YouTube link at all.
+ *  ROUND 69 (#2): the note flow no longer pastes links — the song is
+ *  picked in-app via [NoteSongPicker] (Watch.kt), which captures the
+ *  id from the picked page's URL directly. Kept intact and unused by
+ *  the UI so nothing about link parsing changes for any other caller
+ *  or older data. */
 private fun noteMusicVideoId(input: String): String? {
     val t = input.trim()
     if (t.isEmpty()) return null
@@ -457,8 +462,14 @@ fun NoteSheet(
     var showMusic by remember(headerName, note) { mutableStateOf(music != null) }
     // Set false by Remove so the stored song is NOT re-attached on Share.
     var keepMusic by remember(headerName, note) { mutableStateOf(true) }
-    var musicLink by remember(headerName, note) { mutableStateOf("") }
-    var musicTitle by remember(headerName, note) { mutableStateOf(music?.title ?: "") }
+    // ROUND 69 (#2): the picked song, captured in-app by NoteSongPicker
+    // (Watch.kt) — seeded from the stored note so re-sharing an
+    // untouched song keeps it (id + title ride the trim state below).
+    // The build-117 paste-a-link fields are GONE: the user never
+    // pastes or sees a link any more.
+    var pickedVideoId by remember(headerName, note) { mutableStateOf(music?.videoId ?: "") }
+    var pickedTitle by remember(headerName, note) { mutableStateOf(music?.title ?: "") }
+    var songPickerOpen by remember(headerName, note) { mutableStateOf(false) }
     var clipStart by remember(headerName, note) { mutableStateOf((music?.startSec ?: 0).toFloat()) }
     var clipLen by remember(headerName, note) { mutableStateOf((music?.endSec ?: 30) - (music?.startSec ?: 0)) }
     // WS10: the peer view's player toggle (its own state, below).
@@ -477,6 +488,22 @@ fun NoteSheet(
                 (p.username.contains(atQuery, ignoreCase = true) ||
                     p.name.contains(atQuery, ignoreCase = true))
         }.take(5)
+    // ROUND 69 (#2): the in-app song picker (Watch.kt) — picking
+    // returns the video's id + title, seeds the trim UI below, and
+    // the user trims the clip exactly as in build 117. Dismissing
+    // the picker changes nothing.
+    if (songPickerOpen) {
+        NoteSongPicker(
+            onPicked = { id, title ->
+                pickedVideoId = id
+                pickedTitle = title
+                showMusic = true
+                keepMusic = true
+                songPickerOpen = false
+            },
+            onDismiss = { songPickerOpen = false },
+        )
+    }
     Column(
         Modifier.padding(14.dp).fillMaxWidth().rdGlass(h, RoundedCornerShape(28.dp), 0.1f)
             .clickable(remember { MutableInteractionSource() }, null) {}.padding(18.dp),
@@ -517,7 +544,9 @@ fun NoteSheet(
                 }
             }
             Text("${text.length}/60 · Visible to friends for 24 hours", color = Sub, fontSize = 12.sp, fontFamily = PoppinsFamily)
-            // WS10: attach a song (YouTube / YouTube Music link + clip trim).
+            // WS10: attach a song. ROUND 69 (#2): picked in-app
+            // (search + tap, IG-style) — no link pasting any more;
+            // the clip trim below is the build-117 one, unchanged.
             if (!showMusic) {
                 Row(
                     Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(CardC)
@@ -528,7 +557,7 @@ fun NoteSheet(
                     Icon(Icons.Filled.MusicNote, null, tint = Rose, modifier = Modifier.size(20.dp))
                     Text("Add music", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(start = 10.dp), fontFamily = PoppinsFamily)
                     Spacer(Modifier.weight(1f))
-                    Text("YouTube", color = Sub, fontSize = 12.sp, fontFamily = PoppinsFamily)
+                    Text("Pick a song", color = Sub, fontSize = 12.sp, fontFamily = PoppinsFamily)
                 }
             } else {
                 Column(
@@ -542,36 +571,61 @@ fun NoteSheet(
                         Text(
                             "Remove", color = Sub, fontSize = 12.sp, fontWeight = FontWeight.SemiBold,
                             modifier = Modifier.press {
-                                showMusic = false; keepMusic = false; musicLink = ""; musicTitle = ""
+                                showMusic = false; keepMusic = false; pickedVideoId = ""; pickedTitle = ""
                                 clipStart = 0f; clipLen = 30
                             },
                             fontFamily = PoppinsFamily,
                         )
                     }
-                    Box(Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(Color.White.copy(0.06f)).padding(horizontal = 14.dp, vertical = 12.dp)) {
-                        if (musicLink.isEmpty()) Text("Paste a YouTube / YouTube Music link", color = Sub, fontSize = 14.sp, fontFamily = PoppinsFamily)
-                        BasicTextField(musicLink, { musicLink = it }, singleLine = true, textStyle = TextStyle(fontFamily = PoppinsFamily, color = Color.White, fontSize = 14.sp), cursorBrush = SolidColor(Rose), modifier = Modifier.fillMaxWidth())
-                    }
-                    Box(Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(Color.White.copy(0.06f)).padding(horizontal = 14.dp, vertical = 12.dp)) {
-                        if (musicTitle.isEmpty()) Text("Song name (optional)", color = Sub, fontSize = 14.sp, fontFamily = PoppinsFamily)
-                        BasicTextField(musicTitle, { musicTitle = it }, singleLine = true, textStyle = TextStyle(fontFamily = PoppinsFamily, color = Color.White, fontSize = 14.sp), cursorBrush = SolidColor(Rose), modifier = Modifier.fillMaxWidth())
-                    }
-                    Text("Starts at ${noteClipLabel(clipStart.toInt())} · ${clipLen}s clip", color = Sub, fontSize = 12.sp, fontFamily = PoppinsFamily)
-                    Slider(
-                        value = clipStart, onValueChange = { clipStart = it },
-                        valueRange = 0f..180f, steps = 0,
-                        colors = SliderDefaults.colors(thumbColor = Rose, activeTrackColor = Rose, inactiveTrackColor = Color.White.copy(0.14f)),
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                    Row(horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(8.dp)) {
-                        listOf(15, 30, 60).forEach { len ->
-                            Box(
-                                Modifier.clip(RoundedCornerShape(999.dp))
-                                    .background(if (clipLen == len) Rose else Color.White.copy(0.1f))
-                                    .press { clipLen = len }
-                                    .padding(horizontal = 14.dp, vertical = 8.dp),
-                                contentAlignment = Alignment.Center,
-                            ) { Text("${len}s", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, fontFamily = PoppinsFamily) }
+                    if (pickedVideoId.isBlank()) {
+                        // ROUND 69 (#2): nothing picked yet — the one
+                        // action is opening the in-app YouTube picker.
+                        // No link field, no typing: search + tap.
+                        Row(
+                            Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(Rose)
+                                .press { songPickerOpen = true }.padding(horizontal = 14.dp, vertical = 13.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Icon(Icons.Filled.MusicNote, null, tint = Color.White, modifier = Modifier.size(20.dp))
+                            Text("Pick a song", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(start = 10.dp), fontFamily = PoppinsFamily)
+                            Spacer(Modifier.weight(1f))
+                            Text("YouTube", color = Color.White.copy(0.75f), fontSize = 12.sp, fontFamily = PoppinsFamily)
+                        }
+                        Text("Search YouTube inside the app and tap a song — no link needed.", color = Sub, fontSize = 12.sp, fontFamily = PoppinsFamily)
+                    } else {
+                        // The picked song (title captured from the
+                        // picked page — the user never typed it).
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                pickedTitle.ifEmpty { "Song from YouTube" }, color = Color.White, fontSize = 14.sp,
+                                fontWeight = FontWeight.SemiBold, maxLines = 1,
+                                modifier = Modifier.weight(1f), fontFamily = PoppinsFamily,
+                            )
+                            Text(
+                                "Change song", color = Rose, fontSize = 12.sp, fontWeight = FontWeight.SemiBold,
+                                modifier = Modifier.press { songPickerOpen = true }.padding(start = 10.dp),
+                                fontFamily = PoppinsFamily,
+                            )
+                        }
+                        // Build-117 trim, unchanged: start slider
+                        // (0–180 s) + 15/30/60 s clip chips.
+                        Text("Starts at ${noteClipLabel(clipStart.toInt())} · ${clipLen}s clip", color = Sub, fontSize = 12.sp, fontFamily = PoppinsFamily)
+                        Slider(
+                            value = clipStart, onValueChange = { clipStart = it },
+                            valueRange = 0f..180f, steps = 0,
+                            colors = SliderDefaults.colors(thumbColor = Rose, activeTrackColor = Rose, inactiveTrackColor = Color.White.copy(0.14f)),
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                        Row(horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(8.dp)) {
+                            listOf(15, 30, 60).forEach { len ->
+                                Box(
+                                    Modifier.clip(RoundedCornerShape(999.dp))
+                                        .background(if (clipLen == len) Rose else Color.White.copy(0.1f))
+                                        .press { clipLen = len }
+                                        .padding(horizontal = 14.dp, vertical = 8.dp),
+                                    contentAlignment = Alignment.Center,
+                                ) { Text("${len}s", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, fontFamily = PoppinsFamily) }
+                            }
                         }
                     }
                 }
@@ -579,22 +633,22 @@ fun NoteSheet(
             Row(horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(10.dp)) {
                 if (note.isNotEmpty()) Pill("Delete", Modifier.weight(1f), false, onDelete)
                 Pill("Share", Modifier.weight(1f), true) {
-                    // WS10: resolve the pasted link; a bad link stops the
-                    // share with a toast instead of posting a dead song.
+                    // WS10 + ROUND 69 (#2): the attached song is the
+                    // PICKED one (id + title captured in-app), trimmed
+                    // by the slider/chips above. Removed (Remove) or
+                    // never picked = no song; a stored song seeds the
+                    // picked state, so sharing an edited note without
+                    // touching the song keeps it (rebuilt from the
+                    // same id/title + current trim). No link is ever
+                    // parsed here any more, so a share can no longer
+                    // fail on a bad paste.
                     val attached: NoteMusic? = if (!showMusic) {
                         if (keepMusic) music else null
-                    } else if (musicLink.isBlank() && music != null) {
-                        if (keepMusic) music else null
-                    } else if (musicLink.isBlank()) {
+                    } else if (pickedVideoId.isBlank()) {
                         null
                     } else {
-                        val id = noteMusicVideoId(musicLink)
-                        if (id == null) {
-                            AppState.toast("That link didn't look like a YouTube link")
-                            return@Pill
-                        }
                         val start = clipStart.toInt()
-                        NoteMusic(id, musicTitle.trim().ifEmpty { "Song from YouTube" }, start, start + clipLen)
+                        NoteMusic(pickedVideoId, pickedTitle.trim().ifEmpty { "Song from YouTube" }, start, start + clipLen)
                     }
                     // WS8: keep only mentions whose "@username" still
                     // appears in the text (a deleted token un-mentions).

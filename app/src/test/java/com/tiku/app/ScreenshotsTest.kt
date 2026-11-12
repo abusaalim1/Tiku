@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
@@ -1810,5 +1811,103 @@ class ScreenshotsTest {
                 "gallery=$galleryOffered (capture branch unreadable here)",
         )
         shot("62-camera-graceful.png")
+    }
+
+    // ---------- ROUND 69 (#1): long-press menu on a VERY long message ----------
+    @Test fun shot64_chatMenuVeryLongMessage() {
+        // ROUND 69 (#1): a message many screens tall. PRE-FIX the
+        // long-press menu's preview re-rendered the FULL text with no
+        // height limit inside the centred overlay stack, so the stack
+        // overflowed the screen and the action menu after the preview
+        // was placed off-screen — the owner could not delete long
+        // messages (his screenshot: reaction pill + a screen-filling
+        // bubble, no menu). POST-FIX the preview is capped + internally
+        // scrollable and the whole stack is scrollable, so the FULL
+        // menu — Delete included — is on screen with no scrolling.
+        // The message is MINE so both delete options are offered.
+        val p = PreviewStore.people[1]
+        val id = PreviewRepo.startThreadWith(p)
+        val longText = buildString {
+            append("Start of a very long message. ")
+            repeat(120) { append("This is line $it of a message that runs for many screens, far taller than any phone display could ever show at once. ") }
+            append("End of the very long message.")
+        }
+        AppState.upsertMessage(id, TikuMessage(
+            id = "menu-long-1", senderUid = "me", kind = MsgKind.TEXT,
+            text = longText, time = "9:41", me = true, tsMs = 1))
+        AppState.go(Screen.Chat(id))
+        frame { ChatScreen(id) }
+        composeRule.waitForIdle()
+        // Long-press the bubble. The node spans many screens and the
+        // list is tail-anchored, so its visible part is the BOTTOM of
+        // the bubble — a centre long-click would land off-screen.
+        // Press near the node's bottom edge first (shot29's
+        // try-then-fallback pattern); if that did not open the menu,
+        // fall back to the plain centre long-click shot17 uses.
+        var menuOpened = false
+        runCatching {
+            composeRule.onNodeWithText("Start of a very long message.", substring = true)
+                .performTouchInput {
+                    longClick(bottomCenter.copy(y = bottomCenter.y - 120f))
+                }
+            composeRule.waitForIdle()
+            menuOpened = composeRule.onAllNodesWithText("Reply")
+                .fetchSemanticsNodes().isNotEmpty()
+        }
+        if (!menuOpened) {
+            composeRule.onNodeWithText("Start of a very long message.", substring = true)
+                .performTouchInput { longClick() }
+            composeRule.waitForIdle()
+        }
+        // THE PROOF: every action the short-message menu offers
+        // (shot17) is present for the very long message too, and both
+        // Delete items are actually DISPLAYED (assertIsDisplayed —
+        // composed-but-off-screen would pass a mere existence check
+        // yet still fail the owner on a real phone).
+        composeRule.onNodeWithText("Reply").assertIsDisplayed()
+        composeRule.onNodeWithText("Edit").assertIsDisplayed()
+        composeRule.onNodeWithText("Copy").assertIsDisplayed()
+        composeRule.onNodeWithText("Delete for me").assertIsDisplayed()
+        composeRule.onNodeWithText("Delete for everyone").assertIsDisplayed()
+        shot("64-chat-menu-very-long.png")
+    }
+
+    // ---------- ROUND 69 (#2): note music is PICKED, never pasted ----------
+    @Test fun shot65_noteSheetMusicPickerEntry() {
+        // ROUND 69 (#2): build 117 (WS10) made the owner paste a
+        // YouTube link into the note sheet to attach a song, and he
+        // could not add a song that way. POST-FIX the sheet offers an
+        // in-app pick step (NoteSongPicker in Watch.kt — the Tik
+        // Watch browse/search surface): "Add music" expands to a
+        // "Pick a song" action and there is NO paste-a-link field
+        // anywhere. The picker itself is deliberately NOT opened
+        // here: it owns a real WebView (m.youtube), which the
+        // headless harness must not drive — the pick → trim → share
+        // flow on a real phone is the device check in the worker
+        // report. This shot proves the composer's new entry state.
+        AppState.homeTab = HomeTab.CHATS
+        AppState.go(Screen.Home)
+        frame { HomeScreen() }
+        composeRule.onAllNodesWithText("Your note")[0].performTouchInput { click() }
+        composeRule.waitForIdle()
+        composeRule.onAllNodesWithText("Add music", substring = true)[0]
+            .performTouchInput { click() }
+        composeRule.waitForIdle()
+        org.junit.Assert.assertTrue(
+            "my note sheet must offer the in-app Pick a song action",
+            composeRule.onAllNodesWithText("Pick a song", substring = true)
+                .fetchSemanticsNodes().isNotEmpty(),
+        )
+        org.junit.Assert.assertTrue(
+            "no paste-a-link field may remain in the note sheet",
+            composeRule.onAllNodesWithText("Paste a YouTube", substring = true)
+                .fetchSemanticsNodes().isEmpty(),
+        )
+        org.junit.Assert.assertTrue(
+            "no song-name typing field may remain in the note sheet",
+            composeRule.onAllNodesWithText("Song name (optional)", substring = true)
+                .fetchSemanticsNodes().isEmpty(),
+        )
+        shot("65-note-music-picker.png")
     }
 }

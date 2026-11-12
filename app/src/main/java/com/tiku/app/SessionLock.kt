@@ -33,6 +33,28 @@ object SecretEntry {
         }
         AppState.go(Screen.TikGate)
     }
+
+    /**
+     * ROUND 69 — SYNCHRONOUS direct entry for app startup (MainActivity
+     * calls this BEFORE setContent). Returns true only when the local
+     * session was established synchronously and [AppState.screen] is
+     * ALREADY [Screen.Home], so the very first composed frame is the
+     * chat list and the facade is never composed at all.
+     *
+     * The gate decision itself is unchanged: this returns false unless
+     * [OwnerGate.skipGate] — the exact synchronous check [openGate]
+     * uses (App lock OFF on this device, no pending one-shot gate,
+     * signed in, onboarded, local identity present) — passes, and
+     * false again if the local identity fails to load. On false the
+     * caller falls back to [openGate], whose behaviour (gate screen,
+     * or the async [ChatSession.unlockFlow] routing to Welcome /
+     * Restore on any doubt) is exactly as before: every failure here
+     * fails CLOSED, toward more gate, never less.
+     */
+    fun openGateSync(ctx: Context): Boolean {
+        if (!OwnerGate.skipGate(ctx)) return false
+        return ChatSession.unlockLocalSession(ctx)
+    }
 }
 
 /**
@@ -347,24 +369,86 @@ object ChatSession {
             FirebaseEngine.appCtx = c
             val signedIn = FirebaseEngine.signedIn
             val localKey = signedIn && FirebaseEngine.loadLocalIdentity(c)
-            // ROUND 5: tri-state check — a FAILED account check (offline) used
-            // to throw out of this flow; it must never be read as "new user".
-            val returning = if (signedIn) FirebaseEngine.returningUserCheck() else false
-            when {
-                !signedIn -> { AppState.go(Screen.Welcome); return }
-                onboarded && localKey -> {
-                    FirebaseEngine.start(c)
-                    FirebaseEngine.loadMyProfile()
-                    FirebaseEngine.setPresence(true)
+            if (signedIn && onboarded && localKey) {
+                // ROUND 69 — FAST LANE, the old `onboarded && localKey`
+                // branch taken WITHOUT the two network awaits that used
+                // to precede/reach it: the old code awaited
+                // returningUserCheck() BEFORE the `when`, even though
+                // this branch never read its result (branch order made
+                // it unreachable), and then awaited loadMyProfile()
+                // before navigating — two sequential Firestore round
+                // trips (~2 s) spent sitting on the previous screen.
+                // Neither wait guarded anything: the profile lands in
+                // observable state (AppState.myUsername / myAvatar) and
+                // now loads fire-and-forget alongside the session, the
+                // returning-user check still runs on every path that
+                // actually routes by it (below), and the engine start +
+                // presence happen exactly as before.
+                FirebaseEngine.start(c)
+                FirebaseEngine.setPresence(true)
+                AppState.scope.launch { FirebaseEngine.loadMyProfile() }
+            } else {
+                // ROUND 5: tri-state check — a FAILED account check (offline) used
+                // to throw out of this flow; it must never be read as "new user".
+                val returning = if (signedIn) FirebaseEngine.returningUserCheck() else false
+                when {
+                    !signedIn -> { AppState.go(Screen.Welcome); return }
+                    returning == true -> { AppState.go(Screen.Restore); return }
+                    returning == null -> {
+                        AppState.toast("Couldn't check your account — check your connection and try again")
+                        AppState.go(Screen.Welcome); return
+                    }
+                    else -> { AppState.go(Screen.Welcome); return }
                 }
-                returning == true -> { AppState.go(Screen.Restore); return }
-                returning == null -> {
-                    AppState.toast("Couldn't check your account — check your connection and try again")
-                    AppState.go(Screen.Welcome); return
-                }
-                else -> { AppState.go(Screen.Welcome); return }
             }
         }
         AppState.go(Screen.Home)
+    }
+
+    /**
+     * ROUND 69 — the SYNCHRONOUS twin of [unlockFlow]'s fast lane, for
+     * app startup only (via [SecretEntry.openGateSync], called from
+     * MainActivity.onCreate BEFORE setContent). The caller has already
+     * established — all synchronously, from persisted state — that the
+     * gate may be skipped ([OwnerGate.skipGate]: App lock OFF, no
+     * one-shot gate, signed in, onboarded, local identity present).
+     * Everything this function does is local and non-suspending: the
+     * Keystore unwrap of the on-device identity, the engine's listener
+     * attach, the fire-and-forget presence/profile/token work — the
+     * exact steps [unlockFlow]'s `onboarded && localKey` branch takes,
+     * minus the network awaits that never guarded that branch. It ends
+     * with [AppState.screen] set to [Screen.Home], so the first frame
+     * composed after it is the chat list itself.
+     *
+     * Returns false — with [unlocked] never set and nothing navigated —
+     * if the local identity fails to load despite being present (e.g.
+     * corrupt wrapped material): the caller then falls back to the
+     * ordinary gate route, which is also what the old async flow would
+     * have routed by. Failing closed is deliberate.
+     */
+    fun unlockLocalSession(ctx: Context): Boolean {
+        val c = ctx.applicationContext
+        AppState.repo = FirebaseEngine
+        FirebaseEngine.appCtx = c
+        if (!FirebaseEngine.loadLocalIdentity(c)) return false
+        // The gate was legitimately skipped, so — exactly as in
+        // unlockFlow — any pending one-shot gate is consumed (skipGate
+        // already required gateOnce == false, so this is inert today
+        // and stays correct if that rule ever relaxes).
+        OwnerPrefs.consumeGateOnce()
+        // Same fire-and-forget unlock bootstrap as unlockFlow: the FCM
+        // token re-store and the one-time notification-permission ask
+        // (an Activity caller only). Neither ever gates the session.
+        FcmTokenSync.register(c)
+        (ctx as? android.app.Activity)?.let { PushAlerts.maybeRequestPermission(it) }
+        // from here on the user is inside Tik — any exit must re-lock,
+        // and the engine's sessionLive() gate reads this flag, so it is
+        // set BEFORE the listeners attach (unlockFlow's order too).
+        unlocked = true
+        FirebaseEngine.start(c)
+        FirebaseEngine.setPresence(true)
+        AppState.scope.launch { FirebaseEngine.loadMyProfile() }
+        AppState.instantGo(Screen.Home)
+        return true
     }
 }
