@@ -59,6 +59,14 @@ service cloud.firestore {
         allow read, write: if signedIn() && request.auth.uid in
           get(/databases/$(database)/documents/chats/$(chatId)).data.members;
       }
+
+      // ROUND 70: shared /babeg game state (chats/{chatId}/gamestate/{msgId}
+      // — the game's own JSON board state, written/read via the TikuGame
+      // bridge; members only, exactly like messages/themeasset/nikah.
+      match /gamestate/{docId} {
+        allow read, write: if signedIn() && request.auth.uid in
+          get(/databases/$(database)/documents/chats/$(chatId)).data.members;
+      }
     }
 
     match /moments/{uid} {

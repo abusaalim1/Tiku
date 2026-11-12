@@ -41,21 +41,15 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.CallEnd
-import androidx.compose.material.icons.filled.FlipCameraAndroid
 import androidx.compose.material.icons.filled.KeyboardArrowDown
-import androidx.compose.material.icons.filled.Mic
-import androidx.compose.material.icons.filled.MicOff
 import androidx.compose.material.icons.filled.MoreHoriz
-import androidx.compose.material.icons.filled.Videocam
-import androidx.compose.material.icons.filled.VideocamOff
-import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
-// ROUND 69 (#6): call-control glyphs are Material ImageVectors
-// (material-icons-extended, already a dependency) — see CallToggle.
-// The hand-drawn TikuIcon paths previously used here rendered as
-// blobs (double-scaled stroke in GlassDesign.kt's drawSvgPath); no
-// call-control glyph uses them any more.
+// ROUND 70: the in-call dock glyphs/buttons are the owner's premium
+// kit in CallControls.kt (CallIcons stroke vectors + CallControlButton
+// / EndCallButton). The minimize / 3-dot / ringing glyphs below stay
+// Material ImageVectors (material-icons-extended, already a
+// dependency).
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -76,7 +70,6 @@ import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.lerp
-import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
@@ -217,37 +210,6 @@ private fun RtcVideoView(local: Boolean, modifier: Modifier) {
         },
         modifier = modifier,
     )
-}
-
-/** Call-dock button (ROUND 45 reskin, ROUND 68 premium pass): the inactive
- *  state is the app's real liquid glass — [glassSurface] on a circle, the
- *  same brush, sheen and edge light the gate/Settings surfaces use; the
- *  ACTIVE state flips to a near-white gradient disc with a dark glyph.
- *  ROUND 69 (#6): the glyph is a Material [ImageVector] (24x24
- *  viewport, official filled path data, rendered by material3 [Icon]
- *  at 26 dp) — one consistent, instantly readable set. This replaces
- *  the hand-drawn TikuIcon strings, whose Path strokes were scaled
- *  twice in GlassDesign.kt and collapsed into blobs. Skin only —
- *  same size, same click target, same states. */
-@Composable
-private fun CallToggle(icon: ImageVector, active: Boolean, onClick: () -> Unit) {
-    Box(
-        (if (active) {
-            Modifier.size(58.dp).clip(CircleShape)
-                .background(
-                    Brush.verticalGradient(
-                        listOf(Color.White.copy(alpha = 0.98f), Color.White.copy(alpha = 0.84f)),
-                    ),
-                )
-                .border(1.dp, Color.White.copy(alpha = 0.65f), CircleShape)
-        } else {
-            Modifier.size(58.dp).glassSurface(CircleShape)
-        })
-            .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null, onClick = onClick),
-        contentAlignment = Alignment.Center,
-    ) {
-        Icon(icon, contentDescription = null, modifier = Modifier.size(26.dp), tint = if (active) Color(0xFF16141C) else Color.White)
-    }
 }
 
 /** ROUND 45: the call action discs (end / accept / floating end) share
@@ -677,23 +639,30 @@ fun CallScreen(threadId: String, video: Boolean) {
                     // lands before the dock hides again.
                     if (controlsVisible) {
                         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                            CallToggle(if (connected.muted) Icons.Filled.MicOff else Icons.Filled.Mic, connected.muted) { pokeControls(); CallController.toggleMute() }
-                            CallToggle(Icons.Filled.VolumeUp, connected.speakerOn) { pokeControls(); CallController.toggleSpeaker() }
-                            // ROUND 69 (#6): screen-share button removed
-                            // with the feature — the dock is mic /
-                            // speaker / camera / flip / end.
+                            // ROUND 70: the dock is the owner's premium
+                            // kit (CallControls.kt) wired to the same
+                            // CallController actions — mic / speaker /
+                            // camera / flip / end on video calls, mic /
+                            // speaker / end on audio calls. NO Share
+                            // (screen sharing was removed in build 118)
+                            // and NO Keypad (the app has no in-call
+                            // keypad or audio→video upgrade action).
+                            CallControlButton(if (connected.muted) CallIcons.MicOff else CallIcons.Mic, "Mute", active = connected.muted) { pokeControls(); CallController.toggleMute() }
+                            CallControlButton(CallIcons.Speaker, "Speaker", active = connected.speakerOn) { pokeControls(); CallController.toggleSpeaker() }
                             if (connected.video) {
-                                CallToggle(if (connected.cameraOn) Icons.Filled.Videocam else Icons.Filled.VideocamOff, !connected.cameraOn) { pokeControls(); CallController.toggleCamera() }
-                                CallToggle(Icons.Filled.FlipCameraAndroid, false) { pokeControls(); CallController.switchCamera() }
+                                CallControlButton(if (connected.cameraOn) CallIcons.Video else CallIcons.VideoOff, "Camera", active = !connected.cameraOn) { pokeControls(); CallController.toggleCamera() }
+                                CallControlButton(CallIcons.FlipCamera, "Flip", active = false) { pokeControls(); CallController.switchCamera() }
                             }
-                            CallEndButton { CallController.hangup() }
+                            EndCallButton(onClick = { CallController.hangup() })
                         }
                     }
                 } else {
                     // Outgoing: only the End button — always on screen
                     // (the auto-hide timer never runs before connect).
+                    // ROUND 70: the kit's EndCallButton, the same end
+                    // button as the connected dock.
                     Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                        CallEndButton { CallController.hangup() }
+                        EndCallButton(onClick = { CallController.hangup() })
                     }
                 }
             }

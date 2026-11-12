@@ -468,14 +468,39 @@ object GeminiClient {
         // ~12 minutes — indistinguishable from a hang. Past the
         // ceiling the honest answer is Failed: the indicator clears
         // and the caller toasts.
+        // ROUND 70: prefer SYNC-READY games. A valid HTML document
+        // that never references the TikuGame bridge is a local-only
+        // game — it can never sync two phones — so it no longer wins
+        // the cascade on sight. The first valid-but-local game is
+        // remembered as a fallback and the cascade continues; a local
+        // game is still returned at the end if nothing sync-ready
+        // appears (a local game beats no game). The fallback lives
+        // OUTSIDE the timeout wrapper: if the ceiling hits after a
+        // local game was already in hand, that game is still returned
+        // below instead of degrading a would-have-succeeded /babeg
+        // into Failed.
+        var localFallback: String? = null
         val result = kotlinx.coroutines.withTimeoutOrNull(GAME_OVERALL_TIMEOUT_MS) {
             var sawQuota = false
             for (model in GeminiConfig.TEXT_MODELS) {
                 when (val r = post(model, body, readTimeoutMs = 240_000)) {
                     is Raw.Ok -> {
                         val html = cleanGameHtml(extractGameText(r.json))
-                        if (html != null) return@withTimeoutOrNull Outcome.Ok(html)
-                        Log.w("TikaAi", "model $model returned no valid game — cascading")
+                        if (html != null) {
+                            // ROUND 70: sync-ready = the cleaned HTML
+                            // references the bridge (substring check).
+                            if (html.contains("TikuGame")) {
+                                return@withTimeoutOrNull Outcome.Ok(html)
+                            }
+                            if (localFallback == null) {
+                                localFallback = html
+                                Log.w("TikaAi", "model $model returned a valid LOCAL game (no TikuGame) — remembered as fallback, cascading for a sync-ready game")
+                            } else {
+                                Log.w("TikaAi", "model $model returned another local game (no TikuGame) — keeping the first fallback, cascading")
+                            }
+                        } else {
+                            Log.w("TikaAi", "model $model returned no valid game — cascading")
+                        }
                     }
                     Raw.Quota -> sawQuota = true
                     Raw.Failed -> Unit
@@ -485,12 +510,31 @@ object GeminiClient {
             // the same contract and the same validation.
             val mm = postMiniMaxGame(full)
             val mmHtml = cleanGameHtml(mm)
-            if (mmHtml != null) return@withTimeoutOrNull Outcome.Ok(mmHtml)
-            if (mm == null) Log.w("TikaAi", "minimax game call failed")
+            if (mmHtml != null) {
+                // ROUND 70: MiniMax obeys the same preference — a
+                // sync-ready result returns at once; a local one only
+                // becomes the fallback when none was remembered yet.
+                if (mmHtml.contains("TikuGame")) return@withTimeoutOrNull Outcome.Ok(mmHtml)
+                if (localFallback == null) {
+                    localFallback = mmHtml
+                    Log.w("TikaAi", "minimax returned a valid LOCAL game (no TikuGame) — remembered as fallback")
+                } else {
+                    Log.w("TikaAi", "minimax returned a local game (no TikuGame) — keeping the earlier fallback")
+                }
+            } else if (mm == null) Log.w("TikaAi", "minimax game call failed")
             else Log.w("TikaAi", "minimax returned no valid game")
+            // ROUND 70: cascade exhausted with no sync-ready game —
+            // return the remembered local fallback if one exists,
+            // otherwise the quota/failed outcome is exactly as before.
+            localFallback?.let { return@withTimeoutOrNull Outcome.Ok(it) }
             if (sawQuota) Outcome.Quota else Outcome.Failed
         }
-        if (result == null) Log.w("TikaAi", "game generation hit the overall timeout")
+        if (result == null) {
+            Log.w("TikaAi", "game generation hit the overall timeout")
+            // ROUND 70: a local fallback remembered before the timeout
+            // is still a deliverable game — return it, don't fail.
+            localFallback?.let { return Outcome.Ok(it) }
+        }
         return result ?: Outcome.Failed
     }
 

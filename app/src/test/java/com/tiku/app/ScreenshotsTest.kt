@@ -840,6 +840,48 @@ class ScreenshotsTest {
         CallController.endSilently()
     }
 
+    @Test fun shot68_connectedCallDock() {
+        // ROUND 70: the connected-call dock (the owner's premium kit,
+        // CallControls.kt) needs its own shot — shot33 does NOT stage
+        // it: with PREVIEW_UI_ONLY=false its startCall takes the real
+        // path and lands on the Failed state (the outgoing End-only
+        // row), as the recent CI captures of 33-call-screen.png show.
+        // Stage a CONNECTED video call directly through the controller
+        // state instead — the shot27 seam — and freeze the compose
+        // clock (the shot59 pattern) so the dock's 3-second auto-hide
+        // timer never runs before the capture: the dock stays visible.
+        composeRule.mainClock.autoAdvance = false
+        val th = AppState.threads.value.first()
+        CallController.state.value = CallUiState.Connected(
+            th.id, "shot-dock-1", true, th.person, System.currentTimeMillis() - 65_000,
+            speakerOn = true, cameraOn = true,
+        )
+        frame { CallScreen(th.id, true) }
+        composeRule.waitForIdle()
+        org.junit.Assert.assertTrue(
+            "connected dock must carry the Mute control",
+            composeRule.onAllNodesWithText("Mute").fetchSemanticsNodes().isNotEmpty(),
+        )
+        org.junit.Assert.assertTrue(
+            "connected dock must carry the Speaker control",
+            composeRule.onAllNodesWithText("Speaker").fetchSemanticsNodes().isNotEmpty(),
+        )
+        org.junit.Assert.assertTrue(
+            "video dock must carry the Camera control",
+            composeRule.onAllNodesWithText("Camera").fetchSemanticsNodes().isNotEmpty(),
+        )
+        org.junit.Assert.assertTrue(
+            "video dock must carry the Flip control",
+            composeRule.onAllNodesWithText("Flip").fetchSemanticsNodes().isNotEmpty(),
+        )
+        org.junit.Assert.assertTrue(
+            "connected dock must carry the End control",
+            composeRule.onAllNodesWithText("End").fetchSemanticsNodes().isNotEmpty(),
+        )
+        shot("68-connected-call-dock.png")
+        CallController.endSilently()
+    }
+
     @Test fun shot35_momentsEntry() {
         // ROUND 14 (owner order): the Memories entry — a fixed feature
         // entry (not data-gated) directly under the notes row on
@@ -1909,5 +1951,120 @@ class ScreenshotsTest {
                 .fetchSemanticsNodes().isEmpty(),
         )
         shot("65-note-music-picker.png")
+    }
+
+    // ---------- ROUND 70: /babeg game-card flow ----------
+    @Test fun shot66_gameCardTapOpensPlayer() {
+        // HOST side: PreviewRepo.sendGame posts a fully LOADED game
+        // message (its HTML written to dl_<id>.html under the app
+        // cache) — the same shape the real engine's send produces.
+        // sendGame writes through AppState.appCtx, a lateinit the
+        // harness never sets (MainActivity does in the real app);
+        // without the next line the write silently no-ops (the
+        // repo's runCatching) and the card renders UNLOADED, so its
+        // tap would fetch instead of opening the player.
+        AppState.appCtx = ctx
+        val p = PreviewStore.people[1]
+        val id = PreviewRepo.startThreadWith(p)
+        AppState.updateThread(id) { it.messages.clear() }
+        val title = "Tic Tac Toe"
+        AppState.repo.sendGame(id, PreviewStore.SAMPLE_GAME_HTML, title)
+        val gm = AppState.thread(id)?.messages?.lastOrNull()
+        org.junit.Assert.assertTrue(
+            "sendGame must push a loaded own game message",
+            gm != null && gm.game && gm.me &&
+                gm.localPath?.let { java.io.File(it).exists() } == true,
+        )
+        AppState.go(Screen.Chat(id))
+        frame { ChatScreen(id) }
+        composeRule.waitForIdle()
+        org.junit.Assert.assertTrue(
+            "chat must show the game card with its title",
+            composeRule.onAllNodesWithText(title).fetchSemanticsNodes().isNotEmpty(),
+        )
+        org.junit.Assert.assertTrue(
+            "own game card must carry the tap-to-play line",
+            composeRule.onAllNodesWithText("2-player · tap to play", substring = true)
+                .fetchSemanticsNodes().isNotEmpty(),
+        )
+        // The card's tap layer is a detectTapGestures pointerInput
+        // (no semantics click action), so tap it the shot17 way —
+        // a touch click on the title node, inside the card's own
+        // gesture area.
+        composeRule.onAllNodesWithText(title)[0].performTouchInput { click() }
+        composeRule.waitForIdle()
+        org.junit.Assert.assertTrue(
+            "tapping the loaded card must open the player (host header)",
+            composeRule.onAllNodesWithText("You created this game", substring = true)
+                .fetchSemanticsNodes().isNotEmpty(),
+        )
+        org.junit.Assert.assertTrue(
+            "player header must show the game title",
+            composeRule.onAllNodesWithText(title).fetchSemanticsNodes().isNotEmpty(),
+        )
+        shot("66-game-player-open.png")
+        // No dismissal: gamePlayerMsg is ChatScreen-local remember
+        // state — the next shot's frame{} replaces the composition
+        // wholesale (the shot32 precedent: overlays a shot opens
+        // are never explicitly closed).
+    }
+
+    @Test fun shot67_gameInviteAccept() {
+        // GUEST side: a RECEIVED, already-loaded game message —
+        // upserted directly in the shot17 shape, its HTML written
+        // to the same dl_<msgId>.html cache file the real tap-to-
+        // load (fetchMedia) produces, so the card is LOADED and
+        // its tap opens the player instead of fetching.
+        val p = PreviewStore.people[1]
+        val id = PreviewRepo.startThreadWith(p)
+        AppState.updateThread(id) { it.messages.clear() }
+        val title = "Tic Tac Toe"
+        val msgId = "game-invite-1"
+        val bytes = PreviewStore.SAMPLE_GAME_HTML.toByteArray(Charsets.UTF_8)
+        val file = java.io.File(ctx.cacheDir, "dl_$msgId.html")
+        file.writeBytes(bytes)
+        AppState.upsertMessage(id, TikuMessage(
+            id = msgId, senderUid = p.uid, kind = MsgKind.GAME,
+            text = "", time = "9:41", me = false, tsMs = 1,
+            game = true, gameTitle = title,
+            localPath = file.absolutePath,
+            mediaBytes = bytes.size.toLong(), mimeType = "text/html"))
+        AppState.go(Screen.Chat(id))
+        frame { ChatScreen(id) }
+        composeRule.waitForIdle()
+        org.junit.Assert.assertTrue(
+            "received game card must read as an invite",
+            composeRule.onAllNodesWithText("invited you to play", substring = true)
+                .fetchSemanticsNodes().isNotEmpty(),
+        )
+        composeRule.onAllNodesWithText(title)[0].performTouchInput { click() }
+        composeRule.waitForIdle()
+        org.junit.Assert.assertTrue(
+            "tapping a received card must open the full-screen invite",
+            composeRule.onAllNodesWithText("Do you want to join?")
+                .fetchSemanticsNodes().isNotEmpty(),
+        )
+        org.junit.Assert.assertTrue(
+            "invite must offer Join game",
+            composeRule.onAllNodesWithText("Join game").fetchSemanticsNodes().isNotEmpty(),
+        )
+        // Capture the invite BEFORE accepting: after Join the
+        // WebView host composes under Robolectric's shadow WebView,
+        // so only the player header is asserted from there on —
+        // never the game itself.
+        shot("67-game-invite.png")
+        composeRule.onAllNodesWithText("Join game")[0].performTouchInput { click() }
+        composeRule.waitForIdle()
+        org.junit.Assert.assertTrue(
+            "accepting must dismiss the invite",
+            composeRule.onAllNodesWithText("Do you want to join?")
+                .fetchSemanticsNodes().isEmpty(),
+        )
+        org.junit.Assert.assertTrue(
+            "accepting must land in the player (joined header)",
+            composeRule.onAllNodesWithText("you joined", substring = true)
+                .fetchSemanticsNodes().isNotEmpty(),
+        )
+        shot("67-game-joined.png")
     }
 }

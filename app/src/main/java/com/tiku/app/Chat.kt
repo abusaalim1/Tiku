@@ -2774,6 +2774,28 @@ private fun RdGameCard(
                         }
                         else -> RdGamePreview(m = m, path = loadedPath, peerName = person.name)
                     }
+                    // ROUND 70: transparent gesture overlay over the
+                    // whole preview area, LAST child so it sits on top
+                    // of every state (including the WebView, which
+                    // swallows every touch it receives — without this,
+                    // taps on the visible game never reached the card).
+                    // Same actions as the card's own tap layer; as the
+                    // descendant it wins the gesture, so no double-fire.
+                    Box(
+                        Modifier.matchParentSize()
+                            .pointerInput(m.id, loaded, failed) {
+                                detectTapGestures(
+                                    onTap = {
+                                        when {
+                                            failed -> onRetry()
+                                            loaded -> onPlay()
+                                            else -> onLoad()
+                                        }
+                                    },
+                                    onLongPress = { onMenu() },
+                                )
+                            },
+                    )
                 }
                 if (m.me && m.status == SendStatus.SENDING) {
                     Spacer(Modifier.height(8.dp))
@@ -2799,9 +2821,9 @@ private fun RdGameCard(
  *  with the row — Moments discipline), running on the
  *  [GamePreviewNative] bridge with the shared shim, so the game
  *  renders its initial board but can never act as a third player.
- *  Touch is swallowed whole — the card's own gesture layer underneath
- *  owns taps (play) and long-presses (menu); a transparent overlay
- *  keeps that true even over the WebView's surface. If the file
+ *  Touch is swallowed whole by the WebView itself. ROUND 70: taps
+ *  still reach the play/menu actions because RdGameCard lays a
+ *  transparent gesture overlay over the preview area. If the file
  *  vanished between the exists() check and the read, the area simply
  *  stays cream.
  *
