@@ -62,6 +62,26 @@ class ScreenshotsTest {
     @Before
     fun setup() {
         ctx = ApplicationProvider.getApplicationContext()
+        // ROUND 70: production always has a default FirebaseApp by the
+        // time any Tik surface composes; the harness does not (no
+        // FirebaseInitProvider under Robolectric), so surfaces that
+        // attach a Firestore listener on composition (the game
+        // player's gamestate listener, after a guest Accepts) crashed
+        // with "Default FirebaseApp is not initialized" (shot67).
+        // Mirror the production invariant with dummy test options —
+        // no sign-in happens, listeners simply fail async offline.
+        if (com.google.firebase.FirebaseApp.getApps(ctx).isEmpty()) {
+            runCatching {
+                com.google.firebase.FirebaseApp.initializeApp(
+                    ctx,
+                    com.google.firebase.FirebaseOptions.Builder()
+                        .setProjectId("tiku-chat")
+                        .setApplicationId("1:258621285053:android:0000000000000000000000")
+                        .setApiKey("dummy-test-only-key")
+                        .build(),
+                )
+            }
+        }
         SettingsStore.init(ctx)
         OwnerPrefs.init(ctx)
         // ROUND 9: clean owner slate for every shot — non-owner by default;
