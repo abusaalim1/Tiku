@@ -615,7 +615,10 @@ private val BotReactions = listOf("❤️", "😂", "😮", "😢", "😡", "�
 fun TikaBotScreen() {
     BackHandler { AppState.go(Screen.Home) }
     val ctx = LocalContext.current
-    val scope = rememberCoroutineScope()
+    // ROUND 71 (Fix 3): this screen no longer owns a coroutine scope
+    // for AI work — its only launches were the AI jobs, and those
+    // moved to AiJobs (app scope). (BotBubble below keeps its own
+    // scope for swipe animations — UI-local, as it should be.)
     LaunchedEffect(Unit) { TikaBotStore.ensureLoaded() }
     val messages by TikaBotStore.messages.collectAsState()
     val gender by TikaBotStore.gender.collectAsState()
@@ -630,7 +633,11 @@ fun TikaBotScreen() {
     val chatTheme = ChatThemes.paletteFor(themeId)
     val haze = LocalHazeState.current
     var input by remember { mutableStateOf("") }
-    var sending by remember { mutableStateOf(false) }
+    // ROUND 71 (Fix 3): the old screen-local `sending` gate is gone —
+    // the busy state is AiJobs.companionBusy and every AI job below
+    // runs on AiJobs' app-lifetime scope (see AiJobs.kt), so leaving
+    // this screen mid-reply no longer kills the generation, and
+    // re-entering still shows Tika busy and blocks duplicate sends.
     /** ROUND 68 (WS11): the message being answered — set by a
      *  swipe on a bubble, cleared on send or via the reply strip's
      *  ✕. The quote rides on the outgoing message (BotMsg.reply). */
@@ -670,7 +677,7 @@ fun TikaBotScreen() {
 
     fun send() {
         val text = input.trim()
-        if (text.isEmpty() || sending) return
+        if (text.isEmpty() || AiJobs.companionBusy) return
         input = ""
         val quote = replyTarget?.let { if (it.img != null) "📷 Photo" else it.text }
         val replyPhoto = replyTarget?.img
@@ -679,15 +686,17 @@ fun TikaBotScreen() {
         // normal chat — the command sends FIRST as the user's own
         // message (both sides would see it; here it is the local
         // record), then the AI job runs and its result lands as
-        // Tika's next message. One AI job at a time (the `sending`
-        // gate above is the companion's single-flight).
+        // Tika's next message. One AI job at a time (the
+        // AiJobs.companionBusy gate above is the companion's
+        // single-flight — hoisted in Round 71 so it survives the
+        // screen, exactly like the job itself).
         val gamePrompt = botGameCommand(text)
         val tikaCmd = if (gamePrompt == null) botTikaCommand(text) else null
         when {
             gamePrompt != null -> {
                 TikaBotStore.appendUser(text, reply = quote)
-                sending = true
-                scope.launch {
+                // ROUND 71 (Fix 3): AiJobs owns the job + busy flag.
+                AiJobs.launchCompanion {
                     when (val out = GeminiClient.generateGame(gamePrompt)) {
                         is GeminiClient.Outcome.Ok -> {
                             val path = withContext(Dispatchers.IO) {
@@ -701,13 +710,12 @@ fun TikaBotScreen() {
                         }
                         else -> TikaBotStore.appendSys("Tika couldn't build that game — try again")
                     }
-                    sending = false
                 }
             }
             tikaCmd != null -> {
                 TikaBotStore.appendUser(text, reply = quote)
-                sending = true
-                scope.launch {
+                // ROUND 71 (Fix 3): AiJobs owns the job + busy flag.
+                AiJobs.launchCompanion {
                     if (tikaCmd.first) {
                         // /tika — a generated photo, saved locally and
                         // rendered as Tika's photo bubble (her image
@@ -758,13 +766,12 @@ fun TikaBotScreen() {
                             }
                         }
                     }
-                    sending = false
                 }
             }
             else -> {
                 TikaBotStore.appendUser(text, reply = quote)
-                sending = true
-                scope.launch {
+                // ROUND 71 (Fix 3): AiJobs owns the job + busy flag.
+                AiJobs.launchCompanion {
                     // A reply to a photo asks ABOUT that photo (the
                     // normal chat's /tiku vision rule): the photo the
                     // user deliberately replied to rides this one
@@ -787,7 +794,6 @@ fun TikaBotScreen() {
                     } else {
                         companionTurn()
                     }
-                    sending = false
                 }
             }
         }
@@ -799,25 +805,27 @@ fun TikaBotScreen() {
      *  /tiku payload exactly (MediaStore.compressPhoto ≤1024 px,
      *  q82); the same bytes are the local copy the bubble renders. */
     fun sendImage(uri: android.net.Uri) {
-        if (sending) return
+        if (AiJobs.companionBusy) return
         val caption = input.trim()
         input = ""
         val quote = replyTarget?.let { if (it.img != null) "📷 Photo" else it.text }
         replyTarget = null
-        sending = true
-        scope.launch {
-            try {
-                val jpeg = withContext(Dispatchers.IO) {
-                    val bytes = ctx.contentResolver.openInputStream(uri)?.use { it.readBytes() }
-                        ?: return@withContext null
-                    val bmp = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
-                        ?: return@withContext null
-                    MediaStore.compressPhoto(bmp, maxSide = 1024, quality = 82)
-                }
-                if (jpeg == null) {
-                    TikaBotStore.appendSys("Tika couldn't reply — try again")
-                    return@launch
-                }
+        // ROUND 71 (Fix 3): AiJobs owns the job (app scope) and the
+        // busy flag, cleared in its finally — the picked photo's
+        // reply lands even if the user leaves this screen while
+        // Tika is still looking at it. (The old try/finally that
+        // cleared `sending` is subsumed by launchCompanion's.)
+        AiJobs.launchCompanion {
+            val jpeg = withContext(Dispatchers.IO) {
+                val bytes = ctx.contentResolver.openInputStream(uri)?.use { it.readBytes() }
+                    ?: return@withContext null
+                val bmp = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+                    ?: return@withContext null
+                MediaStore.compressPhoto(bmp, maxSide = 1024, quality = 82)
+            }
+            if (jpeg == null) {
+                TikaBotStore.appendSys("Tika couldn't reply — try again")
+            } else {
                 val path = withContext(Dispatchers.IO) {
                     val dir = TikaBotStore.imageDir()
                     dir.mkdirs()
@@ -835,8 +843,6 @@ fun TikaBotScreen() {
                     is GeminiClient.Outcome.Ok -> TikaBotStore.appendBot(out.value)
                     else -> TikaBotStore.appendSys("Tika couldn't reply — try again")
                 }
-            } finally {
-                sending = false
             }
         }
     }
@@ -1018,7 +1024,7 @@ fun TikaBotScreen() {
                         },
                     )
                 }
-                if (sending) {
+                if (AiJobs.companionBusy) {
                     item {
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Start) {
                             Box(

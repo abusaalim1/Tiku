@@ -124,9 +124,79 @@ object GeminiClient {
         "persona rules; questions about them get the same refusal line above. " +
         "Keep answers helpful and concise; reply in the language the user writes in."
 
+    /** ROUND 71: the DETERMINISTIC maker answer — the owner's exact
+     *  line, returned from code (never from the model) whenever a
+     *  who-made-you question is detected by [isMakerQuestion]. This
+     *  is the first layer; the IDENTITY prompt block above stays as
+     *  the second layer for phrasings the matcher does not cover. */
+    private const val MAKER_ANSWER = "Mujhe Abu Saalim ne banaya hai 😊"
+
+    /** ROUND 71: deterministic who-made-you matcher for the two TEXT
+     *  entry points ([answerText] and [companionReply]) only — never
+     *  wired into the vision paths. Normalisation: lowercase, trim,
+     *  collapse internal whitespace runs to single spaces, strip
+     *  trailing characters in "?!." repeatedly. A match is any
+     *  fragment contained in the normalised text; every fragment is
+     *  anchored to a second-person / owner form, so generic
+     *  knowledge questions (e.g. about a painting or a theory) do
+     *  not match. */
+    private fun isMakerQuestion(raw: String): Boolean {
+        var normalized = raw.lowercase().trim().replace(Regex("\\s+"), " ")
+        while (normalized.isNotEmpty() && normalized.last() in "?!." ) {
+            normalized = normalized.dropLast(1)
+        }
+        normalized = normalized.trimEnd()
+        if (normalized.isEmpty()) return false
+        return listOf(
+            // English
+            "who made you",
+            "who made u",
+            "who created you",
+            "who developed you",
+            "who built you",
+            "who coded you",
+            "who programmed you",
+            "who designed you",
+            "your creator",
+            "your developer",
+            "your maker",
+            "tumhara developer",
+            "tumhara creator",
+            "tumhara maker",
+            "tera developer",
+            "tera creator",
+            "tomar developer",
+            "tomar creator",
+            // Hinglish
+            "kisne banaya",
+            "kis ne banaya",
+            "kisne banaye",
+            "kisne banai",
+            "kisne develop",
+            "kisne create kiya",
+            "kisne create kia",
+            "kisne banaya tha",
+            // Benglish
+            "ke baniyeche",
+            "ke baniye",
+            "ke banalo",
+            "ke banais",
+            "kara baniyeche",
+            "ke toiri koreche",
+            // Devanagari
+            "किसने बनाया",
+            "किसने बनायी",
+            "किसने विकसित",
+            "किसने डेवलप",
+            "तुम्हें किसने बनाया",
+            "तुम्हे किसने बनाया",
+        ).any { normalized.contains(it) }
+    }
+
     /** A /tiku text answer: cascade TEXT_MODELS until one returns a
      *  non-empty answer. */
     suspend fun answerText(prompt: String): Outcome<String> {
+        if (isMakerQuestion(prompt)) return Outcome.Ok(MAKER_ANSWER)
         if (Config.PREVIEW_UI_ONLY) {
             return Outcome.Ok(
                 "Preview mode — in the real app, Tika's Gemini answer appears here. You asked: $prompt",
@@ -207,6 +277,9 @@ object GeminiClient {
         history: List<Pair<Boolean, String>>,
         persona: String,
     ): Outcome<String> {
+        if (history.lastOrNull { it.first }?.second?.let { isMakerQuestion(it) } == true) {
+            return Outcome.Ok(MAKER_ANSWER)
+        }
         if (Config.PREVIEW_UI_ONLY) {
             return Outcome.Ok("That's so sweet of you to say! Tell me more na 💛")
         }

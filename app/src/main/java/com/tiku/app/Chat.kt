@@ -3631,8 +3631,12 @@ private fun RdChatContent(thread: ChatThread) {
      *  null = idle. It doubles as the single-flight gate: a second
      *  command while one runs is refused with a toast. LOCAL ONLY by
      *  design — no doc, no typing stamp; the partner simply sees the
-     *  AI message land when the answer is ready. */
-    var aiThinking by remember(threadId) { mutableStateOf<String?>(null) }
+     *  AI message land when the answer is ready.
+     *  ROUND 71 (Fix 3): the state itself no longer lives here — it
+     *  is AiJobs.thinking[threadId], and the job runs on AiJobs'
+     *  app-lifetime scope, so leaving this screen mid-flight neither
+     *  kills the generation nor drops the gate/indicator: re-entering
+     *  the chat reads the same entry and the reply still lands. */
     var fxPickerOpen by remember(threadId) { mutableStateOf(false) }
     /** The running overlay playback: fx kind to play key ("<msgId>#<n>").
      *  The counter makes every playback — first play or tap replay — a
@@ -4430,31 +4434,30 @@ private fun RdChatContent(thread: ChatThread) {
         // usable while Tika writes the game (only the transient
         // indicator shows), and the finished game lands as its own
         // game message. The in-flight gate is SHARED with /tiku +
-        // /tika (aiThinking) — one AI job per chat at a time, whichever
-        // kind it is. A failed build posts NOTHING — just a toast.
+        // /tika (AiJobs.thinking) — one AI job per chat at a time,
+        // whichever kind it is. A failed build posts NOTHING — just
+        // a toast.
         val gamePrompt = if (replyTarget == null && armedFx == null) gameCommand(v) else null
         if (gamePrompt != null) {
-            if (aiThinking != null) {
+            if (AiJobs.thinking[threadId] != null) {
                 AppState.toast("Tika is busy with the previous task")
                 return
             }
             AppState.repo.sendText(threadId, v, null)
             input = ""
             scope.launch { AppState.repo.setTyping(threadId, false) }
-            aiThinking = "Tika is creating your game…"
-            scope.launch {
-                try {
-                    when (val out = GeminiClient.generateGame(gamePrompt)) {
-                        is GeminiClient.Outcome.Ok -> AppState.repo.sendGame(
-                            threadId, out.value, gamePrompt.take(48),
-                        )
-                        GeminiClient.Outcome.Quota ->
-                            AppState.toast("Tika: the quota is finished — try again in a little while")
-                        GeminiClient.Outcome.Failed ->
-                            AppState.toast("Tika couldn't create the game — try again")
-                    }
-                } finally {
-                    aiThinking = null
+            // ROUND 71 (Fix 3): AiJobs owns the job (app scope) and
+            // clears the label in its finally — the build survives
+            // leaving this chat, and sendGame still lands the game.
+            AiJobs.launch(threadId, "Tika is creating your game…") {
+                when (val out = GeminiClient.generateGame(gamePrompt)) {
+                    is GeminiClient.Outcome.Ok -> AppState.repo.sendGame(
+                        threadId, out.value, gamePrompt.take(48),
+                    )
+                    GeminiClient.Outcome.Quota ->
+                        AppState.toast("Tika: the quota is finished — try again in a little while")
+                    GeminiClient.Outcome.Failed ->
+                        AppState.toast("Tika couldn't create the game — try again")
                 }
             }
             return
@@ -4480,7 +4483,7 @@ private fun RdChatContent(thread: ChatThread) {
             }
         } else null
         if (visionTarget != null && visionQuestion != null) {
-            if (aiThinking != null) {
+            if (AiJobs.thinking[threadId] != null) {
                 AppState.toast("Tika is still answering the previous one")
                 return
             }
@@ -4490,34 +4493,33 @@ private fun RdChatContent(thread: ChatThread) {
             AppState.repo.sendTextFx(threadId, v, replyQuoteLabel(visionTarget), null)
             input = ""; replyTarget = null
             scope.launch { AppState.repo.setTyping(threadId, false) }
-            aiThinking = "Tika is thinking…"
-            scope.launch {
-                try {
-                    val bmp = loadReplyPhoto(targetId, snapshot)
-                    if (bmp == null) {
-                        AppState.toast("Couldn't load that photo")
-                    } else {
-                        // Vision payload: ≤1024 px on the long edge,
-                        // JPEG — the question is about the content,
-                        // not the pixels.
-                        val jpeg = MediaStore.compressPhoto(bmp, maxSide = 1024, quality = 82)
-                        when (val out = GeminiClient.answerImage(question, jpeg)) {
-                            is GeminiClient.Outcome.Ok -> AppState.repo.sendTextAi(threadId, out.value)
-                            GeminiClient.Outcome.Quota ->
-                                AppState.toast("Tika: the quota is finished — try again in a little while")
-                            GeminiClient.Outcome.Failed ->
-                                AppState.toast("Tika couldn't answer — try again")
-                        }
+            // ROUND 71 (Fix 3): AiJobs owns the job (app scope) and
+            // clears the label in its finally — loadReplyPhoto polls
+            // AppState thread state, so the vision ask survives
+            // leaving this chat and the answer still lands.
+            AiJobs.launch(threadId, "Tika is thinking…") {
+                val bmp = loadReplyPhoto(targetId, snapshot)
+                if (bmp == null) {
+                    AppState.toast("Couldn't load that photo")
+                } else {
+                    // Vision payload: ≤1024 px on the long edge,
+                    // JPEG — the question is about the content,
+                    // not the pixels.
+                    val jpeg = MediaStore.compressPhoto(bmp, maxSide = 1024, quality = 82)
+                    when (val out = GeminiClient.answerImage(question, jpeg)) {
+                        is GeminiClient.Outcome.Ok -> AppState.repo.sendTextAi(threadId, out.value)
+                        GeminiClient.Outcome.Quota ->
+                            AppState.toast("Tika: the quota is finished — try again in a little while")
+                        GeminiClient.Outcome.Failed ->
+                            AppState.toast("Tika couldn't answer — try again")
                     }
-                } finally {
-                    aiThinking = null
                 }
             }
             return
         }
         val cmd = if (replyTarget == null && armedFx == null) tikaCommand(v) else null
         if (cmd != null) {
-            if (aiThinking != null) {
+            if (AiJobs.thinking[threadId] != null) {
                 AppState.toast("Tika is still answering the previous one")
                 return
             }
@@ -4525,28 +4527,26 @@ private fun RdChatContent(thread: ChatThread) {
             AppState.repo.sendText(threadId, v, null)
             input = ""
             scope.launch { AppState.repo.setTyping(threadId, false) }
-            aiThinking = if (isImage) "Tika is creating…" else "Tika is thinking…"
-            scope.launch {
-                try {
-                    if (isImage) {
-                        when (val out = GeminiClient.generateImage(prompt)) {
-                            is GeminiClient.Outcome.Ok -> AppState.repo.sendPhotoAi(threadId, out.value)
-                            GeminiClient.Outcome.Quota ->
-                                AppState.toast("Tika: the image quota is finished — try again in a little while")
-                            GeminiClient.Outcome.Failed ->
-                                AppState.toast("Tika couldn't create the image — try again")
-                        }
-                    } else {
-                        when (val out = GeminiClient.answerText(prompt)) {
-                            is GeminiClient.Outcome.Ok -> AppState.repo.sendTextAi(threadId, out.value)
-                            GeminiClient.Outcome.Quota ->
-                                AppState.toast("Tika: the quota is finished — try again in a little while")
-                            GeminiClient.Outcome.Failed ->
-                                AppState.toast("Tika couldn't answer — try again")
-                        }
+            // ROUND 71 (Fix 3): AiJobs owns the job (app scope) and
+            // clears the label in its finally — the /tiku answer or
+            // /tika photo still lands after leaving this chat.
+            AiJobs.launch(threadId, if (isImage) "Tika is creating…" else "Tika is thinking…") {
+                if (isImage) {
+                    when (val out = GeminiClient.generateImage(prompt)) {
+                        is GeminiClient.Outcome.Ok -> AppState.repo.sendPhotoAi(threadId, out.value)
+                        GeminiClient.Outcome.Quota ->
+                            AppState.toast("Tika: the image quota is finished — try again in a little while")
+                        GeminiClient.Outcome.Failed ->
+                            AppState.toast("Tika couldn't create the image — try again")
                     }
-                } finally {
-                    aiThinking = null
+                } else {
+                    when (val out = GeminiClient.answerText(prompt)) {
+                        is GeminiClient.Outcome.Ok -> AppState.repo.sendTextAi(threadId, out.value)
+                        GeminiClient.Outcome.Quota ->
+                            AppState.toast("Tika: the quota is finished — try again in a little while")
+                        GeminiClient.Outcome.Failed ->
+                            AppState.toast("Tika couldn't answer — try again")
+                    }
                 }
             }
             return
@@ -5161,7 +5161,10 @@ private fun RdChatContent(thread: ChatThread) {
                 // ROUND 37: the transient Tika indicator — composed
                 // only while THIS phone's ask is in flight (local
                 // state, never a doc or a typing stamp).
-                val aiLabel = aiThinking
+                // ROUND 71 (Fix 3): the label is read from AiJobs —
+                // the job (and so this indicator) survives the screen
+                // leaving and being re-entered mid-flight.
+                val aiLabel = AiJobs.thinking[threadId]
                 if (aiLabel != null) {
                     item(key = "ai_thinking") { RdAiThinkingBubble(aiLabel, theme = chatTheme) }
                 }

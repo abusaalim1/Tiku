@@ -33,7 +33,13 @@ import androidx.compose.ui.test.swipeLeft
 import androidx.compose.ui.unit.dp
 import androidx.test.core.app.ApplicationProvider
 import com.github.takahirom.roborazzi.captureRoboImage
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
@@ -100,6 +106,11 @@ class ScreenshotsTest {
         AppState.threads.value = seeded
         CallController.endSilently() // calls have no store at all — just reset the controller
         AppState.typing.value = emptyMap()
+        // ROUND 71 (Fix 3): AiJobs is app-global — an in-flight label
+        // or companion flag leaked by an earlier test must never
+        // bleed into a later shot.
+        AiJobs.thinking.clear()
+        AiJobs.companionBusy = false
         AppState.homeTab = HomeTab.CHATS
         AppState.sheetContent = null
         AppState.toastText = null
@@ -900,6 +911,171 @@ class ScreenshotsTest {
         )
         shot("68-connected-call-dock.png")
         CallController.endSilently()
+    }
+
+    // ---------- ROUND 71 (Fix 3): AiJobs ownership proof ----------
+    /** The Fix-3 contract, without any UI: a job launched through
+     *  AiJobs (a) registers its label synchronously, (b) refuses a
+     *  second launch for the same key while in flight, and (c) is
+     *  NOT cancelled when an unrelated screen-like scope is cancelled
+     *  mid-job — it still completes and clears its label. Before the
+     *  fix the job rode the chat screen's rememberCoroutineScope, so
+     *  (c) was exactly the owner's dead-reply bug. */
+    @Test fun aiJobs_jobSurvivesScreenScopeCancel() {
+        val key = "aijobs-test-thread"
+        AiJobs.thinking.remove(key)
+        val started = java.util.concurrent.CountDownLatch(1)
+        val release = java.util.concurrent.atomic.AtomicBoolean(false)
+        val completed = java.util.concurrent.atomic.AtomicBoolean(false)
+        val launched = AiJobs.launch(key, "Tika is thinking…") {
+            started.countDown()
+            while (!release.get()) delay(20)
+            completed.set(true)
+        }
+        org.junit.Assert.assertTrue("first launch must be accepted", launched)
+        org.junit.Assert.assertTrue(
+            "job must start",
+            started.await(5, java.util.concurrent.TimeUnit.SECONDS),
+        )
+        org.junit.Assert.assertEquals("Tika is thinking…", AiJobs.thinking[key])
+        // (b) single-flight: a second launch for the same key is
+        // refused while the first is in flight.
+        org.junit.Assert.assertFalse(
+            "second launch for an in-flight key must be refused",
+            AiJobs.launch(key, "Tika is creating…") { },
+        )
+        // (c) cancel an unrelated screen-like scope mid-job (the
+        // pre-fix job lived in exactly such a scope).
+        val screenScope = CoroutineScope(Job() + Dispatchers.Default)
+        screenScope.launch { delay(60_000) }
+        screenScope.cancel()
+        org.junit.Assert.assertFalse("AiJobs job must still be running", completed.get())
+        org.junit.Assert.assertEquals("Tika is thinking…", AiJobs.thinking[key])
+        // Release it: the job completes and clears its own label.
+        release.set(true)
+        val deadline = System.currentTimeMillis() + 5_000
+        while (AiJobs.thinking.containsKey(key) && System.currentTimeMillis() < deadline) {
+            Thread.sleep(25)
+        }
+        org.junit.Assert.assertTrue("AiJobs job must complete", completed.get())
+        org.junit.Assert.assertFalse(
+            "label must be cleared when the job ends",
+            AiJobs.thinking.containsKey(key),
+        )
+    }
+
+    /** The companion half of the contract: launchCompanion flips
+     *  AiJobs.companionBusy synchronously, refuses a duplicate while
+     *  busy, and clears the flag when the job ends — so the gate a
+     *  re-entered companion screen reads is the job's own state. */
+    @Test fun aiJobs_companionBusyGate() {
+        org.junit.Assert.assertFalse(
+            "companion gate must start clean",
+            AiJobs.companionBusy,
+        )
+        val release = java.util.concurrent.atomic.AtomicBoolean(false)
+        val completed = java.util.concurrent.atomic.AtomicBoolean(false)
+        org.junit.Assert.assertTrue(
+            AiJobs.launchCompanion {
+                while (!release.get()) delay(20)
+                completed.set(true)
+            },
+        )
+        org.junit.Assert.assertTrue(
+            "companionBusy must be set synchronously",
+            AiJobs.companionBusy,
+        )
+        org.junit.Assert.assertFalse(
+            "duplicate companion launch must be refused",
+            AiJobs.launchCompanion { },
+        )
+        release.set(true)
+        val deadline = System.currentTimeMillis() + 5_000
+        while (AiJobs.companionBusy && System.currentTimeMillis() < deadline) {
+            Thread.sleep(25)
+        }
+        org.junit.Assert.assertTrue("companion job must complete", completed.get())
+        org.junit.Assert.assertFalse(
+            "companionBusy must clear when the job ends",
+            AiJobs.companionBusy,
+        )
+    }
+
+    // ---------- ROUND 71: deterministic identity intercept ----------
+    /** The Round-71 identity law, without any UI: a who-made-you
+     *  question is answered FROM CODE by GeminiClient's intercept,
+     *  before the preview-mode branch and before any network — so
+     *  the exact maker line must come back in this harness too, for
+     *  both the /tiku entry point (answerText) and the companion
+     *  entry point (companionReply, keyed on its latest user turn).
+     *  The negative control pins the matcher: a generic knowledge
+     *  question that merely shares the "who created" shape must NOT
+     *  be intercepted. */
+    @Test fun identityIntercept_tikuAnswersLocally() {
+        val expected = GeminiClient.Outcome.Ok("Mujhe Abu Saalim ne banaya hai 😊")
+        org.junit.Assert.assertEquals(
+            expected,
+            runBlocking { GeminiClient.answerText("tumhe kisne banaya?") },
+        )
+        org.junit.Assert.assertEquals(
+            expected,
+            runBlocking { GeminiClient.answerText("Who created you?") },
+        )
+    }
+
+    @Test fun identityIntercept_companionAnswersLocally() {
+        org.junit.Assert.assertEquals(
+            GeminiClient.Outcome.Ok("Mujhe Abu Saalim ne banaya hai 😊"),
+            runBlocking {
+                GeminiClient.companionReply(listOf(true to "who made you?"), "persona")
+            },
+        )
+    }
+
+    @Test fun identityIntercept_doesNotFireOnKnowledgeQuestion() {
+        // Negative control ONLY: whatever this returns in the harness
+        // (a real cascade outcome — PREVIEW_UI_ONLY is a compile-time
+        // false in this build, so there is no canned preview text on
+        // this path; a network failure lands on Outcome.Failed /
+        // Outcome.Quota) it must never be the maker line.
+        org.junit.Assert.assertNotEquals(
+            GeminiClient.Outcome.Ok("Mujhe Abu Saalim ne banaya hai 😊"),
+            runBlocking { GeminiClient.answerText("who created the Mona Lisa?") },
+        )
+    }
+
+    @Test fun shot70_chatAiThinkingFromAiJobs() {
+        // ROUND 71 (Fix 3): the in-chat thinking indicator is driven
+        // by AiJobs.thinking[threadId] now — stage an in-flight ask
+        // exactly as a re-entered chat finds it (job launched, user
+        // left, user came back) and prove the indicator renders from
+        // that hoisted state. The compose clock is frozen (the
+        // shot68 pattern) because the bubble carries an infinite
+        // typing-dots animation. A two-message thread keeps the whole
+        // list — indicator included — inside one viewport.
+        composeRule.mainClock.autoAdvance = false
+        val p = PreviewStore.people[1]
+        val id = PreviewRepo.startThreadWith(p)
+        AppState.upsertMessage(id, TikuMessage(
+            id = "ai70a", senderUid = p.uid, kind = MsgKind.TEXT,
+            text = "Can Tika draw us a picture?", time = "9:41", me = false, tsMs = 1))
+        AppState.upsertMessage(id, TikuMessage(
+            id = "ai70b", senderUid = "me", kind = MsgKind.TEXT,
+            text = "/tika a small lighthouse at dawn", time = "9:41", me = true, tsMs = 2))
+        AiJobs.thinking[id] = "Tika is creating…"
+        try {
+            AppState.go(Screen.Chat(id))
+            frame { ChatScreen(id) }
+            composeRule.waitForIdle()
+            org.junit.Assert.assertTrue(
+                "chat must show the thinking indicator from AiJobs state",
+                composeRule.onAllNodesWithText("Tika is creating…")
+                    .fetchSemanticsNodes().isNotEmpty(),
+            )
+            shot("70-chat-ai-thinking.png")
+        } finally {
+            AiJobs.thinking.remove(id)
+        }
     }
 
     @Test fun shot35_momentsEntry() {
