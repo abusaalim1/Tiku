@@ -423,9 +423,9 @@ class RtcSession(
         val transceiver = videoTransceiver ?: return
         runCatching {
             val recvCaps = RtcFactory.factory
-                .getRtpReceiverCapabilities(MediaStreamTrack.MediaType.VIDEO).codecs
+                .getRtpReceiverCapabilities(MediaStreamTrack.MediaType.MEDIA_TYPE_VIDEO).codecs
             val senderNames = RtcFactory.factory
-                .getRtpSenderCapabilities(MediaStreamTrack.MediaType.VIDEO)
+                .getRtpSenderCapabilities(MediaStreamTrack.MediaType.MEDIA_TYPE_VIDEO)
                 .codecs.map { it.name }.toSet()
             val orderedNames = reorderCodecNames(recvCaps.map { it.name }, senderNames)
             // Map the ordered names back to the capability objects,
