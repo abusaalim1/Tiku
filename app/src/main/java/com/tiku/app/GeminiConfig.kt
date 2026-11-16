@@ -13,9 +13,9 @@ object GeminiConfig {
     // key is extractable from any shipped app anyway; this simply keeps the
     // source tidy). Do not log it.
     private val KEY_PARTS = listOf(
-        "QVEuQWI4Uk42TGZBeG9C",
-        "RXhfMkRsRm5vMlY2S3RWTg==",
-        "QmZzbU5rNUlna2szT2V2TlVXellQQQ==",
+        "QVEuQWI4Uk42Sk8wMkdwUWg=",
+        "Ynh3T1ZWSUF5ZVliU3J6UVUy",
+        "SGtQclVjc1pQQ2JBRkhTV0Fn",
     )
 
     val API_KEY: String by lazy {
