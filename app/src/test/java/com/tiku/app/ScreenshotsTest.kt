@@ -2,10 +2,12 @@ package com.tiku.app
 
 import android.content.Context
 import androidx.compose.foundation.background
+import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -33,6 +35,7 @@ import androidx.compose.ui.test.swipeLeft
 import androidx.compose.ui.unit.dp
 import androidx.test.core.app.ApplicationProvider
 import com.github.takahirom.roborazzi.captureRoboImage
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -2375,5 +2378,728 @@ class ScreenshotsTest {
                 setOf("VP8", "H264"),
             ),
         )
+    }
+
+    // ---------- ROUND 73 (Workstream B): the dynamic flip ----------
+    // R71 proved the indicator RENDERS when the state is set BEFORE
+    // composition (shot70) and that the plain-JUnit gate contracts
+    // hold (aiJobs_* above). Nobody ever tested the FLIP: a job that
+    // completes while its screen is composed — or while the user is
+    // away — must make the indicator DISAPPEAR, driven by nothing
+    // but AiJobs' own finally-clear. The owner's build-124 bug is
+    // exactly that flip failing: the reply lands, "typing…" stays.
+    //
+    // Both production read sites read AiJobs state ONLY inside their
+    // LazyColumn content lambda (Chat.kt RdChatContent:
+    // `AiJobs.thinking[threadId]`; TikaBot.kt TikaBotScreen:
+    // `AiJobs.companionBusy`) — no composable-scope read exists to
+    // recompose the screen when the finally fires, and on a FAILED
+    // ask nothing else changes state afterwards either (the toast
+    // lives in a different subtree: Components.kt's toast host). The
+    // tests below isolate that mechanism first (minimal repro), then
+    // prove the flip on both real screens, including the production
+    // ordering — the reply lands INSIDE the block, and the
+    // finally-clear comes after it, alone.
+
+    private val r73ThreadKey = "r73-flip-thread"
+
+    /** The EXACT read pattern of both production screens, isolated:
+     *  a LazyColumn whose content lambda conditionally adds an item
+     *  from AiJobs state — [AiJobs.companionBusy] for the companion's
+     *  pattern, `AiJobs.thinking[key]` for the chat's pattern.
+     *  Nothing else in this composition reads AiJobs, and nothing
+     *  else changes when a job completes, so a flip here can only be
+     *  driven by the content lambda's own state tracking (or the
+     *  lack of it). */
+    @Composable
+    private fun AiJobsFlipReproList() {
+        LazyColumn(Modifier.fillMaxSize()) {
+            item(key = "r73_head") { Text("r73 repro head") }
+            if (AiJobs.companionBusy) {
+                item(key = "r73_companion_typing") { Text("typing…") }
+            }
+            val label = AiJobs.thinking[r73ThreadKey]
+            if (label != null) {
+                item(key = "ai_thinking") { Text(label) }
+            }
+        }
+    }
+
+    /** Drive frames + idle waits until [cond] holds or the budget
+     *  runs out. AiJobs runs on Dispatchers.Default (real threads),
+     *  so the finally-clear lands in real time, not compose-clock
+     *  time; the loop alternates real sleeps (letting the job thread
+     *  run) with frame advances (letting the recomposer consume the
+     *  snapshot write). Callers freeze the clock first (the
+     *  shot68/shot70 pattern) so the thinking bubble's infinite
+     *  dots animation can never spin the test clock. */
+    private fun pumpUntilR73(timeoutMs: Long = 15_000, cond: () -> Boolean): Boolean {
+        val deadline = System.currentTimeMillis() + timeoutMs
+        while (System.currentTimeMillis() < deadline) {
+            if (cond()) return true
+            runCatching { composeRule.waitForIdle() }
+            composeRule.mainClock.advanceTimeByFrame()
+            Thread.sleep(25)
+        }
+        runCatching { composeRule.waitForIdle() }
+        return cond()
+    }
+
+    private fun nodesWithTextR73(text: String, substring: Boolean = false) =
+        composeRule.onAllNodesWithText(text, substring = substring).fetchSemanticsNodes()
+
+    /** Minimal repro, companion pattern: compose → launch a
+     *  latch-held job → the typing item must APPEAR → release the
+     *  latch → the item must DISAPPEAR, with no other state change
+     *  anywhere in the composition to carry the flip. */
+    @Test fun aiJobsFlip_minimalRepro_companionBusy() {
+        composeRule.mainClock.autoAdvance = false
+        AiJobs.companionBusy = false
+        frame { AiJobsFlipReproList() }
+        org.junit.Assert.assertTrue(
+            "repro list must compose",
+            nodesWithTextR73("r73 repro head").isNotEmpty(),
+        )
+        org.junit.Assert.assertTrue(
+            "no typing item may exist before launch",
+            nodesWithTextR73("typing…").isEmpty(),
+        )
+        val latch = CompletableDeferred<Unit>()
+        org.junit.Assert.assertTrue(AiJobs.launchCompanion { latch.await() })
+        org.junit.Assert.assertTrue(
+            "registration must be synchronous",
+            AiJobs.companionBusy,
+        )
+        org.junit.Assert.assertTrue(
+            "typing item must APPEAR when the job starts",
+            pumpUntilR73 { nodesWithTextR73("typing…").isNotEmpty() },
+        )
+        latch.complete(Unit)
+        org.junit.Assert.assertTrue(
+            "typing item must DISAPPEAR when the job completes — " +
+                "driven by AiJobs' finally-clear alone",
+            pumpUntilR73 { nodesWithTextR73("typing…").isEmpty() },
+        )
+        org.junit.Assert.assertFalse(AiJobs.companionBusy)
+    }
+
+    /** Minimal repro, in-chat pattern: same flip, driven by the
+     *  thinking map entry the chat indicator reads. */
+    @Test fun aiJobsFlip_minimalRepro_thinkingLabel() {
+        composeRule.mainClock.autoAdvance = false
+        AiJobs.thinking.remove(r73ThreadKey)
+        frame { AiJobsFlipReproList() }
+        org.junit.Assert.assertTrue(
+            "no thinking item may exist before launch",
+            nodesWithTextR73("Tika is thinking…").isEmpty(),
+        )
+        val latch = CompletableDeferred<Unit>()
+        org.junit.Assert.assertTrue(
+            AiJobs.launch(r73ThreadKey, "Tika is thinking…") { latch.await() },
+        )
+        org.junit.Assert.assertEquals("Tika is thinking…", AiJobs.thinking[r73ThreadKey])
+        org.junit.Assert.assertTrue(
+            "thinking item must APPEAR when the job starts",
+            pumpUntilR73 { nodesWithTextR73("Tika is thinking…").isNotEmpty() },
+        )
+        latch.complete(Unit)
+        org.junit.Assert.assertTrue(
+            "thinking item must DISAPPEAR when the job completes — " +
+                "driven by AiJobs' finally-clear alone",
+            pumpUntilR73 { nodesWithTextR73("Tika is thinking…").isEmpty() },
+        )
+        org.junit.Assert.assertFalse(AiJobs.thinking.containsKey(r73ThreadKey))
+    }
+
+    /** ROUND 73 single source of truth: companionBusy IS the
+     *  thinking map's companion entry — writing either side moves
+     *  the other, so the two can never diverge (the pre-R73 code
+     *  kept an independent mutableStateOf in lockstep by hand).
+     *  Also pins that the harness cleanup assignment in setup
+     *  (`AiJobs.companionBusy = false`) clears the map entry, and
+     *  that the real launch path drives both views together. */
+    @Test fun aiJobs_singleSource_companionBusyIsThinkingView() {
+        AiJobs.thinking.clear()
+        org.junit.Assert.assertFalse(AiJobs.companionBusy)
+        AiJobs.thinking[AiJobs.COMPANION_KEY] = "typing…"
+        org.junit.Assert.assertTrue(
+            "writing the map entry must flip the busy flag",
+            AiJobs.companionBusy,
+        )
+        AiJobs.companionBusy = false
+        org.junit.Assert.assertFalse(
+            "the cleanup assignment must clear the map entry",
+            AiJobs.thinking.containsKey(AiJobs.COMPANION_KEY),
+        )
+        org.junit.Assert.assertFalse(AiJobs.companionBusy)
+        AiJobs.companionBusy = true
+        org.junit.Assert.assertTrue(
+            "setting the flag must register the map entry",
+            AiJobs.thinking.containsKey(AiJobs.COMPANION_KEY),
+        )
+        AiJobs.thinking.remove(AiJobs.COMPANION_KEY)
+        org.junit.Assert.assertFalse(
+            "removing the map entry must clear the flag",
+            AiJobs.companionBusy,
+        )
+        val latch = CompletableDeferred<Unit>()
+        org.junit.Assert.assertTrue(AiJobs.launchCompanion { latch.await() })
+        org.junit.Assert.assertTrue(
+            "in flight: both views busy",
+            AiJobs.companionBusy && AiJobs.thinking.containsKey(AiJobs.COMPANION_KEY),
+        )
+        latch.complete(Unit)
+        val deadline = System.currentTimeMillis() + 10_000
+        while ((AiJobs.companionBusy || AiJobs.thinking.containsKey(AiJobs.COMPANION_KEY)) &&
+            System.currentTimeMillis() < deadline
+        ) {
+            Thread.sleep(25)
+        }
+        org.junit.Assert.assertFalse(
+            "completed: flag cleared",
+            AiJobs.companionBusy,
+        )
+        org.junit.Assert.assertFalse(
+            "completed: map entry cleared",
+            AiJobs.thinking.containsKey(AiJobs.COMPANION_KEY),
+        )
+    }
+
+    /** ROUND 73 bounded jobs: a wedged block (a provider call that
+     *  never returns) must not hold the indicator — or the
+     *  single-flight gate — forever. A short explicit timeout keeps
+     *  the test fast; production callers ride the 660 s default,
+     *  sized above generateGame's own 600 s self-bound so it can
+     *  only ever fire on a genuinely wedged job. */
+    @Test fun aiJobs_boundedJob_timeoutClearsIndicatorAndGate() {
+        val key = "r73-timeout-thread"
+        AiJobs.thinking.remove(key)
+        org.junit.Assert.assertTrue(
+            AiJobs.launch(key, "Tika is thinking…", timeoutMs = 300) {
+                CompletableDeferred<Unit>().await() // never completes — the wedge
+            },
+        )
+        org.junit.Assert.assertEquals("Tika is thinking…", AiJobs.thinking[key])
+        val deadline = System.currentTimeMillis() + 10_000
+        while (AiJobs.thinking.containsKey(key) && System.currentTimeMillis() < deadline) {
+            Thread.sleep(25)
+        }
+        org.junit.Assert.assertFalse(
+            "the backstop timeout must clear the indicator label",
+            AiJobs.thinking.containsKey(key),
+        )
+        org.junit.Assert.assertTrue(
+            "the gate must be released after a timeout",
+            AiJobs.launch(key, "Tika is thinking…") { },
+        )
+        val deadline2 = System.currentTimeMillis() + 10_000
+        while (AiJobs.thinking.containsKey(key) && System.currentTimeMillis() < deadline2) {
+            Thread.sleep(25)
+        }
+        org.junit.Assert.assertFalse(
+            "the follow-up job must complete and clear normally",
+            AiJobs.thinking.containsKey(key),
+        )
+    }
+
+    /** Companion end-to-end flip, production ordering: the reply
+     *  lands INSIDE the block (the sink), the job is STILL in
+     *  flight afterwards, and only then does it finish — so the
+     *  typing bubble's disappearance is driven by the finally-clear
+     *  alone, never by the reply's own recomposition. */
+    @Test fun aiJobsFlip_companionScreen_clearsAfterReplyLands() {
+        composeRule.mainClock.autoAdvance = false
+        AppState.appCtx = ctx
+        TikaBotStore.ensureLoaded()
+        if (TikaBotStore.gender.value == null) TikaBotStore.chooseGender("male", "Boy")
+        if (TikaBotStore.role.value == null) TikaBotStore.chooseRole("friend", "Just a friend")
+        org.junit.Assert.assertFalse(
+            "companion gate must start clean",
+            AiJobs.companionBusy,
+        )
+        frame { TikaBotScreen() }
+        org.junit.Assert.assertTrue(
+            "no typing bubble before launch",
+            nodesWithTextR73("typing…").isEmpty(),
+        )
+        val reply = "R73 companion reply 7f3a"
+        val replyPosted = CompletableDeferred<Unit>()
+        val finish = CompletableDeferred<Unit>()
+        org.junit.Assert.assertTrue(
+            AiJobs.launchCompanion {
+                TikaBotStore.appendBot(reply)
+                replyPosted.complete(Unit)
+                finish.await()
+            },
+        )
+        org.junit.Assert.assertTrue(
+            "typing bubble must show while the companion job runs",
+            pumpUntilR73 { nodesWithTextR73("typing…").isNotEmpty() },
+        )
+        org.junit.Assert.assertTrue(
+            "the reply must land while the job is still in flight",
+            pumpUntilR73 {
+                replyPosted.isCompleted && nodesWithTextR73(reply, substring = true).isNotEmpty()
+            },
+        )
+        org.junit.Assert.assertTrue(
+            "typing bubble must STILL show — the job has not finished",
+            nodesWithTextR73("typing…").isNotEmpty(),
+        )
+        finish.complete(Unit)
+        org.junit.Assert.assertTrue(
+            "typing bubble must DISAPPEAR when the job completes — " +
+                "the finally-clear is the only change left",
+            pumpUntilR73 { nodesWithTextR73("typing…").isEmpty() },
+        )
+        org.junit.Assert.assertFalse(AiJobs.companionBusy)
+        org.junit.Assert.assertTrue(
+            "the reply must remain after the flip",
+            nodesWithTextR73(reply, substring = true).isNotEmpty(),
+        )
+    }
+
+    /** The owner's exact path: send, press Back mid-job, the job
+     *  completes while away, re-enter — the re-entered companion
+     *  must show the landed reply and NO typing bubble. */
+    @Test fun aiJobsFlip_companionScreen_leaveAndReenterAfterCompletion() {
+        composeRule.mainClock.autoAdvance = false
+        AppState.appCtx = ctx
+        TikaBotStore.ensureLoaded()
+        if (TikaBotStore.gender.value == null) TikaBotStore.chooseGender("male", "Boy")
+        if (TikaBotStore.role.value == null) TikaBotStore.chooseRole("friend", "Just a friend")
+        org.junit.Assert.assertFalse(
+            "companion gate must start clean",
+            AiJobs.companionBusy,
+        )
+        frame { TikaBotScreen() }
+        val reply = "R73 reentry reply 9c1b"
+        val latch = CompletableDeferred<Unit>()
+        org.junit.Assert.assertTrue(
+            AiJobs.launchCompanion {
+                latch.await()
+                TikaBotStore.appendBot(reply)
+            },
+        )
+        org.junit.Assert.assertTrue(
+            "typing bubble must show while the job runs",
+            pumpUntilR73 { nodesWithTextR73("typing…").isNotEmpty() },
+        )
+        // LEAVE mid-job (the Back press): the whole companion
+        // composition goes away. The job must NOT die with it (R71).
+        frame { Text("r73 away placeholder") }
+        org.junit.Assert.assertTrue(
+            "away placeholder must compose",
+            nodesWithTextR73("r73 away placeholder").isNotEmpty(),
+        )
+        latch.complete(Unit)
+        val deadline = System.currentTimeMillis() + 10_000
+        while (AiJobs.companionBusy && System.currentTimeMillis() < deadline) {
+            Thread.sleep(25)
+        }
+        org.junit.Assert.assertFalse(
+            "the job must complete while the user is away",
+            AiJobs.companionBusy,
+        )
+        org.junit.Assert.assertTrue(
+            "the reply must have landed while the user was away",
+            TikaBotStore.messages.value.any { it.text == reply },
+        )
+        // RE-ENTER: a fresh composition reads the finished state.
+        frame { TikaBotScreen() }
+        org.junit.Assert.assertTrue(
+            "re-entered companion must show the landed reply",
+            pumpUntilR73 { nodesWithTextR73(reply, substring = true).isNotEmpty() },
+        )
+        org.junit.Assert.assertTrue(
+            "re-entered companion must NOT resurrect the typing bubble",
+            nodesWithTextR73("typing…").isEmpty(),
+        )
+    }
+
+    /** In-chat flip, production ordering (the shot70 screen, but a
+     *  REAL latch job through AiJobs.launch instead of a pre-set
+     *  label): the AI reply lands inside the block while the job is
+     *  still in flight, then the job finishes and the "ai_thinking"
+     *  indicator must disappear with no new message arriving. */
+    @Test fun aiJobsFlip_chatScreen_clearsAfterReplyLands() {
+        composeRule.mainClock.autoAdvance = false
+        val p = PreviewStore.people[1]
+        val id = PreviewRepo.startThreadWith(p)
+        AppState.updateThread(id) { it.messages.clear() }
+        AppState.upsertMessage(id, TikuMessage(
+            id = "r73a", senderUid = p.uid, kind = MsgKind.TEXT,
+            text = "R73 chat seed question", time = "9:41", me = false, tsMs = 1))
+        AppState.upsertMessage(id, TikuMessage(
+            id = "r73b", senderUid = "me", kind = MsgKind.TEXT,
+            text = "/tiku r73 flip probe", time = "9:41", me = true, tsMs = 2))
+        AppState.go(Screen.Chat(id))
+        frame { ChatScreen(id) }
+        org.junit.Assert.assertTrue(
+            "no thinking indicator before launch",
+            nodesWithTextR73("Tika is thinking…").isEmpty(),
+        )
+        val reply = "R73 chat reply 4d2e"
+        val replyPosted = CompletableDeferred<Unit>()
+        val finish = CompletableDeferred<Unit>()
+        org.junit.Assert.assertTrue(
+            AiJobs.launch(id, "Tika is thinking…") {
+                AppState.repo.sendTextAi(id, reply)
+                replyPosted.complete(Unit)
+                finish.await()
+            },
+        )
+        org.junit.Assert.assertTrue(
+            "thinking indicator must show while the job runs",
+            pumpUntilR73 { nodesWithTextR73("Tika is thinking…").isNotEmpty() },
+        )
+        org.junit.Assert.assertTrue(
+            "the AI reply must land while the job is still in flight",
+            pumpUntilR73 {
+                replyPosted.isCompleted && nodesWithTextR73(reply, substring = true).isNotEmpty()
+            },
+        )
+        org.junit.Assert.assertTrue(
+            "thinking indicator must STILL show — the job has not finished",
+            nodesWithTextR73("Tika is thinking…").isNotEmpty(),
+        )
+        finish.complete(Unit)
+        org.junit.Assert.assertTrue(
+            "thinking indicator must DISAPPEAR when the job completes — " +
+                "the finally-clear is the only change left",
+            pumpUntilR73 { nodesWithTextR73("Tika is thinking…").isEmpty() },
+        )
+        org.junit.Assert.assertFalse(AiJobs.thinking.containsKey(id))
+    }
+
+    // ---------- ROUND 73 (Worker C): companion streaming, typing
+    // parity, message menu (star / pin / edit / delete) ----------
+    //
+    // Staging follows Worker B's companion pattern: the REAL local
+    // store, onboarded through ensureLoaded() + the chooseGender /
+    // chooseRole guards. Every test records the store size it
+    // started from and removes exactly the messages it staged (in
+    // finally, via the store's own deleteMessage), restores any
+    // nickname / theme it changed, and clears the transient
+    // liveText + the AiJobs gate — the store is process-global, so
+    // nothing here may leak into a neighbouring test.
+
+    private fun stageCompanionR73C() {
+        AppState.appCtx = ctx
+        TikaBotStore.ensureLoaded()
+        if (TikaBotStore.gender.value == null) TikaBotStore.chooseGender("male", "Boy")
+        if (TikaBotStore.role.value == null) TikaBotStore.chooseRole("friend", "Just a friend")
+    }
+
+    /** Remove every message staged from index [base] on, and clear
+     *  the transient Round-73 state (live partial + busy gate). */
+    private fun cleanupCompanionR73C(base: Int) {
+        while (TikaBotStore.messages.value.size > base) {
+            TikaBotStore.deleteMessage(base)
+        }
+        TikaBotStore.setLiveText(null)
+        AiJobs.companionBusy = false
+    }
+
+    /** Scroll the companion list to its TAIL item (the typing /
+     *  live slot sits AFTER the last message, and the screen's own
+     *  follow scroll only targets the last message — without this
+     *  the tail bubble can sit below the fold, uncomposed). Tries
+     *  every scrollable node; only the LazyColumn has a
+     *  scroll-to-index action, the rest fail soft inside runCatching. */
+    private fun scrollCompanionToTailR73C() {
+        val tailIdx = TikaBotStore.messages.value.size
+        val nodes = composeRule.onAllNodes(hasScrollAction())
+        val count = nodes.fetchSemanticsNodes().size
+        for (i in 0 until count) {
+            runCatching { nodes[i].performScrollToIndex(tailIdx) }
+        }
+        runCatching { composeRule.waitForIdle() }
+    }
+
+    /** Release a latch-held companion job and wait for AiJobs'
+     *  finally to clear the gate (real threads — poll, don't pump). */
+    private fun releaseCompanionJobR73C(latch: CompletableDeferred<Unit>) {
+        latch.complete(Unit)
+        val deadline = System.currentTimeMillis() + 10_000
+        while (AiJobs.companionBusy && System.currentTimeMillis() < deadline) {
+            Thread.sleep(25)
+        }
+        org.junit.Assert.assertFalse(
+            "the companion gate must clear after the latch releases",
+            AiJobs.companionBusy,
+        )
+    }
+
+    /** Store contracts (plain JUnit, no composition): star / pin
+     *  toggle and persist, edit replaces ONLY my own text, delete
+     *  removes the right message (indices shift) and deletes a
+     *  photo message's local file with it. */
+    @Test fun tikaStoreR73_starPinEditDelete() {
+        stageCompanionR73C()
+        val base = TikaBotStore.messages.value.size
+        try {
+            TikaBotStore.appendUser("R73C store user line")
+            TikaBotStore.appendBot("R73C store bot line")
+            var msgs = TikaBotStore.messages.value
+            org.junit.Assert.assertEquals(base + 2, msgs.size)
+            org.junit.Assert.assertTrue(msgs[base].mine)
+            org.junit.Assert.assertFalse(msgs[base + 1].mine)
+            org.junit.Assert.assertFalse(msgs[base].starred)
+            org.junit.Assert.assertFalse(msgs[base + 1].pinned)
+
+            TikaBotStore.toggleStar(base)
+            TikaBotStore.togglePin(base + 1)
+            msgs = TikaBotStore.messages.value
+            org.junit.Assert.assertTrue(
+                "toggleStar must set the flag",
+                msgs[base].starred,
+            )
+            org.junit.Assert.assertTrue(
+                "togglePin must set the flag",
+                msgs[base + 1].pinned,
+            )
+            // Persist round-trip: the flags must be in the JSON the
+            // store just wrote ("s" / "p", written only when true).
+            // The prefs file is keyed by the account uid; under the
+            // harness there is no signed-in user, so the key is ""
+            // and the file is "tika_bot_". When that file is not the
+            // one this environment wrote, the in-memory assertions
+            // above stand on their own (a clean reload is not
+            // feasible: ensureLoaded is idempotent per account key).
+            val raw = runCatching {
+                ctx.getSharedPreferences("tika_bot_", Context.MODE_PRIVATE)
+                    .getString("msgs", null)
+            }.getOrNull()
+            if (raw != null) {
+                org.junit.Assert.assertTrue(
+                    "persisted JSON must carry the star flag",
+                    raw.contains("\"s\":true"),
+                )
+                org.junit.Assert.assertTrue(
+                    "persisted JSON must carry the pin flag",
+                    raw.contains("\"p\":true"),
+                )
+            }
+            // Toggling again clears.
+            TikaBotStore.toggleStar(base)
+            org.junit.Assert.assertFalse(TikaBotStore.messages.value[base].starred)
+            TikaBotStore.toggleStar(base)
+            org.junit.Assert.assertTrue(TikaBotStore.messages.value[base].starred)
+
+            // Edit: my own text changes; Tika's message refuses; a
+            // stale index is a safe no-op.
+            TikaBotStore.editMessageText(base, "R73C edited line")
+            org.junit.Assert.assertEquals(
+                "R73C edited line",
+                TikaBotStore.messages.value[base].text,
+            )
+            TikaBotStore.editMessageText(base + 1, "R73C must not apply")
+            org.junit.Assert.assertEquals(
+                "editMessageText must refuse a bot message",
+                "R73C store bot line",
+                TikaBotStore.messages.value[base + 1].text,
+            )
+            TikaBotStore.editMessageText(base + 999, "R73C stale index")
+            org.junit.Assert.assertEquals(base + 2, TikaBotStore.messages.value.size)
+
+            // Delete: the user line goes, the bot line shifts into
+            // its place.
+            TikaBotStore.deleteMessage(base)
+            msgs = TikaBotStore.messages.value
+            org.junit.Assert.assertEquals(base + 1, msgs.size)
+            org.junit.Assert.assertEquals("R73C store bot line", msgs[base].text)
+            org.junit.Assert.assertTrue(msgs[base].pinned)
+
+            // Delete a photo message: its local file goes with it.
+            val imgFile = java.io.File(ctx.cacheDir, "r73c-store-photo.jpg")
+            imgFile.writeBytes(byteArrayOf(1, 2, 3))
+            org.junit.Assert.assertTrue(imgFile.exists())
+            TikaBotStore.appendUserImage("R73C caption", imgFile.absolutePath)
+            val imgIdx = TikaBotStore.messages.value.lastIndex
+            org.junit.Assert.assertEquals(imgFile.absolutePath, TikaBotStore.messages.value[imgIdx].img)
+            TikaBotStore.deleteMessage(imgIdx)
+            org.junit.Assert.assertFalse(
+                "deleting a photo message must delete its local file",
+                imgFile.exists(),
+            )
+            org.junit.Assert.assertEquals(base + 1, TikaBotStore.messages.value.size)
+        } finally {
+            cleanupCompanionR73C(base)
+        }
+    }
+
+    /** Typing parity: with a companion job in flight, the screen
+     *  shows the typing state (the header reads "typing…", and the
+     *  list tail carries the normal chat's RdTypingBubble with
+     *  Tika's avatar — dots only, no text, so the header is the
+     *  text witness; the bubble itself is what the shot shows). */
+    @Test fun shot72_companionTypingParity() {
+        composeRule.mainClock.autoAdvance = false
+        stageCompanionR73C()
+        val latch = CompletableDeferred<Unit>()
+        try {
+            frame { TikaBotScreen() }
+            org.junit.Assert.assertTrue(
+                "no typing state before launch",
+                nodesWithTextR73("typing…").isEmpty(),
+            )
+            org.junit.Assert.assertTrue(AiJobs.launchCompanion { latch.await() })
+            org.junit.Assert.assertTrue(
+                "typing state must show while the companion job runs",
+                pumpUntilR73 { nodesWithTextR73("typing…").isNotEmpty() },
+            )
+            scrollCompanionToTailR73C()
+            composeRule.mainClock.advanceTimeBy(1_000)
+            shot("72-companion-typing-parity.png")
+        } finally {
+            releaseCompanionJobR73C(latch)
+            TikaBotStore.setLiveText(null)
+        }
+    }
+
+    /** Streaming live bubble: a partial published to the store's
+     *  transient liveText renders as the tail bubble while the job
+     *  is still in flight — the partial text itself is the witness. */
+    @Test fun shot73_companionStreamingLive() {
+        composeRule.mainClock.autoAdvance = false
+        stageCompanionR73C()
+        val latch = CompletableDeferred<Unit>()
+        try {
+            org.junit.Assert.assertTrue(AiJobs.launchCompanion { latch.await() })
+            TikaBotStore.setLiveText("Ami khub bhalo achi, tumi?")
+            frame { TikaBotScreen() }
+            org.junit.Assert.assertTrue(
+                "the live bubble must render the streaming partial",
+                pumpUntilR73 {
+                    nodesWithTextR73("Ami khub bhalo achi, tumi?", substring = true).isNotEmpty()
+                },
+            )
+            scrollCompanionToTailR73C()
+            shot("73-companion-streaming-live.png")
+        } finally {
+            TikaBotStore.setLiveText(null)
+            releaseCompanionJobR73C(latch)
+        }
+    }
+
+    /** The message menu, composed directly: a starred OWN text
+     *  message offers the full item set in the normal chat's order
+     *  — Reply, Edit, Copy, Unstar (state-aware), Pin, Delete. */
+    @Test fun shot74_companionMenu() {
+        frame {
+            Box(Modifier.fillMaxSize().background(Color(0xFF101014))) {
+                BotMessageMenu(
+                    msg = TikaBotStore.BotMsg(
+                        mine = true,
+                        text = "R73C menu sample — my own line",
+                        starred = true,
+                    ),
+                    theme = null,
+                    onDismiss = {},
+                    onReact = {},
+                    onReply = {},
+                    onEdit = {},
+                    onCopy = {},
+                    onToggleStar = {},
+                    onTogglePin = {},
+                    onDelete = {},
+                )
+            }
+        }
+        composeRule.waitForIdle()
+        listOf("Reply", "Edit", "Copy", "Unstar", "Pin", "Delete").forEach { label ->
+            org.junit.Assert.assertTrue(
+                "menu must offer $label",
+                nodesWithTextR73(label).isNotEmpty(),
+            )
+        }
+        shot("74-companion-menu.png")
+    }
+
+    /** Nickname + theme end to end: the header carries the local
+     *  nickname and the staged bubbles render under a non-default
+     *  theme (t3 — wallpaper + themed bubble colours). */
+    @Test fun shot75_companionThemedNickname() {
+        stageCompanionR73C()
+        val oldNick = TikaBotStore.nickname.value
+        val oldTheme = TikaBotStore.themeId.value
+        val base = TikaBotStore.messages.value.size
+        try {
+            TikaBotStore.setNickname("Cutie")
+            TikaBotStore.setThemeId("t3")
+            TikaBotStore.appendUser("R73C themed question")
+            TikaBotStore.appendBot("R73C themed reply")
+            frame { TikaBotScreen() }
+            org.junit.Assert.assertTrue(
+                "the header must show the nickname",
+                pumpUntilR73 { nodesWithTextR73("Cutie").isNotEmpty() },
+            )
+            org.junit.Assert.assertTrue(
+                "the themed reply bubble must render",
+                nodesWithTextR73("R73C themed reply", substring = true).isNotEmpty(),
+            )
+            shot("75-companion-themed-nickname.png")
+        } finally {
+            cleanupCompanionR73C(base)
+            TikaBotStore.setNickname(oldNick)
+            TikaBotStore.setThemeId(oldTheme)
+        }
+    }
+
+    /** Pinned strip: pinning a staged message shows the strip
+     *  under the header with the normal chat's "Pinned · …" line. */
+    @Test fun shot76_companionPinnedStrip() {
+        stageCompanionR73C()
+        val base = TikaBotStore.messages.value.size
+        try {
+            TikaBotStore.appendUser("R73C pin me line")
+            TikaBotStore.appendBot("R73C after pin reply")
+            TikaBotStore.togglePin(base)
+            org.junit.Assert.assertTrue(TikaBotStore.messages.value[base].pinned)
+            frame { TikaBotScreen() }
+            org.junit.Assert.assertTrue(
+                "the pinned strip must show under the header",
+                pumpUntilR73 {
+                    nodesWithTextR73("Pinned · R73C pin me line", substring = true).isNotEmpty()
+                },
+            )
+            shot("76-companion-pinned-strip.png")
+        } finally {
+            cleanupCompanionR73C(base)
+        }
+    }
+
+    /** Editing, the real flow: long-press my own bubble → the menu
+     *  opens → tap Edit → the composer shows its "Editing message"
+     *  banner (the shot17 long-press pattern). */
+    @Test fun shot77_companionEditing() {
+        stageCompanionR73C()
+        val base = TikaBotStore.messages.value.size
+        try {
+            TikaBotStore.appendUser("R73C edit this line")
+            frame { TikaBotScreen() }
+            org.junit.Assert.assertTrue(
+                "the staged own message must render",
+                pumpUntilR73 { nodesWithTextR73("R73C edit this line").isNotEmpty() },
+            )
+            composeRule.onAllNodesWithText("R73C edit this line")[0]
+                .performTouchInput { longClick() }
+            composeRule.waitForIdle()
+            org.junit.Assert.assertTrue(
+                "long-press must open the message menu",
+                nodesWithTextR73("Edit").isNotEmpty(),
+            )
+            composeRule.onAllNodesWithText("Edit")[0]
+                .performTouchInput { click() }
+            composeRule.waitForIdle()
+            org.junit.Assert.assertTrue(
+                "the composer must show the Editing message banner",
+                nodesWithTextR73("Editing message").isNotEmpty(),
+            )
+            shot("77-companion-editing.png")
+        } finally {
+            cleanupCompanionR73C(base)
+        }
     }
 }

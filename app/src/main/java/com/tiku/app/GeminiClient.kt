@@ -209,6 +209,16 @@ object GeminiClient {
             put("contents", JSONArray().put(JSONObject().apply {
                 put("parts", JSONArray().put(JSONObject().put("text", prompt)))
             }))
+            // ROUND 73: thinking off — a thinking model can burn the
+            // whole output budget on reasoning and return empty or
+            // truncated text (seen in R71 at small budgets). No token
+            // cap is added here: /tiku keeps its previous length
+            // behaviour, only the thinking failure mode is removed.
+            put("generationConfig", JSONObject().apply {
+                put("thinkingConfig", JSONObject().apply {
+                    put("thinkingBudget", 0)
+                })
+            })
         }
         val (outcome, sawBlock) = cascadeTextAnswer(body)
         return maybeWzFallback(
@@ -300,8 +310,13 @@ object GeminiClient {
             // user asks something important the answer may run as
             // long as it genuinely needs. (Round 54's 220-token cap
             // produced the absurd 3-word replies the owner rejected.)
+            // ROUND 73: thinking off alongside the cap (same R71
+            // empty/truncated-answer failure mode as answerText).
             put("generationConfig", JSONObject().apply {
                 put("maxOutputTokens", 1200)
+                put("thinkingConfig", JSONObject().apply {
+                    put("thinkingBudget", 0)
+                })
             })
         }
         val (outcome, sawBlock) = cascadeCompanionAnswer(body)
@@ -314,6 +329,257 @@ object GeminiClient {
             systemText = persona + "\n\n" + WZ_ROUTE_GUARD,
             userText = latestUser,
         )
+    }
+
+    /** ROUND 73: one streaming attempt's result — the streaming
+     *  twin of [Raw]. [FailedBeforeText] carries the HTTP status
+     *  when the failure was a non-2xx response (null for a
+     *  transport exception) so the cascade can apply the lite
+     *  503-retry rule; [FailedMidStream] keeps the partial text so
+     *  a reply that was already arriving is never thrown away. */
+    private sealed interface StreamResult {
+        data class Completed(val text: String) : StreamResult
+        data object Empty : StreamResult
+        data object Quota : StreamResult
+        data class FailedBeforeText(val httpCode: Int? = null) : StreamResult
+        data class FailedMidStream(val partialText: String) : StreamResult
+    }
+
+    /** ROUND 73 — companion reply SPEED (streaming entry point).
+     *
+     *  Measured diagnosis (coordinator, live, shipped key,
+     *  companion-shaped requests): gemini-3.1-flash-lite answers
+     *  in ~2 s when it answers; the heavier models are slow or
+     *  503 at peak times. The old slowness was cascade
+     *  fall-through — when lite failed, each later model could
+     *  eat a full 60 s read timeout before the next was tried.
+     *  This entry point streams over the SAME fastest-first
+     *  [COMPANION_TEXT_MODELS] with short timeouts (15 s connect /
+     *  30 s read) so a dead model fails fast, delivers text
+     *  incrementally through [onText] (the accumulated text after
+     *  every growing chunk), retries lite ONCE after 1200 ms when
+     *  its failure looks transient (429, or a 503 before any
+     *  text — the dominant fall-through cause), and falls back to
+     *  the existing non-streaming [cascadeCompanionAnswer] once
+     *  when streaming produced no text at all, so a device
+     *  network that cannot do SSE behaves exactly as before.
+     *  [companionReply] keeps its logic and stays the
+     *  non-streaming core (and the identity harness target).
+     *
+     *  Contract: [onText] receives the ACCUMULATED text (not a
+     *  delta) and may be called many times; the returned
+     *  [Outcome] is authoritative — when the refusal fallback
+     *  replaces a streamed refusal, the final value differs from
+     *  the last streamed text and the screen must render the
+     *  Outcome, not the stream. Maker and preview handling are
+     *  identical to [companionReply] and never touch the network. */
+    suspend fun companionReplyStreaming(
+        history: List<Pair<Boolean, String>>,
+        persona: String,
+        onText: (String) -> Unit,
+    ): Outcome<String> {
+        if (history.lastOrNull { it.first }?.second?.let { isMakerQuestion(it) } == true) {
+            onText(MAKER_ANSWER)
+            return Outcome.Ok(MAKER_ANSWER)
+        }
+        if (Config.PREVIEW_UI_ONLY) {
+            val preview = "That's so sweet of you to say! Tell me more na 💛"
+            onText(preview)
+            return Outcome.Ok(preview)
+        }
+        // The SAME body as companionReply (ROUND 73 thinking off
+        // included) — one body shared by every streaming attempt
+        // and by the non-streaming backstop below.
+        val body = JSONObject().apply {
+            put("system_instruction", JSONObject().apply {
+                put("parts", JSONArray().put(JSONObject().put("text", persona)))
+            })
+            put("contents", JSONArray().apply {
+                for ((isUser, text) in history) {
+                    put(JSONObject().apply {
+                        put("role", if (isUser) "user" else "model")
+                        put("parts", JSONArray().put(JSONObject().put("text", text)))
+                    })
+                }
+            })
+            put("generationConfig", JSONObject().apply {
+                put("maxOutputTokens", 1200)
+                put("thinkingConfig", JSONObject().apply {
+                    put("thinkingBudget", 0)
+                })
+            })
+        }
+        var sawQuota = false
+        var sawBlock = false
+        var winningText: String? = null
+        var retriedLite = false
+        var idx = 0
+        while (idx < COMPANION_TEXT_MODELS.size && winningText == null) {
+            val model = COMPANION_TEXT_MODELS[idx]
+            when (val r = postStream(model, body, onText)) {
+                is StreamResult.Completed -> {
+                    if (r.text.isNotBlank()) {
+                        winningText = r.text.trim()
+                    } else {
+                        sawBlock = true
+                        idx++
+                    }
+                }
+                is StreamResult.FailedMidStream -> {
+                    // Text was already arriving — deliver the
+                    // partial rather than lose the whole turn.
+                    if (r.partialText.isNotBlank()) {
+                        winningText = r.partialText.trim()
+                    } else {
+                        idx++
+                    }
+                }
+                StreamResult.Empty -> {
+                    sawBlock = true
+                    idx++
+                }
+                StreamResult.Quota -> {
+                    sawQuota = true
+                    if (idx == 0 && !retriedLite) {
+                        // A lite 429 is usually a momentary cap —
+                        // one short pause, then lite once more
+                        // before paying for a heavier model.
+                        retriedLite = true
+                        Log.w("TikaAi", "model $model quota on stream — retrying lite once")
+                        kotlinx.coroutines.delay(1200)
+                    } else {
+                        idx++
+                    }
+                }
+                is StreamResult.FailedBeforeText -> {
+                    if (idx == 0 && !retriedLite && r.httpCode == 503) {
+                        // 503s on lite are the dominant
+                        // fall-through cause and are usually
+                        // transient — one short pause, then lite
+                        // once more before moving on.
+                        retriedLite = true
+                        Log.w("TikaAi", "model $model -> HTTP 503 on stream — retrying lite once")
+                        kotlinx.coroutines.delay(1200)
+                    } else {
+                        idx++
+                    }
+                }
+            }
+        }
+        val won = winningText
+        val finalOutcome: Outcome<String>
+        val finalSawBlock: Boolean
+        if (won != null) {
+            finalOutcome = Outcome.Ok(won)
+            finalSawBlock = sawBlock
+        } else {
+            // Streaming produced no text at all. Tracked exactly
+            // like the existing cascade, the streaming-only outcome
+            // is Quota when sawQuota else Failed (with sawBlock as
+            // accumulated above) — but the backstop supersedes it:
+            // one non-streaming cascade, whose (outcome, sawBlock)
+            // becomes the final result — today's exact behaviour
+            // when SSE is unusable on a device network.
+            val streamingOutcome = if (sawQuota) Outcome.Quota else Outcome.Failed
+            Log.w("TikaAi", "streaming cascade produced no text ($streamingOutcome) — running non-streaming backstop")
+            val (backstopOutcome, backstopBlock) = cascadeCompanionAnswer(body)
+            finalOutcome = backstopOutcome
+            finalSawBlock = backstopBlock
+        }
+        // Finish EXACTLY like companionReply: the refusal fallback
+        // must fire on a completed refusal as today. Fallback user
+        // input is ONLY the latest user message (privacy law).
+        return maybeWzFallback(
+            outcome = finalOutcome,
+            sawBlock = finalSawBlock,
+            systemText = persona + "\n\n" + WZ_ROUTE_GUARD,
+            userText = history.lastOrNull { it.first }?.second,
+        )
+    }
+
+    /** ROUND 73: one SSE streaming call to
+     *  `streamGenerateContent?alt=sse`. Same key discipline as
+     *  [post] (the `x-goog-api-key` header, never logged), with
+     *  the shorter streaming timeouts (15 s connect / 30 s read)
+     *  so a hung model fails fast instead of eating the full
+     *  non-streaming read timeout. SSE payloads (`data:` lines)
+     *  are generateContent JSON chunks; text accumulates from
+     *  candidates[0].content.parts with `thought` parts skipped
+     *  (via [extractGameText], the existing thought-skipping
+     *  extractor), and [onText] fires with the accumulated text
+     *  after every chunk that grows it. A callback exception is
+     *  swallowed (logged by type only) so a UI hiccup can never
+     *  be misread as a stream failure. */
+    private suspend fun postStream(
+        model: String,
+        body: JSONObject,
+        onText: (String) -> Unit,
+    ): StreamResult = withContext(Dispatchers.IO) {
+        var conn: HttpURLConnection? = null
+        val accumulated = StringBuilder()
+        try {
+            conn = (URL("${GeminiConfig.BASE}/$model:streamGenerateContent?alt=sse")
+                .openConnection() as HttpURLConnection).apply {
+                requestMethod = "POST"
+                connectTimeout = 15_000
+                readTimeout = 30_000
+                doOutput = true
+                setRequestProperty("Content-Type", "application/json")
+                setRequestProperty("x-goog-api-key", GeminiConfig.API_KEY)
+            }
+            conn.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
+            val code = conn.responseCode
+            if (code == 429) {
+                Log.w("TikaAi", "model $model stream -> HTTP 429 — cascading")
+                return@withContext StreamResult.Quota
+            }
+            if (code !in 200..299) {
+                Log.w("TikaAi", "model $model stream -> HTTP $code — cascading")
+                return@withContext StreamResult.FailedBeforeText(code)
+            }
+            try {
+                conn.inputStream.bufferedReader(Charsets.UTF_8).useLines { lines ->
+                    for (line in lines) {
+                        if (!line.startsWith("data:")) continue
+                        val payload = line.substring(5).trim()
+                        if (payload.isEmpty() || payload == "[DONE]") continue
+                        val chunkText = runCatching {
+                            extractGameText(JSONObject(payload))
+                        }.getOrNull()
+                        if (!chunkText.isNullOrEmpty()) {
+                            accumulated.append(chunkText)
+                            runCatching { onText(accumulated.toString()) }
+                                .onFailure { e ->
+                                    Log.w("TikaAi", "stream callback failed (${e.javaClass.simpleName})")
+                                }
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                if (accumulated.isNotEmpty()) {
+                    Log.w("TikaAi", "model $model stream failed mid-stream (${e.javaClass.simpleName}) — keeping partial")
+                    return@withContext StreamResult.FailedMidStream(accumulated.toString())
+                }
+                Log.w("TikaAi", "model $model stream failed (${e.javaClass.simpleName}) — cascading")
+                return@withContext StreamResult.FailedBeforeText(null)
+            }
+            if (accumulated.isEmpty()) {
+                Log.w("TikaAi", "model $model stream ended empty — cascading")
+                StreamResult.Empty
+            } else {
+                StreamResult.Completed(accumulated.toString())
+            }
+        } catch (e: Exception) {
+            if (accumulated.isNotEmpty()) {
+                Log.w("TikaAi", "model $model stream failed mid-stream (${e.javaClass.simpleName}) — keeping partial")
+                StreamResult.FailedMidStream(accumulated.toString())
+            } else {
+                Log.w("TikaAi", "model $model stream failed (${e.javaClass.simpleName}) — cascading")
+                StreamResult.FailedBeforeText(null)
+            }
+        } finally {
+            conn?.disconnect()
+        }
     }
 
     /** ROUND 55 (Part C): the companion LOOKS at a photo — the bot
@@ -362,8 +628,13 @@ object GeminiClient {
                         }))
                 })
             })
+            // ROUND 73: thinking off alongside the cap (same R71
+            // empty/truncated-answer failure mode as companionReply).
             put("generationConfig", JSONObject().apply {
                 put("maxOutputTokens", 1200)
+                put("thinkingConfig", JSONObject().apply {
+                    put("thinkingBudget", 0)
+                })
             })
         }
         // Vision path (ROUND 70 out of scope): no fallback hook.

@@ -12,8 +12,10 @@ import androidx.compose.animation.core.spring
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -23,6 +25,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -31,13 +34,18 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.PushPin
+import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -61,8 +69,10 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -125,7 +135,11 @@ object TikaBotStore {
      *  [game] is the ABSOLUTE PATH of a /babeg game's saved HTML in
      *  tika_bot_games/<account> (additive "g") — a solo game, played
      *  on this phone only; [reaction] is MY one emoji reaction on
-     *  this message (additive "r", local only, never shared). */
+     *  this message (additive "r", local only, never shared).
+     *  ROUND 73: [starred] / [pinned] are the normal chat's star +
+     *  pin, local only (additive "s" / "p", written only when true —
+     *  Round-68 histories simply lack them and load unstarred /
+     *  unpinned, exactly as before). */
     data class BotMsg(
         val mine: Boolean,
         val text: String,
@@ -134,10 +148,31 @@ object TikaBotStore {
         val reply: String? = null,
         val game: String? = null,
         val reaction: String? = null,
+        val starred: Boolean = false,
+        val pinned: Boolean = false,
     )
 
     private val _messages = MutableStateFlow<List<BotMsg>>(emptyList())
     val messages: StateFlow<List<BotMsg>> = _messages
+
+    /** ROUND 73 (Workstream A): the in-flight STREAMING reply's
+     *  accumulated partial text, or null when no reply is streaming.
+     *  TRANSIENT by design: it lives only in this flow — it is never
+     *  written by [persist], never part of a [BotMsg], and never
+     *  enters [snapshotForSharing] or any upload path. Living in the
+     *  store (not screen state) means leaving and re-entering the
+     *  companion mid-stream keeps showing the partial; when the turn
+     *  completes, the final text lands as a real message via
+     *  [appendBot] and this is cleared back to null. */
+    private val _liveText = MutableStateFlow<String?>(null)
+    val liveText: StateFlow<String?> = _liveText
+
+    /** Set the streaming partial (null clears it). Called from the
+     *  streaming callback, which fires on Dispatchers.IO — a plain
+     *  StateFlow write, safe from any thread. */
+    fun setLiveText(t: String?) {
+        _liveText.value = t
+    }
 
     /** The Messages-list row subtitle: "AI companion" until the first
      *  exchange exists, then the last message (either side). */
@@ -212,6 +247,8 @@ object TikaBotStore {
                         reply = o.optString("q").ifBlank { null },
                         game = o.optString("g").ifBlank { null },
                         reaction = o.optString("r").ifBlank { null },
+                        starred = o.optBoolean("s"),
+                        pinned = o.optBoolean("p"),
                     )
                 }
             }
@@ -262,6 +299,8 @@ object TikaBotStore {
             if (m.reply != null) o.put("q", m.reply)
             if (m.game != null) o.put("g", m.game)
             if (m.reaction != null) o.put("r", m.reaction)
+            if (m.starred) o.put("s", true)
+            if (m.pinned) o.put("p", true)
             arr.put(o)
         }
         p.edit()
@@ -309,6 +348,68 @@ object TikaBotStore {
         val next = if (m.reaction == emoji) null else emoji
         _messages.value = list.toMutableList().also { it[index] = m.copy(reaction = next) }
         persist()
+    }
+
+    /** ROUND 73 (message-menu parity): star the message at [index]
+     *  (the normal chat's Star) — local only, persisted additively
+     *  under "s". Bounds-checked like [toggleReaction]; system
+     *  lines carry no menu and are never starred. */
+    fun toggleStar(index: Int) {
+        val list = _messages.value
+        if (index !in list.indices) return
+        val m = list[index]
+        if (m.sys) return
+        _messages.value = list.toMutableList().also { it[index] = m.copy(starred = !m.starred) }
+        persist()
+    }
+
+    /** ROUND 73 (message-menu parity): pin the message at [index]
+     *  (the normal chat's Pin) — local only, persisted additively
+     *  under "p". The latest pinned message rides the strip under
+     *  the companion header. */
+    fun togglePin(index: Int) {
+        val list = _messages.value
+        if (index !in list.indices) return
+        val m = list[index]
+        if (m.sys) return
+        _messages.value = list.toMutableList().also { it[index] = m.copy(pinned = !m.pinned) }
+        persist()
+    }
+
+    /** ROUND 73 (message-menu parity): replace the TEXT of my own
+     *  message at [index] (the normal chat's Edit). Guarded here
+     *  too: only my own plain-text messages edit — never Tika's,
+     *  never a photo caption, never a game, never a system line —
+     *  and a stale index (the message was deleted while the editor
+     *  was open) or a blank replacement is a safe no-op. Editing
+     *  never regenerates or alters Tika's reply, and quotes other
+     *  messages hold of this one keep their snapshots. */
+    fun editMessageText(index: Int, newText: String) {
+        val list = _messages.value
+        if (index !in list.indices) return
+        val m = list[index]
+        if (m.sys || !m.mine || m.img != null || m.game != null) return
+        val t = newText.trim()
+        if (t.isEmpty() || t == m.text) return
+        _messages.value = list.toMutableList().also { it[index] = m.copy(text = t) }
+        persist()
+    }
+
+    /** ROUND 73 (message-menu parity): remove the message at
+     *  [index] from this local store (the companion's delete is
+     *  local-only — there is no server copy). A photo or game
+     *  message's local file goes with it (the same files
+     *  [imageDir] / [gameDir] hold). Quotes in OTHER messages keep
+     *  their snapshots by design — a quote is a copy of the text,
+     *  not a reference. Bounds-checked: a stale index is a no-op. */
+    fun deleteMessage(index: Int) {
+        val list = _messages.value
+        if (index !in list.indices) return
+        val m = list[index]
+        _messages.value = list.toMutableList().also { it.removeAt(index) }
+        persist()
+        if (m.img != null) runCatching { File(m.img).delete() }
+        if (m.game != null) runCatching { File(m.game).delete() }
     }
 
     /** ROUND 68 (WS1 parity): rename Tika in this chat (local only).
@@ -375,6 +476,7 @@ object TikaBotStore {
         _role.value = null
         _nickname.value = null
         _themeId.value = ""
+        _liveText.value = null
         _messages.value = emptyList()
         prefs()?.edit()?.clear()?.apply()
         runCatching { imageDir().deleteRecursively() }
@@ -531,6 +633,12 @@ object TikaBotStore {
 private val BotCard = Color(0xFF1B1B1F)
 private val BotSub = Color(0xFF9A99A6)
 
+/** Chat.kt's private RdSheet / RdDanger, replicated value for
+ *  value (0xFF16161B / 0xFFFF453A) for the Round-73 message menu —
+ *  the same replication pattern as [BotCard] / [BotSub] above. */
+private val BotSheet = Color(0xFF16161B)
+private val BotDanger = Color(0xFFFF453A)
+
 /** Chat.kt's private chatGlass (Chat.kt:622), replicated value for
  *  value: haze blur 24 dp with a white 0.07 tint and the white
  *  0.30→0.06 border gradient; without a haze state, RdCard at 0.94
@@ -625,6 +733,26 @@ fun TikaBotScreen() {
     val role by TikaBotStore.role.collectAsState()
     val nickname by TikaBotStore.nickname.collectAsState()
     val themeId by TikaBotStore.themeId.collectAsState()
+    // ROUND 73 (Workstream B): the companion busy flag, read HERE in
+    // composable scope — this read is what makes AiJobs' finally-clear
+    // recompose the screen when a companion job finishes. The
+    // LazyColumn content lambda below only consumes this captured
+    // value: a snapshot read inside the lazy DSL does not by itself
+    // schedule the recomposition that removes the "typing…" item,
+    // which is how the indicator stranded after the reply landed
+    // (build 124).
+    val companionBusyNow = AiJobs.companionBusy
+    // ROUND 73 (Workstream A): the streaming reply's live partial,
+    // collected HERE in composable scope for the same reason — its
+    // changes must recompose the screen so the LazyColumn tail can
+    // swap the typing bubble for the live bubble and keep the
+    // partial growing chunk by chunk.
+    val liveText by TikaBotStore.liveText.collectAsState()
+    val clipboard = LocalClipboardManager.current
+    // ROUND 73: a screen-lifetime scope for UI scrolls (pinned strip
+    // taps, starred-row jumps) — deliberately NOT an AI-job scope
+    // (those live in AiJobs); this one only animates the list.
+    val uiScope = rememberCoroutineScope()
     // ROUND 68 (WS1): this chat's theme — the same six built-in
     // themes as a normal chat, local only (ChatThemes.paletteFor
     // returns null for "" / unknown = Default, exactly like a real
@@ -642,9 +770,16 @@ fun TikaBotScreen() {
      *  swipe on a bubble, cleared on send or via the reply strip's
      *  ✕. The quote rides on the outgoing message (BotMsg.reply). */
     var replyTarget by remember { mutableStateOf<TikaBotStore.BotMsg?>(null) }
-    /** ROUND 68 (WS1): the index whose reaction picker is open
-     *  (long-press on a bubble), or null. */
-    var reactingIdx by remember { mutableStateOf<Int?>(null) }
+    /** ROUND 73 (message-menu parity): the index whose long-press
+     *  message menu is open, or null — replaces the Round-68 inline
+     *  reaction bar (reactingIdx): a long-press now opens the same
+     *  full-screen overlay menu a normal chat opens. */
+    var menuIdx by remember { mutableStateOf<Int?>(null) }
+    /** ROUND 73 (message-menu parity): the index of my own text
+     *  message being edited, or null — the normal chat's Edit: the
+     *  composer loads the text under its "Editing message" banner
+     *  and Send replaces the message instead of posting a new one. */
+    var editingIdx by remember { mutableStateOf<Int?>(null) }
     /** ROUND 68 (WS11): the /babeg game open full-screen, or null. */
     var openGame by remember { mutableStateOf<TikaBotStore.BotMsg?>(null) }
     val listState = rememberLazyListState()
@@ -664,18 +799,51 @@ fun TikaBotScreen() {
     }
 
     /** The AI call for a plain text turn: the companion's own
-     *  history + persona, through the fastest-first cascade
-     *  (GeminiClient.companionReply). */
-    suspend fun companionTurn() {
-        when (val outcome = GeminiClient.companionReply(
+     *  history + persona, through the fastest-first cascade.
+     *  ROUND 73 (Workstream A): this branch STREAMS —
+     *  GeminiClient.companionReplyStreaming delivers the accumulated
+     *  partial after every chunk, and each partial is published to
+     *  TikaBotStore.liveText, which the list tail renders as the
+     *  live bubble. On Ok the final text lands FIRST as a real
+     *  message and only then is the live text cleared (so the tail
+     *  never flashes empty); on any failure the live text clears
+     *  and the SAME failure line the non-streaming path used is
+     *  appended. The Outcome is authoritative — when the refusal
+     *  fallback inside GeminiClient replaces a streamed refusal,
+     *  the landed message is the Outcome's value, not the last
+     *  partial. The other branches (photo/vision, /tiku, /tika,
+     *  /babeg) stay single-shot, exactly as before. */
+    suspend fun companionTurnStreaming() {
+        when (val outcome = GeminiClient.companionReplyStreaming(
             TikaBotStore.aiHistory(), TikaBotStore.personaPrompt(),
-        )) {
-            is GeminiClient.Outcome.Ok -> TikaBotStore.appendBot(outcome.value)
-            else -> TikaBotStore.appendSys("Tika couldn't reply — try again")
+        ) { partial -> TikaBotStore.setLiveText(partial) }) {
+            is GeminiClient.Outcome.Ok -> {
+                TikaBotStore.appendBot(outcome.value)
+                TikaBotStore.setLiveText(null)
+            }
+            else -> {
+                TikaBotStore.setLiveText(null)
+                TikaBotStore.appendSys("Tika couldn't reply — try again")
+            }
         }
     }
 
     fun send() {
+        // ROUND 73 (message-menu parity): EDIT MODE — Send replaces
+        // the message being edited instead of posting a new one,
+        // and the composer returns to normal mode either way (the
+        // normal chat's sendCurrent edit branch, mirrored). A blank
+        // replacement is skipped (the store guards it too), a stale
+        // index no-ops inside the store, and NO AI job runs: editing
+        // never regenerates or alters Tika's reply.
+        val editIdx = editingIdx
+        if (editIdx != null) {
+            val edited = input.trim()
+            if (edited.isNotEmpty()) TikaBotStore.editMessageText(editIdx, edited)
+            editingIdx = null
+            input = ""
+            return
+        }
         val text = input.trim()
         if (text.isEmpty() || AiJobs.companionBusy) return
         input = ""
@@ -792,7 +960,7 @@ fun TikaBotScreen() {
                             TikaBotStore.appendSys("Tika couldn't reply — try again")
                         }
                     } else {
-                        companionTurn()
+                        companionTurnStreaming()
                     }
                 }
             }
@@ -884,7 +1052,13 @@ fun TikaBotScreen() {
                     Text(nickname ?: "Tika", color = Color.White, fontSize = 15.sp,
                         fontWeight = FontWeight.SemiBold, maxLines = 1,
                         fontFamily = InterTight)
-                    Text("AI companion", color = BotSub, fontSize = 12.sp,
+                    // ROUND 73 (typing parity): the header status
+                    // mirrors the normal chat's — "typing…" while a
+                    // companion job is in flight (the hoisted
+                    // companionBusyNow read, so the flip recomposes),
+                    // "AI companion" at rest.
+                    Text(if (companionBusyNow) "typing…" else "AI companion",
+                        color = BotSub, fontSize = 12.sp,
                         fontFamily = PoppinsFamily)
                 }
             }
@@ -955,6 +1129,40 @@ fun TikaBotScreen() {
                                         }
                                     }
                                 Spacer(Modifier.height(16.dp))
+                                // ROUND 73 (message-menu parity): the
+                                // Starred messages section — every
+                                // starred message as a row (media
+                                // reads "Photo" / "Game", like the
+                                // pinned strip's fallbacks); tapping
+                                // one closes the sheet and scrolls
+                                // the list to it. With none starred,
+                                // a muted placeholder line instead.
+                                Text("Starred messages", color = BotSub, fontSize = 12.sp,
+                                    fontFamily = PoppinsFamily)
+                                Spacer(Modifier.height(6.dp))
+                                val starredRows = messages.withIndex().filter { it.value.starred }
+                                if (starredRows.isEmpty()) {
+                                    Text("No starred messages", color = BotSub, fontSize = 13.sp,
+                                        fontFamily = PoppinsFamily)
+                                } else {
+                                    starredRows.forEach { (idx, sm) ->
+                                        CardRow({
+                                            AppState.closeSheet()
+                                            uiScope.launch { listState.animateScrollToItem(idx) }
+                                        }) {
+                                            TwoLine(
+                                                when {
+                                                    sm.img != null -> "Photo"
+                                                    sm.game != null -> "Game"
+                                                    else -> sm.text.take(60)
+                                                },
+                                                null,
+                                                Modifier.weight(1f),
+                                            )
+                                        }
+                                    }
+                                }
+                                Spacer(Modifier.height(16.dp))
                                 CardRow({
                                     TikaBotStore.reset()
                                     AppState.closeSheet()
@@ -977,6 +1185,61 @@ fun TikaBotScreen() {
             ) {
                 Icon(Icons.Filled.MoreVert, null, tint = Color.White, modifier = Modifier.size(20.dp))
             }
+        }
+
+        // ROUND 73 (message-menu parity): the pinned strip — a
+        // mirror of the normal chat's (Chat.kt): under the header,
+        // showing the LATEST pinned message as a one-line preview;
+        // tap scrolls the list to it, long-press unpins it with the
+        // same "Message unpinned" toast. Media previews fall back
+        // to "Photo" / "Game", like theirs. The pill wears the
+        // active theme's peer colours (BotCard on Default, whose
+        // value IS the normal strip's RdCard).
+        val pinnedIdx = messages.indexOfLast { it.pinned }
+        if (pinnedIdx >= 0) {
+            val pinnedMsg = messages[pinnedIdx]
+            val pinPreview = when {
+                pinnedMsg.img != null -> "Photo"
+                pinnedMsg.game != null -> "Game"
+                else -> pinnedMsg.text.take(60)
+            }
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = 14.dp)
+                    .clip(RoundedCornerShape(999.dp))
+                    .background(chatTheme?.peerBubble ?: BotCard)
+                    .pointerInput(pinnedIdx) {
+                        detectTapGestures(
+                            onTap = {
+                                uiScope.launch { listState.animateScrollToItem(pinnedIdx) }
+                            },
+                            onLongPress = {
+                                TikaBotStore.togglePin(pinnedIdx)
+                                AppState.toast("Message unpinned")
+                            },
+                        )
+                    }
+                    .padding(horizontal = 14.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(Icons.Filled.PushPin, null, Modifier.size(13.dp),
+                    tint = chatTheme?.accent ?: Rose)
+                Spacer(Modifier.width(6.dp))
+                Text(
+                    "Pinned · $pinPreview",
+                    fontSize = 12.5.sp,
+                    color = chatTheme?.peerText ?: Color.White,
+                    fontFamily = rememberChatFontFamily(),
+                    maxLines = 1,
+                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f),
+                )
+                val pinCount = messages.count { it.pinned }
+                if (pinCount > 1) {
+                    Text("$pinCount pinned", fontSize = 11.5.sp, color = BotSub,
+                        fontFamily = PoppinsFamily)
+                }
+            }
+            Spacer(Modifier.height(8.dp))
         }
 
         // ROUND 68 (WS1): the theme wallpaper sits behind the list
@@ -1008,15 +1271,13 @@ fun TikaBotScreen() {
                         m = messages[i],
                         theme = chatTheme,
                         animateIn = i == freshIndex,
-                        reacting = reactingIdx == i,
                         onSwipeReply = {
-                            reactingIdx = null
+                            menuIdx = null
                             replyTarget = messages[i]
                         },
-                        onLongPress = { reactingIdx = if (reactingIdx == i) null else i },
+                        onMenu = { menuIdx = i },
                         onReact = { emoji ->
                             TikaBotStore.toggleReaction(i, emoji)
-                            reactingIdx = null
                         },
                         onGameTap = {
                             val g = messages[i].game
@@ -1024,19 +1285,33 @@ fun TikaBotScreen() {
                         },
                     )
                 }
-                if (AiJobs.companionBusy) {
-                    item {
-                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Start) {
-                            Box(
-                                Modifier.clip(RoundedCornerShape(22.dp))
-                                    .background(chatTheme?.peerBubble ?: BotCard)
-                                    .padding(horizontal = 16.dp, vertical = 11.dp),
-                            ) {
-                                Text("typing…",
-                                    color = chatTheme?.peerText?.copy(alpha = 0.6f) ?: BotSub,
-                                    fontSize = 13.sp, fontFamily = PoppinsFamily)
-                            }
-                        }
+                // ROUND 73 (Workstream A + typing parity): the tail
+                // slot. While a reply STREAMS, the live partial
+                // renders as a normal bot bubble (the hoisted
+                // liveText read drives its growth); while a job is
+                // merely in flight, the companion shows the NORMAL
+                // chat's own typing bubble — RdTypingBubble with
+                // Tika's avatar in its avatar slot and the active
+                // theme — instead of the old static "typing…" pill.
+                // companionBusyNow is the hoisted §1 read: this
+                // lambda only consumes captured values.
+                val live = liveText
+                if (live != null) {
+                    item(key = "bot_live") {
+                        BotBubble(
+                            m = TikaBotStore.BotMsg(false, live),
+                            theme = chatTheme,
+                        )
+                    }
+                } else if (companionBusyNow) {
+                    item(key = "bot_typing") {
+                        RdTypingBubble(
+                            null,
+                            theme = chatTheme,
+                            avatar = {
+                                TikaAvatar(Modifier.size(28.dp).clip(CircleShape))
+                            },
+                        )
                     }
                 }
             }
@@ -1118,8 +1393,72 @@ fun TikaBotScreen() {
                     },
                     onFxClick = { AppState.toast("Effects aren't available in the Tika chat yet") },
                     theme = chatTheme,
+                    // ROUND 73 (message-menu parity): edit mode —
+                    // the composer's "Editing message" banner rides
+                    // above the pill while editingIdx is set; its ✕
+                    // cancels back to normal compose, discarding the
+                    // loaded text with the mode (theirs, mirrored).
+                    editing = editingIdx != null,
+                    onCancelEdit = {
+                        editingIdx = null
+                        input = ""
+                    },
                 )
             }
+        }
+    }
+
+    // ROUND 73 (message-menu parity): the long-press message menu —
+    // a full-screen overlay at screen level, after the list, like
+    // the normal chat's. Every action resolves the open index
+    // against the store, then dismisses. A stale index (the message
+    // was deleted while the menu was open) simply renders nothing.
+    val mi = menuIdx
+    if (mi != null) {
+        val mm = messages.getOrNull(mi)
+        if (mm != null && !mm.sys) {
+            BotMessageMenu(
+                msg = mm,
+                theme = chatTheme,
+                onDismiss = { menuIdx = null },
+                onReact = { emoji ->
+                    TikaBotStore.toggleReaction(mi, emoji)
+                    menuIdx = null
+                },
+                onReply = {
+                    editingIdx = null
+                    replyTarget = mm
+                    menuIdx = null
+                },
+                onEdit = {
+                    replyTarget = null
+                    editingIdx = mi
+                    input = mm.text
+                    menuIdx = null
+                },
+                onCopy = {
+                    clipboard.setText(AnnotatedString(mm.text))
+                    AppState.toast("Copied")
+                    menuIdx = null
+                },
+                onToggleStar = {
+                    TikaBotStore.toggleStar(mi)
+                    AppState.toast(if (mm.starred) "Unstarred" else "Starred")
+                    menuIdx = null
+                },
+                onTogglePin = {
+                    TikaBotStore.togglePin(mi)
+                    menuIdx = null
+                },
+                onDelete = {
+                    if (editingIdx == mi) {
+                        editingIdx = null
+                        input = ""
+                    }
+                    TikaBotStore.deleteMessage(mi)
+                    menuIdx = null
+                },
+            )
         }
     }
 
@@ -1138,7 +1477,8 @@ fun TikaBotScreen() {
  * ≤280 dp, 16×11 padding; own = the theme's ownBubble or the
  * Rose→RoseDeep gradient on Default, Tika = peerBubble / BotCard),
  * its gestures (horizontal drag springs back and arms reply past
- * 70 px; long-press opens the reaction picker; double-tap hearts),
+ * 70 px; long-press opens the message menu (Round 73 — it opened
+ * the inline reaction picker before); double-tap hearts),
  * its reply quote, its reaction chip, and its fresh-tail entrance
  * pop (graphicsLayer only, so it can never disturb layout). A
  * /babeg game message renders its game card instead of text.
@@ -1149,9 +1489,8 @@ private fun BotBubble(
     m: TikaBotStore.BotMsg,
     theme: ChatTheme? = null,
     animateIn: Boolean = false,
-    reacting: Boolean = false,
     onSwipeReply: () -> Unit = {},
-    onLongPress: () -> Unit = {},
+    onMenu: () -> Unit = {},
     onReact: (String) -> Unit = {},
     onGameTap: () -> Unit = {},
 ) {
@@ -1211,7 +1550,10 @@ private fun BotBubble(
                 .pointerInput(m.text, m.img, m.game) {
                     detectTapGestures(
                         onDoubleTap = { onReact("❤️") },
-                        onLongPress = { onLongPress() },
+                        // ROUND 73: long-press opens the full
+                        // message menu (BotMessageMenu), like a
+                        // normal chat — no more inline reaction bar.
+                        onLongPress = { onMenu() },
                         onTap = { if (m.game != null) onGameTap() },
                     )
                 },
@@ -1296,6 +1638,15 @@ private fun BotBubble(
                     }
                 }
             }
+            // ROUND 73: the starred marker — the normal chat's own
+            // mark, mirrored: a small gold ★ beside the bubble.
+            if (m.starred) {
+                Text(
+                    "★", color = Color(0xFFFFC857), fontSize = 11.sp,
+                    modifier = Modifier.align(Alignment.CenterVertically)
+                        .padding(horizontal = 6.dp),
+                )
+            }
         }
         // My reaction on this message — the normal chat's chip,
         // local only (one emoji, not the uid-keyed map).
@@ -1309,22 +1660,149 @@ private fun BotBubble(
                 EmojiGlyph(m.reaction, 14.dp)
             }
         }
-        // The long-press picker — six quick reactions; tapping the
-        // one already set clears it (toggleReaction).
-        if (reacting) {
+    }
+}
+
+/** Chat.kt's private RdMenuItem, replicated value for value
+ *  (22×17 padding, 16 sp Poppins label, danger in RdDanger —
+ *  here BotDanger): label left, trailing slot right. The tap rides
+ *  this file's .press, as every TikaBot tap does. */
+@Composable
+private fun BotMenuItem(label: String, danger: Boolean = false, onClick: () -> Unit, trailing: @Composable () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().press(onClick).padding(horizontal = 22.dp, vertical = 17.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(label, color = if (danger) BotDanger else Color.White, fontSize = 16.sp, modifier = Modifier.weight(1f), fontFamily = PoppinsFamily)
+        trailing()
+    }
+}
+
+/** Chat.kt's private RdDivider1, replicated value for value. */
+@Composable
+private fun BotDivider1() = Box(Modifier.fillMaxWidth().height(1.dp).background(Color.White.copy(0.08f)))
+
+/**
+ * ROUND 73 (message-menu parity) — the companion's long-press
+ * message menu: the normal chat's centred overlay (Chat.kt),
+ * mirrored in shape — a dim scrim that dismisses on tap, the
+ * reaction row in its glass pill (the same six [BotReactions]),
+ * a preview of the message in its own bubble look (height-capped
+ * at 160 dp and internally scrollable, exactly like theirs, so a
+ * very long message can never push the menu off-screen), then the
+ * 250 dp / 26 dp menu card in RdSheet colours (here [BotSheet])
+ * with the items IN THE NORMAL CHAT'S ORDER, each shown only when
+ * it applies: Reply (every message), Edit (my own text only),
+ * Copy (any message with text — photo captions included), Star /
+ * Unstar, Pin / Unpin, and Delete last, in danger colour, with a
+ * divider above it. Delete is local-only (this store has no
+ * server copy) and asks no confirmation, like theirs.
+ *
+ * Factored internal (not private) so the screenshot harness can
+ * compose it directly over a backdrop.
+ */
+@Composable
+internal fun BotMessageMenu(
+    msg: TikaBotStore.BotMsg,
+    theme: ChatTheme?,
+    onDismiss: () -> Unit,
+    onReact: (String) -> Unit,
+    onReply: () -> Unit,
+    onEdit: () -> Unit,
+    onCopy: () -> Unit,
+    onToggleStar: () -> Unit,
+    onTogglePin: () -> Unit,
+    onDelete: () -> Unit,
+) {
+    if (msg.sys) return
+    Box(
+        Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.55f))
+            .clickable(remember { MutableInteractionSource() }, null) { onDismiss() },
+        contentAlignment = Alignment.Center,
+    ) {
+        Column(
+            Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+            horizontalAlignment = if (msg.mine) Alignment.End else Alignment.Start,
+            verticalArrangement = Arrangement.spacedBy(14.dp),
+        ) {
+            // The reaction row — the normal menu's glass pill with
+            // the six quick reactions.
             Row(
-                Modifier.padding(top = 4.dp).clip(RoundedCornerShape(999.dp))
-                    .background(BotCard).border(1.dp, Color.White.copy(0.10f), RoundedCornerShape(999.dp))
-                    .padding(horizontal = 10.dp, vertical = 6.dp),
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                Modifier.clip(RoundedCornerShape(999.dp)).background(BotSheet)
+                    .border(1.dp, Color.White.copy(0.12f), RoundedCornerShape(999.dp))
+                    .padding(horizontal = 8.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
             ) {
                 BotReactions.forEach { emoji ->
                     Box(
-                        Modifier.press { onReact(emoji) },
+                        Modifier.press { onReact(emoji) }.padding(6.dp),
                         contentAlignment = Alignment.Center,
                     ) {
-                        EmojiGlyph(emoji, 24.dp)
+                        EmojiGlyph(emoji, 28.dp)
                     }
+                }
+            }
+            // The preview — the message's own bubble look,
+            // non-interactive (BotBubble's callbacks all default to
+            // no-ops here), height-capped like theirs. A game
+            // previews as a plain text bubble (its ready line)
+            // instead of spinning up a second WebView.
+            if (msg.game != null) {
+                Box(
+                    Modifier.widthIn(max = 280.dp).clip(RoundedCornerShape(22.dp))
+                        .background(SolidColor(theme?.peerBubble ?: BotCard))
+                        .padding(horizontal = 16.dp, vertical = 11.dp),
+                ) {
+                    Text(
+                        msg.text.ifBlank { "Game" },
+                        color = theme?.peerText ?: Color.White,
+                        fontSize = 15.sp, fontFamily = rememberChatFontFamily(),
+                    )
+                }
+            } else {
+                Box(
+                    Modifier.heightIn(max = 160.dp)
+                        .verticalScroll(rememberScrollState()),
+                ) {
+                    BotBubble(m = msg, theme = theme)
+                }
+            }
+            // The menu card — 250 dp wide, 26 dp corners, RdSheet
+            // colours, items in the normal chat's order.
+            Column(
+                Modifier.width(250.dp).clip(RoundedCornerShape(26.dp)).background(BotSheet)
+                    .border(1.dp, Color.White.copy(0.12f), RoundedCornerShape(26.dp)),
+            ) {
+                BotMenuItem("Reply", onClick = onReply) {
+                    Text("↩", color = Color.White, fontSize = 20.sp)
+                }
+                if (msg.mine && msg.img == null && msg.game == null) {
+                    BotDivider1()
+                    BotMenuItem("Edit", onClick = onEdit) {
+                        Text("✎", color = Color.White, fontSize = 20.sp)
+                    }
+                }
+                if (msg.text.isNotBlank()) {
+                    BotDivider1()
+                    BotMenuItem("Copy", onClick = onCopy) {
+                        Text("⧉", color = Color.White, fontSize = 20.sp)
+                    }
+                }
+                BotDivider1()
+                BotMenuItem(if (msg.starred) "Unstar" else "Star", onClick = onToggleStar) {
+                    Icon(
+                        Icons.Filled.Star, null,
+                        tint = if (msg.starred) Color(0xFFFFC857) else Color.White,
+                        modifier = Modifier.size(22.dp),
+                    )
+                }
+                BotDivider1()
+                BotMenuItem(if (msg.pinned) "Unpin" else "Pin", onClick = onTogglePin) {
+                    Icon(Icons.Filled.PushPin, null, tint = Color.White, modifier = Modifier.size(20.dp))
+                }
+                BotDivider1()
+                BotMenuItem("Delete", danger = true, onClick = onDelete) {
+                    Icon(Icons.Filled.Delete, null, tint = BotDanger, modifier = Modifier.size(22.dp))
                 }
             }
         }

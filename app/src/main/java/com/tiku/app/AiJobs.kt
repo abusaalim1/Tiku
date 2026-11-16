@@ -1,13 +1,12 @@
 package com.tiku.app
 
-import androidx.compose.runtime.getValue
+import android.util.Log
 import androidx.compose.runtime.mutableStateMapOf
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.setValue
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 
 /**
  * ROUND 71 (Fix 3) — AI jobs outlive the screens that start them.
@@ -34,6 +33,33 @@ import kotlinx.coroutines.launch
  * Scope note: this survives IN-PROCESS navigation only. Process death
  * still drops an in-flight generation — deliberately out of scope for
  * this round (no WorkManager, no service).
+ *
+ * ROUND 73 (Workstream B) — the STUCK indicator. R71 made the reply
+ * land after Back, but the "typing…" / thinking indicator then stayed
+ * on screen after the job finished. Two hardenings land here:
+ *
+ * 1. SINGLE SOURCE OF TRUTH: [companionBusy] used to be a second,
+ *    independent `mutableStateOf` written alongside the [thinking]
+ *    entry — two stores for one fact, free to diverge. It is now a
+ *    pure VIEW over [thinking] (see its doc): the boolean and the
+ *    map can never disagree, so no path can clear one and strand
+ *    the other.
+ *
+ * 2. BOUNDED JOBS: a job whose provider call wedges forever never
+ *    reaches its finally, so its indicator (and its single-flight
+ *    gate) would live forever. Every job now runs under a generous
+ *    backstop ceiling (see [launch]); on timeout the block is
+ *    cancelled, nothing is posted by the timeout path, the finally
+ *    still clears the indicator, and the timeout is logged. The
+ *    ceilings sit ABOVE every self-bounded workload (GeminiClient
+ *    .generateGame already self-bounds at 600 s), so they can only
+ *    ever fire on a genuinely wedged job.
+ *
+ * The remaining half of the R73 root cause lives at the READ sites
+ * (Chat.kt's RdChatContent / TikaBot.kt's TikaBotScreen read this
+ * state only inside their LazyColumn content lambdas — see the
+ * Round-73 worker-B report); the dynamic-flip tests in
+ * ScreenshotsTest pin the behaviour end to end.
  */
 object AiJobs {
 
@@ -50,6 +76,10 @@ object AiJobs {
      * Compose-observable: RdChatContent reads `thinking[threadId]`
      * in composition, so leaving and re-entering a chat mid-flight
      * shows the indicator still running.
+     *
+     * ROUND 73: this map is now the ONLY in-flight store — the
+     * companion's busy flag is a view over its [COMPANION_KEY]
+     * entry (see [companionBusy]).
      */
     val thinking = mutableStateMapOf<String, String>()
 
@@ -59,15 +89,35 @@ object AiJobs {
      * survives navigation and still blocks duplicate sends on
      * re-entry. Managed exclusively by [launchCompanion] — set
      * synchronously at launch, cleared in its finally.
+     *
+     * ROUND 73: this is a VIEW over [thinking], not a second store:
+     * the getter reads the companion's map entry and the setter
+     * writes/removes it, so the flag and the map entry are the same
+     * fact and can never diverge (the pre-R73 code kept an
+     * independent `mutableStateOf` in lockstep by hand). The setter
+     * stays live for test cleanup (`AiJobs.companionBusy = false`
+     * in the harness setup clears the companion's map entry).
      */
-    var companionBusy by mutableStateOf(false)
+    var companionBusy: Boolean
+        get() = thinking.containsKey(COMPANION_KEY)
+        set(value) {
+            if (value) thinking[COMPANION_KEY] = COMPANION_LABEL
+            else thinking.remove(COMPANION_KEY)
+        }
 
-    /** The companion's key in [thinking] — registered alongside
-     *  [companionBusy] so every in-flight AI job is observable in
-     *  one place. The companion UI reads [companionBusy] (its
-     *  indicator is the fixed "typing…" bubble, not a label). */
+    /** The companion's key in [thinking] — registered by
+     *  [launchCompanion] (via [companionBusy]) so every in-flight
+     *  AI job is observable in one place. The companion UI reads
+     *  [companionBusy] (its indicator is the fixed "typing…"
+     *  bubble, not a label). */
     const val COMPANION_KEY: String = "tika-companion"
     private const val COMPANION_LABEL: String = "typing…"
+
+    /** ROUND 73: the companion job's backstop ceiling — the same
+     *  660 s as [launch]'s default, because the companion also runs
+     *  /babeg, whose own self-bound inside GeminiClient is 600 s.
+     *  Pure backstop against a wedged job; see [launch]. */
+    private const val COMPANION_TIMEOUT_MS: Long = 660_000L
 
     /**
      * Launch [block] as the AI job for chat [key], showing [label]
@@ -81,13 +131,34 @@ object AiJobs {
      * so the gate has no window; it is cleared in a finally inside
      * the job, so completion, failure and even a thrown exception
      * all release the chat.
+     *
+     * ROUND 73: [block] runs under a [timeoutMs] backstop
+     * (withTimeoutOrNull). The default — 660 s — is deliberately
+     * ABOVE the longest self-bounded workload (game generation
+     * self-bounds at 600 s inside GeminiClient.generateGame), so
+     * the ceiling never cuts a legitimate job; it exists only so a
+     * wedged provider call can never hold the indicator (or the
+     * gate) forever. On timeout the block is cancelled mid-flight:
+     * its outcome handling simply never runs — nothing is posted —
+     * the timeout is logged, and the finally clears the label,
+     * exactly as if the job had failed.
      */
-    fun launch(key: String, label: String, block: suspend () -> Unit): Boolean {
+    fun launch(key: String, label: String, timeoutMs: Long = 660_000L, block: suspend () -> Unit): Boolean {
         if (thinking.containsKey(key)) return false
         thinking[key] = label
         scope.launch {
             try {
-                block()
+                val finished = withTimeoutOrNull(timeoutMs) {
+                    block()
+                    true
+                }
+                if (finished == null) {
+                    Log.w(
+                        "AiJobs",
+                        "AI job for '$key' hit the ${timeoutMs}ms backstop and was cancelled; " +
+                            "indicator cleared, nothing posted by the timeout path",
+                    )
+                }
             } finally {
                 thinking.remove(key)
             }
@@ -100,17 +171,30 @@ object AiJobs {
      * [launch], on the companion's own gate: returns false without
      * launching while [companionBusy]; the flag is set synchronously
      * and cleared in the job's finally, whatever the block does.
+     * ROUND 73: registration writes the companion's [thinking]
+     * entry through the [companionBusy] view (one store, one fact),
+     * and the job runs under the [COMPANION_TIMEOUT_MS] backstop —
+     * on timeout nothing is posted, the timeout is logged, and the
+     * finally still clears the flag.
      */
     fun launchCompanion(block: suspend () -> Unit): Boolean {
         if (companionBusy) return false
         companionBusy = true
-        thinking[COMPANION_KEY] = COMPANION_LABEL
         scope.launch {
             try {
-                block()
+                val finished = withTimeoutOrNull(COMPANION_TIMEOUT_MS) {
+                    block()
+                    true
+                }
+                if (finished == null) {
+                    Log.w(
+                        "AiJobs",
+                        "Companion AI job hit the ${COMPANION_TIMEOUT_MS}ms backstop and was " +
+                            "cancelled; indicator cleared, nothing posted by the timeout path",
+                    )
+                }
             } finally {
                 companionBusy = false
-                thinking.remove(COMPANION_KEY)
             }
         }
         return true

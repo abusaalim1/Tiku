@@ -2521,13 +2521,18 @@ private fun RdVoiceBubble(
  *  RdCard, 22dp corners, 16×15 padding, 7dp RdSub dots, avatar — is
  *  Tiku's own and unchanged. */
 @Composable
-private fun RdTypingBubble(person: Person, theme: ChatTheme? = null) {
+internal fun RdTypingBubble(person: Person?, theme: ChatTheme? = null, avatar: (@Composable () -> Unit)? = null) {
     val pop = remember { Animatable(0f) }
     LaunchedEffect(Unit) {
         pop.animateTo(1f, spring(dampingRatio = 0.55f, stiffness = Spring.StiffnessMediumLow))
     }
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Bottom) {
-        RdAv(person, 28); Spacer(Modifier.width(8.dp))
+        // ROUND 73: an explicit avatar slot wins over the person's
+        // avatar (the companion passes Tika's own avatar with a null
+        // person); with neither, nothing renders in the slot. The
+        // normal chat's call site passes only a person, unchanged.
+        if (avatar != null) avatar() else if (person != null) RdAv(person, 28)
+        Spacer(Modifier.width(8.dp))
         Row(
             Modifier.clip(RoundedCornerShape(22.dp)).background(theme?.peerBubble ?: RdCard).padding(horizontal = 16.dp, vertical = 15.dp)
                 .graphicsLayer {
@@ -3560,6 +3565,14 @@ private fun RdChatContent(thread: ChatThread) {
         typingClock = System.currentTimeMillis()
     }
     val peerTyping = peerTypingAt > 0L && typingClock - peerTypingAt < 5_000L
+    // ROUND 73 (Workstream B): the AI indicator's label, read HERE in
+    // composable scope — this read is what makes AiJobs' finally-clear
+    // recompose the screen when a job finishes. The LazyColumn content
+    // lambda below only consumes this captured value: a snapshot read
+    // inside the lazy DSL does not by itself schedule the recomposition
+    // that removes the "ai_thinking" item, which is how the indicator
+    // stranded after the reply landed (build 124).
+    val aiThinkingLabel = AiJobs.thinking[threadId]
 
     var input by remember { mutableStateOf("") }
     var replyTarget by remember { mutableStateOf<TikuMessage?>(null) }
@@ -5164,9 +5177,10 @@ private fun RdChatContent(thread: ChatThread) {
                 // ROUND 71 (Fix 3): the label is read from AiJobs —
                 // the job (and so this indicator) survives the screen
                 // leaving and being re-entered mid-flight.
-                val aiLabel = AiJobs.thinking[threadId]
-                if (aiLabel != null) {
-                    item(key = "ai_thinking") { RdAiThinkingBubble(aiLabel, theme = chatTheme) }
+                // ROUND 73: the label itself is read hoisted in the
+                // composable body (aiThinkingLabel) — see there.
+                if (aiThinkingLabel != null) {
+                    item(key = "ai_thinking") { RdAiThinkingBubble(aiThinkingLabel, theme = chatTheme) }
                 }
             }
         }
