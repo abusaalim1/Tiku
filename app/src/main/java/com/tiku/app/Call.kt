@@ -675,10 +675,11 @@ fun CallScreen(threadId: String, video: Boolean) {
  * the ChatRoot surfaces whenever a live call is minimized. Video calls show
  * the live REMOTE tile (the same renderer binding the full screen uses);
  * audio calls (and outgoing calls) show an avatar tile with the call clock.
- * Draggable anywhere over the chat UI; tap restores the full call screen;
- * the red button ends the call through CallController.hangup() — the call
- * event is recorded and the signaling doc deleted, exactly as when ending
- * from the full screen. If the peer ends, or the session locks, the
+ * Draggable anywhere over the chat UI; tap is the window's ONLY
+ * interaction and restores the full call screen (ROUND 72: there is no
+ * end button on the window any more — hanging up is restore first, then
+ * the full screen's End, exactly as on Instagram; see the ROUND 72
+ * paragraph below). If the peer ends, or the session locks, the
  * controller leaves Connected/Outgoing (or pipMinimized clears) and the
  * window disappears on its own.
  *
@@ -710,6 +711,30 @@ fun CallScreen(threadId: String, video: Boolean) {
  * restoreCall(). Voice calls show the avatar tile + clock instead.
  * The signalling/FCM path and the build-90 "incoming presents only
  * when that chat is opened" behaviour are untouched by this round.
+ *
+ * ROUND 72 — INSTAGRAM AUDIT (research: round72-ig-research.md,
+ * Instagram's documented minimize behaviour, Q2/Q4/Q6). Two
+ * deviations from Instagram are REMOVED in this round:
+ * (1) REMOTE-ONLY TILE: the window now shows ONLY the other person's
+ * video — the local self-preview inset that used to ride the tile's
+ * top-end corner is gone. On Instagram the minimized window is the
+ * friend's face only; the self-view inset belongs to the FULL-SCREEN
+ * call UI (where Tiku's draggable PiP stays, untouched).
+ * (2) TAP IS THE ONLY INTERACTION: the red end-call disc is removed
+ * from BOTH window variants. No source documents any control on
+ * Instagram's minimized window; ending a call is restore-first —
+ * tap the window back to full screen, then End there — and that is
+ * now Tiku's flow too.
+ * KEPT, with their audit status recorded honestly: Back → minimize
+ * plus the full screen's chevron minimize control are the OWNER'S
+ * rule (Instagram documents the chevron control; it is silent on
+ * what Android Back does, so Back-minimize is a Tiku choice, not an
+ * Instagram copy). Dragging is free with NO edge/corner snap
+ * (Instagram: the window is movable; snapping is unverified either
+ * way). The audio/outgoing avatar pill is kept as-is (Instagram's
+ * minimized AUDIO form is undocumented — the pill is Tiku-original).
+ * The Home-tab CallPill seam is kept (Round 20 shell design, not an
+ * Instagram surface). Nothing else in this window changed.
  */
 @Composable
 fun FloatingCallWindow() {
@@ -788,20 +813,11 @@ fun FloatingCallWindow() {
                 key(connected?.tick) {
                     RtcVideoView(local = false, modifier = Modifier.fillMaxSize())
                 }
-                // ROUND 20: his own tiny self-preview rides the tile's
-                // top-end corner — the same local renderer binding the
-                // full call screen uses (a second sink on the local
-                // track, bound and released with this window only).
-                // Hidden while his camera is off: a black inset would
-                // lie about a camera that is not sending anything.
-                if (connected?.cameraOn == true) {
-                    RtcVideoView(
-                        local = true,
-                        modifier = Modifier.align(Alignment.TopEnd).padding(6.dp)
-                            .size(27.dp, 38.dp).clip(RoundedCornerShape(8.dp))
-                            .border(1.dp, Color.White.copy(alpha = 0.35f), RoundedCornerShape(8.dp)),
-                    )
-                }
+                // ROUND 72: NO self-preview inset on this tile any
+                // more — the window is remote-only, exactly like
+                // Instagram's minimized window (see the ROUND 72 doc
+                // paragraph above). The self-view lives on the full
+                // call screen only.
                 Row(
                     Modifier.align(Alignment.BottomStart).padding(8.dp),
                     verticalAlignment = Alignment.CenterVertically,
@@ -813,7 +829,10 @@ fun FloatingCallWindow() {
                 }
             } else {
                 Row(
-                    Modifier.fillMaxSize().padding(start = 10.dp, end = 44.dp),
+                    // ROUND 72: end padding is symmetric 10.dp now —
+                    // the old end = 44.dp reserved room for the end
+                    // disc this round removed.
+                    Modifier.fillMaxSize().padding(start = 10.dp, end = 10.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     AvatarBox(person, 40.dp, 14.dp, 16f)
@@ -826,17 +845,12 @@ fun FloatingCallWindow() {
                     }
                 }
             }
-            // end call — a real hangup (event recorded + signaling deleted),
-            // never a mere dismiss of the window. ROUND 45: same red
-            // glass-disc finish as the full screen's End button.
-            Box(Modifier.align(Alignment.BottomEnd).padding(8.dp)) {
-                CallGlassDisc(
-                    30.dp, listOf(Color(0xFFFF7A85), Color(0xFFE5313F)),
-                    onClick = { CallController.hangup() },
-                ) {
-                    Icon(Icons.Filled.CallEnd, contentDescription = null, modifier = Modifier.size(15.dp), tint = Color.White)
-                }
-            }
+            // ROUND 72: NO end-call disc on this window any more (it
+            // used to sit here at BottomEnd, over both variants).
+            // Tap is the window's only interaction; hanging up is
+            // restore → full-screen End, exactly like Instagram —
+            // see the ROUND 72 doc paragraph above. CallGlassDisc
+            // itself stays: CallScreen still uses it.
         }
     }
 }

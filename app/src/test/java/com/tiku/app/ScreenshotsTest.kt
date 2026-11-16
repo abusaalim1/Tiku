@@ -2263,4 +2263,117 @@ class ScreenshotsTest {
         )
         shot("67-game-joined.png")
     }
+
+    // ---------- ROUND 72: floating window over chat + minimize contract + codec order ----------
+    @Test fun shot71_floatingWindowOverChat() {
+        // ROUND 72 (WS2): the floating call window over an OPEN CHAT —
+        // the surface Round 20 restored it for. Stage a CONNECTED
+        // video call (~125 s in) for the first thread and minimize it
+        // through the controller flag exactly as minimizeCall() leaves
+        // it, then navigate to that thread's chat so the Home-tab
+        // CallPill seam does NOT suppress the window (the window
+        // yields only on Home panes 0..3). The frame mirrors how
+        // TikuRoot composes it (MainActivity): the chat surface with
+        // FloatingCallWindow() as the last child above it. The compose
+        // clock is frozen (the shot68 pattern) so the window's
+        // 500 ms clock loop never advances mid-capture. There is NO
+        // RTC session in the harness, so the window renders its
+        // avatar variant — the 184×64 pill: avatar, name, clock, and
+        // (ROUND 72) NO end disc: tap is its only interaction now,
+        // hangup is restore → full-screen End, as on Instagram.
+        composeRule.mainClock.autoAdvance = false
+        val th = AppState.threads.value.first()
+        CallController.state.value = CallUiState.Connected(
+            th.id, "shot-float-1", true, th.person,
+            System.currentTimeMillis() - 125_000,
+        )
+        CallController.pipMinimized.value = true
+        AppState.go(Screen.Chat(th.id))
+        frame {
+            Box(Modifier.fillMaxSize()) {
+                ChatScreen(th.id)
+                FloatingCallWindow()
+            }
+        }
+        composeRule.waitForIdle()
+        org.junit.Assert.assertTrue(
+            "floating window over chat must show the person's name",
+            composeRule.onAllNodesWithText(th.person.name, substring = true)
+                .fetchSemanticsNodes().isNotEmpty(),
+        )
+        org.junit.Assert.assertTrue(
+            "floating window must be minimized (pipMinimized still set)",
+            CallController.pipMinimized.value,
+        )
+        shot("71-floating-window.png")
+        CallController.endSilently()
+        CallController.pipMinimized.value = false
+    }
+
+    @Test fun minimizeRestore_contract() {
+        // ROUND 72 (WS2): the minimize/restore contract as pure
+        // controller state, no UI. Minimizing a connected call must
+        // set pipMinimized WITHOUT ending the call; restoring must
+        // clear it, again WITHOUT ending the call — the Instagram
+        // behaviour the floating window exists for (minimize is a
+        // local UI event; the call keeps running throughout).
+        val th = AppState.threads.value.first()
+        CallController.state.value = CallUiState.Connected(
+            th.id, "shot-minrestore-1", true, th.person,
+            System.currentTimeMillis() - 30_000,
+        )
+        CallController.minimizeCall()
+        org.junit.Assert.assertTrue(
+            "minimizeCall must set pipMinimized",
+            CallController.pipMinimized.value,
+        )
+        org.junit.Assert.assertTrue(
+            "minimizeCall must NOT end the call (state stays Connected)",
+            CallController.state.value is CallUiState.Connected,
+        )
+        CallController.restoreCall()
+        org.junit.Assert.assertFalse(
+            "restoreCall must clear pipMinimized",
+            CallController.pipMinimized.value,
+        )
+        org.junit.Assert.assertTrue(
+            "restoreCall must NOT end the call (state stays Connected)",
+            CallController.state.value is CallUiState.Connected,
+        )
+        CallController.endSilently()
+    }
+
+    @Test fun codecReorder_prefersH264KeepsAll() {
+        // ROUND 72 (F2): the pure codec-ordering decision behind
+        // RtcSession.preferHardwareCodec(), tested over NAMES (no
+        // WebRTC objects). Case 1: H264 is encodable here — it moves
+        // first, ALL other codecs are retained, and their relative
+        // order is preserved (reorder, never filter). Case 2: H264
+        // is ABSENT from the sender capabilities (decode-only trap) —
+        // the H264 entry is DROPPED from the preference list and
+        // everything else is retained in order. Case 3: duplicate
+        // H264 entries (fmtp variants) are ALL kept, in order, at
+        // the front.
+        org.junit.Assert.assertEquals(
+            listOf("H264", "VP8", "VP9", "AV1"),
+            reorderCodecNames(
+                listOf("VP8", "VP9", "H264", "AV1"),
+                setOf("VP8", "VP9", "H264", "AV1"),
+            ),
+        )
+        org.junit.Assert.assertEquals(
+            listOf("VP8", "VP9", "AV1"),
+            reorderCodecNames(
+                listOf("VP8", "VP9", "H264", "AV1"),
+                setOf("VP8", "VP9", "AV1"),
+            ),
+        )
+        org.junit.Assert.assertEquals(
+            listOf("H264", "H264", "VP8"),
+            reorderCodecNames(
+                listOf("VP8", "H264", "H264"),
+                setOf("VP8", "H264"),
+            ),
+        )
+    }
 }

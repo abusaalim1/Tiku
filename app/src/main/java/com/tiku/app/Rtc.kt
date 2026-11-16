@@ -10,6 +10,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
@@ -27,8 +28,10 @@ import org.webrtc.EglBase
 import org.webrtc.IceCandidate
 import org.webrtc.MediaConstraints
 import org.webrtc.MediaStream
+import org.webrtc.MediaStreamTrack
 import org.webrtc.PeerConnection
 import org.webrtc.PeerConnectionFactory
+import org.webrtc.RTCStatsReport
 import org.webrtc.RtpParameters
 import org.webrtc.RtpReceiver
 import org.webrtc.RtpSender
@@ -72,6 +75,29 @@ fun decodeCandidate(enc: String): IceCandidate? {
     val parts = enc.split("|", limit = 3)
     if (parts.size < 3) return null
     return IceCandidate(parts[0], parts[1].toIntOrNull() ?: 0, parts[2])
+}
+
+// ======================= ROUND 72 (F2): codec preference ordering =======================
+/**
+ * ROUND 72 (F2) — the pure ordering decision behind
+ * RtcSession.preferHardwareCodec(), expressed over codec NAMES so the
+ * harness can unit-test it without WebRTC objects. Input: the RECEIVER
+ * capability names in their original order, plus the set of codec
+ * names this device can actually SEND (encode). Output: a STABLE
+ * reorder — every H264 entry first (original relative order kept, so
+ * duplicate H264 fmtp variants all survive in order), then every other
+ * codec in its original order. Nothing is ever filtered out EXCEPT a
+ * decode-only H264: an H264 that appears in the receiver list but is
+ * ABSENT from the sender capabilities is DROPPED from the preference
+ * list — such a phone may decode H264 (e.g. via a platform software
+ * decoder) yet has no H264 encoder, and pushing it to offer H264
+ * first would strand its own outgoing video. On that phone VP8
+ * simply stays first, exactly as before this round.
+ */
+internal fun reorderCodecNames(recvNames: List<String>, senderNames: Set<String>): List<String> {
+    val h264 = if ("H264" in senderNames) recvNames.filter { it == "H264" } else emptyList()
+    val rest = recvNames.filter { it != "H264" }
+    return h264 + rest
 }
 
 // ======================= Firestore signaling =======================
@@ -185,25 +211,30 @@ class RtcSession(
 
     var events: Events? = null
 
-    // ROUND 68 (WS7c) — HIGH 1:1 video-call quality profile. Supersedes
-    // the Round 61 profile (720p@30, 2.0 Mbps cap, MAINTAIN_RESOLUTION):
-    // capture up to 1080p (1920x1080) at 30 fps, an ADAPTIVE encoder
-    // bitrate capped at 4.0 Mbps (floor 500 kbps so adaptation has room
-    // to breathe instead of a hard fixed rate), framerate capped at the
-    // capture rate, and MAINTAIN_RESOLUTION so framerate is sacrificed
-    // before resolution under bandwidth pressure. No simulcast (a 1:1
-    // call has one viewer). The camera capturer negotiates the closest
-    // format the device actually supports at or below the request, so
-    // a camera without a 1080p mode gracefully falls back on its own
-    // — startCapture does not fail for a lower-capability camera, and
-    // the encoder cap simply never binds there. Shipped values:
-    // 1920x1080 @ 30 fps, max 4.0 Mbps / min 0.5 Mbps, MAINTAIN_RESOLUTION.
+    // ROUND 72 (F1) — 1:1 video-call quality profile. Supersedes the
+    // Round 68 profile (1080p capture, 4.0 Mbps cap, 500 kbps floor,
+    // MAINTAIN_RESOLUTION), which optimised the wrong variable: the
+    // encoder CAP was never the budget. On the owner's real links the
+    // DELIVERED bitrate is set by the network and the congestion
+    // controller at roughly 0.6–1.5 Mbps; at 1080p30 that is only
+    // 0.010–0.024 bits/pixel — deep in macroblocking territory — and
+    // MAINTAIN_RESOLUTION then collapsed the framerate to keep those
+    // starved pixels, so faces went both blocky and choppy. At 720p
+    // the same bits are spent 2.25× better per pixel, and BALANCED
+    // degradation lets the encoder trade resolution AND framerate
+    // instead of sacrificing framerate alone. The cap is lowered to
+    // 2.5 Mbps (at 720p30 that is 0.090 bits/pixel — headroom above
+    // any realistic need, without inviting overshoot bursts on
+    // fluctuating links) and the floor to 300 kbps so a bad-path
+    // moment degrades gracefully instead of queueing. No simulcast
+    // (a 1:1 call has one viewer). Shipped values: 1280x720 @ 30 fps,
+    // max 2.5 Mbps / min 0.3 Mbps, BALANCED.
     private companion object {
-        const val CAMERA_CAPTURE_WIDTH = 1920
-        const val CAMERA_CAPTURE_HEIGHT = 1080
+        const val CAMERA_CAPTURE_WIDTH = 1280
+        const val CAMERA_CAPTURE_HEIGHT = 720
         const val CAMERA_CAPTURE_FPS = 30
-        const val VIDEO_MAX_BITRATE_BPS = 4_000_000
-        const val VIDEO_MIN_BITRATE_BPS = 500_000
+        const val VIDEO_MAX_BITRATE_BPS = 2_500_000
+        const val VIDEO_MIN_BITRATE_BPS = 300_000
         const val VIDEO_MAX_FRAMERATE = 30
     }
 
@@ -218,6 +249,17 @@ class RtcSession(
      *  profile (see [configureVideoSender]) can be applied at session
      *  setup and re-applied once the local description is set. */
     private var videoSender: RtpSender? = null
+    /** ROUND 72 (F2): the video track's transceiver — kept so the
+     *  codec preference (see [preferHardwareCodec]) can be applied
+     *  once, in init, before any offer/answer exists on either role. */
+    private var videoTransceiver: RtpTransceiver? = null
+    /** ROUND 72 (F4): session-owned scope for the getStats logging
+     *  loop (this class had no scope of its own before this round).
+     *  Cancelled in [dispose]; stats are logcat-only observation and
+     *  can never affect the call. */
+    private val statsScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    private var statsJob: Job? = null
+    private var statsStarted = false
     private var videoCapturer: CameraVideoCapturer? = null
     private var captureHelper: SurfaceTextureHelper? = null
     // [cameraPref] is the camera on/off the user asked for.
@@ -268,7 +310,17 @@ class RtcSession(
             override fun onIceConnectionChange(s: PeerConnection.IceConnectionState) {
                 when (s) {
                     PeerConnection.IceConnectionState.CONNECTED,
-                    PeerConnection.IceConnectionState.COMPLETED -> events?.onMediaConnected()
+                    PeerConnection.IceConnectionState.COMPLETED -> {
+                        events?.onMediaConnected()
+                        // ROUND 72 (F3): the encoder provably exists
+                        // now — re-apply the sender profile (idempotent;
+                        // parameters are sender-local) and read it back,
+                        // so the live profile is a measurement, not an
+                        // intention. ROUND 72 (F4): start the getStats
+                        // logging loop (first CONNECTED/COMPLETED only).
+                        configureVideoSender()
+                        startStatsLoop()
+                    }
                     PeerConnection.IceConnectionState.FAILED -> events?.onFailed()
                     else -> {}
                 }
@@ -310,18 +362,34 @@ class RtcSession(
         if (capturer != null) {
             captureHelper = SurfaceTextureHelper.create("tiku-capture", eglContext)
             capturer.initialize(captureHelper, appCtx, videoSource!!.capturerObserver)
-            // ROUND 68 (WS7c): request 1080p (1920x1080) at 30 fps (was
-            // 720p under Round 61). The camera capturer negotiates the
-            // closest format the device actually supports at or below
-            // the request, so a camera without a 1080p mode gracefully
-            // falls back on its own — startCapture does not fail for a
-            // lower-capability camera.
+            // ROUND 72 (F1): request 720p (1280x720) at 30 fps (was
+            // 1080p under Round 68 — see the profile comment above for
+            // why the smaller frame spends the real bitrate better).
+            // Library fact, stated honestly (the Round 68 comment here
+            // claimed otherwise and was wrong): the capturer picks the
+            // supported format CLOSEST to the request by |Δwidth| +
+            // |Δheight| over ALL supported sizes — it does NOT cap at
+            // or below the request, so on an odd camera it can pick a
+            // size above the request or in a different aspect. At
+            // 1280x720 that is benign: the size is a near-universal
+            // front-camera format, and startCapture does not fail for
+            // a lower-capability camera either way.
             runCatching { capturer.startCapture(CAMERA_CAPTURE_WIDTH, CAMERA_CAPTURE_HEIGHT, CAMERA_CAPTURE_FPS) }
             videoTrack?.setEnabled(cameraOn)
         } else {
             videoTrack?.setEnabled(false)
         }
         videoSender = pc?.addTrack(videoTrack, listOf("tiku-stream"))
+        // ROUND 72 (F2): keep the video transceiver (the one whose
+        // sender is the video sender just created) so the codec
+        // preference can be set on it below.
+        videoTransceiver = pc?.transceivers?.firstOrNull { it.sender == videoSender }
+        // ROUND 72 (F2): prefer the hardware codec ONCE, here in init
+        // — the session is constructed before createOffer() on the
+        // caller and before setRemoteDescription/createAnswer() on
+        // the callee, so this single call site lands before any
+        // offer/answer exists on BOTH roles.
+        preferHardwareCodec()
         configureVideoSender()
         // audio route for the call
         runCatching {
@@ -332,25 +400,89 @@ class RtcSession(
     }
 
     /**
-     * ROUND 68 (WS7c) — apply the HIGH 1:1 video quality profile to the
-     * video sender: adaptive bitrate with a 4.0 Mbps cap (floor
-     * 500 kbps so adaptation has room to breathe instead of a hard
-     * fixed rate), framerate capped at the capture rate, and
-     * MAINTAIN_RESOLUTION degradation — under bandwidth pressure the
-     * encoder drops frames before it drops pixels. A single encoding
-     * only: no simulcast layers are added or enabled. Applied to
-     * EVERY session's video sender (a voice call's blank track
-     * included). Best-effort by design:
-     * any failure leaves the sender exactly as it was and can never
-     * break call setup. Audio is not touched here or anywhere in
-     * this round. (Round 61's profile was 720p / 2.0 Mbps / 300 kbps
-     * floor; the constants above are the shipped Round-68 values.)
+     * ROUND 72 (F2) — prefer H264 by REORDERING the video
+     * transceiver's codec preferences. Why: the library's default
+     * offer order puts VP8 first, and VP8 ENCODE is software (libvpx)
+     * on a large share of mid-tier phones — at any resolution that
+     * burns CPU, drops frames and balloons the quantiser. H264 is
+     * hardware-encoded on almost every phone that has it, so moving
+     * encode onto the hardware block is the win (at these bitrates
+     * H264 and VP8 compress comparably; the gain is hardware, not
+     * maths). The list is REORDERED, never filtered: VP8 and every
+     * other codec stay, so every peer — build 122 included, which
+     * already advertises and decodes the same codec set — keeps a
+     * common codec. The ordering decision itself is the pure
+     * [reorderCodecNames] over codec names; the capability OBJECTS
+     * are passed through untouched (never constructed or mutated —
+     * their fmtp parameter maps ride along exactly as the factory
+     * built them), mapped back stably so duplicate names (two H264
+     * fmtp variants) keep all their entries in original order.
+     * Best-effort: any failure leaves negotiation exactly as it was.
+     */
+    private fun preferHardwareCodec() {
+        val transceiver = videoTransceiver ?: return
+        runCatching {
+            val recvCaps = RtcFactory.factory
+                .getRtpReceiverCapabilities(MediaStreamTrack.MediaType.VIDEO).codecs
+            val senderNames = RtcFactory.factory
+                .getRtpSenderCapabilities(MediaStreamTrack.MediaType.VIDEO)
+                .codecs.map { it.name }.toSet()
+            val orderedNames = reorderCodecNames(recvCaps.map { it.name }, senderNames)
+            // Map the ordered names back to the capability objects,
+            // stably: each name consumes its next unused object in
+            // original order (duplicates keep their relative order).
+            val remaining = recvCaps.toMutableList()
+            val reordered = orderedNames.mapNotNull { name ->
+                val idx = remaining.indexOfFirst { it.name == name }
+                if (idx >= 0) remaining.removeAt(idx) else null
+            }
+            transceiver.setCodecPreferences(reordered)
+            Log.i(
+                "TikuCall",
+                "preferHardwareCodec first=${reordered.firstOrNull()?.name} " +
+                    "order=${reordered.map { it.name }}",
+            )
+        }.onFailure { e ->
+            Log.e("TikuCall", "preferHardwareCodec failed — default codec order kept", e)
+        }
+    }
+
+    /**
+     * ROUND 72 (F1 + F3) — apply the 1:1 video quality profile to the
+     * video sender: adaptive bitrate with a 2.5 Mbps cap (floor
+     * 300 kbps so a bad-path moment degrades gracefully), framerate
+     * capped at the capture rate, and BALANCED degradation — under
+     * bandwidth pressure the encoder trades resolution AND framerate
+     * in balance instead of collapsing framerate to defend pixels it
+     * cannot afford (Round 68's MAINTAIN_RESOLUTION at 1080p; see the
+     * profile comment on the constants). A single encoding only: no
+     * simulcast layers are added or enabled. Applied to EVERY
+     * session's video sender (a voice call's blank track included).
+     *
+     * ROUND 72 (F3): application is now VERIFIABLE. The library's
+     * setParameters returns a boolean — before this round it was
+     * discarded inside a bare runCatching, so success, a false return
+     * and an exception were indistinguishable and nobody could say
+     * which profile a live call actually ran. Now the result is
+     * captured and logged, a false/exception logs at error level, and
+     * the parameters are READ BACK from the sender and logged — the
+     * readback, not the intention, is the record. Call sites: init,
+     * createOffer/acceptOffer (post-local-description), the end of
+     * setRemoteAnswer, and ICE CONNECTED/COMPLETED — the last two are
+     * the first moments the encoder provably exists. Idempotent and
+     * best-effort by design: any failure leaves the sender exactly as
+     * it was and can never break call setup. Audio is not touched
+     * here or anywhere in this round.
      */
     private fun configureVideoSender() {
         val sender = videoSender ?: return
         runCatching {
-            val params = sender.parameters ?: return@runCatching
-            params.degradationPreference = RtpParameters.DegradationPreference.MAINTAIN_RESOLUTION
+            val params = sender.parameters
+            if (params == null) {
+                Log.e("TikuCall", "configureVideoSender: sender.parameters was null — profile NOT applied")
+                return@runCatching
+            }
+            params.degradationPreference = RtpParameters.DegradationPreference.BALANCED
             val encoding = params.encodings.firstOrNull()
             if (encoding != null) {
                 encoding.active = true
@@ -358,8 +490,106 @@ class RtcSession(
                 encoding.minBitrateBps = VIDEO_MIN_BITRATE_BPS
                 encoding.maxFramerate = VIDEO_MAX_FRAMERATE
             }
-            sender.setParameters(params)
+            val ok = sender.setParameters(params)
+            if (ok) {
+                Log.i(
+                    "TikuCall",
+                    "configureVideoSender ok=true applied maxBitrateBps=$VIDEO_MAX_BITRATE_BPS " +
+                        "minBitrateBps=$VIDEO_MIN_BITRATE_BPS maxFramerate=$VIDEO_MAX_FRAMERATE " +
+                        "degradationPreference=BALANCED",
+                )
+            } else {
+                Log.e(
+                    "TikuCall",
+                    "configureVideoSender ok=false — setParameters REFUSED the profile " +
+                        "(intended maxBitrateBps=$VIDEO_MAX_BITRATE_BPS " +
+                        "minBitrateBps=$VIDEO_MIN_BITRATE_BPS maxFramerate=$VIDEO_MAX_FRAMERATE " +
+                        "degradationPreference=BALANCED)",
+                )
+            }
+            // Read back what the sender actually holds now.
+            val readback = sender.parameters
+            val rbEncoding = readback?.encodings?.firstOrNull()
+            Log.i(
+                "TikuCall",
+                "configureVideoSender readback maxBitrateBps=${rbEncoding?.maxBitrateBps} " +
+                    "minBitrateBps=${rbEncoding?.minBitrateBps} " +
+                    "maxFramerate=${rbEncoding?.maxFramerate} " +
+                    "degradationPreference=${readback?.degradationPreference}",
+            )
+        }.onFailure { e ->
+            Log.e("TikuCall", "configureVideoSender failed — profile application exception", e)
         }
+    }
+
+    /**
+     * ROUND 72 (F4) — getStats logging loop. Started once, when ICE
+     * first reaches CONNECTED/COMPLETED; every 2 s the peer
+     * connection's stats are read and ONE line is logged: the selected
+     * candidate-pair's local/remote candidate types (host / srflx /
+     * relay — relay is how TURN use becomes visible) and its
+     * available outgoing bitrate; the outbound video stream's frame
+     * size / fps / quality-limitation reason / encoder implementation
+     * (the last settles hardware-vs-software encode in one look); and
+     * the inbound video stream's fps / frame size / packets lost.
+     * Everything is runCatching-wrapped: stats are pure observation —
+     * logcat only, no UI, no storage, nothing on the wire — and can
+     * never crash or otherwise affect the call. The loop dies with
+     * the session in [dispose].
+     */
+    private fun startStatsLoop() {
+        if (statsStarted) return
+        statsStarted = true
+        statsJob = statsScope.launch {
+            while (true) {
+                delay(2000)
+                if (disposed) break
+                runCatching { collectStatsOnce() }
+            }
+        }
+    }
+
+    private fun collectStatsOnce() {
+        val conn = pc ?: return
+        runCatching {
+            conn.getStats { report ->
+                runCatching { logStatsLine(report) }
+            }
+        }
+    }
+
+    private fun logStatsLine(report: RTCStatsReport) {
+        val byId = report.statsMap
+        val all = byId.values
+        // Selected candidate-pair: state "succeeded" or nominated.
+        val pair = all.firstOrNull { st ->
+            st.type == "candidate-pair" &&
+                (st.members["state"] == "succeeded" || st.members["nominated"] == true)
+        }
+        val pairText = if (pair == null) "pair=none" else {
+            val localType = (pair.members["localCandidateId"] as? String)
+                ?.let { byId[it]?.members?.get("candidateType") }
+            val remoteType = (pair.members["remoteCandidateId"] as? String)
+                ?.let { byId[it]?.members?.get("candidateType") }
+            "pair=local:$localType/remote:$remoteType " +
+                "availableOutgoingBitrate=${pair.members["availableOutgoingBitrate"]}"
+        }
+        fun isVideo(st: org.webrtc.RTCStats): Boolean =
+            st.members["kind"] == "video" || st.members["mediaType"] == "video"
+        val out = all.firstOrNull { it.type == "outbound-rtp" && isVideo(it) }
+        val outText = if (out == null) "out=none" else {
+            "out=${out.members["frameWidth"]}x${out.members["frameHeight"]}" +
+                "@${out.members["framesPerSecond"]}fps " +
+                "qualityLimitationReason=${out.members["qualityLimitationReason"]} " +
+                "encoderImplementation=${out.members["encoderImplementation"]}"
+        }
+        val inbound = all.firstOrNull { it.type == "inbound-rtp" && isVideo(it) }
+        val inText = if (inbound == null) "in=none" else {
+            "in=${inbound.members["frameWidth"]}x${inbound.members["frameHeight"]}" +
+                "@${inbound.members["framesPerSecond"]}fps " +
+                "packetsLost=${inbound.members["packetsLost"]}"
+        }
+        Log.i("TikuCall", "stats $pairText $outText $inText")
     }
 
     private fun createCapturer(context: Context): CameraVideoCapturer? {
@@ -436,7 +666,15 @@ class RtcSession(
         if (conn == null) { if (cont.isActive) cont.resume(Unit); return@suspendCancellableCoroutine }
         conn.setRemoteDescription(sdpObserver(
             onCreated = {},
-            onDone = { markRemoteDescReady(); if (cont.isActive) cont.resume(Unit) },
+            onDone = {
+                markRemoteDescReady()
+                // ROUND 72 (F3): the remote answer is in — the first
+                // moment on the caller side where the encoder provably
+                // exists. Re-apply the sender profile (idempotent) and
+                // read it back, per configureVideoSender's contract.
+                configureVideoSender()
+                if (cont.isActive) cont.resume(Unit)
+            },
             onError = { if (cont.isActive) cont.resume(Unit) }, // best-effort: ICE state drives failure anyway
         ), answer)
     }
@@ -472,6 +710,9 @@ class RtcSession(
     fun dispose() {
         if (disposed) return
         disposed = true
+        // ROUND 72 (F4): the stats loop dies with the session.
+        runCatching { statsJob?.cancel(); statsJob = null }
+        runCatching { statsScope.cancel() }
         runCatching { videoCapturer?.stopCapture() }
         runCatching { videoCapturer?.dispose() }
         runCatching { captureHelper?.dispose() }
