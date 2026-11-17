@@ -71,28 +71,46 @@ export function stopVoiceover() {
   }
 }
 
-function splitChunks(text: string, max = 450): string[] {
+// Gemini TTS generation runs at roughly half of real time, so a
+// big chunk means a long silent wait. The first chunk stays small
+// (~150 chars ≈ 15s of audio) so her voice starts as soon as
+// possible; later chunks are bigger and are generated WHILE the
+// current one plays, so the story flows without gaps.
+function splitChunks(text: string): string[] {
   const clean = text.replace(/\s+/g, ' ').trim();
-  if (clean.length <= max) return clean ? [clean] : [];
-  const sentences = clean.match(/[^.!?…।\n]+[.!?…।]*/g) || [clean];
+  if (!clean) return [];
+  const sentences = (clean.match(/[^.!?…।\n]+[.!?…।]*/g) || [clean])
+    .map((s) => s.trim())
+    .filter(Boolean);
   const chunks: string[] = [];
   let buf = '';
-  for (const s of sentences) {
-    const part = s.trim();
-    if (!part) continue;
-    if (buf && buf.length + part.length + 1 > max) {
-      chunks.push(buf);
-      buf = part;
-    } else {
-      buf = buf ? buf + ' ' + part : part;
-    }
-    while (buf.length > max) {
-      chunks.push(buf.slice(0, max));
-      buf = buf.slice(max);
+  let limit = 150;
+  const flush = () => {
+    if (buf) chunks.push(buf);
+    buf = '';
+    limit = 380;
+  };
+  for (const part of sentences) {
+    if (buf && buf.length + part.length + 1 > limit) flush();
+    buf = buf ? buf + ' ' + part : part;
+    while (buf.length > limit) {
+      chunks.push(buf.slice(0, limit));
+      buf = buf.slice(limit);
+      limit = 380;
     }
   }
-  if (buf) chunks.push(buf);
+  flush();
   return chunks;
+}
+
+async function fetchChunkAudio(text: string): Promise<Blob> {
+  const resp = await fetch('/api/tts', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ text }),
+  });
+  if (!resp.ok) throw new Error('tts failed');
+  return resp.blob();
 }
 
 export async function playVoiceover(
@@ -108,15 +126,15 @@ export async function playVoiceover(
       onState('idle');
       return;
     }
-    for (const chunk of chunks) {
+    // Pipeline: the next chunk is generated while the current plays.
+    let nextBlob: Promise<Blob> | null = fetchChunkAudio(chunks[0]);
+    for (let i = 0; i < chunks.length; i++) {
       if (my !== session) return;
-      const resp = await fetch('/api/tts', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text: chunk }),
-      });
-      if (!resp.ok) throw new Error('tts failed');
-      const blob = await resp.blob();
+      const blob = await nextBlob;
+      nextBlob = i + 1 < chunks.length ? fetchChunkAudio(chunks[i + 1]) : null;
+      // A failed prefetch surfaces on its own turn; guard the rejection
+      // until then so it is never reported as unhandled.
+      nextBlob?.catch(() => {});
       if (my !== session) return;
       const url = URL.createObjectURL(blob);
       await new Promise<void>((resolve, reject) => {
