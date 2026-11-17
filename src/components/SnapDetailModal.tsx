@@ -4,7 +4,7 @@ import { Category, Snap } from '../types';
 import { formatDate } from '../utils/dateUtils';
 import { Category3DIcon, Sparkles3D, LoveLetter3D } from './Romance3DIcons';
 import { X, Heart, MapPin, Calendar, Trash2, ChevronLeft, ChevronRight, Images, Volume2, Square, Loader2 } from 'lucide-react';
-import { playVoiceover, stopVoiceover, VoiceState } from '../utils/voiceover';
+import { playVoiceover, primeVoiceover, stopVoiceover, VoiceState } from '../utils/voiceover';
 
 interface SnapDetailModalProps {
   snap: Snap | null;
@@ -47,6 +47,9 @@ export const SnapDetailModal: React.FC<SnapDetailModalProps> = ({
       stopVoiceover();
       setVoiceState('idle');
     } else {
+      // Unlock audio inside the tap itself — phone browsers/WebView
+      // block playback that starts seconds later without this.
+      primeVoiceover();
       playVoiceover(snap.description, setVoiceState);
     }
   };
