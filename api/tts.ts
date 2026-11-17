@@ -73,28 +73,35 @@ export default async function handler(req: any, res: any) {
     return;
   }
 
-  try {
-    const resp = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent`,
-      {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-goog-api-key': apiKey,
+  const requestBody = JSON.stringify({
+    contents: [{ parts: [{ text: STYLE_PREFIX + text }] }],
+    generationConfig: {
+      responseModalities: ['AUDIO'],
+      speechConfig: {
+        voiceConfig: {
+          prebuiltVoiceConfig: { voiceName: VOICE_NAME },
         },
-        body: JSON.stringify({
-          contents: [{ parts: [{ text: STYLE_PREFIX + text }] }],
-          generationConfig: {
-            responseModalities: ['AUDIO'],
-            speechConfig: {
-              voiceConfig: {
-                prebuiltVoiceConfig: { voiceName: VOICE_NAME },
-              },
-            },
-          },
-        }),
       },
-    );
+    },
+  });
+  const callGemini = () =>
+    fetch(`https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-goog-api-key': apiKey,
+      },
+      body: requestBody,
+    });
+
+  try {
+    let resp = await callGemini();
+    if (resp.status === 429) {
+      // Free-tier TTS rate limit — wait a few seconds and retry once
+      // instead of failing the story outright.
+      await new Promise((r) => setTimeout(r, 5000));
+      resp = await callGemini();
+    }
 
     if (!resp.ok) {
       res.status(502).json({ error: 'Voice generation failed' });
