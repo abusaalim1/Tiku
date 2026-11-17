@@ -6,16 +6,19 @@
 // silently. This function keeps the key server-side and turns story
 // text into spoken audio with Gemini TTS.
 //
-// Voice: "Sulafat" — a warm female voice, steered by a style prompt
-// into a soft, romantic read. Language is auto-detected from the
-// text itself, so Bengali, Benglish, Hinglish and English stories
-// are all read in their own language.
+// Voice: "Leda" — a youthful female voice, picked by the owner on
+// 2026-11-17 from live samples (over Sulafat and Aoede) as the most
+// natural. The style prompt steers her into a soft, romantic read.
+// Language is auto-detected from the text itself, so Bengali,
+// Benglish, Hinglish and English stories are all read in their own
+// language.
 
 const MODEL = 'gemini-2.5-flash-preview-tts';
-const VOICE_NAME = 'Sulafat';
+const VOICE_NAME = 'Leda';
 const STYLE_PREFIX =
-  'Say in a soft, warm, romantic female voice, slowly and lovingly, ' +
-  'like reading a love letter aloud to someone dear: ';
+  'Read aloud like a young woman softly telling her favourite memory ' +
+  'to the person she loves, natural and unhurried, with real feeling, ' +
+  'gentle pauses, and a smile in her voice: ';
 const MAX_CHARS = 900;
 
 function pcmToWav(pcm: Buffer, sampleRate = 24000, channels = 1, bitsPerSample = 16): Buffer {
@@ -124,3 +127,4 @@ export default async function handler(req: any, res: any) {
     res.status(502).json({ error: 'Voice generation failed' });
   }
 }
+
