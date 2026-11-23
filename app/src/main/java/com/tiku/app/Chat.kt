@@ -3574,7 +3574,18 @@ private fun RdChatContent(thread: ChatThread) {
     // stranded after the reply landed (build 124).
     val aiThinkingLabel = AiJobs.thinking[threadId]
 
-    var input by remember { mutableStateOf("") }
+    // ROUND 75 (WS5): the composer text is a per-chat DRAFT
+    // (DraftStore) — restored from this thread's slot on entry
+    // (keyed on threadId, so switching chats can never carry one
+    // chat's text into another), written back on EVERY change (not
+    // just on dispose, so it survives Back and process death), and
+    // cleared by that same write-back whenever a send empties the
+    // field: every sendCurrent branch that enqueues a message sets
+    // input = "" (plain / fx / edit / slash-command / vision paths
+    // alike), and a send refused before enqueueing (busy AI gate)
+    // returns with the field untouched, so its draft stands.
+    var input by remember(threadId) { mutableStateOf(DraftStore.getChat(threadId)) }
+    LaunchedEffect(threadId, input) { DraftStore.setChat(threadId, input) }
     var replyTarget by remember { mutableStateOf<TikuMessage?>(null) }
     /** ROUND 57 (Fix 2): the message being edited, or null. Set by the
      *  long-press menu's Edit (own text messages only): the composer

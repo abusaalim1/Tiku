@@ -24,7 +24,6 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.imePadding
-import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.systemBars
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.runtime.Composable
@@ -39,7 +38,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.unit.dp
 import androidx.lifecycle.lifecycleScope
 import dev.chrisbanes.haze.rememberHazeState
 import kotlinx.coroutines.delay
@@ -164,12 +162,6 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         ChatSession.foreground = true
-        // ROUND 15: the symmetric half of onPause's Watch pause — an
-        // onPause()d WebView that is never onResume()d keeps a frozen,
-        // black video surface while its page lives on. This only
-        // unfreezes the renderer; it never forces playback (expanding
-        // the pane is what plays — see WatchControl.requestResume).
-        WatchControl.requestResume()
         // ROUND 58: returning to the app means any standing push
         // alerts have been seen — clear them (the old judge's
         // foreground clear, kept), and take the one-time Android 13+
@@ -192,13 +184,6 @@ class MainActivity : ComponentActivity() {
     override fun onPause() {
         super.onPause()
         ChatSession.foreground = false
-        // ROUND 10 (Watch): backgrounding WITHOUT a lock (e.g. the owner's
-        // relaxed mode, or a transient system surface) pauses the in-vault
-        // video — playback never continues invisibly. The lock path itself
-        // (onStop → ChatSession.lock) destroys the WebView outright.
-        // ROUND 13: the pause goes through WatchControl to the ACTIVE pane's
-        // WebView; no pane composed = nothing playing (view destroyed).
-        WatchControl.requestPause()
         // ROUND 58: no notify reconcile on pause any more — FCM
         // delivery is the platform's job while the app is away; the
         // old foreground service that needed a legal start window here
@@ -339,6 +324,28 @@ fun TikuRoot(onGoogleClick: () -> Unit) {
                 else -> {
                     Box(Modifier.fillMaxSize()) {
                         HomeScreen()
+                        // ROUND 75 (WS6) — SHELL TOUCH SHIELD: the root
+                        // cause of "a stray tap inside a chat opens a
+                        // different chat". HomeScreen above stays
+                        // COMPOSED (and its Messages list fully
+                        // touch-live) underneath every overlay in this
+                        // Box — the ThreadRow / CardRow clickables in
+                        // Home.kt navigate on tap — so any tap an open
+                        // chat does not claim lands on the list beneath
+                        // and opens whatever row sits under the finger.
+                        // While a full-screen overlay is open, this
+                        // shield sits directly above HomeScreen and
+                        // below the overlays: overlay content (composed
+                        // after it) claims its events first, and every
+                        // unclaimed tap dies here instead of reaching
+                        // the list. It exists only while an overlay is
+                        // open, so Home's own interaction is untouched.
+                        if (screen is Screen.Chat || screen is Screen.ChatDetails ||
+                            screen is Screen.TikaBot || screen is Screen.Moments ||
+                            screen is Screen.Call
+                        ) {
+                            TouchShield()
+                        }
                         // ROUND 8 (animations pass): the chat overlay slides
                         // in from the right and the call overlay fades/scales
                         // in — previously both snapped in instantly. The last
@@ -405,20 +412,6 @@ fun TikuRoot(onGoogleClick: () -> Unit) {
                         ) {
                             TikaBotScreen()
                         }
-                        // ROUND 15 (owner device test): the Watch host
-                        // is hoisted HERE from HomeScreen — above the
-                        // Chat / ChatDetails / Moments overlays, so the
-                        // floating mini player stays visible and usable
-                        // over an open chat; below the call UI, the
-                        // story viewer, the sheets (BottomSheetHost,
-                        // composed after this subtree) and the toast.
-                        // It still dies with the Tik session: locking
-                        // flips this AnimatedContent branch away, which
-                        // uncomposes the host and destroys the WebView.
-                        // The host pauses + hides the mini itself while
-                        // a call is active (CallController state).
-                        WatchHost()
-                        WatchFullscreenLayer()
                         AnimatedVisibility(
                             visible = screen is Screen.Call,
                             enter = fadeIn(tween(300, easing = TikuEase)) +
@@ -429,37 +422,21 @@ fun TikuRoot(onGoogleClick: () -> Unit) {
                             (screen as? Screen.Call ?: lastCall)?.let { CallScreen(it.threadId, it.video) }
                         }
                         if (screen is Screen.Story) StoryScreen()
-                        // ROUND 13: the "Now watching" glass bar floats
-                        // above the glass nav. It self-hides unless a Watch
-                        // session exists on a non-Watch Home tab.
-                        // ROUND 14 (Addendum 2 §5): the floating mini
-                        // player (WatchHost, hoisted to this root in
-                        // ROUND 15) rests directly above this bar; the
-                        // bar's bottom inset is NowWatchingBarBottomInset
-                        // (94.dp — 8.dp above the redesign NavPill's
-                        // 86.dp block).
-                        NowWatchingBar(
-                            Modifier.align(Alignment.BottomCenter)
-                                .padding(start = 16.dp, end = 16.dp, bottom = NowWatchingBarBottomInset),
-                        )
                         // ROUND 20: the floating call window (Call.kt) is
                         // composed HERE again, as this Box's last child —
                         // above HomeScreen, the Chat / Details / Moments
-                        // overlays and WatchHost, so a minimized VIDEO
-                        // call keeps the peer's live video floating while
-                        // the owner messages (Round 14's CallPill lives
-                        // inside HomeScreen and can never appear over a
-                        // chat). The window self-gates: it renders only
-                        // for a minimized live call, and yields the Home
-                        // pane tabs to the CallPill, so exactly one
+                        // overlays, so a minimized VIDEO call keeps the
+                        // peer's live video floating while the owner
+                        // messages (Round 14's CallPill lives inside
+                        // HomeScreen and can never appear over a chat).
+                        // The window self-gates: it renders only for a
+                        // minimized live call, and yields the Home pane
+                        // tabs to the CallPill, so exactly one
                         // minimized-call affordance is ever visible.
-                        // The Watch mini never coexists with it —
-                        // WatchHost hides + pauses its mini for the whole
-                        // call (Round 15). Within this Box the window is
-                        // the topmost layer (it floats over the story
-                        // viewer too, IG-style); only the sheets and the
-                        // toast, composed after this whole subtree, sit
-                        // above it.
+                        // Within this Box the window is the topmost
+                        // layer (it floats over the story viewer too,
+                        // IG-style); only the sheets and the toast,
+                        // composed after this whole subtree, sit above it.
                         FloatingCallWindow()
                     }
                 }
@@ -509,8 +486,8 @@ fun TikuRoot(onGoogleClick: () -> Unit) {
     // every screen, re-asserted on every navigation, plus an
     // explicit show() of the status bars so no transient state (a
     // player fullscreen session included) can leave them hidden
-    // behind it. Player exits restore them too (FacadePlayer /
-    // WatchFullscreenLayer call restoreStatusBars on dispose).
+    // behind it. Player exits restore them too (FacadePlayer calls
+    // restoreStatusBars on dispose).
     LaunchedEffect(screen, rootSettings.darkMode) {
         val w = activity?.window ?: return@LaunchedEffect
         val controller = androidx.core.view.WindowInsetsControllerCompat(w, w.decorView)

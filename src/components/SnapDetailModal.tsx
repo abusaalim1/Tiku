@@ -1,10 +1,9 @@
-import React, { useEffect, useState } from 'react';
+import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Category, Snap } from '../types';
 import { formatDate } from '../utils/dateUtils';
 import { Category3DIcon, Sparkles3D, LoveLetter3D } from './Romance3DIcons';
-import { X, Heart, MapPin, Calendar, Trash2, ChevronLeft, ChevronRight, Images, Volume2, Square, Loader2 } from 'lucide-react';
-import { playVoiceover, primeVoiceover, stopVoiceover, VoiceState } from '../utils/voiceover';
+import { X, Heart, MapPin, Calendar, Trash2, ChevronLeft, ChevronRight, Images } from 'lucide-react';
 
 interface SnapDetailModalProps {
   snap: Snap | null;
@@ -22,37 +21,6 @@ export const SnapDetailModal: React.FC<SnapDetailModalProps> = ({
   onDeleteSnap,
 }) => {
   const [photoIndex, setPhotoIndex] = useState<number>(0);
-  const [voiceState, setVoiceState] = useState<VoiceState>('idle');
-
-  // Story voiceover stops whenever the memory changes or the modal closes.
-  useEffect(() => {
-    stopVoiceover();
-    setVoiceState('idle');
-  }, [snap?.id]);
-
-  useEffect(() => {
-    return () => stopVoiceover();
-  }, []);
-
-  useEffect(() => {
-    if (voiceState === 'error') {
-      const t = setTimeout(() => setVoiceState('idle'), 2600);
-      return () => clearTimeout(t);
-    }
-  }, [voiceState]);
-
-  const handleToggleVoice = () => {
-    if (!snap?.description) return;
-    if (voiceState === 'playing' || voiceState === 'loading') {
-      stopVoiceover();
-      setVoiceState('idle');
-    } else {
-      // Unlock audio inside the tap itself — phone browsers/WebView
-      // block playback that starts seconds later without this.
-      primeVoiceover();
-      playVoiceover(snap.description, setVoiceState);
-    }
-  };
 
   if (!snap) return null;
 
@@ -198,30 +166,8 @@ export const SnapDetailModal: React.FC<SnapDetailModalProps> = ({
               {/* Description / Story */}
               {snap.description && (
                 <div className="p-3.5 sm:p-4 rounded-2xl bg-[#FFF7F9] border border-[#FDE2E7] space-y-1">
-                  <div className="flex items-center justify-between gap-2">
-                    <div className="text-[11px] font-bold text-[#F47D90] uppercase tracking-wider flex items-center gap-1.5">
-                      <LoveLetter3D size={16} /> What Happened That Day
-                    </div>
-                    <button
-                      onClick={handleToggleVoice}
-                      className={`shrink-0 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[11px] font-extrabold transition-all cursor-pointer active:scale-95 shadow-xs border ${
-                        voiceState === 'playing' || voiceState === 'loading'
-                          ? 'bg-[#F47D90] text-white border-[#F47D90]'
-                          : voiceState === 'error'
-                            ? 'bg-red-50 text-red-500 border-red-200'
-                            : 'bg-white text-[#F47D90] border-[#FDE2E7] hover:bg-[#FFF0F3]'
-                      }`}
-                    >
-                      {voiceState === 'loading' ? (
-                        <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Loading…</>
-                      ) : voiceState === 'playing' ? (
-                        <><Square className="w-3.5 h-3.5 fill-current" /> Stop</>
-                      ) : voiceState === 'error' ? (
-                        <><Volume2 className="w-3.5 h-3.5" /> Try Again</>
-                      ) : (
-                        <><Volume2 className="w-3.5 h-3.5" /> Listen</>
-                      )}
-                    </button>
+                  <div className="text-[11px] font-bold text-[#F47D90] uppercase tracking-wider flex items-center gap-1.5">
+                    <LoveLetter3D size={16} /> What Happened That Day
                   </div>
                   <p className="text-xs sm:text-sm text-[#2D1F27] font-medium leading-relaxed whitespace-pre-wrap">
                     {snap.description}

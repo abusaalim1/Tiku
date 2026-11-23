@@ -690,7 +690,7 @@ fun CallScreen(threadId: String, video: Boolean) {
  * chat (Chat is a TikuRoot overlay ABOVE HomeScreen), so a minimized
  * video call vanished exactly where the owner wants it: over the chat
  * he is typing in. Surface seam (exactly one minimized-call affordance
- * per surface): on the Home pane tabs (Messages / Calls / Watch /
+ * per surface): on the Home pane tabs (Messages / Calls /
  * Settings, dest 0..3) the CallPill remains the affordance and this
  * window stays out; on every other surface — an open chat above all —
  * this window renders. Renderer handover is safe by construction:

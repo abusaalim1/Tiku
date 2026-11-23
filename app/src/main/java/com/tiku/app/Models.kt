@@ -389,12 +389,12 @@ data class NoteMention(
 
 /** ROUND 68 (WS10): one YouTube song attached to a note, with the
  *  IG-notes-music style clip the author chose. [videoId] is a YouTube
- *  video id (from a youtube.com / youtu.be / music.youtube.com link —
- *  see [youtubeThumbId]); playback is the app's existing locked
- *  nocookie embed ([youtubeEmbedUrl] + start/end params), so no new
- *  dependency and no API key. [startSec]/[endSec] bound the clip
- *  (endSec > startSec, both >= 0); viewers play the clip from the
- *  note. Plain data; Firestore stores it as a map. */
+ *  video id; [startSec]/[endSec] bound the clip (endSec > startSec,
+ *  both >= 0). Plain data; Firestore stores it as a map.
+ *  ROUND 75 (WS4): Notes music is removed from the UI — this model
+ *  (and its Firestore parsing) is KEPT on purpose: songs stored by
+ *  older builds stay stored and parseable, simply never offered,
+ *  rendered or played on new builds. Never delete this data. */
 data class NoteMusic(
     val videoId: String = "",
     val title: String = "",

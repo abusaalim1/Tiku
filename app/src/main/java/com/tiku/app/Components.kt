@@ -40,6 +40,7 @@ import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Dp
@@ -47,6 +48,33 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
 val PressAnim = androidx.compose.animation.core.tween<Float>(250)
+
+/**
+ * ROUND 75 (WS6) — TOUCH SHIELD: a full-size, invisible leaf that
+ * consumes every pointer event that reaches it. Placed as a child
+ * BEHIND a surface's real content (never wrapping it), it changes
+ * nothing for that content — the content sits above it and claims
+ * its events first — while any tap the content does NOT claim (dead
+ * zones: list gaps and padding, header margins, the space around a
+ * floating pill) dies here instead of falling through to whatever
+ * is composed beneath the surface (in TikuRoot, the Messages list
+ * stays composed under every chat overlay — see MainActivity).
+ * Consumption happens in the Main pass, the same pass the codebase's
+ * proven Round-57 chat shield uses: above-layer gesture detectors
+ * resolve before the under-layer's clickables see the event.
+ */
+@Composable
+fun TouchShield() {
+    Box(
+        Modifier.fillMaxSize().pointerInput(Unit) {
+            awaitPointerEventScope {
+                while (true) {
+                    awaitPointerEvent().changes.forEach { it.consume() }
+                }
+            }
+        },
+    )
+}
 
 @Composable
 fun AvatarBox(

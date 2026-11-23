@@ -285,14 +285,9 @@ object ChatSession {
         // signed-in + local identity + the user's Notifications
         // preference, default ON), independent of the lock — that
         // independence is the point of the FCM switch.
-        // ROUND 10 (Watch lock safety): this lock() is the single choke point
-        // every lock path funnels through (quick exit, Back-out, backgrounding
-        // via MainActivity.onStop, the explicit "Lock now").
-        // ROUND 13: the Watch WebView is owned by its pane — clearing the
-        // session here (epoch bump) makes the pane's dispose-time save a
-        // no-op, and leaving the vault uncomposes the pane, which destroys
-        // the WebView — so no video frame and no audio can survive any lock.
-        WatchSession.clear()
+        // This lock() is the single choke point every lock path funnels
+        // through (quick exit, Back-out, backgrounding via
+        // MainActivity.onStop, the explicit "Lock now").
         if (!Config.PREVIEW_UI_ONLY && unlocked && FirebaseEngine.signedIn) {
             FirebaseEngine.setPresence(false)
         }
@@ -314,12 +309,8 @@ object ChatSession {
      *  identical-to-lock() behaviour, as always. */
     fun quickExit(ctx: Context) {
         if (OwnerGate.lockOffActive()) {
-            // ROUND 10: the relaxed exit keeps the chat SESSION alive, but a
-            // playing Watch video must never leak audio into the facade —
-            // the session is cleared here too, and the pane (uncomposed by
-            // the navigation below) destroys its WebView on dispose (only
-            // the keys and threads survive this path, never media).
-            WatchSession.clear()
+            // The relaxed exit keeps the chat SESSION alive (only the
+            // keys and threads survive this path, never media).
             if (!Config.PREVIEW_UI_ONLY && unlocked && FirebaseEngine.signedIn) {
                 FirebaseEngine.setPresence(false)
             }

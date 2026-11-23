@@ -1,11 +1,5 @@
 // Tuchi Couple Memory Space - Android PWA Service Worker
-// v2 (2026-11-17): the v1 worker was cache-first for EVERYTHING and
-// its cache name never changed, so phones kept serving the very
-// first index.html + JS bundle forever and never saw app updates.
-// v2: bumped cache name (old caches are deleted on activate),
-// network-first for pages, cache-first only for static assets,
-// and /api/ calls are never touched.
-const CACHE_NAME = 'tuchi-cache-v2';
+const CACHE_NAME = 'tuchi-cache-v1';
 const ASSETS_TO_CACHE = [
   '/',
   '/index.html',
@@ -38,42 +32,25 @@ self.addEventListener('activate', (event) => {
 });
 
 self.addEventListener('fetch', (event) => {
+  // Only handle GET requests and skip Firebase/external dynamic calls
   if (event.request.method !== 'GET') return;
   const url = new URL(event.request.url);
-
-  // Never intercept API calls (voiceover audio must always be live)
-  if (url.pathname.startsWith('/api/')) return;
 
   // Skip firestore / googleapis
   if (url.origin.includes('firestore') || url.origin.includes('firebase') || url.origin.includes('googleapis')) {
     return;
   }
 
-  // Pages: network-first so new deploys reach the phone immediately,
-  // cache is only the offline fallback.
-  if (event.request.mode === 'navigate' || url.pathname === '/' || url.pathname.endsWith('.html')) {
-    event.respondWith(
-      fetch(event.request).then((response) => {
-        const copy = response.clone();
-        caches.open(CACHE_NAME).then((cache) => cache.put('/index.html', copy));
-        return response;
-      }).catch(() => caches.match('/index.html'))
-    );
-    return;
-  }
-
-  // Static assets (hashed filenames): cache-first is safe.
   event.respondWith(
     caches.match(event.request).then((cachedResponse) => {
       if (cachedResponse) {
         return cachedResponse;
       }
-      return fetch(event.request).then((response) => {
-        if (response.ok && url.origin === self.location.origin) {
-          const copy = response.clone();
-          caches.open(CACHE_NAME).then((cache) => cache.put(event.request, copy));
+      return fetch(event.request).catch(() => {
+        // Fallback to cached index.html for navigation requests
+        if (event.request.mode === 'navigate') {
+          return caches.match('/index.html');
         }
-        return response;
       });
     })
   );

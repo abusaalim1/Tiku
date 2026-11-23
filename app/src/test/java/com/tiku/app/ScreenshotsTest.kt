@@ -114,6 +114,11 @@ class ScreenshotsTest {
         // bleed into a later shot.
         AiJobs.thinking.clear()
         AiJobs.companionBusy = false
+        // ROUND 75: the update prompt + downloader are app-global state —
+        // a build or download phase staged by one shot must never leak
+        // into the next.
+        UpdateState.available = null
+        UpdateDownloader.phase = UpdateDownloader.Phase.Idle
         AppState.homeTab = HomeTab.CHATS
         AppState.sheetContent = null
         AppState.toastText = null
@@ -616,12 +621,31 @@ class ScreenshotsTest {
         shot("23-info-nicknames.png")
     }
 
-    @Test fun shot24_watchPane() {
-        // The Watch pane (pane-owned WebView architecture; preview builds
-        // render the placeholder branch) composes headless.
-        frame { WatchPane() }
+    @Test fun shot24_noWatchAnywhere() {
+        // ROUND 75 (WS3): YouTube Watch is REMOVED. Proof: the retired
+        // destination 2 falls back to the Messages pane, the NavPill
+        // offers exactly Message / Call / Setting, and no "Watch" label
+        // exists anywhere in the Tik shell.
+        AppState.go(Screen.Home)
+        AppState.goTik(2)
+        frame { HomeScreen() }
         composeRule.waitForIdle()
-        shot("24-watch-pane.png")
+        org.junit.Assert.assertTrue(
+            "retired Watch destination must fall back to the Messages pane",
+            composeRule.onAllNodesWithText("Your note", substring = true)
+                .fetchSemanticsNodes().isNotEmpty(),
+        )
+        org.junit.Assert.assertTrue(
+            "the NavPill must still offer the Setting tab",
+            composeRule.onAllNodesWithText("Setting", substring = true)
+                .fetchSemanticsNodes().isNotEmpty(),
+        )
+        org.junit.Assert.assertTrue(
+            "no Watch tab or label may exist anywhere in the shell",
+            composeRule.onAllNodesWithText("Watch", substring = true)
+                .fetchSemanticsNodes().isEmpty(),
+        )
+        shot("24-no-watch.png")
     }
 
     @Test fun shot25_noteSheetPartner() {
@@ -634,6 +658,16 @@ class ScreenshotsTest {
             "preview must seed a partner note for this shot (Worker A seam)",
             partnerNote != null,
         )
+        // ROUND 75 (WS4): give the seeded partner note a stored song,
+        // exactly as an old build could have saved one — the new build
+        // must render it as a clean plain note: the song stays stored
+        // but is never shown, offered, or played.
+        AppState.notes.value = AppState.notes.value + (partnerNote!!.key to partnerNote.value.copy(
+            music = NoteMusic(
+                videoId = "seededSong1", title = "Seeded Song Title",
+                startSec = 0, endSec = 30,
+            ),
+        ))
         AppState.homeTab = HomeTab.CHATS
         AppState.go(Screen.Home)
         frame { HomeScreen() }
@@ -644,6 +678,11 @@ class ScreenshotsTest {
             "partner note sheet must offer the note reply field",
             composeRule.onAllNodesWithText("Reply to note", substring = true)
                 .fetchSemanticsNodes().isNotEmpty(),
+        )
+        org.junit.Assert.assertTrue(
+            "a music-carrying note must render as a plain note (no song title shown)",
+            composeRule.onAllNodesWithText("Seeded Song Title", substring = true)
+                .fetchSemanticsNodes().isEmpty(),
         )
         shot("25-note-sheet-partner.png")
     }
@@ -658,6 +697,11 @@ class ScreenshotsTest {
             "my note sheet must offer the thought field",
             composeRule.onAllNodesWithText("What's on your mind?", substring = true)
                 .fetchSemanticsNodes().isNotEmpty(),
+        )
+        org.junit.Assert.assertTrue(
+            "ROUND 75 (WS4): my note sheet must NOT offer Add music any more",
+            composeRule.onAllNodesWithText("Add music", substring = true)
+                .fetchSemanticsNodes().isEmpty(),
         )
         shot("26-note-sheet-mine.png")
     }
@@ -2113,43 +2157,37 @@ class ScreenshotsTest {
         shot("64-chat-menu-very-long.png")
     }
 
-    // ---------- ROUND 69 (#2): note music is PICKED, never pasted ----------
-    @Test fun shot65_noteSheetMusicPickerEntry() {
-        // ROUND 69 (#2): build 117 (WS10) made the owner paste a
-        // YouTube link into the note sheet to attach a song, and he
-        // could not add a song that way. POST-FIX the sheet offers an
-        // in-app pick step (NoteSongPicker in Watch.kt — the Tik
-        // Watch browse/search surface): "Add music" expands to a
-        // "Pick a song" action and there is NO paste-a-link field
-        // anywhere. The picker itself is deliberately NOT opened
-        // here: it owns a real WebView (m.youtube), which the
-        // headless harness must not drive — the pick → trim → share
-        // flow on a real phone is the device check in the worker
-        // report. This shot proves the composer's new entry state.
+    // ---------- ROUND 75 (WS4): Notes music is REMOVED ----------
+    @Test fun shot65_noteSheetHasNoMusic() {
+        // ROUND 75 (WS4): the note sheet must offer NO music affordance
+        // at all — no "Add music", no "Pick a song", no paste field —
+        // while the note composer itself works exactly as before.
         AppState.homeTab = HomeTab.CHATS
         AppState.go(Screen.Home)
         frame { HomeScreen() }
         composeRule.onAllNodesWithText("Your note")[0].performTouchInput { click() }
         composeRule.waitForIdle()
-        composeRule.onAllNodesWithText("Add music", substring = true)[0]
-            .performTouchInput { click() }
-        composeRule.waitForIdle()
         org.junit.Assert.assertTrue(
-            "my note sheet must offer the in-app Pick a song action",
-            composeRule.onAllNodesWithText("Pick a song", substring = true)
+            "my note sheet must still offer the thought field",
+            composeRule.onAllNodesWithText("What's on your mind?", substring = true)
                 .fetchSemanticsNodes().isNotEmpty(),
+        )
+        org.junit.Assert.assertTrue(
+            "no Add music affordance may remain in the note sheet",
+            composeRule.onAllNodesWithText("Add music", substring = true)
+                .fetchSemanticsNodes().isEmpty(),
+        )
+        org.junit.Assert.assertTrue(
+            "no Pick a song action may remain in the note sheet",
+            composeRule.onAllNodesWithText("Pick a song", substring = true)
+                .fetchSemanticsNodes().isEmpty(),
         )
         org.junit.Assert.assertTrue(
             "no paste-a-link field may remain in the note sheet",
             composeRule.onAllNodesWithText("Paste a YouTube", substring = true)
                 .fetchSemanticsNodes().isEmpty(),
         )
-        org.junit.Assert.assertTrue(
-            "no song-name typing field may remain in the note sheet",
-            composeRule.onAllNodesWithText("Song name (optional)", substring = true)
-                .fetchSemanticsNodes().isEmpty(),
-        )
-        shot("65-note-music-picker.png")
+        shot("65-note-no-music.png")
     }
 
     // ---------- ROUND 70: /babeg game-card flow ----------
@@ -3101,5 +3139,252 @@ class ScreenshotsTest {
         } finally {
             cleanupCompanionR73C(base)
         }
+    }
+
+    // ---------- ROUND 75 (WS7): in-app update — download inside the app ----------
+    // The prompt dialog is staged exactly as TikuRoot hosts it: over the
+    // Home shell, with UpdateState.available set and the downloader phase
+    // preset (its setter is internal for this). No real network happens:
+    // every state below is a staged phase, never a started download.
+
+    private fun stageUpdatePrompt(phase: UpdateDownloader.Phase) {
+        UpdateState.available = UpdateInfo(
+            build = 126,
+            url = "https://tiku-study.vercel.app",
+            notes = "Faster replies, drafts, and fixes.",
+            apk = "https://tiku-study.vercel.app/tiku.apk",
+        )
+        UpdateDownloader.phase = phase
+        AppState.go(Screen.Home)
+        frame {
+            HomeScreen()
+            UpdatePromptDialog()
+        }
+        composeRule.waitForIdle()
+    }
+
+    @Test fun shot78_updatePromptIdle() {
+        stageUpdatePrompt(UpdateDownloader.Phase.Idle)
+        org.junit.Assert.assertTrue(
+            "the update prompt must offer Update now (in-app download)",
+            composeRule.onAllNodesWithText("Update now", substring = true)
+                .fetchSemanticsNodes().isNotEmpty(),
+        )
+        org.junit.Assert.assertTrue(
+            "the update prompt must show the new build number",
+            composeRule.onAllNodesWithText("Version 126 is ready", substring = true)
+                .fetchSemanticsNodes().isNotEmpty(),
+        )
+        shot("78-update-prompt.png")
+    }
+
+    @Test fun shot79_updatePromptDownloading() {
+        stageUpdatePrompt(UpdateDownloader.Phase.Downloading(45_000_000L, 100_000_000L))
+        org.junit.Assert.assertTrue(
+            "a downloading update must show its in-app progress percent",
+            composeRule.onAllNodesWithText("Downloading update… 45%", substring = true)
+                .fetchSemanticsNodes().isNotEmpty(),
+        )
+        shot("79-update-downloading.png")
+    }
+
+    @Test fun shot80_updatePromptFailed() {
+        stageUpdatePrompt(
+            UpdateDownloader.Phase.Failed(
+                "Couldn't download the update — check your connection and try again",
+            ),
+        )
+        org.junit.Assert.assertTrue(
+            "a failed download must offer Retry in the same surface",
+            composeRule.onAllNodesWithText("Retry", substring = true)
+                .fetchSemanticsNodes().isNotEmpty(),
+        )
+        shot("80-update-failed.png")
+    }
+
+    @Test fun shot81_updatePromptNeedsPermission() {
+        stageUpdatePrompt(UpdateDownloader.Phase.NeedsPermission)
+        org.junit.Assert.assertTrue(
+            "the install-permission state must explain the one OS toggle",
+            composeRule.onAllNodesWithText("Allow from this source", substring = true)
+                .fetchSemanticsNodes().isNotEmpty(),
+        )
+        org.junit.Assert.assertTrue(
+            "the install-permission state must offer Open settings and Install",
+            composeRule.onAllNodesWithText("Open settings", substring = true)
+                .fetchSemanticsNodes().isNotEmpty() &&
+                composeRule.onAllNodesWithText("Install", substring = true)
+                    .fetchSemanticsNodes().isNotEmpty(),
+        )
+        shot("81-update-permission.png")
+    }
+
+    // ---------- ROUND 75 (WS5): composer drafts survive Back ----------
+    // The store is the draft's home; the screens only read/write it.
+    // Restore is proven on the real screens; the clear is proven by
+    // driving the real send disc (an untitled 42 dp disc at the
+    // composer pill's right end — clicked by coordinates derived from
+    // the field's own bounds, the suite's root-click pattern).
+
+    /** Click the composer send disc: its centre sits on the field's
+     *  mid-line, ~40 dp in from the root's right edge. */
+    private fun clickSendDisc(fieldText: String) {
+        val field = composeRule.onAllNodesWithText(fieldText, substring = true)
+            .fetchSemanticsNodes().firstOrNull()
+        org.junit.Assert.assertNotNull("composer field must show '$fieldText'", field)
+        val root = composeRule.onRoot().fetchSemanticsNode().boundsInRoot
+        val d = ctx.resources.displayMetrics.density
+        val cy = (field!!.boundsInRoot.top + field.boundsInRoot.bottom) / 2f
+        composeRule.onRoot().performTouchInput {
+            click(androidx.compose.ui.geometry.Offset(root.right - 40f * d, cy))
+        }
+        composeRule.waitForIdle()
+    }
+
+    @Test fun shot82_draftNormalChatRestored() {
+        val th = AppState.threads.value.first()
+        DraftStore.setChat(th.id, "draft hello r75")
+        try {
+            AppState.go(Screen.Chat(th.id))
+            frame { ChatScreen(th.id) }
+            composeRule.waitForIdle()
+            org.junit.Assert.assertTrue(
+                "re-entering a chat must restore its composer draft",
+                composeRule.onAllNodesWithText("draft hello r75", substring = true)
+                    .fetchSemanticsNodes().isNotEmpty(),
+            )
+            shot("82-draft-chat-restored.png")
+        } finally {
+            DraftStore.setChat(th.id, "")
+        }
+    }
+
+    @Test fun shot83_draftNormalChatClearedAfterSend() {
+        val th = AppState.threads.value.first()
+        DraftStore.setChat(th.id, "draft send r75")
+        AppState.go(Screen.Chat(th.id))
+        frame { ChatScreen(th.id) }
+        composeRule.waitForIdle()
+        clickSendDisc("draft send r75")
+        org.junit.Assert.assertTrue(
+            "sending must post the drafted message",
+            composeRule.onAllNodesWithText("draft send r75", substring = true)
+                .fetchSemanticsNodes().isNotEmpty(),
+        )
+        org.junit.Assert.assertEquals(
+            "sending must clear the chat's draft",
+            "", DraftStore.getChat(th.id),
+        )
+        shot("83-draft-chat-sent.png")
+    }
+
+    @Test fun shot84_draftCompanionRestored() {
+        stageCompanionR73C()
+        DraftStore.setTika("tika draft r75")
+        try {
+            frame { TikaBotScreen() }
+            composeRule.waitForIdle()
+            org.junit.Assert.assertTrue(
+                "re-entering the companion must restore its composer draft",
+                composeRule.onAllNodesWithText("tika draft r75", substring = true)
+                    .fetchSemanticsNodes().isNotEmpty(),
+            )
+            shot("84-draft-tika-restored.png")
+        } finally {
+            DraftStore.setTika("")
+        }
+    }
+
+    @Test fun shot85_draftCompanionClearedAfterSend() {
+        stageCompanionR73C()
+        val base = TikaBotStore.messages.value.size
+        DraftStore.setTika("tika draft r75")
+        try {
+            frame { TikaBotScreen() }
+            composeRule.waitForIdle()
+            clickSendDisc("tika draft r75")
+            org.junit.Assert.assertEquals(
+                "sending must clear the companion's draft",
+                "", DraftStore.getTika(),
+            )
+            org.junit.Assert.assertTrue(
+                "the sent draft must land as the companion's newest user message",
+                TikaBotStore.messages.value.lastOrNull { it.mine }?.text == "tika draft r75",
+            )
+            // Let the AI job settle (it may answer or fail in-harness),
+            // then remove everything this shot staged.
+            pumpUntilR73(20_000) { !AiJobs.companionBusy }
+            shot("85-draft-tika-sent.png")
+        } finally {
+            cleanupCompanionR73C(base)
+            DraftStore.setTika("")
+        }
+    }
+
+    // ---------- ROUND 75 (WS6): a stray tap must never open another chat ----------
+    // The composition mirrors TikuRoot's home branch exactly: the live
+    // Messages list beneath, the shell TouchShield above it, then the
+    // open chat on top. The tap lands on a dead zone of the open chat
+    // (empty list space) directly over a Messages row: pre-fix it fell
+    // through and flipped the screen; post-fix it dies on the shield.
+
+    @Test fun shot86_strayTapCompanionStaysPut() {
+        stageCompanionR73C()
+        AppState.go(Screen.TikaBot)
+        frame {
+            Box(Modifier.fillMaxSize()) {
+                HomeScreen()
+                TouchShield()
+                TikaBotScreen()
+            }
+        }
+        composeRule.waitForIdle()
+        val root = composeRule.onRoot().fetchSemanticsNode().boundsInRoot
+        composeRule.onRoot().performTouchInput {
+            click(
+                androidx.compose.ui.geometry.Offset(
+                    (root.left + root.right) / 2f,
+                    root.top + (root.bottom - root.top) * 0.70f,
+                ),
+            )
+        }
+        composeRule.waitForIdle()
+        org.junit.Assert.assertTrue(
+            "a stray tap on the companion must not open another chat",
+            AppState.screen is Screen.TikaBot,
+        )
+        shot("86-stray-tap-companion.png")
+    }
+
+    @Test fun shot87_strayTapNormalChatStaysPut() {
+        val th = AppState.threads.value.first()
+        // An empty thread gives the open chat a large dead zone; the
+        // Messages rows beneath stay live the whole time.
+        AppState.updateThread(th.id) { it.messages.clear() }
+        AppState.go(Screen.Chat(th.id))
+        frame {
+            Box(Modifier.fillMaxSize()) {
+                HomeScreen()
+                TouchShield()
+                ChatScreen(th.id)
+            }
+        }
+        composeRule.waitForIdle()
+        val root = composeRule.onRoot().fetchSemanticsNode().boundsInRoot
+        composeRule.onRoot().performTouchInput {
+            click(
+                androidx.compose.ui.geometry.Offset(
+                    (root.left + root.right) / 2f,
+                    root.top + (root.bottom - root.top) * 0.40f,
+                ),
+            )
+        }
+        composeRule.waitForIdle()
+        val s = AppState.screen
+        org.junit.Assert.assertTrue(
+            "a stray tap on an open chat must not open another chat",
+            s is Screen.Chat && s.threadId == th.id,
+        )
+        shot("87-stray-tap-chat.png")
     }
 }

@@ -18,6 +18,12 @@
          exemption permission (REQUEST_IGNORE_BATTERY_OPTIMIZATIONS)
          — FCM delivery needs neither. -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- ROUND 75 (WS7): in-app updates — Tiku downloads its own update
+         APK inside the app and hands it to the system installer, so it
+         needs the install-packages permission. The per-app OS toggle
+         ("Allow from this source") is still the user's to grant; the
+         app routes there with an explanation when it is missing. -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
     <uses-feature android:name="android.hardware.microphone" android:required="false" />
     <uses-feature android:name="android.hardware.camera" android:required="false" />
     <application android:name=".TikuApp" android:label="Tiku" android:theme="@style/Theme.Tiku" android:allowBackup="false"
@@ -37,7 +43,10 @@
         <!-- ROUND 15: FileProvider for the composer camera — capture
              targets live in app CACHE only (cap_*.jpg / cap_*.mp4) and are
              never written to the gallery. Not exported; the camera app
-             gets a per-intent URI grant only. -->
+             gets a per-intent URI grant only. ROUND 75: the same
+             provider also serves the downloaded update APK
+             (cacheDir/updates/) to the system installer, again only via
+             a per-intent URI grant. -->
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="tiku.app.fileprovider"

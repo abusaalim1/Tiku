@@ -51,7 +51,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Archive
 import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.Edit
-import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.filled.Videocam
@@ -93,7 +92,8 @@ import kotlinx.coroutines.withContext
  * ROUND 14 — the Tik shell in the owner's TikuRedesign model: pure-black
  * root, the panes as the Haze source, AnimatedContent with the file's
  * screenSpec depth transitions over destinations (0 Messages · 1 Calls ·
- * 2 Watch · 3 Setting · 7 Requests), the sliding-lens NavPill (pane tabs
+ * 3 Setting · 7 Requests; destination 2 was Watch, removed in ROUND 75),
+ * the sliding-lens NavPill (pane tabs
  * only), the CallPill above it for a minimized live call, and the note
  * sheet overlay. Chat (9) and Info (8) stay Screen-routed overlays in
  * TikuRoot (Screen.Chat / Screen.ChatDetails), per the round-14 split.
@@ -202,7 +202,6 @@ fun HomeScreen() {
                             onArchived = { showArchived = true },
                         )
                         1 -> CallsScreen()
-                        2 -> WatchScreen()
                         3 -> SettingsScreen()
                         7 -> RequestsScreen(onBack = { AppState.goTik(0) })
                         else -> MessagesScreen(
@@ -214,12 +213,6 @@ fun HomeScreen() {
                 }
             }
         }
-
-        // ROUND 15: WatchHost + WatchFullscreenLayer moved OUT of this
-        // shell to TikuRoot (MainActivity) — the floating mini player
-        // must float ABOVE the chat overlay, which is a TikuRoot
-        // sibling of HomeScreen, not a child of it. The host still owns
-        // the pane for the whole Tik session from there; see Watch.kt.
 
         // NavPill (+ CallPill) — pane tabs only, never over chat/info/requests.
         AnimatedVisibility(
@@ -290,20 +283,26 @@ fun HomeScreen() {
                             onDelete = { AppState.repo.deleteMyNote(); AppState.toast("Note deleted"); noteTarget = null },
                             onHeart = {},
                             onReply = {},
-                            // ROUND 68 (WS8 + WS10): mentions + song ride the
-                            // note; candidates are thread partners (the only
+                            // ROUND 68 (WS8): mentions ride the note;
+                            // candidates are thread partners (the only
                             // people who can see a note). The repo interface
-                            // is unchanged this round, so the full write
-                            // goes to the real engine directly; preview
-                            // falls back to the plain setMyNote above.
+                            // is unchanged, so the full write goes to the
+                            // real engine directly; preview falls back to
+                            // the plain setMyNote above.
+                            // ROUND 75 (WS4): Notes music is removed from
+                            // the UI, but a song stored by an older build
+                            // is user data — the share write passes the
+                            // CURRENTLY STORED song through untouched, so
+                            // re-sharing a note never deletes it (the new
+                            // UI simply never offers, changes or plays it).
                             mentions = notes[myUidKey()]?.mentions ?: emptyList(),
-                            music = notes[myUidKey()]?.music,
                             mentionCandidates = threads.map { it.person },
-                            onShareFull = { t, mentioned, song ->
+                            onShareFull = { t, mentioned ->
                                 if (t.isBlank()) AppState.toast("Write something first")
                                 else {
-                                    (AppState.repo as? FirebaseEngine)?.setMyNoteFull(t, mentioned, song)
-                                        ?: AppState.repo.setMyNote(t)
+                                    (AppState.repo as? FirebaseEngine)?.setMyNoteFull(
+                                        t, mentioned, notes[myUidKey()]?.music,
+                                    ) ?: AppState.repo.setMyNote(t)
                                     AppState.toast("Note shared")
                                 }
                                 noteTarget = null
@@ -331,10 +330,11 @@ fun HomeScreen() {
                                     }
                                     noteTarget = null
                                 },
-                                // ROUND 68 (WS8 + WS10): render the note's
-                                // mentions highlighted and offer its song.
+                                // ROUND 68 (WS8): render the note's
+                                // mentions highlighted. ROUND 75 (WS4):
+                                // a stored song is no longer rendered or
+                                // played — the note shows as a plain note.
                                 mentions = note?.mentions ?: emptyList(),
-                                music = note?.music,
                             )
                         }
                     }
@@ -352,9 +352,6 @@ fun HomeScreen() {
         ) {
             ArchivedScreen(onBack = { showArchived = false })
         }
-
-        // (The fullscreen YouTube layer renders in TikuRoot beside
-        // WatchHost — ROUND 15 hoist, see above. Empty unless fullscreen.)
     }
 }
 
@@ -469,7 +466,6 @@ internal fun MessagesScreen(
                         heart = false, idx = 0,
                         onClick = { onNote(NoteTarget.Me) },
                         avatar = { AvMe(58) },
-                        hasMusic = myNote?.music != null,
                     )
                 }
                 itemsIndexed(notedThreads) { idx, th ->
@@ -479,7 +475,6 @@ internal fun MessagesScreen(
                         heart = myUidKey() in (n?.hearts ?: emptySet()), idx = idx + 1,
                         onClick = { onNote(NoteTarget.Peer(th)) },
                         avatar = { Av(th.person, 58) },
-                        hasMusic = n?.music != null,
                     )
                 }
             }
@@ -870,37 +865,6 @@ fun CallsScreen() {
     }
 }
 
-// ================= Watch =================
-/** The redesign chrome (black + Title) for the REAL YouTube pane. The
- *  pane is NOT composed here: WatchHost (Watch.kt) owns it at the
- *  TikuRoot level (ROUND 15 hoist — it must float above the chat
- *  overlay) so a playing video can shrink into the floating mini
- *  player on other tabs and over chats. This screen renders
- *  only the header; the empty weight-1 box below reserves EXACTLY the
- *  area the host's EXPANDED mode covers — header height =
- *  WatchChromeTopPadding (24) + WatchChromeButtonSize (46) =
- *  WatchChromeHeaderHeight (70), the host's expanded top offset. The
- *  two sides stay in sync through those shared constants in Watch.kt. */
-@Composable
-fun WatchScreen() {
-    Column(Modifier.fillMaxSize().background(Color.Black)) {
-        Row(
-            Modifier.fillMaxWidth().padding(start = 20.dp, end = 20.dp, top = WatchChromeTopPadding),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Box(Modifier.weight(1f)) { Title("Watch") }
-            Box(
-                Modifier.size(WatchChromeButtonSize).clip(CircleShape).background(CardC)
-                    .border(1.dp, Color.White.copy(0.1f), CircleShape)
-                    .press { WatchControl.goHome() },
-                contentAlignment = Alignment.Center,
-            ) { Icon(Icons.Filled.Home, null, tint = Color.White, modifier = Modifier.size(21.dp)) }
-        }
-        // Reserved for WatchHost's EXPANDED rect — see the doc above.
-        Box(Modifier.weight(1f))
-    }
-}
-
 // ================= Settings =================
 @Composable
 fun SettingsScreen() {
@@ -1216,23 +1180,31 @@ private fun SettingsMain(
             // install's CI build number (stamped into assets at build
             // time); 0 = a pre-system install, which shows the check
             // prompt instead. Tap = a manual check that ignores the 6h
-            // throttle: newer → the download page opens in the browser;
-            // up to date / offline → a toast says which.
+            // throttle. ROUND 75 (WS7): a newer build now DOWNLOADS
+            // INSIDE the app (progress / error / install-permission UI
+            // renders under this row via UpdateDownloadUi) and hands the
+            // APK to the system installer — the browser is never opened.
             val installed = remember { UpdateCheck.installedBuild(ctx) }
-            NavRow(
-                "App update",
-                if (installed > 0) "Version $installed" else "Check for the latest version",
-            ) {
-                UpdateCheck.checkNow(ctx) { result ->
-                    when (result) {
-                        is UpdateCheck.ManualResult.Newer ->
-                            UpdateCheck.openDownloadPage(ctx, result.url)
-                        UpdateCheck.ManualResult.UpToDate ->
-                            AppState.toast("You're on the latest version")
-                        UpdateCheck.ManualResult.Failed ->
-                            AppState.toast("Couldn't check — check your connection")
+            Column {
+                NavRow(
+                    "App update",
+                    if (installed > 0) "Version $installed" else "Check for the latest version",
+                ) {
+                    UpdateCheck.checkNow(ctx) { result ->
+                        when (result) {
+                            is UpdateCheck.ManualResult.Newer ->
+                                UpdateDownloader.start(ctx, result.info.apk)
+                            UpdateCheck.ManualResult.UpToDate ->
+                                AppState.toast("You're on the latest version")
+                            UpdateCheck.ManualResult.Failed ->
+                                AppState.toast("Couldn't check — check your connection")
+                        }
                     }
                 }
+                // ROUND 75: live download progress / error+Retry /
+                // install-permission explanation for the row above;
+                // renders nothing while idle.
+                UpdateDownloadUi()
             }
         }
         if (OwnerState.isOwner) {

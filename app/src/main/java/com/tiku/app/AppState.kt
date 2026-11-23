@@ -50,7 +50,7 @@ sealed interface Screen {
     data object TikaBot : Screen
 }
 
-enum class HomeTab { CHATS, CALLS, WATCH, ME }
+enum class HomeTab { CHATS, CALLS, ME }
 
 /** Engine-wide crash guard: no engine coroutine may ever kill the process with an
  *  uncaught exception (this was the crash vector on the chat-open path). */
@@ -80,17 +80,18 @@ object AppState {
     var authBusy by mutableStateOf(false)
 
     /** ROUND 14 — the redesign shell's destination INSIDE Screen.Home:
-     *  0 Messages · 1 Calls · 2 Watch · 3 Setting · 7 Requests. (Chat and
+     *  0 Messages · 1 Calls · 3 Setting · 7 Requests. (Chat and
      *  Info stay Screen-routed overlays — Screen.Chat / Screen.ChatDetails.)
      *  Kept in AppState so the screenshot harness and deep links can land
-     *  on a pane deterministically. homeTab mirrors it for legacy readers
-     *  (WatchControl / NowWatchingBar). */
+     *  on a pane deterministically. homeTab mirrors it for legacy readers.
+     *  ROUND 75 (WS3): destination 2 was the YouTube Watch pane — the
+     *  feature is removed; the number is NOT reused (stored/deep-linked
+     *  2s land on Messages via HomeScreen's else branch). */
     var tikDestination by mutableStateOf(0)
     fun goTik(dest: Int) {
         tikDestination = dest
         homeTab = when (dest) {
             1 -> HomeTab.CALLS
-            2 -> HomeTab.WATCH
             3 -> HomeTab.ME
             else -> HomeTab.CHATS
         }

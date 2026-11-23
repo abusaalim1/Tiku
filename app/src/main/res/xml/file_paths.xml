@@ -3,4 +3,11 @@
      app cache directory (cap_*.jpg / cap_*.mp4). Nothing else is shared. -->
 <paths>
     <cache-path name="captures" path="." />
+    <!-- ROUND 75 (WS7): downloaded update APKs live in
+         cacheDir/updates/ (tiku-update.apk) and are shared ONLY with
+         the system installer via a per-intent URI grant. (The "."
+         cache root above already covers this subfolder; the explicit
+         entry documents the update root and keeps it covered even if
+         the captures root is ever narrowed.) -->
+    <cache-path name="updates" path="updates/" />
 </paths>
