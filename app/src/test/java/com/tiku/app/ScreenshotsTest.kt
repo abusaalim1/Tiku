@@ -3262,14 +3262,18 @@ class ScreenshotsTest {
             "Settings must carry the App update row without any scrolling",
             row.isNotEmpty(),
         )
-        val appearance = composeRule.onAllNodesWithText("Appearance").fetchSemanticsNodes()
+        // Pinned at the top means: composed in the first window AND in
+        // the title zone. The harness is fixed at 480 dpi (1 dp = 3 px):
+        // 24 dp list top padding + the Settings title puts the first
+        // row's label at ~250 px; below the profile card (the old
+        // position's earliest possible spot) it could not start above
+        // ~550 px. (An earlier revision of this test compared against
+        // the Appearance header, but LazyColumn does not guarantee
+        // composing that far at idle — the row's own position is the
+        // stable proof.)
         org.junit.Assert.assertTrue(
-            "the Appearance section must be composed in the first Settings window",
-            appearance.isNotEmpty(),
-        )
-        org.junit.Assert.assertTrue(
-            "App update must sit ABOVE Appearance — pinned at the top of Settings",
-            row.first().boundsInRoot.top < appearance.first().boundsInRoot.top,
+            "App update must sit in the title zone at the very top of Settings",
+            row.first().boundsInRoot.top < 420f,
         )
         shot("88-settings-update-top.png")
     }

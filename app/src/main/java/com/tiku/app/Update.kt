@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.Text
@@ -540,7 +541,9 @@ fun UpdateBanner() {
                 )
             }
             if (phase is UpdateDownloader.Phase.Idle) {
-                Pill("Update", Modifier.padding(start = 12.dp), accent = true) {
+                // A fixed comfortable width: Pill hugs its label, and
+                // a bare "Update" would render as a cramped disc.
+                Pill("Update", Modifier.padding(start = 12.dp).width(112.dp), accent = true) {
                     UpdateDownloader.start(ctx, info.apk)
                 }
             }
