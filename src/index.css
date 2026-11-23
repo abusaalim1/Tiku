@@ -55,11 +55,14 @@
   }
 }
 
-/* Frosted Glass Panels (Light, Minimalist White & Soft Blush Rose) */
+/* Solid Panels (Light, Minimalist White & Soft Blush Rose)
+   ROUND 77: NO backdrop filter / blur utilities anywhere in this app —
+   Android WebView fails to composite it (the Memories page stuck fully
+   blurred with a dead sheet fragment, same disease Round 68 fixed in
+   SnapDetailModal alone). These classes keep their original near-opaque
+   solid backgrounds; only the blur effect is gone. Do not re-add it. */
 .glass-panel {
   background: rgba(255, 255, 255, 0.92);
-  backdrop-filter: blur(20px) saturate(180%);
-  -webkit-backdrop-filter: blur(20px) saturate(180%);
   border: 1px solid rgba(253, 226, 231, 0.85);
   box-shadow: 
     0 12px 32px -4px rgba(244, 125, 144, 0.08),
@@ -83,8 +86,6 @@
 
 .glass-dock {
   background: rgba(255, 255, 255, 0.94);
-  backdrop-filter: blur(24px) saturate(190%);
-  -webkit-backdrop-filter: blur(24px) saturate(190%);
   border: 1px solid rgba(253, 226, 231, 0.95);
   box-shadow: 
     0 16px 40px -6px rgba(244, 125, 144, 0.15),
@@ -94,8 +95,6 @@
 
 .glass-modal {
   background: rgba(255, 255, 255, 0.98);
-  backdrop-filter: blur(28px) saturate(190%);
-  -webkit-backdrop-filter: blur(28px) saturate(190%);
   border: 1px solid rgba(253, 226, 231, 0.95);
   box-shadow: 
     0 24px 60px -10px rgba(45, 31, 39, 0.16),

@@ -3487,4 +3487,174 @@ class ScreenshotsTest {
         )
         shot("87-stray-tap-chat.png")
     }
+
+    // ---------- ROUND 77 (WS-A): a deleted voice note survives for the receiver ----------
+    // decryptDoc's retained-audio shape, staged directly as thread state
+    // (the PreviewRepo pattern of shot40): a PEER voice message flagged
+    // deletedForEveryone whose media survived (mediaChunks > 0, payload
+    // file held locally). The chat must render its PLAYER — never the
+    // tombstone — with only the subtle "Deleted" note under it, and its
+    // long-press menu must offer Save to device.
+
+    private fun stageRetainedVoiceR77(): String {
+        val p = PreviewStore.people.first()
+        val id = PreviewRepo.startThreadWith(p)
+        AppState.updateThread(id) { it.messages.clear() }
+        val f = java.io.File(ctx.cacheDir, "dl_r77voice.m4a")
+        f.writeBytes(ByteArray(16))
+        AppState.upsertMessage(id, TikuMessage(
+            id = "r77voice", senderUid = p.uid, kind = MsgKind.VOICE,
+            time = "9:41", me = false, tsMs = 1,
+            voiceDurSec = 7, amps = List(22) { 12 },
+            localPath = f.absolutePath, mediaChunks = 3,
+            deletedForEveryone = true))
+        AppState.go(Screen.Chat(id))
+        frame { ChatScreen(id) }
+        composeRule.waitForIdle()
+        return id
+    }
+
+    @Test fun shot90_chatDeletedVoiceRetainedPlayer() {
+        stageRetainedVoiceR77()
+        org.junit.Assert.assertTrue(
+            "a retained deleted voice note must render its player (duration)",
+            composeRule.onAllNodesWithText("0:07").fetchSemanticsNodes().isNotEmpty(),
+        )
+        org.junit.Assert.assertTrue(
+            "a retained deleted voice note must carry the subtle Deleted note",
+            composeRule.onAllNodesWithText("Deleted").fetchSemanticsNodes().isNotEmpty(),
+        )
+        org.junit.Assert.assertTrue(
+            "a retained deleted voice note must NOT render the tombstone",
+            composeRule.onAllNodesWithText("This message was deleted")
+                .fetchSemanticsNodes().isEmpty(),
+        )
+        shot("90-chat-deleted-voice-retained.png")
+    }
+
+    @Test fun shot91_chatDeletedVoiceRetainedMenuSave() {
+        stageRetainedVoiceR77()
+        composeRule.onNodeWithText("0:07").performTouchInput { longClick() }
+        composeRule.waitForIdle()
+        org.junit.Assert.assertTrue(
+            "a retained deleted voice note's menu must offer Save to device",
+            composeRule.onAllNodesWithText("Save to device").fetchSemanticsNodes().isNotEmpty(),
+        )
+        org.junit.Assert.assertTrue(
+            "a retained deleted voice note's menu must offer Delete for me",
+            composeRule.onAllNodesWithText("Delete for me").fetchSemanticsNodes().isNotEmpty(),
+        )
+        org.junit.Assert.assertTrue(
+            "a retained deleted voice note's menu must NOT offer Reply",
+            composeRule.onAllNodesWithText("Reply").fetchSemanticsNodes().isEmpty(),
+        )
+        shot("91-chat-deleted-voice-menu.png")
+    }
+
+    // ---------- ROUND 77 (WS-B): presence pack ----------
+
+    @Test fun shot92_chatPresenceOnlineDot() {
+        // The seeded first thread's peer is online (Person defaults:
+        // online = true, lastSeenMs = 0 — presenceText reads that as
+        // "online" at face value, exactly the privacy-toggle-off
+        // shape). The header must show the green presence dot (tagged
+        // presence_dot) beside the unchanged "Active now" string.
+        val th = AppState.threads.value.first()
+        org.junit.Assert.assertTrue(
+            "seeded peer must stage as online",
+            th.person.online,
+        )
+        AppState.go(Screen.Chat(th.id))
+        frame { ChatScreen(th.id) }
+        composeRule.waitForIdle()
+        org.junit.Assert.assertTrue(
+            "online header must keep the exact 'Active now' string",
+            composeRule.onAllNodesWithText("Active now").fetchSemanticsNodes().isNotEmpty(),
+        )
+        composeRule.onNodeWithTag("presence_dot").assertIsDisplayed()
+        shot("92-chat-presence-online.png")
+    }
+
+    @Test fun shot93_chatPresenceLastSeenNoDot() {
+        // The same header, peer OFFLINE with a last seen one hour ago:
+        // the line must show the peer's latest recorded stamp
+        // ("last seen today at …", the fmtLastSeen form) and NO dot.
+        val th = AppState.threads.value.first()
+        val offline = th.copy(
+            person = th.person.copy(
+                online = false,
+                lastSeenMs = System.currentTimeMillis() - 3_600_000L,
+            ),
+        )
+        AppState.threads.value = AppState.threads.value.map {
+            if (it.id == th.id) offline else it
+        }
+        AppState.go(Screen.Chat(th.id))
+        frame { ChatScreen(th.id) }
+        composeRule.waitForIdle()
+        org.junit.Assert.assertTrue(
+            "offline header must show the latest last seen",
+            composeRule.onAllNodesWithText("last seen today at", substring = true)
+                .fetchSemanticsNodes().isNotEmpty(),
+        )
+        org.junit.Assert.assertTrue(
+            "offline header must not show Active now",
+            composeRule.onAllNodesWithText("Active now").fetchSemanticsNodes().isEmpty(),
+        )
+        org.junit.Assert.assertTrue(
+            "offline header must not carry the presence dot",
+            composeRule.onAllNodesWithTag("presence_dot").fetchSemanticsNodes().isEmpty(),
+        )
+        shot("93-chat-presence-last-seen.png")
+    }
+
+    /** ROUND 77 (WS-B) — the seen gate's truth table, proven at unit
+     *  level (the Firestore write itself needs a live session and is
+     *  NOT claimed here): seen-marking passes ONLY for a foregrounded,
+     *  unlocked session whose CURRENT destination is exactly this
+     *  chat and which holds the chat in its open set. Every other
+     *  combination — backgrounded with the chat left open, locked,
+     *  another screen (Home / ChatDetails / Call) over the same
+     *  thread, a different chat current, or a chat never opened —
+     *  must refuse, so nothing that arrived unviewed can be marked
+     *  seen, retroactively or otherwise. */
+    @Test fun shot94_seenGateContract() {
+        val open = setOf("c1")
+        org.junit.Assert.assertTrue(
+            "foreground + unlocked + this chat current + open must pass",
+            seenGatePasses(true, true, Screen.Chat("c1"), "c1", open),
+        )
+        org.junit.Assert.assertFalse(
+            "backgrounded app must refuse (the reported leak)",
+            seenGatePasses(false, true, Screen.Chat("c1"), "c1", open),
+        )
+        org.junit.Assert.assertFalse(
+            "locked session must refuse",
+            seenGatePasses(true, false, Screen.Chat("c1"), "c1", open),
+        )
+        org.junit.Assert.assertFalse(
+            "Home over the shell must refuse",
+            seenGatePasses(true, true, Screen.Home, "c1", open),
+        )
+        org.junit.Assert.assertFalse(
+            "ChatDetails for the same thread must refuse",
+            seenGatePasses(true, true, Screen.ChatDetails("c1"), "c1", open),
+        )
+        org.junit.Assert.assertFalse(
+            "a Call over the same thread must refuse",
+            seenGatePasses(true, true, Screen.Call("c1", false), "c1", open),
+        )
+        org.junit.Assert.assertFalse(
+            "a different chat being current must refuse",
+            seenGatePasses(true, true, Screen.Chat("c2"), "c1", open),
+        )
+        org.junit.Assert.assertFalse(
+            "a chat outside the open set must refuse",
+            seenGatePasses(true, true, Screen.Chat("c1"), "c1", emptySet()),
+        )
+        org.junit.Assert.assertFalse(
+            "no current screen must refuse",
+            seenGatePasses(true, true, null, "c1", open),
+        )
+    }
 }

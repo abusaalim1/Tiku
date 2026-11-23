@@ -94,7 +94,7 @@ export const SnapDetailModal: React.FC<SnapDetailModalProps> = ({
               {/* Multi-Photo Carousel Controls */}
               {images.length > 1 && (
                 <>
-                  <div className="absolute top-3 left-3 px-2.5 py-1 rounded-full bg-black/60 backdrop-blur-md text-xs font-bold text-white flex items-center gap-1.5 border border-white/20">
+                  <div className="absolute top-3 left-3 px-2.5 py-1 rounded-full bg-black/60 text-xs font-bold text-white flex items-center gap-1.5 border border-white/20">
                     <Images className="w-3.5 h-3.5 text-[#F47D90]" />
                     <span>{photoIndex + 1} / {images.length}</span>
                   </div>
@@ -114,7 +114,7 @@ export const SnapDetailModal: React.FC<SnapDetailModalProps> = ({
                   </button>
 
                   {/* Indicator Dots */}
-                  <div className="absolute bottom-3 left-1/2 -translate-x-1/2 flex items-center gap-1.5 px-3 py-1 rounded-full bg-black/50 backdrop-blur-md">
+                  <div className="absolute bottom-3 left-1/2 -translate-x-1/2 flex items-center gap-1.5 px-3 py-1 rounded-full bg-black/50">
                     {images.map((_, idx) => (
                       <button
                         key={idx}

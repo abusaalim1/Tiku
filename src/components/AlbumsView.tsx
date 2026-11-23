@@ -143,13 +143,13 @@ export const AlbumsView: React.FC<AlbumsViewProps> = ({
                     ) : null}
 
                     {/* Top Category Badge */}
-                    <div className="absolute top-3 left-3 px-3 py-1 rounded-full bg-white/95 backdrop-blur-md text-xs font-extrabold text-[#2D1F27] flex items-center gap-1.5 shadow-xs border border-[#FDE2E7]">
+                    <div className="absolute top-3 left-3 px-3 py-1 rounded-full bg-white/95 text-xs font-extrabold text-[#2D1F27] flex items-center gap-1.5 shadow-xs border border-[#FDE2E7]">
                       <Category3DIcon categoryName={cat.name} size={16} />
                       <span>{cat.name}</span>
                     </div>
 
                     {/* Photo count indicator */}
-                    <div className="absolute bottom-3 right-3 px-2.5 py-0.5 rounded-full bg-white/95 backdrop-blur-md text-[10px] font-bold text-[#2D1F27] flex items-center gap-1 border border-[#FDE2E7] shadow-xs">
+                    <div className="absolute bottom-3 right-3 px-2.5 py-0.5 rounded-full bg-white/95 text-[10px] font-bold text-[#2D1F27] flex items-center gap-1 border border-[#FDE2E7] shadow-xs">
                       <Images className="w-3 h-3 text-[#F47D90]" />
                       <span>{catSnaps.length}</span>
                     </div>
@@ -193,7 +193,7 @@ export const AlbumsView: React.FC<AlbumsViewProps> = ({
               whileHover={{ scale: 1.02, y: -2 }}
               whileTap={{ scale: 0.98 }}
               onClick={onOpenAddCategory}
-              className="rounded-[32px] p-6 border-2 border-dashed border-[#FDE2E7] hover:border-[#F47D90] bg-white hover:bg-[#FFF0F3]/50 backdrop-blur-md text-center flex flex-col items-center justify-center gap-2.5 transition-all cursor-pointer min-h-[200px]"
+              className="rounded-[32px] p-6 border-2 border-dashed border-[#FDE2E7] hover:border-[#F47D90] bg-white hover:bg-[#FFF0F3]/50 text-center flex flex-col items-center justify-center gap-2.5 transition-all cursor-pointer min-h-[200px]"
             >
               <div className="w-12 h-12 rounded-2xl bg-[#FFF0F3] text-[#F47D90] flex items-center justify-center border border-[#FDE2E7] shadow-xs">
                 <Sparkles3D size={28} />

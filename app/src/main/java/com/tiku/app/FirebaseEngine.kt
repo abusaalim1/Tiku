@@ -61,6 +61,29 @@ import javax.crypto.SecretKey
  *  renders from it. */
 val MESSAGE_FX_KINDS = setOf("gift", "fire", "confetti", "hearts")
 
+/**
+ * ROUND 77 (WS-B) — THE SEEN GATE, as a pure function. A chat may be
+ * read-marked (seenBy writes + the local read watermark) ONLY while it
+ * is ACTUALLY being viewed: the process is foregrounded, the session
+ * is unlocked, the chat is in the engine's open set, AND it is the
+ * app's current destination ([Screen.Chat] for exactly this id —
+ * ChatDetails / Call / Home / the facade over the same thread do NOT
+ * count). Composition is deliberately NOT an input: screens in this
+ * app stay composed under the shell while invisible (Home sits
+ * composed under every overlay), so "composed" can never prove
+ * "seen". Pure + top-level so the harness can pin the whole truth
+ * table without a Firebase session (ScreenshotsTest shot94).
+ */
+internal fun seenGatePasses(
+    foreground: Boolean,
+    unlocked: Boolean,
+    screen: Screen?,
+    chatId: String,
+    openIds: Set<String>,
+): Boolean =
+    foreground && unlocked && chatId in openIds &&
+        (screen as? Screen.Chat)?.threadId == chatId
+
 object FirebaseEngine : ChatRepo {
     lateinit var appCtx: Context
 
@@ -1684,7 +1707,11 @@ object FirebaseEngine : ChatRepo {
 
     /** Per-peer user-doc listeners feeding AppState.notes — the note set is
      *  exactly my thread partners (spec: notes are visible to thread
-     *  partners). Synced from the threads listener like the preview regs. */
+     *  partners). Synced from the threads listener like the preview regs.
+     *  ROUND 77 (WS-B): the SAME snapshot also folds PRESENCE (see
+     *  [applyPresenceSnapshot]) — this listener was already receiving every
+     *  peer presence write live and discarding the online/lastSeen fields,
+     *  which is why the chat header's last seen went stale (see there). */
     private fun syncNoteListeners(peerUids: Set<String>) {
         (noteRegs.keys - peerUids).forEach { noteRegs.remove(it)?.remove() }
         peerUids.forEach { p ->
@@ -1693,9 +1720,54 @@ object FirebaseEngine : ChatRepo {
                     .addSnapshotListener { snap, err ->
                         if (err != null || snap == null) return@addSnapshotListener
                         applyNoteSnapshot(p, snap)
+                        applyPresenceSnapshot(p, snap)
                     }
             }
         }
+    }
+
+    /**
+     * ROUND 77 (WS-B) — LIVE PRESENCE FOLD. Root cause of the stale
+     * last-seen header: the reader side had NO live path at all.
+     * [fetchPerson] is a one-time get() whose result is served from
+     * [profileCache] forever after (cleared only on lock / sign-out /
+     * pull-to-refresh), and the threads listener — the only code that
+     * rebuilds the ChatThread the header reads — calls fetchPerson, so
+     * every rebuild re-published the FIRST presence ever fetched (e.g.
+     * 3:44 PM) no matter what the peer's doc said later (5:14 PM).
+     * This per-peer user-doc listener, by contrast, already fired on
+     * every peer presence write; it simply threw online/lastSeen away.
+     * Now each snapshot folds the doc's CURRENT online/lastSeen into
+     * the profile cache (so later fetchPerson consumers are fresh too)
+     * and onto every live thread with that peer, republishing
+     * AppState.threads — an open chat's header therefore updates LIVE
+     * while it stays open. Privacy is unchanged: this reads exactly the
+     * two fields the peer's own client already publishes under their
+     * "Last seen" toggle (toggle off = no lastSeen field on the doc =
+     * 0L here, exactly as personFromDoc/fetchPerson have always read
+     * it); no new field is read or exposed.
+     */
+    private fun applyPresenceSnapshot(
+        peerUid: String,
+        snap: com.google.firebase.firestore.DocumentSnapshot,
+    ) {
+        val online = snap.getBoolean("online") == true
+        val lsMs = snap.getTimestamp("lastSeen")?.toDate()?.time ?: 0L
+        profileCache[peerUid]?.let { cached ->
+            if (cached.online != online || cached.lastSeenMs != lsMs) {
+                profileCache[peerUid] = cached.copy(online = online, lastSeenMs = lsMs)
+            }
+        }
+        var changed = false
+        val updated = AppState.threads.value.map { t ->
+            if (t.person.uid == peerUid &&
+                (t.person.online != online || t.person.lastSeenMs != lsMs)
+            ) {
+                changed = true
+                t.copy(person = t.person.copy(online = online, lastSeenMs = lsMs))
+            } else t
+        }
+        if (changed) AppState.threads.value = updated
     }
 
     // ================= CHAT DOC BOOTSTRAP =================
@@ -1780,6 +1852,8 @@ object FirebaseEngine : ChatRepo {
         convKeyCache.clear(); profileCache.clear(); publicKeyCache.clear()
         everOutgoing.clear()
         openChatIds.clear()
+        // ROUND 77 (WS-B): the seen re-mark page cache dies too.
+        latestMsgDocs.clear()
         // ROUND 8: the decrypted message cache + pagination bookkeeping die
         // with the session too, and so do the decrypted voice-note FILES in
         // the app cache (dl_*.m4a) — a chat trace that used to outlive the
@@ -1812,13 +1886,31 @@ object FirebaseEngine : ChatRepo {
             // first second, not the first heartbeat.
             if (lsOn) updates["lastSeen"] = FieldValue.serverTimestamp()
             runCatching { ref.update(updates) }
-            if (lsOn) {
-                presenceJob = scope.launch {
-                    while (presenceOnline) {
-                        delay(60_000)
-                        if (presenceOnline) runCatching {
-                            ref.update("lastSeen", FieldValue.serverTimestamp())
-                        }
+            // ROUND 77 (WS-B): the heartbeat job now ALWAYS runs while
+            // online and re-reads the "Last seen" toggle on every tick.
+            // Before, the job was started only when the toggle was on at
+            // the instant setPresence(true) ran — a user who turned Last
+            // seen ON mid-session got no heartbeat (and no fresh stamp
+            // beyond the one initial write) until the next resume, and a
+            // user who turned it OFF mid-session kept being stamped
+            // until then. Each tick also re-asserts online=true WITH
+            // the stamp, so a transient offline write (a pause that was
+            // not a real exit) self-heals within a minute instead of
+            // leaving the peer's header showing "offline + old stamp"
+            // for a session that is actually live. Toggle off = the
+            // tick writes nothing at all, exactly as before.
+            presenceJob = scope.launch {
+                while (presenceOnline) {
+                    delay(60_000)
+                    if (presenceOnline &&
+                        SettingsStore.state.value.lastSeen
+                    ) runCatching {
+                        ref.update(
+                            mapOf(
+                                "online" to true,
+                                "lastSeen" to FieldValue.serverTimestamp(),
+                            ),
+                        )
                     }
                 }
             }
@@ -1831,7 +1923,12 @@ object FirebaseEngine : ChatRepo {
     }
 
     // ================= CHATREPO =================
-    override fun closeThread(id: String) { openChatIds -= id }
+    override fun closeThread(id: String) {
+        openChatIds -= id
+        // ROUND 77 (WS-B): a closed chat's cached page dies with it —
+        // the foreground re-mark must never act on a stale page.
+        latestMsgDocs.remove(id)
+    }
 
     /**
      * SEEN MARKING (round 4, item 1): the recipient adds their uid to a
@@ -1846,7 +1943,59 @@ object FirebaseEngine : ChatRepo {
      * apply to them. Batched; a snapshot that finds nothing unseen writes
      * nothing (no listener write-loop).
      */
+    /** ROUND 77 (WS-B): the live evaluation of [seenGatePasses] for
+     *  this process — the ONE gate every seen write passes through. */
+    fun isChatActivelyVisible(id: String): Boolean = seenGatePasses(
+        foreground = ChatSession.foreground,
+        unlocked = ChatSession.unlocked,
+        screen = AppState.screen,
+        chatId = id,
+        openIds = openChatIds,
+    )
+
+    /** ROUND 77 (WS-B): the newest-page docs of each open chat, as
+     *  last delivered by its messages listener. Kept so the instant
+     *  the app returns to the foreground with a chat genuinely on
+     *  screen, [refreshSeenForForegroundChat] can mark exactly what
+     *  the user is now looking at — the listener itself does not
+     *  re-fire for docs that landed while backgrounded. Cleared with
+     *  the session in [lock]. */
+    private val latestMsgDocs =
+        mutableMapOf<String, List<com.google.firebase.firestore.DocumentSnapshot>>()
+
+    /**
+     * ROUND 77 (WS-B) — foreground re-mark. Called from
+     * MainActivity.onResume (right after presence goes back online).
+     * If a chat is the current destination, the messages it shows are
+     * genuinely being viewed NOW, so the seen marks the background
+     * gate withheld are written — from the listener's latest docs,
+     * through the same gated [markIncomingSeen]. On a fresh LAUNCH
+     * the screen is the facade/Home (never a chat), so nothing is
+     * marked retroactively for messages that arrived while the app
+     * was closed: they mark only when the user actually opens that
+     * chat in the foreground, via the listener snapshot that
+     * openThread's attach delivers.
+     */
+    fun refreshSeenForForegroundChat() {
+        val s = AppState.screen as? Screen.Chat ?: return
+        if (!isChatActivelyVisible(s.threadId)) return
+        latestMsgDocs[s.threadId]?.let { markIncomingSeen(s.threadId, it) }
+        markRead(s.threadId)
+    }
+
     private fun markIncomingSeen(id: String, docs: List<com.google.firebase.firestore.DocumentSnapshot>) {
+        // ROUND 77 (WS-B) — THE GATE, first, before every other check:
+        // a chat left open under a backgrounded / locked / navigated-
+        // away app must NOT mark anything seen. Before this round the
+        // only condition was membership in openChatIds, which survives
+        // minimizing the app (the composition, the open set and the
+        // Firestore listener all live on — above all for the owner's
+        // App-lock-OFF session, which is never torn down on
+        // backgrounding), so every message that landed while the phone
+        // sat in a pocket was instantly "Seen" for the peer. The gate
+        // is centralised HERE so every caller (live listener,
+        // pagination, foreground refresh) inherits it.
+        if (!isChatActivelyVisible(id)) return
         // ROUND 33 — GHOST READ (owner-only): while the owner's ghost
         // toggle is on, his client writes NO seenBy marks at all — the
         // sender never sees his Seen. GhostStore.enabled self-gates on
@@ -1930,8 +2079,14 @@ object FirebaseEngine : ChatRepo {
             .orderBy("ts", Query.Direction.DESCENDING).limit(PAGE_SIZE)
             .addSnapshotListener { snap, _ ->
                 if (snap == null) return@addSnapshotListener
+                // ROUND 77 (WS-B): remember this page for the
+                // foreground re-mark (see refreshSeenForForegroundChat)
+                // — stored whether or not the gate passes right now.
+                latestMsgDocs[id] = snap.documents
                 // round 4: while this chat is OPEN on screen, incoming messages
                 // are marked seen as they land (drives the sender's "Seen").
+                // ROUND 77 (WS-B): "open" now means ACTUALLY VISIBLE —
+                // markIncomingSeen applies the seen gate itself.
                 if (openChatIds.contains(id)) markIncomingSeen(id, snap.documents)
                 scope.launch {
                     // EVERYTHING in this listener is failure-tolerant: a key that is not
@@ -2095,10 +2250,15 @@ object FirebaseEngine : ChatRepo {
             if (t.id == id) t.copy(messages = msgs.toMutableList(), hasOlder = older,
                 // ROUND 8 (item B1): call events never count as unread —
                 // matches the preview-path calc exactly.
-                unread = if (openChatIds.contains(id)) 0 else msgs.count { !it.me && it.kind != MsgKind.CALL && it.tsMs > lr })
+                // ROUND 77 (WS-B): the zeroing + the markRead below use
+                // the seen gate, not mere open-set membership — a chat
+                // open under a backgrounded app keeps counting unread
+                // (its messages were NOT viewed) until the foreground
+                // re-mark runs when the user is actually back on it.
+                unread = if (isChatActivelyVisible(id)) 0 else msgs.count { !it.me && it.kind != MsgKind.CALL && it.tsMs > lr })
             else t
         }
-        if (openChatIds.contains(id)) markRead(id)
+        if (isChatActivelyVisible(id)) markRead(id)
     }
 
     /** ROUND 8 — PAGINATION: fetch the next page of messages OLDER than the
@@ -2327,19 +2487,31 @@ object FirebaseEngine : ChatRepo {
         // timestamps only — and every surface renders "This message was
         // deleted" from it. deletedForMe still applies on top (a
         // tombstone I also deleted for me stays hidden for me).
-        if (doc.getBoolean("delAll") == true) {
-            // ROUND 30 — OWNER VAULT: the owner's client notes the deletion
-            // moment for any copy it kept locally (markDeleted self-gates on
-            // OwnerState.isOwner and no-ops without an entry — content this
-            // phone never loaded stays gone, exactly like every other
-            // device). delAt is the ROUND-30 server timestamp; tombstones
-            // written by older builds lack it → 0 → first-observed fallback.
-            if (!me) {
-                OwnerVault.markDeleted(
-                    appCtx, chatId, doc.id,
-                    doc.getTimestamp("delAt")?.toDate()?.time ?: 0L,
-                )
-            }
+        // ROUND 77 (WS-A) — AUDIO RETENTION: a delAll doc of an AUDIO kind
+        // (voice note / audio file) whose media SURVIVED the delete
+        // (mediaChunks > 0 — a Round-77 sender no longer wipes the media
+        // fields or the chunks subcollection, and keeps the media `iv`)
+        // falls through to the normal media decryption below on the
+        // RECEIVER's side only, still flagged deletedForEveryone so the
+        // UI can label it subtly. The sender's own side keeps today's
+        // tombstone, and a delAll audio doc with mediaChunks == 0 (its
+        // bytes were destroyed by a pre-Round-77 sender) keeps today's
+        // tombstone too — that limit is honest, the bytes are gone.
+        val delAllDoc = doc.getBoolean("delAll") == true
+        val retainedAudio = delAllDoc && !me &&
+            (kindRaw == "voice" || kindRaw == "audio") &&
+            (doc.getLong("mediaChunks") ?: 0L) > 0L
+        // ROUND 30 — OWNER VAULT markDeleted hook: UNCHANGED by Round 77 —
+        // it fires for every incoming delAll doc exactly as before
+        // (including a retained-audio one), before the tombstone /
+        // fall-through split below.
+        if (delAllDoc && !me) {
+            OwnerVault.markDeleted(
+                appCtx, chatId, doc.id,
+                doc.getTimestamp("delAt")?.toDate()?.time ?: 0L,
+            )
+        }
+        if (delAllDoc && !retainedAudio) {
             val tomb = TikuMessage(
                 id = doc.id, senderUid = sender, kind = kind, text = "",
                 time = fmtTime(tsMs), me = me,
@@ -2490,6 +2662,10 @@ object FirebaseEngine : ChatRepo {
             mimeType = mimeType, mediaBytes = mediaBytes,
             fx = fx, vo = vo, voDone = voDone, ai = ai,
             game = game, gameTitle = gameTitle,
+            // ROUND 77 (WS-A): true ONLY for the retained-audio fall-through
+            // above (every other path here is a non-delAll doc → false,
+            // exactly as before).
+            deletedForEveryone = retainedAudio,
             nikah = nikah, nikahState = nikahState, nikahKeepsake = nikahKeepsake)
         // ROUND 33 — HIDE RECOVERY: mirror this copy into the hidden
         // registry (or drop its entry, when the doc no longer hides it
@@ -3315,6 +3491,11 @@ object FirebaseEngine : ChatRepo {
      * tombstone already makes them unreachable in every UI). The local
      * list tombstones optimistically; the MODIFIED echo rebuilds the
      * identical shape from the doc on both devices.
+     * ROUND 77 (WS-A) EXCEPTION — AUDIO kinds only (owner's order): the
+     * media fields, the media `iv` and the chunks SURVIVE (see the wipe
+     * below), so the receiver's client rebuilds a playable / savable
+     * voice message from the same echo, flagged deletedForEveryone;
+     * the sender's own side still rebuilds the tombstone above.
      * A still-SENDING message has no stable server doc to tombstone (its
      * own set() could land after the update and resurrect it), and a
      * FAILED one never reliably landed — both are refused / local-only.
@@ -3344,7 +3525,19 @@ object FirebaseEngine : ChatRepo {
             runCatching {
                 val ref = msgRef(id, msgId)
                 val chunkCount = m.mediaChunks
-                ref.update(mapOf(
+                // ROUND 77 (WS-A) — AUDIO RETENTION (owner's order): for an
+                // AUDIO kind (voice note / audio file) the media must
+                // SURVIVE a delete-for-everyone so the receiver can still
+                // play + save it: the media fields (amps / durationMs /
+                // mediaChunks / mime / mediaBytes) are NOT wiped, the
+                // media `iv` is NOT wiped (it is the chunk blob's decrypt
+                // IV — media docs carry ct="" already), and the chunks
+                // subcollection is NOT deleted below. delAll + delAt and
+                // the text/reply/reaction wipes are exactly as for every
+                // other kind. Non-audio kinds keep the pre-Round-77 wipe
+                // byte-for-byte.
+                val audioKind = m.kind == MsgKind.VOICE || m.kind == MsgKind.AUDIO
+                val wipe = mutableMapOf<String, Any>(
                     "delAll" to true,
                     // ROUND 30: additive deletion timestamp, written in the
                     // SAME update (the member-update rule already covers
@@ -3353,13 +3546,20 @@ object FirebaseEngine : ChatRepo {
                     // log's deleted-at time. Older tombstones lack it and
                     // their readers fall back to first-observed time.
                     "delAt" to FieldValue.serverTimestamp(),
-                    "ct" to "", "iv" to "",
+                    "ct" to "",
                     "rqCt" to "", "rqIv" to "", "replyToId" to FieldValue.delete(),
                     "reaction" to emptyMap<String, String>(),
-                    "amps" to emptyList<Int>(), "durationMs" to 0,
-                    "mediaChunks" to 0, "mime" to "", "mediaBytes" to 0L,
-                )).await()
-                if (chunkCount > 0) {
+                )
+                if (!audioKind) {
+                    wipe["iv"] = ""
+                    wipe["amps"] = emptyList<Int>()
+                    wipe["durationMs"] = 0
+                    wipe["mediaChunks"] = 0
+                    wipe["mime"] = ""
+                    wipe["mediaBytes"] = 0L
+                }
+                ref.update(wipe).await()
+                if (!audioKind && chunkCount > 0) {
                     val chunks = ref.collection("chunks").get().await()
                     var batch = db.batch()
                     var n = 0

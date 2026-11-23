@@ -375,7 +375,7 @@ export const HomeGallery: React.FC<HomeGalleryProps> = ({
                       className="w-full h-full object-cover group-hover:scale-108 transition-transform duration-300"
                     />
                     {snapImgs.length > 1 && (
-                      <div className="absolute top-1.5 right-1.5 px-1.5 py-0.5 rounded-md bg-black/70 backdrop-blur-xs text-[9px] font-bold text-white flex items-center gap-0.5">
+                      <div className="absolute top-1.5 right-1.5 px-1.5 py-0.5 rounded-md bg-black/70 text-[9px] font-bold text-white flex items-center gap-0.5">
                         <Images className="w-2.5 h-2.5 text-[#F47D90]" />
                         <span>{snapImgs.length}</span>
                       </div>
@@ -533,7 +533,7 @@ export const HomeGallery: React.FC<HomeGalleryProps> = ({
       {/* LOVE NOTE MODAL */}
       <AnimatePresence>
         {showLoveNoteModal && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm">
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50">
             <motion.div
               initial={{ scale: 0.9, opacity: 0 }}
               animate={{ scale: 1, opacity: 1 }}

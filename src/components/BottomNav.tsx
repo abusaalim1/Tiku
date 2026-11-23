@@ -24,7 +24,7 @@ export const BottomNav: React.FC<BottomNavProps> = ({
       className="fixed bottom-0 left-0 right-0 z-40 px-3 sm:px-5 pointer-events-none flex justify-center"
       style={{ paddingBottom: 'max(0.75rem, calc(0.5rem + env(safe-area-inset-bottom, 0px)))' }}
     >
-      <div className="pointer-events-auto w-full max-w-md glass-dock rounded-[32px] px-3 py-2 flex items-center justify-between border border-[#FDE2E7] shadow-[0_16px_40px_rgba(244,125,144,0.18)] relative bg-white/95 backdrop-blur-xl">
+      <div className="pointer-events-auto w-full max-w-md glass-dock rounded-[32px] px-3 py-2 flex items-center justify-between border border-[#FDE2E7] shadow-[0_16px_40px_rgba(244,125,144,0.18)] relative bg-white/95">
         {/* Left Side: Home & Gallery */}
         <div className="flex items-center gap-1 sm:gap-2 flex-1 justify-around">
           {/* Home Tab */}

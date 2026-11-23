@@ -172,6 +172,13 @@ class MainActivity : ComponentActivity() {
         // presence reflects being INSIDE ChatRoot only — never the facade
         if (!Config.PREVIEW_UI_ONLY && ChatSession.unlocked && FirebaseEngine.signedIn && isOnboarded()) {
             FirebaseEngine.setPresence(true)
+            // ROUND 77 (WS-B): ChatSession.foreground was set true just
+            // above — if a chat is the current screen, what it shows is
+            // genuinely being viewed again, so release the seen marks
+            // the background gate withheld while the app was away (the
+            // engine re-checks the full seen gate itself; a launch that
+            // lands on the facade/Home marks nothing).
+            FirebaseEngine.refreshSeenForForegroundChat()
             // ROUND 53 (item 2): NO call reconcile here any more. The
             // owner reversed the auto-popup half of Round 52 item 5:
             // merely returning to the foreground must never throw a

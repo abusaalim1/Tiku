@@ -101,7 +101,7 @@ export const AnniversaryCelebrationCard: React.FC<AnniversaryCelebrationCardProp
 
         <div className="relative z-10 flex flex-col sm:flex-row items-center justify-between gap-5 text-center sm:text-left">
           <div className="space-y-2">
-            <div className="inline-flex items-center gap-2 px-3.5 py-1 rounded-full bg-white/25 backdrop-blur-md text-white text-xs font-extrabold uppercase tracking-wider border border-white/30 shadow-xs">
+            <div className="inline-flex items-center gap-2 px-3.5 py-1 rounded-full bg-white/25 text-white text-xs font-extrabold uppercase tracking-wider border border-white/30 shadow-xs">
               <PartyPopper className="w-4 h-4 text-yellow-200 animate-bounce" />
               <span>Happy Anniversary Today! 🎉</span>
             </div>
@@ -129,7 +129,7 @@ export const AnniversaryCelebrationCard: React.FC<AnniversaryCelebrationCardProp
             {onNavigateToMemories && (
               <button
                 onClick={onNavigateToMemories}
-                className="py-2.5 px-4 rounded-2xl bg-white/20 hover:bg-white/30 text-white text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer backdrop-blur-md border border-white/20"
+                className="py-2.5 px-4 rounded-2xl bg-white/20 hover:bg-white/30 text-white text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer border border-white/20"
               >
                 <span>View Timeline</span>
                 <ChevronRight className="w-3.5 h-3.5" />
@@ -344,7 +344,7 @@ export const AnniversaryCelebrationCard: React.FC<AnniversaryCelebrationCardProp
       {/* FULL SCREEN CELEBRATION MODAL ON MILESTONE TAP */}
       <AnimatePresence>
         {celebratingMilestone && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm">
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50">
             <motion.div
               initial={{ opacity: 0, scale: 0.85, y: 20 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}

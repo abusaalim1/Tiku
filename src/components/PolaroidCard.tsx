@@ -40,7 +40,7 @@ export const PolaroidCard: React.FC<PolaroidCardProps> = ({
       className="polaroid-card group cursor-pointer relative flex flex-col justify-between transition-all duration-300 shadow-tuchi hover:shadow-tuchi-lg select-none bg-white rounded-[24px] p-3 border border-[#FDE2E7]"
     >
       {/* Top Cute Washi Tape Accent */}
-      <div className="absolute -top-3 left-1/2 -translate-x-1/2 w-14 h-4 bg-[#FDE2E7]/90 backdrop-blur-xs border border-white/80 shadow-2xs rotate-[-1.5deg] rounded-sm pointer-events-none z-10 flex items-center justify-center">
+      <div className="absolute -top-3 left-1/2 -translate-x-1/2 w-14 h-4 bg-[#FDE2E7]/90 border border-white/80 shadow-2xs rotate-[-1.5deg] rounded-sm pointer-events-none z-10 flex items-center justify-center">
         <span className="text-[8px] text-[#F47D90] font-bold opacity-80">♥ ♥</span>
       </div>
 
@@ -55,7 +55,7 @@ export const PolaroidCard: React.FC<PolaroidCardProps> = ({
 
         {/* Multi-Photo Indicator Pill */}
         {images.length > 1 && (
-          <div className="absolute top-2.5 left-2.5 px-2.5 py-0.5 rounded-full bg-black/60 backdrop-blur-md text-[10px] font-bold text-white flex items-center gap-1 border border-white/30 shadow-xs z-10">
+          <div className="absolute top-2.5 left-2.5 px-2.5 py-0.5 rounded-full bg-black/60 text-[10px] font-bold text-white flex items-center gap-1 border border-white/30 shadow-xs z-10">
             <Images className="w-3 h-3 text-[#F47D90]" />
             <span>{currentIdx + 1}/{images.length}</span>
           </div>
@@ -66,13 +66,13 @@ export const PolaroidCard: React.FC<PolaroidCardProps> = ({
           <>
             <button
               onClick={handlePrev}
-              className="absolute left-1.5 top-1/2 -translate-y-1/2 w-7 h-7 rounded-full bg-white/90 backdrop-blur-md text-[#2D1F27] flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity hover:bg-[#F47D90] hover:text-white z-10 cursor-pointer shadow-xs"
+              className="absolute left-1.5 top-1/2 -translate-y-1/2 w-7 h-7 rounded-full bg-white/90 text-[#2D1F27] flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity hover:bg-[#F47D90] hover:text-white z-10 cursor-pointer shadow-xs"
             >
               <ChevronLeft className="w-3.5 h-3.5" />
             </button>
             <button
               onClick={handleNext}
-              className="absolute right-1.5 top-1/2 -translate-y-1/2 w-7 h-7 rounded-full bg-white/90 backdrop-blur-md text-[#2D1F27] flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity hover:bg-[#F47D90] hover:text-white z-10 cursor-pointer shadow-xs"
+              className="absolute right-1.5 top-1/2 -translate-y-1/2 w-7 h-7 rounded-full bg-white/90 text-[#2D1F27] flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity hover:bg-[#F47D90] hover:text-white z-10 cursor-pointer shadow-xs"
             >
               <ChevronRight className="w-3.5 h-3.5" />
             </button>
@@ -97,7 +97,7 @@ export const PolaroidCard: React.FC<PolaroidCardProps> = ({
 
         {/* Category Tag Icon & Label */}
         {category && (
-          <div className="absolute bottom-2.5 left-2.5 px-2.5 py-1 rounded-full bg-white/95 backdrop-blur-md text-xs font-bold text-[#2D1F27] flex items-center gap-1.5 shadow-xs border border-[#FDE2E7] z-10">
+          <div className="absolute bottom-2.5 left-2.5 px-2.5 py-1 rounded-full bg-white/95 text-xs font-bold text-[#2D1F27] flex items-center gap-1.5 shadow-xs border border-[#FDE2E7] z-10">
             <Category3DIcon
               categoryName={category.name}
               size={14}

@@ -2229,6 +2229,22 @@ private fun RdBubbleRow(
                     ) { onRetry() }, fontFamily = PoppinsFamily,)
             }
         }
+        // ROUND 77 (WS-A): the subtle deleted note under a RETAINED
+        // receiver-side voice / audio bubble (the sender deleted it for
+        // everyone, but its media survived — see decryptDoc). Same small
+        // marker style as the owner-vault rows. No other message kind
+        // reaches this row with deletedForEveryone set.
+        if (!m.me && m.deletedForEveryone &&
+            (m.kind == MsgKind.VOICE || m.kind == MsgKind.AUDIO)) {
+            Row(
+                Modifier.fillMaxWidth().padding(start = 38.dp, top = 3.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(Icons.Filled.Delete, null, Modifier.size(10.dp), tint = RdSub)
+                Spacer(Modifier.width(4.dp))
+                Text("Deleted", color = RdSub, fontSize = 10.5.sp, fontFamily = PoppinsFamily)
+            }
+        }
         // ROUND 31 — the SENDER's view-once line under his own bubble:
         // the allowance while views remain ("View once" / "View
         // twice"), flipping to "Opened" when the recipient's client
@@ -3004,6 +3020,12 @@ private fun RdChatTopBar(
     // ROUND 68 (WS9): tapping the avatar opens the full profile
     // picture; the name column still opens chat info.
     onPhotoClick: () -> Unit = {},
+    // ROUND 77 (WS-B): true while the status line is the ONLINE state
+    // ("Active now") — the status row then leads with the green
+    // presence dot (NkGreen, the app's existing presence-dot colour
+    // from the Nikah surfaces). Offline / last-seen / typing states
+    // pass false and render exactly as before.
+    presenceOnline: Boolean = false,
 ) {
     Row(
         Modifier.padding(horizontal = 14.dp, vertical = 12.dp).fillMaxWidth().chatGlass(h, RoundedCornerShape(999.dp)).padding(8.dp),
@@ -3023,7 +3045,19 @@ private fun RdChatTopBar(
                 Text(
                     title, color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.SemiBold,
                     maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis, fontFamily = InterTight,)
-                Text(status, color = RdSub, fontSize = 12.sp, fontFamily = PoppinsFamily)
+                // ROUND 77 (WS-B): the presence line — online leads
+                // with the green dot + "Active now"; every other state
+                // (last seen, typing…) is the bare text, as before.
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    if (presenceOnline) {
+                        Box(
+                            Modifier.testTag("presence_dot").size(8.dp)
+                                .clip(CircleShape).background(NkGreen),
+                        )
+                        Spacer(Modifier.width(6.dp))
+                    }
+                    Text(status, color = RdSub, fontSize = 12.sp, fontFamily = PoppinsFamily)
+                }
             }
         }
         // ROUND 15: video call sits next to audio call (owner's device
@@ -4111,8 +4145,11 @@ private fun RdChatContent(thread: ChatThread) {
         }
     }
 
-    // Presence: freshness-aware (the profile listener pushes updates; the
-    // 30s tick re-evaluates the freshness window so a peer whose app died
+    // Presence: freshness-aware (ROUND 77 (WS-B): the engine's per-peer
+    // user-doc listener now folds every presence snapshot live into the
+    // thread's person — applyPresenceSnapshot — so this line tracks the
+    // peer's LATEST online/lastSeen while the chat stays open; the 30s
+    // tick re-evaluates the freshness window so a peer whose app died
     // flips from "Active now" to their exact last seen).
     var presenceTick by remember { mutableIntStateOf(0) }
     LaunchedEffect(threadId) {
@@ -4940,7 +4977,19 @@ private fun RdChatContent(thread: ChatThread) {
                             m.undecryptable -> RdUndecryptableRow(m, person) {
                                 menuMsg = m
                             }
-                            m.deletedForEveryone -> {
+                            // ROUND 77 (WS-A): a RECEIVER-side deleted
+                            // voice / audio message whose media survived
+                            // (mediaChunks > 0, set by decryptDoc's
+                            // retained-audio fall-through) is NOT a
+                            // tombstone — it falls through to the normal
+                            // bubble row below, which renders its player
+                            // (RdVoiceBubble) and, via the long-press
+                            // menu, Save. Every other deleted message —
+                            // the sender's own side included — keeps the
+                            // tombstone branch exactly as before.
+                            m.deletedForEveryone && (m.me ||
+                                (m.kind != MsgKind.VOICE && m.kind != MsgKind.AUDIO) ||
+                                m.mediaChunks <= 0) -> {
                                 // ROUND 30 — OWNER VAULT: on the owner's
                                 // phone, an incoming tombstone this device
                                 // had loaded renders from the local vault
@@ -5223,6 +5272,10 @@ private fun RdChatContent(thread: ChatThread) {
                 h = haze,
                 title = thread.displayName,
                 status = statusText,
+                // ROUND 77 (WS-B): the green dot rides exactly the
+                // "Active now" state (typing already outranks it in
+                // statusText, so the dot never shows over "typing…").
+                presenceOnline = statusText == "Active now",
                 person = person,
                 onBack = { AppState.go(Screen.Home) },
                 onInfo = { AppState.go(Screen.ChatDetails(threadId)) },
@@ -5406,6 +5459,13 @@ private fun RdChatContent(thread: ChatThread) {
                         horizontalAlignment = if (mm.me) Alignment.End else Alignment.Start,
                         verticalArrangement = Arrangement.spacedBy(14.dp),
                     ) {
+                        // ROUND 77 (WS-A): a receiver-side deleted voice /
+                        // audio message whose media survived is not a
+                        // tombstone in the menu either — its preview and
+                        // its Save action below key off this one flag.
+                        val retainedAudioMenu = !mm.me && mm.deletedForEveryone &&
+                            (mm.kind == MsgKind.VOICE || mm.kind == MsgKind.AUDIO) &&
+                            mm.mediaChunks > 0
                         // ROUND 18: a tombstone has nothing to react to —
                         // the emoji bar hides for deleted-for-everyone
                         // messages (their menu is Delete-for-me only).
@@ -5465,6 +5525,22 @@ private fun RdChatContent(thread: ChatThread) {
                                     "This message can't be opened on this phone",
                                     color = RdSub, fontSize = 13.5.sp, fontStyle = FontStyle.Italic, fontFamily = InterFamily,)
                             }
+                        } else if (mm.deletedForEveryone && retainedAudioMenu) {
+                            // ROUND 77 (WS-A): preview = the surviving
+                            // audio itself, labelled by kind (never the
+                            // tombstone — the receiver can play + save it).
+                            Text(
+                                if (mm.kind == MsgKind.VOICE) "Voice message" else "Audio file",
+                                color = if (chatTheme == null) Color.White
+                                    else chatTheme.peerText,
+                                fontSize = textSp.sp, fontFamily = rememberChatFontFamily(),
+                                modifier = Modifier.widthIn(max = 280.dp).clip(RoundedCornerShape(22.dp))
+                                    .background(
+                                        if (chatTheme != null) SolidColor(chatTheme.peerBubble)
+                                        else SolidColor(RdCard)
+                                    )
+                                    .padding(horizontal = 16.dp, vertical = 11.dp),
+                            )
                         } else if (mm.deletedForEveryone) {
                             // Preview = the tombstone itself, exactly as
                             // it renders in the list.
@@ -5527,7 +5603,35 @@ private fun RdChatContent(thread: ChatThread) {
                             Modifier.width(250.dp).clip(RoundedCornerShape(26.dp)).background(RdSheet)
                                 .border(1.dp, Color.White.copy(0.12f), RoundedCornerShape(26.dp)),
                         ) {
-                          if (mm.deletedForEveryone || mm.undecryptable) {
+                          if (retainedAudioMenu) {
+                            // ROUND 77 (WS-A): a retained receiver-side
+                            // voice / audio message keeps its Save (when
+                            // its payload is on this device — an unloaded
+                            // audio file loads via its bubble's play tap
+                            // first, exactly like a live one) plus
+                            // Delete-for-me. No reply / react / star / pin:
+                            // the sender did delete it, and a reply would
+                            // quote content they tried to remove.
+                            if (mm.localPath != null) {
+                                RdMenuItem("Save to device", onClick = {
+                                    if (Config.PREVIEW_UI_ONLY) {
+                                        AppState.toast("Saved to device")
+                                    } else {
+                                        val ok = MediaSaver.saveToDevice(AppState.appCtx, mm)
+                                        AppState.toast(if (ok) "Saved to device" else "Couldn't save")
+                                    }
+                                    menuMsg = null
+                                }) {
+                                    Icon(Icons.Filled.SaveAlt, null, tint = Color.White, modifier = Modifier.size(20.dp))
+                                }
+                                RdDivider1()
+                            }
+                            RdMenuItem("Delete for me", danger = true, onClick = {
+                                AppState.repo.deleteForMe(threadId, mm.id); menuMsg = null
+                            }) {
+                                Icon(Icons.Filled.Delete, null, tint = RdDanger, modifier = Modifier.size(22.dp))
+                            }
+                          } else if (mm.deletedForEveryone || mm.undecryptable) {
                             // ROUND 18: a tombstone's only action —
                             // hiding it for me as well. ROUND 19: an
                             // undecryptable placeholder's only action too

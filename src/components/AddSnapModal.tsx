@@ -249,7 +249,7 @@ export const AddSnapModal: React.FC<AddSnapModalProps> = ({
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             onClick={handleModalClose}
-            className="fixed inset-0 bg-black/40 backdrop-blur-md cursor-pointer"
+            className="fixed inset-0 bg-black/50 cursor-pointer"
           />
 
           {/* Modal Container */}
@@ -411,7 +411,7 @@ export const AddSnapModal: React.FC<AddSnapModalProps> = ({
                         alt="Featured Memory"
                         className="w-full h-full object-cover"
                       />
-                      <div className="absolute top-3 left-3 px-3 py-1 rounded-full bg-white/95 backdrop-blur-md border border-[#FDE2E7] text-[11px] font-bold text-[#F47D90] flex items-center gap-1.5 shadow-xs">
+                      <div className="absolute top-3 left-3 px-3 py-1 rounded-full bg-white/95 border border-[#FDE2E7] text-[11px] font-bold text-[#F47D90] flex items-center gap-1.5 shadow-xs">
                         <Sparkles3D size={14} />
                         <span>Cover Photo ({activeCoverIndex + 1} of {imageUrls.length})</span>
                       </div>
@@ -419,7 +419,7 @@ export const AddSnapModal: React.FC<AddSnapModalProps> = ({
                       <button
                         type="button"
                         onClick={() => handleRemoveImage(activeCoverIndex)}
-                        className="absolute top-3 right-3 w-8 h-8 rounded-full bg-white/95 backdrop-blur-md border border-red-200 text-red-500 hover:bg-red-50 flex items-center justify-center transition-all cursor-pointer shadow-xs"
+                        className="absolute top-3 right-3 w-8 h-8 rounded-full bg-white/95 border border-red-200 text-red-500 hover:bg-red-50 flex items-center justify-center transition-all cursor-pointer shadow-xs"
                         title="Remove photo"
                       >
                         <Trash2 className="w-3.5 h-3.5" />
