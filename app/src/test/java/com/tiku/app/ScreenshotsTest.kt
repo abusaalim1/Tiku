@@ -3577,7 +3577,7 @@ class ScreenshotsTest {
         // EXISTENCE instead; the shot's PNG remains the visual proof.
         org.junit.Assert.assertTrue(
             "online header must carry the presence dot",
-            composeRule.onAllNodesWithTag("presence_dot").fetchSemanticsNodes().isNotEmpty(),
+            composeRule.onAllNodesWithTag("presence_dot", useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty(),
         )
         shot("92-chat-presence-online.png")
     }
@@ -3610,7 +3610,7 @@ class ScreenshotsTest {
         )
         org.junit.Assert.assertTrue(
             "offline header must not carry the presence dot",
-            composeRule.onAllNodesWithTag("presence_dot").fetchSemanticsNodes().isEmpty(),
+            composeRule.onAllNodesWithTag("presence_dot", useUnmergedTree = true).fetchSemanticsNodes().isEmpty(),
         )
         shot("93-chat-presence-last-seen.png")
     }

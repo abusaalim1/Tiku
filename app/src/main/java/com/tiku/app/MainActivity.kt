@@ -169,6 +169,22 @@ class MainActivity : ComponentActivity() {
         // alert and it hasn't been asked yet.
         PushAlerts.clearStanding(this)
         PushAlerts.maybeRequestPermission(this)
+        // ROUND 77 (WS-N): token (re)registration on EVERY foreground,
+        // not only at unlock. Before this round register() ran solely
+        // from the two unlock paths (+ Settings toggle / onNewToken):
+        // a session that never re-unlocks — above all the owner's
+        // App-lock-OFF session, which survives backgrounding by design
+        // and, in a long-lived process, may go days without an unlock
+        // event — never re-stored a rotated/invalidated FCM token, and
+        // a register whose write failed offline was retried only at
+        // that same missing unlock. register() is idempotent
+        // (fetch current token → merge-write → verify read-back) and
+        // fire-and-forget, so running it on every resume is safe; the
+        // signed-in gate keeps a signed-out resume from fetching a
+        // token nobody could store.
+        if (!Config.PREVIEW_UI_ONLY && FirebaseEngine.signedIn) {
+            FcmTokenSync.register(this)
+        }
         // presence reflects being INSIDE ChatRoot only — never the facade
         if (!Config.PREVIEW_UI_ONLY && ChatSession.unlocked && FirebaseEngine.signedIn && isOnboarded()) {
             FirebaseEngine.setPresence(true)

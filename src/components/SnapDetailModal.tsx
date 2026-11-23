@@ -38,10 +38,13 @@ export const SnapDetailModal: React.FC<SnapDetailModalProps> = ({
     <AnimatePresence>
       {/* ROUND 68 (WS13): the wrapper must be a motion element or
         AnimatePresence exit animations never run; the backdrop must
-        NOT use backdrop-blur (a full-page backdrop-filter + a
-        spring-transformed sibling is the classic Android-WebView
-        compositing failure — the modal stuck blurred with the white
-        card peeking at the bottom, exactly the owner's screenshot).
+        NOT use a backdrop blur effect (a full-page backdrop filter
+        plus a spring-transformed sibling is the classic
+        Android-WebView compositing failure — the modal stuck blurred
+        with the white card peeking at the bottom, exactly the
+        owner's screenshot). ROUND 77: the literal class names are
+        kept out of this comment on purpose — Tailwind scans comments
+        too and would mint the dead utilities into the CSS.
         Plain translucent backdrop + a short tween entrance instead. */}
       <motion.div
         className="fixed inset-0 z-50 flex items-center justify-center p-4 overflow-y-auto"
