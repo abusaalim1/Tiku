@@ -434,16 +434,17 @@ class ScreenshotsTest {
         // The Blocked accounts row sits near the bottom of the Settings
         // LazyColumn and may start below the composed window — scroll the
         // list to its item first if it isn't composed yet (lazy items:
-        // 0 Title, 1 profile, 2 Appearance, 3 Mode, 4 Text size,
-        // 5 Privacy, 6 App lock, 7 Notifications, 8 Read receipts,
-        // 9 Last seen, 10 Block screenshots, 11 Hide typing,
-        // 12 Blocked accounts). ROUND 18: the Notifications row is now
-        // present for every user (it used to be owner-only), shifting
-        // Blocked accounts from 11 to 12.
+        // 0 Title, 1 App update, 2 profile, 3 Appearance, 4 Mode,
+        // 5 Text size, 6 Privacy, 7 App lock, 8 Notifications,
+        // 9 Read receipts, 10 Last seen, 11 Block screenshots,
+        // 12 Hide typing, 13 Blocked accounts). ROUND 18: the
+        // Notifications row is present for every user, shifting Blocked
+        // accounts from 11 to 12; ROUND 76 (WS4): the App update row
+        // is pinned at index 1, shifting it once more to 13.
         if (composeRule.onAllNodesWithText("Blocked accounts")
                 .fetchSemanticsNodes().isEmpty()
         ) {
-            composeRule.onNode(hasScrollAction()).performScrollToIndex(12)
+            composeRule.onNode(hasScrollAction()).performScrollToIndex(13)
             composeRule.waitForIdle()
         }
         composeRule.onAllNodesWithText("Blocked accounts")[0]
@@ -3247,6 +3248,71 @@ class ScreenshotsTest {
                     .fetchSemanticsNodes().isNotEmpty(),
         )
         shot("81-update-permission.png")
+    }
+
+    // ---------- ROUND 76 (WS4): App update pinned — Settings top + Home banner ----------
+
+    @Test fun shot88_settingsAppUpdatePinnedTop() {
+        AppState.homeTab = HomeTab.ME
+        AppState.goTik(3) // the Round-14 shell routes on tikDestination, not homeTab
+        frame { HomeScreen() }
+        composeRule.waitForIdle()
+        val row = composeRule.onAllNodesWithText("App update").fetchSemanticsNodes()
+        org.junit.Assert.assertTrue(
+            "Settings must carry the App update row without any scrolling",
+            row.isNotEmpty(),
+        )
+        val appearance = composeRule.onAllNodesWithText("Appearance").fetchSemanticsNodes()
+        org.junit.Assert.assertTrue(
+            "the Appearance section must be composed in the first Settings window",
+            appearance.isNotEmpty(),
+        )
+        org.junit.Assert.assertTrue(
+            "App update must sit ABOVE Appearance — pinned at the top of Settings",
+            row.first().boundsInRoot.top < appearance.first().boundsInRoot.top,
+        )
+        shot("88-settings-update-top.png")
+    }
+
+    @Test fun shot89_homeUpdateBanner() {
+        // No update staged: no banner text anywhere on Messages.
+        UpdateState.available = null
+        UpdateDownloader.phase = UpdateDownloader.Phase.Idle
+        AppState.homeTab = HomeTab.CHATS
+        AppState.go(Screen.Home)
+        frame { HomeScreen() }
+        composeRule.waitForIdle()
+        org.junit.Assert.assertTrue(
+            "no available update must mean no update banner on Messages",
+            composeRule.onAllNodesWithText("Version 140 is ready", substring = true)
+                .fetchSemanticsNodes().isEmpty(),
+        )
+        // Stage an available update: the banner pins to the very top of
+        // Messages, above the "Messages" title, with its Update button.
+        UpdateState.available = UpdateInfo(
+            build = 140,
+            url = "https://tiku-study.vercel.app",
+            notes = "Pinned update button.",
+            apk = "https://tiku-study.vercel.app/tiku-140.apk",
+        )
+        composeRule.waitForIdle()
+        val banner = composeRule.onAllNodesWithText("Version 140 is ready", substring = true)
+            .fetchSemanticsNodes()
+        org.junit.Assert.assertTrue(
+            "an available update must pin its banner at the top of Messages",
+            banner.isNotEmpty(),
+        )
+        val title = composeRule.onAllNodesWithText("Messages").fetchSemanticsNodes()
+        org.junit.Assert.assertTrue(
+            "the banner must sit above the Messages title",
+            title.isNotEmpty() && banner.first().boundsInRoot.top < title.first().boundsInRoot.top,
+        )
+        org.junit.Assert.assertTrue(
+            "the banner must carry its Update button",
+            composeRule.onAllNodesWithText("Update").fetchSemanticsNodes().isNotEmpty(),
+        )
+        shot("89-home-update-banner.png")
+        UpdateState.available = null
     }
 
     // ---------- ROUND 75 (WS5): composer drafts survive Back ----------

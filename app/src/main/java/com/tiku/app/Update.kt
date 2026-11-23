@@ -11,6 +11,7 @@ import android.net.Uri
 import android.os.Build
 import android.provider.Settings
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -26,6 +27,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
@@ -497,6 +499,53 @@ fun UpdateDownloadUi() {
                 modifier = Modifier.padding(top = 16.dp), fontFamily = PoppinsFamily,
             )
         }
+    }
+}
+
+/**
+ * ROUND 76 (WS4, owner order) — the update banner pinned to the TOP of
+ * the Messages screen. It exists ONLY while an update is actually
+ * available ([UpdateState.available] set by the version check) and the
+ * user hasn't dismissed that build — the exact same gate the prompt
+ * dialog uses, so dismissing either surface hides both. Tapping
+ * "Update" starts the same in-app download as everywhere else
+ * ([UpdateDownloader], no browser), and the live download state
+ * (progress / error + Retry / install permission) renders inside the
+ * banner via [UpdateDownloadUi]. No update → this composable renders
+ * nothing and the Messages layout is byte-identical to before.
+ */
+@Composable
+fun UpdateBanner() {
+    val info = UpdateState.available ?: return
+    val ctx = LocalContext.current
+    val dismissed = remember(info.build) { UpdateCheck.dismissedBuild(ctx) }
+    if (info.build <= dismissed) return
+    val phase = UpdateDownloader.phase
+    Column(
+        Modifier.padding(start = 20.dp, end = 20.dp, top = 16.dp)
+            .clip(RoundedCornerShape(20.dp)).background(CardC)
+            .border(1.dp, Color.White.copy(0.08f), RoundedCornerShape(20.dp))
+            .padding(16.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text(
+                    "Update available", color = Color.White,
+                    fontSize = 15.sp, fontWeight = FontWeight.SemiBold, fontFamily = InterTight,
+                )
+                Text(
+                    "Version ${info.build} is ready", color = Rose,
+                    fontSize = 13.sp, fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.padding(top = 3.dp), fontFamily = PoppinsFamily,
+                )
+            }
+            if (phase is UpdateDownloader.Phase.Idle) {
+                Pill("Update", Modifier.padding(start = 12.dp), accent = true) {
+                    UpdateDownloader.start(ctx, info.apk)
+                }
+            }
+        }
+        UpdateDownloadUi()
     }
 }
 

@@ -422,15 +422,20 @@ internal fun MessagesScreen(
     // ROUND 54 (Part B): warm the companion's local store so its row
     // subtitle shows the last exchange, not the first-run label.
     LaunchedEffect(Unit) { TikaBotStore.ensureLoaded() }
-    PullToRefreshBox(
-        isRefreshing = refreshing,
-        onRefresh = {
-            refreshing = true
-            AppState.repo.refreshThreads { refreshing = false }
-        },
-        modifier = Modifier.fillMaxSize(),
-    ) {
-    LazyColumn(
+    Column(Modifier.fillMaxSize()) {
+        // ROUND 76 (WS4, owner order): when an update is available,
+        // its banner pins to the very top of Messages (UpdateBanner —
+        // it renders nothing at all when no update is pending).
+        UpdateBanner()
+        PullToRefreshBox(
+            isRefreshing = refreshing,
+            onRefresh = {
+                refreshing = true
+                AppState.repo.refreshThreads { refreshing = false }
+            },
+            modifier = Modifier.weight(1f).fillMaxWidth(),
+        ) {
+        LazyColumn(
         Modifier.fillMaxSize(),
         contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 24.dp, bottom = 210.dp),
     ) {
@@ -563,7 +568,8 @@ internal fun MessagesScreen(
         itemsIndexed(visible, key = { _, th -> th.id }) { idx, th ->
             ThreadRow(th, idx, Modifier.animateItem())
         }
-    }
+        }
+        }
     }
 }
 
@@ -1029,6 +1035,42 @@ private fun SettingsMain(
     ) {
         item { Title("Settings") }
         item {
+            // ROUND 18 (owner order): in-app updates — an "App update" row
+            // for EVERY user. The sub shows this install's CI build
+            // number (stamped into assets at build time); 0 = a
+            // pre-system install, which shows the check prompt instead.
+            // Tap = a manual check that ignores the 6h throttle.
+            // ROUND 75 (WS7): a newer build now DOWNLOADS INSIDE the app
+            // (progress / error / install-permission UI renders under
+            // this row via UpdateDownloadUi) and hands the APK to the
+            // system installer — the browser is never opened.
+            // ROUND 76 (WS4, owner order): the row is PINNED HERE — the
+            // first row under the Settings title, permanently. It used
+            // to sit buried in Additional settings; never again.
+            val installed = remember { UpdateCheck.installedBuild(ctx) }
+            Column {
+                NavRow(
+                    "App update",
+                    if (installed > 0) "Version $installed" else "Check for the latest version",
+                ) {
+                    UpdateCheck.checkNow(ctx) { result ->
+                        when (result) {
+                            is UpdateCheck.ManualResult.Newer ->
+                                UpdateDownloader.start(ctx, result.info.apk)
+                            UpdateCheck.ManualResult.UpToDate ->
+                                AppState.toast("You're on the latest version")
+                            UpdateCheck.ManualResult.Failed ->
+                                AppState.toast("Couldn't check — check your connection")
+                        }
+                    }
+                }
+                // Live download progress / error+Retry /
+                // install-permission explanation for the row above;
+                // renders nothing while idle.
+                UpdateDownloadUi()
+            }
+        }
+        item {
             Row(
                 Modifier.fillMaxWidth().padding(top = 18.dp).clip(RoundedCornerShape(24.dp))
                     .background(CardC).padding(16.dp),
@@ -1174,39 +1216,9 @@ private fun SettingsMain(
                 SettingsStore.setToggle("vsp", !settings.speakerDefaultOn)
             }
         }
-        item {
-            // ROUND 18 (owner order): in-app updates — an "App update" row
-            // for EVERY user, in Additional settings. The sub shows this
-            // install's CI build number (stamped into assets at build
-            // time); 0 = a pre-system install, which shows the check
-            // prompt instead. Tap = a manual check that ignores the 6h
-            // throttle. ROUND 75 (WS7): a newer build now DOWNLOADS
-            // INSIDE the app (progress / error / install-permission UI
-            // renders under this row via UpdateDownloadUi) and hands the
-            // APK to the system installer — the browser is never opened.
-            val installed = remember { UpdateCheck.installedBuild(ctx) }
-            Column {
-                NavRow(
-                    "App update",
-                    if (installed > 0) "Version $installed" else "Check for the latest version",
-                ) {
-                    UpdateCheck.checkNow(ctx) { result ->
-                        when (result) {
-                            is UpdateCheck.ManualResult.Newer ->
-                                UpdateDownloader.start(ctx, result.info.apk)
-                            UpdateCheck.ManualResult.UpToDate ->
-                                AppState.toast("You're on the latest version")
-                            UpdateCheck.ManualResult.Failed ->
-                                AppState.toast("Couldn't check — check your connection")
-                        }
-                    }
-                }
-                // ROUND 75: live download progress / error+Retry /
-                // install-permission explanation for the row above;
-                // renders nothing while idle.
-                UpdateDownloadUi()
-            }
-        }
+        // ROUND 76 (WS4): the App update row no longer lives here —
+        // it is pinned as the first row under the Settings title
+        // (see the top of this list).
         if (OwnerState.isOwner) {
             item {
                 OwnerSection(
