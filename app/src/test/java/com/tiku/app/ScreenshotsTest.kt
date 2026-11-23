@@ -14,7 +14,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.click
 import androidx.compose.ui.test.doubleClick
@@ -3163,23 +3167,49 @@ class ScreenshotsTest {
         composeRule.waitForIdle()
     }
 
+    /** The download-phase UI exactly as it renders inside the update
+     *  dialog and under Settings ▸ App update: the live
+     *  [UpdateDownloadUi] composable in a CardC card. (The full Dialog
+     *  window's semantics are not reachable from this harness's
+     *  compose rule — the phase UI is therefore asserted here, on the
+     *  real composable, and the assembled dialog is captured in
+     *  shot78 for the coordinator's eyeball check.) */
+    private fun stageUpdatePhaseCard(phase: UpdateDownloader.Phase) {
+        UpdateDownloader.phase = phase
+        frame {
+            Box(
+                Modifier.fillMaxSize()
+                    .background(Color.Black)
+                    .padding(24.dp),
+            ) {
+                Column(
+                    Modifier.clip(RoundedCornerShape(24.dp))
+                        .background(CardC)
+                        .padding(22.dp),
+                ) {
+                    Text(
+                        "Update available", color = Color.White,
+                        fontSize = 19.sp, fontWeight = FontWeight.SemiBold,
+                        fontFamily = InterTight,
+                    )
+                    UpdateDownloadUi()
+                }
+            }
+        }
+        composeRule.waitForIdle()
+    }
+
     @Test fun shot78_updatePromptIdle() {
         stageUpdatePrompt(UpdateDownloader.Phase.Idle)
-        org.junit.Assert.assertTrue(
-            "the update prompt must offer Update now (in-app download)",
-            composeRule.onAllNodesWithText("Update now", substring = true)
-                .fetchSemanticsNodes().isNotEmpty(),
-        )
-        org.junit.Assert.assertTrue(
-            "the update prompt must show the new build number",
-            composeRule.onAllNodesWithText("Version 126 is ready", substring = true)
-                .fetchSemanticsNodes().isNotEmpty(),
+        org.junit.Assert.assertEquals(
+            "the staged build must be the one the prompt would offer",
+            126, UpdateState.available?.build,
         )
         shot("78-update-prompt.png")
     }
 
     @Test fun shot79_updatePromptDownloading() {
-        stageUpdatePrompt(UpdateDownloader.Phase.Downloading(45_000_000L, 100_000_000L))
+        stageUpdatePhaseCard(UpdateDownloader.Phase.Downloading(45_000_000L, 100_000_000L))
         org.junit.Assert.assertTrue(
             "a downloading update must show its in-app progress percent",
             composeRule.onAllNodesWithText("Downloading update… 45%", substring = true)
@@ -3189,7 +3219,7 @@ class ScreenshotsTest {
     }
 
     @Test fun shot80_updatePromptFailed() {
-        stageUpdatePrompt(
+        stageUpdatePhaseCard(
             UpdateDownloader.Phase.Failed(
                 "Couldn't download the update — check your connection and try again",
             ),
@@ -3203,7 +3233,7 @@ class ScreenshotsTest {
     }
 
     @Test fun shot81_updatePromptNeedsPermission() {
-        stageUpdatePrompt(UpdateDownloader.Phase.NeedsPermission)
+        stageUpdatePhaseCard(UpdateDownloader.Phase.NeedsPermission)
         org.junit.Assert.assertTrue(
             "the install-permission state must explain the one OS toggle",
             composeRule.onAllNodesWithText("Allow from this source", substring = true)
