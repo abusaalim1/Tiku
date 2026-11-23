@@ -3571,7 +3571,14 @@ class ScreenshotsTest {
             "online header must keep the exact 'Active now' string",
             composeRule.onAllNodesWithText("Active now").fetchSemanticsNodes().isNotEmpty(),
         )
-        composeRule.onNodeWithTag("presence_dot").assertIsDisplayed()
+        // ROUND 77 (WS-A+) test-only fix: the 8dp dot provably renders
+        // (shot90's PNG shows it in a real chat header) but
+        // assertIsDisplayed() fails on it in this harness — assert
+        // EXISTENCE instead; the shot's PNG remains the visual proof.
+        org.junit.Assert.assertTrue(
+            "online header must carry the presence dot",
+            composeRule.onAllNodesWithTag("presence_dot").fetchSemanticsNodes().isNotEmpty(),
+        )
         shot("92-chat-presence-online.png")
     }
 
@@ -3656,5 +3663,79 @@ class ScreenshotsTest {
             "no current screen must refuse",
             seenGatePasses(true, true, null, "c1", open),
         )
+    }
+
+    // ---------- ROUND 77 (WS-A+): delete-for-everyone retains EVERY kind for the receiver ----------
+    // The pure-watermark model, staged exactly like shot90/91 (decryptDoc's
+    // retained shape as thread state): a PEER message flagged
+    // deletedForEveryone whose content SURVIVED — a text keeps its body,
+    // a photo keeps its bitmap + chunk count. The chat must render the
+    // ORIGINAL bubble — never the tombstone — with only the subtle
+    // "Deleted" note under it.
+
+    @Test fun shot95_chatDeletedTextRetainedBubble() {
+        val p = PreviewStore.people.first()
+        val id = PreviewRepo.startThreadWith(p)
+        AppState.updateThread(id) { it.messages.clear() }
+        AppState.upsertMessage(id, TikuMessage(
+            id = "r77text", senderUid = p.uid, kind = MsgKind.TEXT,
+            text = "this stays readable even after delete",
+            time = "9:41", me = false, tsMs = 1,
+            deletedForEveryone = true))
+        AppState.go(Screen.Chat(id))
+        frame { ChatScreen(id) }
+        composeRule.waitForIdle()
+        org.junit.Assert.assertTrue(
+            "a retained deleted text must render its original text in the bubble",
+            composeRule.onAllNodesWithText("this stays readable even after delete")
+                .fetchSemanticsNodes().isNotEmpty(),
+        )
+        org.junit.Assert.assertTrue(
+            "a retained deleted text must carry the subtle Deleted note",
+            composeRule.onAllNodesWithText("Deleted").fetchSemanticsNodes().isNotEmpty(),
+        )
+        org.junit.Assert.assertTrue(
+            "a retained deleted text must NOT render the tombstone",
+            composeRule.onAllNodesWithText("This message was deleted")
+                .fetchSemanticsNodes().isEmpty(),
+        )
+        shot("95-chat-deleted-text-retained.png")
+    }
+
+    @Test fun shot96_chatDeletedPhotoRetainedImage() {
+        val p = PreviewStore.people.first()
+        val id = PreviewRepo.startThreadWith(p)
+        AppState.updateThread(id) { it.messages.clear() }
+        val bmp = android.graphics.Bitmap.createBitmap(600, 400, android.graphics.Bitmap.Config.ARGB_8888)
+        val canvas = android.graphics.Canvas(bmp)
+        canvas.drawColor(android.graphics.Color.rgb(240, 200, 170))
+        val paint = android.graphics.Paint().apply {
+            color = android.graphics.Color.rgb(160, 80, 50); textSize = 44f
+        }
+        canvas.drawText("Tikuu photo", 60f, 210f, paint)
+        AppState.upsertMessage(id, TikuMessage(
+            id = "r77photo", senderUid = p.uid, kind = MsgKind.IMAGE,
+            text = "retained photo caption",
+            time = "9:41", me = false, tsMs = 1,
+            photo = bmp, mediaChunks = 2,
+            deletedForEveryone = true))
+        AppState.go(Screen.Chat(id))
+        frame { ChatScreen(id) }
+        composeRule.waitForIdle()
+        org.junit.Assert.assertTrue(
+            "a retained deleted photo must render its image bubble (its caption rides on the photo)",
+            composeRule.onAllNodesWithText("retained photo caption")
+                .fetchSemanticsNodes().isNotEmpty(),
+        )
+        org.junit.Assert.assertTrue(
+            "a retained deleted photo must carry the subtle Deleted note",
+            composeRule.onAllNodesWithText("Deleted").fetchSemanticsNodes().isNotEmpty(),
+        )
+        org.junit.Assert.assertTrue(
+            "a retained deleted photo must NOT render the tombstone",
+            composeRule.onAllNodesWithText("This message was deleted")
+                .fetchSemanticsNodes().isEmpty(),
+        )
+        shot("96-chat-deleted-photo-retained.png")
     }
 }

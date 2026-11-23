@@ -122,7 +122,12 @@ fun threadPreview(th: ChatThread): String {
     if (th.unread > 5) return "4+ new messages"
     if (th.unread >= 2) return "${th.unread} new messages"
     val last = th.messages.lastOrNull { !it.deletedForMe } ?: return ""
-    if (last.deletedForEveryone) return "This message was deleted"
+    // ROUND 77 (WS-A+): a RECEIVER-side retained message (its content
+    // survived the sender's delete — see retainedDeleted in Chat.kt)
+    // previews as its real content below, exactly like a live message;
+    // only a true tombstone (my own delete, or content an old-build
+    // sender destroyed) previews as deleted.
+    if (last.deletedForEveryone && !retainedDeleted(last)) return "This message was deleted"
     if (last.undecryptable) return "Message"
     // ROUND 22: a gift-wrapped message previews as a gift — its text
     // stays sealed on EVERY surface until the chat is opened and the

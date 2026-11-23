@@ -93,11 +93,17 @@ data class TikuMessage(
      *  Firestore field `mediaBytes`. */
     val mediaBytes: Long = 0L,
     // ---- round 18 (appended last, same discipline as round 15) ----
-    /** Tombstone: the SENDER deleted this message for everyone (Firestore
-     *  `delAll=true`). The doc stays — chats never disappear — but its
-     *  ciphertext was wiped by the delete, and every surface renders the
-     *  "This message was deleted" tombstone instead of any content.
-     *  Distinct from [deletedForMe] (a local hide that only affects me). */
+    /** The SENDER deleted this message for everyone (Firestore
+     *  `delAll=true`). The doc stays — chats never disappear. ROUND 77
+     *  (WS-A+): the delete is a pure watermark — the ciphertext/media
+     *  are NOT wiped — so the SENDER's side renders the "This message
+     *  was deleted" tombstone from this flag alone, while a RECEIVER
+     *  whose copy retained its content (see decryptDoc / retainedDeleted)
+     *  renders the original message with this flag set, labelled by a
+     *  subtle "Deleted" marker. A receiver-side copy with this flag and
+     *  NO content is a true tombstone (an old-build sender destroyed
+     *  the bytes). Distinct from [deletedForMe] (a local hide that
+     *  only affects me). */
     val deletedForEveryone: Boolean = false,
     // ---- round 19 (appended last, same discipline) ----
     /** This device cannot open the message's ciphertext (e.g. history

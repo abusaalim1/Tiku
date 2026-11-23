@@ -748,6 +748,20 @@ fun replyQuoteLabel(m: TikuMessage): String = if (m.undecryptable) "This message
     else -> m.text
 }.take(60)
 
+/** ROUND 77 (WS-A+) — a RECEIVER-side delete-for-everyone whose content
+ *  SURVIVED the delete (decryptDoc's retained fall-through): the sender
+ *  deleted it, but this phone still holds the original — text readable,
+ *  photo viewable, media playable / savable — flagged only by the subtle
+ *  "Deleted" marker. Sender-side copies (me), call/game kinds, and
+ *  content-less tombstones (an old-build sender destroyed the bytes)
+ *  are NOT retained and keep the plain tombstone on every surface. */
+fun retainedDeleted(m: TikuMessage): Boolean =
+    !m.me && m.deletedForEveryone && when (m.kind) {
+        MsgKind.TEXT -> m.text.isNotEmpty()
+        MsgKind.IMAGE, MsgKind.VIDEO, MsgKind.VOICE, MsgKind.AUDIO -> m.mediaChunks > 0
+        else -> false
+    }
+
 /** ROUND 57 (Fix 1) — the in-bubble clock: every message bubble shows
  *  its own time, WhatsApp-style, small at the bubble's bottom-end
  *  corner. Formatted from the message's [TikuMessage.tsMs] as
@@ -2229,13 +2243,12 @@ private fun RdBubbleRow(
                     ) { onRetry() }, fontFamily = PoppinsFamily,)
             }
         }
-        // ROUND 77 (WS-A): the subtle deleted note under a RETAINED
-        // receiver-side voice / audio bubble (the sender deleted it for
-        // everyone, but its media survived — see decryptDoc). Same small
-        // marker style as the owner-vault rows. No other message kind
-        // reaches this row with deletedForEveryone set.
-        if (!m.me && m.deletedForEveryone &&
-            (m.kind == MsgKind.VOICE || m.kind == MsgKind.AUDIO)) {
+        // ROUND 77 (WS-A+): the subtle deleted note under a RETAINED
+        // receiver-side bubble of ANY retained kind (the sender deleted
+        // it for everyone, but its content survived — see decryptDoc).
+        // Same small marker style as the owner-vault rows. No other
+        // message reaches this row with deletedForEveryone set.
+        if (retainedDeleted(m)) {
             Row(
                 Modifier.fillMaxWidth().padding(start = 38.dp, top = 3.dp),
                 verticalAlignment = Alignment.CenterVertically,
@@ -4977,19 +4990,17 @@ private fun RdChatContent(thread: ChatThread) {
                             m.undecryptable -> RdUndecryptableRow(m, person) {
                                 menuMsg = m
                             }
-                            // ROUND 77 (WS-A): a RECEIVER-side deleted
-                            // voice / audio message whose media survived
-                            // (mediaChunks > 0, set by decryptDoc's
-                            // retained-audio fall-through) is NOT a
+                            // ROUND 77 (WS-A+): a RECEIVER-side deleted
+                            // message whose content survived (decryptDoc's
+                            // retained fall-through — text / photo / video /
+                            // voice / audio, see retainedDeleted) is NOT a
                             // tombstone — it falls through to the normal
-                            // bubble row below, which renders its player
-                            // (RdVoiceBubble) and, via the long-press
+                            // bubble row below, which renders its original
+                            // bubble / player and, via the long-press
                             // menu, Save. Every other deleted message —
                             // the sender's own side included — keeps the
                             // tombstone branch exactly as before.
-                            m.deletedForEveryone && (m.me ||
-                                (m.kind != MsgKind.VOICE && m.kind != MsgKind.AUDIO) ||
-                                m.mediaChunks <= 0) -> {
+                            m.deletedForEveryone && !retainedDeleted(m) -> {
                                 // ROUND 30 — OWNER VAULT: on the owner's
                                 // phone, an incoming tombstone this device
                                 // had loaded renders from the local vault
@@ -5459,13 +5470,13 @@ private fun RdChatContent(thread: ChatThread) {
                         horizontalAlignment = if (mm.me) Alignment.End else Alignment.Start,
                         verticalArrangement = Arrangement.spacedBy(14.dp),
                     ) {
-                        // ROUND 77 (WS-A): a receiver-side deleted voice /
-                        // audio message whose media survived is not a
+                        // ROUND 77 (WS-A+): a receiver-side deleted
+                        // message whose content survived is not a
                         // tombstone in the menu either — its preview and
-                        // its Save action below key off this one flag.
-                        val retainedAudioMenu = !mm.me && mm.deletedForEveryone &&
-                            (mm.kind == MsgKind.VOICE || mm.kind == MsgKind.AUDIO) &&
-                            mm.mediaChunks > 0
+                        // its Save action below key off this one flag
+                        // (any retained kind: text / photo / video /
+                        // voice / audio — see retainedDeleted).
+                        val retainedMenu = retainedDeleted(mm)
                         // ROUND 18: a tombstone has nothing to react to —
                         // the emoji bar hides for deleted-for-everyone
                         // messages (their menu is Delete-for-me only).
@@ -5525,22 +5536,49 @@ private fun RdChatContent(thread: ChatThread) {
                                     "This message can't be opened on this phone",
                                     color = RdSub, fontSize = 13.5.sp, fontStyle = FontStyle.Italic, fontFamily = InterFamily,)
                             }
-                        } else if (mm.deletedForEveryone && retainedAudioMenu) {
-                            // ROUND 77 (WS-A): preview = the surviving
-                            // audio itself, labelled by kind (never the
-                            // tombstone — the receiver can play + save it).
-                            Text(
-                                if (mm.kind == MsgKind.VOICE) "Voice message" else "Audio file",
-                                color = if (chatTheme == null) Color.White
-                                    else chatTheme.peerText,
-                                fontSize = textSp.sp, fontFamily = rememberChatFontFamily(),
-                                modifier = Modifier.widthIn(max = 280.dp).clip(RoundedCornerShape(22.dp))
-                                    .background(
-                                        if (chatTheme != null) SolidColor(chatTheme.peerBubble)
-                                        else SolidColor(RdCard)
-                                    )
-                                    .padding(horizontal = 16.dp, vertical = 11.dp),
-                            )
+                        } else if (mm.deletedForEveryone && retainedMenu) {
+                            // ROUND 77 (WS-A+): preview = the surviving
+                            // content itself (never the tombstone — the
+                            // receiver can read / play / save it): the
+                            // photo for an image, the text for a text,
+                            // a kind label for the player kinds.
+                            when {
+                                mm.kind == MsgKind.IMAGE && mm.photo != null -> Image(
+                                    mm.photo.asImageBitmap(), null,
+                                    Modifier.width(160.dp).height(190.dp).clip(RoundedCornerShape(22.dp)),
+                                    contentScale = ContentScale.Crop,
+                                )
+                                mm.kind == MsgKind.TEXT -> Text(
+                                    mm.text,
+                                    color = if (chatTheme == null) Color.White
+                                        else chatTheme.peerText,
+                                    fontSize = textSp.sp, fontFamily = rememberChatFontFamily(),
+                                    modifier = Modifier.widthIn(max = 280.dp).heightIn(max = 160.dp).clip(RoundedCornerShape(22.dp))
+                                        .background(
+                                            if (chatTheme != null) SolidColor(chatTheme.peerBubble)
+                                            else SolidColor(RdCard)
+                                        )
+                                        .padding(horizontal = 16.dp, vertical = 11.dp)
+                                        .verticalScroll(menuPreviewScroll),
+                                )
+                                else -> Text(
+                                    when (mm.kind) {
+                                        MsgKind.VOICE -> "Voice message"
+                                        MsgKind.AUDIO -> "Audio file"
+                                        MsgKind.VIDEO -> "Video"
+                                        else -> "Photo"
+                                    },
+                                    color = if (chatTheme == null) Color.White
+                                        else chatTheme.peerText,
+                                    fontSize = textSp.sp, fontFamily = rememberChatFontFamily(),
+                                    modifier = Modifier.widthIn(max = 280.dp).clip(RoundedCornerShape(22.dp))
+                                        .background(
+                                            if (chatTheme != null) SolidColor(chatTheme.peerBubble)
+                                            else SolidColor(RdCard)
+                                        )
+                                        .padding(horizontal = 16.dp, vertical = 11.dp),
+                                )
+                            }
                         } else if (mm.deletedForEveryone) {
                             // Preview = the tombstone itself, exactly as
                             // it renders in the list.
@@ -5603,16 +5641,22 @@ private fun RdChatContent(thread: ChatThread) {
                             Modifier.width(250.dp).clip(RoundedCornerShape(26.dp)).background(RdSheet)
                                 .border(1.dp, Color.White.copy(0.12f), RoundedCornerShape(26.dp)),
                         ) {
-                          if (retainedAudioMenu) {
-                            // ROUND 77 (WS-A): a retained receiver-side
-                            // voice / audio message keeps its Save (when
-                            // its payload is on this device — an unloaded
-                            // audio file loads via its bubble's play tap
-                            // first, exactly like a live one) plus
-                            // Delete-for-me. No reply / react / star / pin:
-                            // the sender did delete it, and a reply would
-                            // quote content they tried to remove.
-                            if (mm.localPath != null) {
+                          if (retainedMenu) {
+                            // ROUND 77 (WS-A+): a retained receiver-side
+                            // message of any retained kind keeps its Save
+                            // (when its payload is on this device — an
+                            // unloaded video/audio file loads via its
+                            // bubble's tap first, exactly like a live one;
+                            // the view-once gate matches the live menu)
+                            // plus Delete-for-me. No reply / react / star
+                            // / pin: the sender did delete it, and a reply
+                            // would quote content they tried to remove.
+                            val retainedSavable = when (mm.kind) {
+                                MsgKind.IMAGE -> mm.photo != null
+                                MsgKind.VOICE, MsgKind.VIDEO, MsgKind.AUDIO -> mm.localPath != null
+                                else -> false
+                            } && (mm.me || mm.vo == null || VoStore.ownerBypass(ctx))
+                            if (retainedSavable) {
                                 RdMenuItem("Save to device", onClick = {
                                     if (Config.PREVIEW_UI_ONLY) {
                                         AppState.toast("Saved to device")

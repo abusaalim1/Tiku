@@ -1260,8 +1260,8 @@ object FirebaseEngine : ChatRepo {
      *  open chat, pagination) renders the placeholder "This message
      *  can't be opened on this phone" from it — never a blank bubble.
      *  Used by the preview path, the open-chat listener and loadOlder
-     *  alike. A delAll doc never reaches here (decryptDoc returns its
-     *  tombstone without touching ciphertext). */
+     *  alike. A tombstone-shaped delAll doc never reaches here
+     *  (decryptDoc returns it without touching ciphertext). */
     private fun undecryptableStub(doc: com.google.firebase.firestore.DocumentSnapshot): TikuMessage? {
         val sender = doc.getString("senderId") ?: return null
         val kind = when (doc.getString("kind") ?: "text") {
@@ -2481,29 +2481,34 @@ object FirebaseEngine : ChatRepo {
             else -> MsgKind.TEXT
         }
         // ROUND 18 — TOMBSTONE: the sender deleted this message for
-        // everyone (delAll). The doc stays (chats never disappear) but its
-        // ciphertext was wiped by the delete, so there is nothing TO
-        // decrypt: return the tombstone shape directly — kind + sender +
-        // timestamps only — and every surface renders "This message was
-        // deleted" from it. deletedForMe still applies on top (a
-        // tombstone I also deleted for me stays hidden for me).
-        // ROUND 77 (WS-A) — AUDIO RETENTION: a delAll doc of an AUDIO kind
-        // (voice note / audio file) whose media SURVIVED the delete
-        // (mediaChunks > 0 — a Round-77 sender no longer wipes the media
-        // fields or the chunks subcollection, and keeps the media `iv`)
-        // falls through to the normal media decryption below on the
-        // RECEIVER's side only, still flagged deletedForEveryone so the
-        // UI can label it subtly. The sender's own side keeps today's
-        // tombstone, and a delAll audio doc with mediaChunks == 0 (its
-        // bytes were destroyed by a pre-Round-77 sender) keeps today's
-        // tombstone too — that limit is honest, the bytes are gone.
+        // everyone (delAll). The doc stays (chats never disappear).
+        // ROUND 77 (WS-A+) — RETENTION, generalized from WS-A's
+        // audio-only rule to the pure-watermark model (owner's order):
+        // a Round-77+ sender's delete writes ONLY the delAll flag, so
+        // the content SURVIVES the delete. On the RECEIVER's side such
+        // a doc falls through to the normal decryption below, still
+        // flagged deletedForEveryone so the UI can label it subtly:
+        //   text        — ct (or an edit's eCt) still present;
+        //   image/video — mediaChunks > 0 (fields + chunks intact);
+        //   voice/audio — mediaChunks > 0 (WS-A's original rule).
+        // CALL and GAME kinds are NOT retained (the owner's order
+        // enumerates text / audio / photo / video only) — their
+        // receiver side keeps the tombstone. The sender's OWN side
+        // always keeps the tombstone. And a delAll doc whose content
+        // is genuinely absent (a pre-Round-77 sender wiped it before
+        // this fix) keeps the tombstone too — that limit is honest,
+        // the bytes are gone.
         val delAllDoc = doc.getBoolean("delAll") == true
-        val retainedAudio = delAllDoc && !me &&
-            (kindRaw == "voice" || kindRaw == "audio") &&
-            (doc.getLong("mediaChunks") ?: 0L) > 0L
+        val mediaSurvived = (doc.getLong("mediaChunks") ?: 0L) > 0L
+        val retained = delAllDoc && !me && when (kindRaw) {
+            "text" -> !doc.getString("ct").isNullOrEmpty() ||
+                !doc.getString("eCt").isNullOrEmpty()
+            "image", "video", "voice", "audio" -> mediaSurvived
+            else -> false
+        }
         // ROUND 30 — OWNER VAULT markDeleted hook: UNCHANGED by Round 77 —
         // it fires for every incoming delAll doc exactly as before
-        // (including a retained-audio one), before the tombstone /
+        // (including a retained one), before the tombstone /
         // fall-through split below.
         if (delAllDoc && !me) {
             OwnerVault.markDeleted(
@@ -2511,7 +2516,7 @@ object FirebaseEngine : ChatRepo {
                 doc.getTimestamp("delAt")?.toDate()?.time ?: 0L,
             )
         }
-        if (delAllDoc && !retainedAudio) {
+        if (delAllDoc && !retained) {
             val tomb = TikuMessage(
                 id = doc.id, senderUid = sender, kind = kind, text = "",
                 time = fmtTime(tsMs), me = me,
@@ -2662,10 +2667,10 @@ object FirebaseEngine : ChatRepo {
             mimeType = mimeType, mediaBytes = mediaBytes,
             fx = fx, vo = vo, voDone = voDone, ai = ai,
             game = game, gameTitle = gameTitle,
-            // ROUND 77 (WS-A): true ONLY for the retained-audio fall-through
+            // ROUND 77 (WS-A+): true ONLY for the retained fall-through
             // above (every other path here is a non-delAll doc → false,
             // exactly as before).
-            deletedForEveryone = retainedAudio,
+            deletedForEveryone = retained,
             nikah = nikah, nikahState = nikahState, nikahKeepsake = nikahKeepsake)
         // ROUND 33 — HIDE RECOVERY: mirror this copy into the hidden
         // registry (or drop its entry, when the doc no longer hides it
@@ -3483,19 +3488,21 @@ object FirebaseEngine : ChatRepo {
 
     /**
      * ROUND 18 — DELETE FOR EVERYONE (own messages only). The doc is
-     * TOMBSTONED, never removed (chats never disappear): delAll=true and
-     * the ciphertext fields are wiped in the same update, so the content
-     * is gone for both sides — including any future restore — while the
-     * message's slot, sender and timestamp remain for the tombstone
-     * bubble. Media chunks are deleted best-effort right after (the
-     * tombstone already makes them unreachable in every UI). The local
-     * list tombstones optimistically; the MODIFIED echo rebuilds the
-     * identical shape from the doc on both devices.
-     * ROUND 77 (WS-A) EXCEPTION — AUDIO kinds only (owner's order): the
-     * media fields, the media `iv` and the chunks SURVIVE (see the wipe
-     * below), so the receiver's client rebuilds a playable / savable
-     * voice message from the same echo, flagged deletedForEveryone;
-     * the sender's own side still rebuilds the tombstone above.
+     * TOMBSTONED, never removed (chats never disappear).
+     * ROUND 77 (WS-A+) — PURE WATERMARK (owner's order, generalizing
+     * WS-A's audio-only retention to EVERY kind): the update is ONLY
+     * {delAll: true, delAt: serverTimestamp} — no ciphertext wipe, no
+     * reply/reaction wipe, no media-field zeroing, no chunks deletion.
+     * The founding law is "ciphertext/media permanent; delete =
+     * watermark only": the SENDER's own client renders the tombstone
+     * from the flag alone, while the RECEIVER's client (decryptDoc)
+     * falls through and renders the original content, flagged
+     * deletedForEveryone. (Pre-Round-77 builds wiped the content
+     * fields and deleted the chunks in this same update — content
+     * destroyed by an old-build sender stays destroyed; that is the
+     * honest cross-version limit, not something this write can undo.)
+     * The local list tombstones optimistically; the MODIFIED echo
+     * rebuilds each side's shape from the doc.
      * A still-SENDING message has no stable server doc to tombstone (its
      * own set() could land after the update and resurrect it), and a
      * FAILED one never reliably landed — both are refused / local-only.
@@ -3524,51 +3531,26 @@ object FirebaseEngine : ChatRepo {
         scope.launch {
             runCatching {
                 val ref = msgRef(id, msgId)
-                val chunkCount = m.mediaChunks
-                // ROUND 77 (WS-A) — AUDIO RETENTION (owner's order): for an
-                // AUDIO kind (voice note / audio file) the media must
-                // SURVIVE a delete-for-everyone so the receiver can still
-                // play + save it: the media fields (amps / durationMs /
-                // mediaChunks / mime / mediaBytes) are NOT wiped, the
-                // media `iv` is NOT wiped (it is the chunk blob's decrypt
-                // IV — media docs carry ct="" already), and the chunks
-                // subcollection is NOT deleted below. delAll + delAt and
-                // the text/reply/reaction wipes are exactly as for every
-                // other kind. Non-audio kinds keep the pre-Round-77 wipe
-                // byte-for-byte.
-                val audioKind = m.kind == MsgKind.VOICE || m.kind == MsgKind.AUDIO
-                val wipe = mutableMapOf<String, Any>(
-                    "delAll" to true,
-                    // ROUND 30: additive deletion timestamp, written in the
-                    // SAME update (the member-update rule already covers
-                    // it; no field validation exists to trip). Only the
-                    // OWNER's client reads it — for the "Deleted messages"
-                    // log's deleted-at time. Older tombstones lack it and
-                    // their readers fall back to first-observed time.
-                    "delAt" to FieldValue.serverTimestamp(),
-                    "ct" to "",
-                    "rqCt" to "", "rqIv" to "", "replyToId" to FieldValue.delete(),
-                    "reaction" to emptyMap<String, String>(),
-                )
-                if (!audioKind) {
-                    wipe["iv"] = ""
-                    wipe["amps"] = emptyList<Int>()
-                    wipe["durationMs"] = 0
-                    wipe["mediaChunks"] = 0
-                    wipe["mime"] = ""
-                    wipe["mediaBytes"] = 0L
-                }
-                ref.update(wipe).await()
-                if (!audioKind && chunkCount > 0) {
-                    val chunks = ref.collection("chunks").get().await()
-                    var batch = db.batch()
-                    var n = 0
-                    for (d in chunks.documents) {
-                        batch.delete(d.reference)
-                        if (++n >= 400) { batch.commit().await(); batch = db.batch(); n = 0 }
-                    }
-                    if (n > 0) batch.commit().await()
-                }
+                // ROUND 77 (WS-A+) — PURE WATERMARK for EVERY kind: the
+                // update carries ONLY the flag and its timestamp. ct/iv,
+                // rqCt/rqIv/reaction, every media field and the chunks
+                // subcollection all SURVIVE, so the receiver's client can
+                // rebuild the original message from the same echo (see
+                // decryptDoc's retained fall-through); only the sender's
+                // own side renders the tombstone.
+                ref.update(
+                    mapOf<String, Any>(
+                        "delAll" to true,
+                        // ROUND 30: additive deletion timestamp, written in
+                        // the SAME update (the member-update rule already
+                        // covers it; no field validation exists to trip).
+                        // Only the OWNER's client reads it — for the
+                        // "Deleted messages" log's deleted-at time. Older
+                        // tombstones lack it and their readers fall back
+                        // to first-observed time.
+                        "delAt" to FieldValue.serverTimestamp(),
+                    ),
+                ).await()
                 Log.d("TikuChat", "message $msgId deleted for everyone in chat $id")
             }.onFailure {
                 Log.e("TikuChat", "deleteForEveryone failed for $msgId in chat $id", it)
@@ -3650,8 +3632,8 @@ object FirebaseEngine : ChatRepo {
     }
 
     /** ROUND 44: hard-delete ONE message doc + its media chunks. The
-     *  chunk half mirrors deleteForEveryone's proven batch loop exactly
-     *  (read the chunks subcollection, batch-delete in 400s); the doc
+     *  chunk half is a proven batch loop (read the chunks subcollection,
+     *  batch-delete in 400s); the doc
      *  itself is then DELETED, not tombstoned — "chats never disappear"
      *  yields to the owner's explicit AI-image expiry law for this one
      *  message class. If the chunk pass throws, the doc delete is
