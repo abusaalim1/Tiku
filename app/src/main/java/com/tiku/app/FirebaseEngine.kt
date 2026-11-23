@@ -120,6 +120,21 @@ object FirebaseEngine : ChatRepo {
 
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate + TikuEngineHandler)
 
+    /** ROUND 78 (WS-3): message ids whose delivery coroutine is live
+     *  right now — including one parked indefinitely inside
+     *  ensureChatDoc's await on a dead network (when connectivity
+     *  returns, that await completes on its own; a second launch would
+     *  only double the push). Marked synchronously at every staging /
+     *  drain site BEFORE the delivery launches, cleared by the deliver
+     *  funnels at every exit. See OutboxStore. */
+    private val outboxInFlight =
+        java.util.Collections.synchronizedSet(mutableSetOf<String>())
+
+    /** ROUND 78 (WS-3): the connectivity callback that re-drains the
+     *  outbox the moment a network returns (registered in [start],
+     *  removed in [stop]). */
+    private var netCallback: android.net.ConnectivityManager.NetworkCallback? = null
+
     /** True while this process's listeners are attached (set by
      *  [start], cleared by [stop] — lock and sign-out both run through
      *  stop). ROUND 58: with the alert foreground service deleted, the
@@ -1194,6 +1209,11 @@ object FirebaseEngine : ChatRepo {
                         syncPreviewListeners(ids)
                         syncNoteListeners(list.map { it.person.uid }.toSet())
                         sweepStaleCalls(ids)
+                        // ROUND 78 (WS-3): the thread set this drain
+                        // needs now exists — offer the outbox its
+                        // re-stage pass (a no-op when the box is empty
+                        // or everything pending is already in flight).
+                        drainOutbox()
                     }
                 }
             }
@@ -1202,6 +1222,12 @@ object FirebaseEngine : ChatRepo {
         // engine session (attached here = signed-in + unlocked, or
         // the alert service's gated bootstrap; removed by stop()).
         AiShare.start()
+        // ROUND 78 (WS-3): the send outbox rides the session too —
+        // the connectivity callback re-drains it when a network
+        // returns, and this first drain covers sends that were
+        // pending when the session (re)started.
+        registerNetCallback()
+        drainOutbox()
     }
 
     // ================= CHAT-LIST PREVIEW LISTENERS (round 6, bug 3 layer 2) ====
@@ -1596,6 +1622,16 @@ object FirebaseEngine : ChatRepo {
 
     fun stop() {
         listenersActive = false
+        // ROUND 78 (WS-3): the outbox's connectivity callback dies
+        // with the session (the box itself persists — it is drained
+        // by the next session's start()).
+        netCallback?.let { cb ->
+            runCatching {
+                (appCtx.getSystemService(Context.CONNECTIVITY_SERVICE)
+                    as android.net.ConnectivityManager).unregisterNetworkCallback(cb)
+            }
+        }
+        netCallback = null
         // ROUND 56: the AI-share listeners + state die with the session.
         AiShare.stop()
         threadsReg?.remove(); msgsReg?.remove()
@@ -2746,6 +2782,17 @@ object FirebaseEngine : ChatRepo {
             tsMs = System.currentTimeMillis(), status = SendStatus.SENDING,
             fx = fx?.takeIf { it in MESSAGE_FX_KINDS },
         )
+        // ROUND 78 (WS-3): persist the pending send BEFORE any async
+        // hop — from here the message can survive process death and
+        // still land exactly once (see OutboxStore).
+        OutboxStore.enqueue(
+            OutboxStore.PendingSend(
+                msgId = local.id, chatId = id, kind = "text", tsMs = local.tsMs,
+                text = text, replyQuote = quote, replyToId = local.replyToId,
+                fx = local.fx,
+            ),
+        )
+        outboxInFlight += local.id
         AppState.upsertMessage(id, local)
         // ROUND 19: sender-intent glide — the open chat animates to this
         // exact local once it composes as the tail (see AppState).
@@ -2767,6 +2814,14 @@ object FirebaseEngine : ChatRepo {
             tsMs = System.currentTimeMillis(), status = SendStatus.SENDING,
             ai = true,
         )
+        // ROUND 78 (WS-3): outbox first, like every send (see sendTextFx).
+        OutboxStore.enqueue(
+            OutboxStore.PendingSend(
+                msgId = local.id, chatId = id, kind = "text", tsMs = local.tsMs,
+                text = text, ai = true,
+            ),
+        )
+        outboxInFlight += local.id
         AppState.upsertMessage(id, local)
         AppState.requestTailScroll(id, local.id)
         scope.launch { deliverText(id, th.person.uid, local) }
@@ -2833,12 +2888,14 @@ object FirebaseEngine : ChatRepo {
         repeat(3) { attempt ->
             try {
                 deliverNikahCardOnce(id, peerUid, local, onLanded)
+                outboxInFlight -= local.id // ROUND 78: retrySend marked it
                 return
             } catch (e: Exception) {
                 lastErr = e
                 if (attempt < 2) delay(600L * (attempt + 1))
             }
         }
+        outboxInFlight -= local.id // ROUND 78: retrySend marked it
         Log.e("TikuSend", "nikah card send failed in chat $id (msg ${local.id})", lastErr)
         AppState.setMessageStatus(id, local.id, SendStatus.FAILED)
         AppState.toast("Couldn't send — ${sendFailureReason(lastErr ?: IllegalStateException("send failed"))}")
@@ -2904,6 +2961,7 @@ object FirebaseEngine : ChatRepo {
     }
 
     private suspend fun deliverText(id: String, peerUid: String, local: TikuMessage) {
+        outboxInFlight += local.id
         try {
             ensureChatDoc(id, peerUid)
             val key = convKeyOrNull(id, peerUid)
@@ -2928,6 +2986,9 @@ object FirebaseEngine : ChatRepo {
             if (local.ai) docData["ai"] = true
             msgRef(id, local.id).set(docData).await()
             AppState.setMessageStatus(id, local.id, SendStatus.SENT)
+            // ROUND 78 (WS-3): the write landed — the outbox entry has
+            // done its job (a later drain must never resend this id).
+            OutboxStore.remove(local.id)
             // ROUND 58: the write landed — fire the peer's FCM push
             // (best-effort, background, failures swallowed; the
             // message's own ct/iv ride for text, ai_text for Tika's
@@ -2941,6 +3002,11 @@ object FirebaseEngine : ChatRepo {
             Log.e("TikuSend", "text send failed in chat $id (msg ${local.id})", e)
             AppState.setMessageStatus(id, local.id, SendStatus.FAILED)
             AppState.toast("Couldn't send — ${sendFailureReason(e)}")
+        } finally {
+            // ROUND 78 (WS-3): on FAILURE the outbox entry STAYS (the
+            // drain retries it on reconnect / next launch); only the
+            // in-flight mark clears.
+            outboxInFlight -= local.id
         }
     }
 
@@ -2959,9 +3025,27 @@ object FirebaseEngine : ChatRepo {
             tsMs = System.currentTimeMillis(), status = SendStatus.SENDING,
             vo = vo?.takeIf { it in 1..2 },
         )
+        // ROUND 78 (WS-3): a photo's payload exists only as a bitmap
+        // in memory — stage the compressed bytes to a cache file and
+        // persist the outbox entry SYNCHRONOUSLY, before the delivery
+        // coroutine exists, so the send survives process death from
+        // this instant (see OutboxStore). If the staging write itself
+        // fails the entry carries no path and a later drain drops it;
+        // the in-session delivery below still runs from memory.
+        val bytes = MediaStore.compressPhoto(bmp)
+        val staged = File(appCtx.cacheDir, "outbox_${local.id}.jpg")
+        val stagedOk = runCatching { staged.writeBytes(bytes); true }.getOrDefault(false)
+        OutboxStore.enqueue(
+            OutboxStore.PendingSend(
+                msgId = local.id, chatId = id, kind = "image", tsMs = local.tsMs,
+                localPath = if (stagedOk) staged.absolutePath else null,
+                vo = local.vo,
+            ),
+        )
+        outboxInFlight += local.id
         AppState.upsertMessage(id, local)
         AppState.requestTailScroll(id, local.id)
-        scope.launch { deliverMedia(id, th.person.uid, local, MediaStore.compressPhoto(bmp)) }
+        scope.launch { deliverMedia(id, th.person.uid, local, bytes) }
     }
 
     /** ROUND 37: the AI (Tika) image send — Gemini's generated bitmap
@@ -2976,9 +3060,22 @@ object FirebaseEngine : ChatRepo {
             tsMs = System.currentTimeMillis(), status = SendStatus.SENDING,
             ai = true,
         )
+        // ROUND 78 (WS-3): staged bytes + outbox entry, exactly like
+        // sendPhotoVo — an AI image in flight is a send like any other.
+        val bytes = MediaStore.compressPhoto(bmp)
+        val staged = File(appCtx.cacheDir, "outbox_${local.id}.jpg")
+        val stagedOk = runCatching { staged.writeBytes(bytes); true }.getOrDefault(false)
+        OutboxStore.enqueue(
+            OutboxStore.PendingSend(
+                msgId = local.id, chatId = id, kind = "image", tsMs = local.tsMs,
+                localPath = if (stagedOk) staged.absolutePath else null,
+                ai = true,
+            ),
+        )
+        outboxInFlight += local.id
         AppState.upsertMessage(id, local)
         AppState.requestTailScroll(id, local.id)
-        scope.launch { deliverMedia(id, th.person.uid, local, MediaStore.compressPhoto(bmp)) }
+        scope.launch { deliverMedia(id, th.person.uid, local, bytes) }
     }
 
     /** ROUND 41: the game send — Tika's validated HTML file rides the
@@ -3009,6 +3106,15 @@ object FirebaseEngine : ChatRepo {
             mimeType = "text/html", mediaBytes = bytes.size.toLong(),
             game = true, gameTitle = title.trim().take(48),
         )
+        // ROUND 78 (WS-3): the game's HTML already lives in a cache
+        // file — persist the outbox entry against it (see OutboxStore).
+        OutboxStore.enqueue(
+            OutboxStore.PendingSend(
+                msgId = local.id, chatId = id, kind = "game", tsMs = local.tsMs,
+                localPath = local.localPath, gameTitle = local.gameTitle,
+            ),
+        )
+        outboxInFlight += local.id
         AppState.upsertMessage(id, local)
         AppState.requestTailScroll(id, local.id)
         scope.launch { deliverMedia(id, th.person.uid, local, bytes) }
@@ -3026,6 +3132,15 @@ object FirebaseEngine : ChatRepo {
             voiceDurSec = durSec, amps = amps, localPath = audioFile.absolutePath,
             tsMs = System.currentTimeMillis(), status = SendStatus.SENDING,
         )
+        // ROUND 78 (WS-3): the recording file is the payload — persist
+        // the outbox entry against it before launching (see OutboxStore).
+        OutboxStore.enqueue(
+            OutboxStore.PendingSend(
+                msgId = local.id, chatId = id, kind = "voice", tsMs = local.tsMs,
+                localPath = audioFile.absolutePath, voiceDurSec = durSec, amps = amps,
+            ),
+        )
+        outboxInFlight += local.id
         AppState.upsertMessage(id, local)
         AppState.requestTailScroll(id, local.id)
         scope.launch {
@@ -3119,6 +3234,17 @@ object FirebaseEngine : ChatRepo {
             mimeType = mime, mediaBytes = file.length(),
             vo = vo,
         )
+        // ROUND 78 (WS-3): the source file is the payload — persist
+        // the outbox entry against it before launching (see OutboxStore).
+        OutboxStore.enqueue(
+            OutboxStore.PendingSend(
+                msgId = local.id, chatId = id,
+                kind = if (kind == MsgKind.VIDEO) "video" else "audio",
+                tsMs = local.tsMs, localPath = file.absolutePath,
+                voiceDurSec = durSec, mimeType = mime, vo = vo,
+            ),
+        )
+        outboxInFlight += local.id
         AppState.upsertMessage(id, local)
         AppState.requestTailScroll(id, local.id)
         scope.launch {
@@ -3187,6 +3313,7 @@ object FirebaseEngine : ChatRepo {
 
     /** Shared media delivery: encrypt -> doc under the LOCAL id -> chunk upload. */
     private suspend fun deliverMedia(id: String, peerUid: String, local: TikuMessage, plainBytes: ByteArray) {
+        outboxInFlight += local.id
         val kind = when (local.kind) {
             MsgKind.IMAGE -> "image"; MsgKind.VIDEO -> "video"; MsgKind.AUDIO -> "audio"
             MsgKind.GAME -> "game"
@@ -3227,6 +3354,15 @@ object FirebaseEngine : ChatRepo {
             val chunks = MediaStore.upload(db, id, local.id, ctBytes)
             ref.update("mediaChunks", chunks).await()
             AppState.setMessageStatus(id, local.id, SendStatus.SENT)
+            // ROUND 78 (WS-3): fully landed (doc + chunks) — the
+            // outbox entry has done its job, and a photo's staged
+            // bytes file goes with it (voice/video/audio/game source
+            // files are NOT staged copies; their cleanup rules below
+            // and in the send paths are unchanged).
+            OutboxStore.remove(local.id)
+            if (local.kind == MsgKind.IMAGE) {
+                runCatching { File(appCtx.cacheDir, "outbox_${local.id}.jpg").delete() }
+            }
             // ROUND 58: the media write fully landed (doc + chunks) —
             // fire the peer's FCM push, metadata only (media pushes
             // never carry ciphertext). Kinds with no Worker type —
@@ -3248,6 +3384,11 @@ object FirebaseEngine : ChatRepo {
             Log.e("TikuSend", "$kind send failed in chat $id (msg ${local.id})", e)
             AppState.setMessageStatus(id, local.id, SendStatus.FAILED)
             AppState.toast("Couldn't send — ${sendFailureReason(e)}")
+        } finally {
+            // ROUND 78 (WS-3): on FAILURE the outbox entry STAYS for
+            // the drain; only the in-flight mark clears (see
+            // deliverText's finally).
+            outboxInFlight -= local.id
         }
     }
 
@@ -3257,6 +3398,11 @@ object FirebaseEngine : ChatRepo {
         val m = th.messages.firstOrNull { it.id == msgId } ?: return
         if (m.status != SendStatus.FAILED) return
         AppState.setMessageStatus(id, msgId, SendStatus.SENDING)
+        // ROUND 78 (WS-3): the retry is a delivery like any other —
+        // mark it in flight so a concurrent outbox drain skips it
+        // (the deliver funnels clear the mark at every exit; a
+        // pre-outbox FAILED message simply has no entry to drain).
+        outboxInFlight += msgId
         scope.launch {
             when (m.kind) {
                 // ROUND 63: a Nikah card retries through its OWN
@@ -3301,6 +3447,154 @@ object FirebaseEngine : ChatRepo {
                 MsgKind.CALL -> AppState.setMessageStatus(id, msgId, SendStatus.SENT)
             }
         }
+    }
+
+    /** ROUND 78 (WS-3) — rebuild the optimistic local for one outbox
+     *  entry, or null when the entry can never be delivered (its
+     *  payload file is gone — the OS purged the cache — or the kind
+     *  is unknown). The rebuild is faithful to the original staging:
+     *  same client-chosen id, same device ts, same payload pointers,
+     *  so the delivery that follows writes the very doc the sender
+     *  originally aimed at. */
+    private fun rebuildOutboxLocal(e: OutboxStore.PendingSend): TikuMessage? {
+        val base = TikuMessage(
+            id = e.msgId, senderUid = uid, time = fmtTime(e.tsMs), me = true,
+            tsMs = e.tsMs, status = SendStatus.SENDING,
+        )
+        fun payloadFile(): File? = e.localPath?.let { File(it) }?.takeIf { it.exists() }
+        return when (e.kind) {
+            "text" -> base.copy(
+                kind = MsgKind.TEXT, text = e.text,
+                replyQuote = e.replyQuote, replyToId = e.replyToId,
+                fx = e.fx?.takeIf { it in MESSAGE_FX_KINDS }, ai = e.ai,
+            )
+            "image" -> {
+                val f = payloadFile() ?: return null
+                base.copy(
+                    kind = MsgKind.IMAGE, localPath = f.absolutePath,
+                    photo = runCatching {
+                        android.graphics.BitmapFactory.decodeFile(f.absolutePath)
+                    }.getOrNull(),
+                    vo = e.vo, ai = e.ai,
+                )
+            }
+            "voice" -> {
+                val f = payloadFile() ?: return null
+                base.copy(
+                    kind = MsgKind.VOICE, localPath = f.absolutePath,
+                    voiceDurSec = e.voiceDurSec, amps = e.amps,
+                )
+            }
+            "video" -> {
+                val f = payloadFile() ?: return null
+                base.copy(
+                    kind = MsgKind.VIDEO, localPath = f.absolutePath,
+                    voiceDurSec = e.voiceDurSec, mimeType = e.mimeType,
+                    mediaBytes = f.length(), vo = e.vo, photo = videoPoster(f),
+                )
+            }
+            "audio" -> {
+                val f = payloadFile() ?: return null
+                base.copy(
+                    kind = MsgKind.AUDIO, localPath = f.absolutePath,
+                    voiceDurSec = e.voiceDurSec, mimeType = e.mimeType,
+                    mediaBytes = f.length(),
+                )
+            }
+            "game" -> {
+                val f = payloadFile() ?: return null
+                base.copy(
+                    kind = MsgKind.GAME, localPath = f.absolutePath,
+                    mimeType = "text/html", mediaBytes = f.length(),
+                    game = true, gameTitle = e.gameTitle,
+                )
+            }
+            else -> null
+        }
+    }
+
+    /** ROUND 78 (WS-3) — drain the outbox (see OutboxStore): every
+     *  persisted pending send is either dropped (its doc already
+     *  landed — exactly-once) or re-staged as a SENDING bubble and
+     *  delivered again. Called from [start], from the threads-list
+     *  rebuild (by the time a launch's threads exist, the box can
+     *  drain against them), and from the connectivity callback the
+     *  moment a network returns. Idempotent and cheap when the box
+     *  is empty (one prefs read); entries already in flight or whose
+     *  thread is not built yet are simply left for the next trigger. */
+    fun drainOutbox() {
+        if (uid.isEmpty()) return
+        val entries = OutboxStore.all()
+        if (entries.isEmpty()) return
+        scope.launch {
+            val landed = entries.mapNotNull { e ->
+                e.msgId.takeIf { msgCache[e.chatId]?.containsKey(e.msgId) == true }
+            }.toSet()
+            val (deliver, drop) = OutboxStore.planDrain(entries, landed)
+            drop.forEach { OutboxStore.remove(it.msgId) }
+            for (e in deliver) {
+                // Mark BEFORE launching: two drains queued back to
+                // back can then never double-launch one entry.
+                if (!outboxInFlight.add(e.msgId)) continue
+                val th = AppState.thread(e.chatId)
+                if (th == null) {
+                    outboxInFlight -= e.msgId
+                    continue
+                }
+                val local = rebuildOutboxLocal(e)
+                if (local == null) {
+                    // Undeliverable (payload purged): drop the entry
+                    // rather than resurrecting a bubble that can only
+                    // fail forever. The in-session FAILED bubble, if
+                    // any, is untouched — this path is for entries
+                    // whose bubble died with the process.
+                    OutboxStore.remove(e.msgId)
+                    outboxInFlight -= e.msgId
+                    continue
+                }
+                if (th.messages.none { it.id == e.msgId }) {
+                    AppState.upsertMessage(e.chatId, local)
+                    AppState.requestTailScroll(e.chatId, e.msgId)
+                } else {
+                    AppState.setMessageStatus(e.chatId, e.msgId, SendStatus.SENDING)
+                }
+                when (e.kind) {
+                    "text" -> scope.launch { deliverText(e.chatId, th.person.uid, local) }
+                    else -> {
+                        val bytes = e.localPath?.let {
+                            runCatching { File(it).readBytes() }.getOrNull()
+                        }
+                        if (bytes == null) {
+                            OutboxStore.remove(e.msgId)
+                            AppState.setMessageStatus(e.chatId, e.msgId, SendStatus.FAILED)
+                            outboxInFlight -= e.msgId
+                        } else {
+                            scope.launch { deliverMedia(e.chatId, th.person.uid, local, bytes) }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /** ROUND 78 (WS-3): register the connectivity callback that
+     *  re-drains the outbox when a network returns (and once
+     *  immediately — registration itself reports the current default
+     *  network as available). Removed in [stop]. */
+    private fun registerNetCallback() {
+        if (netCallback != null) return
+        val cm = runCatching {
+            appCtx.getSystemService(Context.CONNECTIVITY_SERVICE)
+                as android.net.ConnectivityManager
+        }.getOrNull() ?: return
+        val cb = object : android.net.ConnectivityManager.NetworkCallback() {
+            override fun onAvailable(network: android.net.Network) {
+                drainOutbox()
+            }
+        }
+        runCatching { cm.registerDefaultNetworkCallback(cb) }
+            .onSuccess { netCallback = cb }
+            .onFailure { Log.w("TikuSend", "network callback registration failed", it) }
     }
 
     /** ROUND 53 (item 1) — SENDING LIFTS MY HIDE. The owner deletes a
@@ -3456,6 +3750,10 @@ object FirebaseEngine : ChatRepo {
 
     /** Delete = delete-for-me ONLY (append uid to deletedFor). Never a hard delete. */
     override fun deleteForMe(id: String, msgId: String) {
+        // ROUND 78 (WS-3): hiding a message that is still a pending
+        // send cancels the send — its outbox entry drops here, or the
+        // next drain would resurrect a message the user just hid.
+        OutboxStore.remove(msgId)
         // ROUND 33: register the hide in the recovery registry right
         // away (the MODIFIED echo re-registers the identical copy via
         // decryptDoc), so the owner's "Hidden by me" page lists it
@@ -3518,6 +3816,9 @@ object FirebaseEngine : ChatRepo {
             SendStatus.FAILED -> {
                 // never landed on the server — there is nothing to
                 // tombstone; hide the local copy (same as delete-for-me).
+                // ROUND 78 (WS-3): its outbox entry drops too, or the
+                // next drain would resurrect and send it.
+                OutboxStore.remove(msgId)
                 AppState.updateThread(id) { t ->
                     t.messages.replaceAll { mm ->
                         if (mm.id == msgId) mm.copy(deletedForMe = true) else mm
@@ -4243,6 +4544,14 @@ object FirebaseEngine : ChatRepo {
             replyQuote = "Note: $noteText", replyToId = "__note__",
             tsMs = System.currentTimeMillis(), status = SendStatus.SENDING,
         )
+        // ROUND 78 (WS-3): outbox first, like every send (see sendTextFx).
+        OutboxStore.enqueue(
+            OutboxStore.PendingSend(
+                msgId = local.id, chatId = id, kind = "text", tsMs = local.tsMs,
+                text = text, replyQuote = local.replyQuote, replyToId = local.replyToId,
+            ),
+        )
+        outboxInFlight += local.id
         AppState.upsertMessage(id, local)
         AppState.requestTailScroll(id, local.id)
         scope.launch { deliverText(id, th.person.uid, local) }

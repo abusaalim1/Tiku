@@ -184,6 +184,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import java.io.File
 import java.text.SimpleDateFormat
+import java.util.Calendar
 import java.util.Date
 import java.util.Locale
 import kotlin.math.abs
@@ -1335,6 +1336,58 @@ private fun RdUndecryptableRow(m: TikuMessage, person: Person, onMenu: () -> Uni
                 "This message can't be opened on this phone",
                 color = RdSub, fontSize = 13.5.sp, fontStyle = FontStyle.Italic, fontFamily = InterFamily,)
         }
+    }
+}
+
+/** ROUND 78 (WS-2) — IG-style time separator: the label for the message
+ *  stamped [tsMs] given the previous message's stamp [prevTsMs], or
+ *  null while the conversation flows in quick succession. A label is
+ *  earned by a jump — a gap of an hour or more, or a calendar-day
+ *  change (a 20-minute gap across midnight still separates the days).
+ *  The label names the LATER message's moment, IG-style: today → the
+ *  bare time ("12:04 PM"); yesterday → "Yesterday, 9:15 PM"; older →
+ *  "21 Nov, 9:15 PM" (+"yyyy" across years). Pure and display-only —
+ *  derived from the timestamps the messages already carry; nothing is
+ *  stored, no schema changes, old conversations label identically.
+ *  [nowMs] is a parameter so the harness can pin the day buckets. */
+internal fun timeSeparatorLabel(prevTsMs: Long, tsMs: Long, nowMs: Long): String? {
+    if (prevTsMs <= 0L || tsMs <= 0L) return null
+    fun epochDay(ms: Long): Long {
+        val c = Calendar.getInstance().apply { timeInMillis = ms }
+        val local = ms + c.get(Calendar.ZONE_OFFSET) + c.get(Calendar.DST_OFFSET)
+        return Math.floorDiv(local, 86_400_000L)
+    }
+    val gap = tsMs - prevTsMs
+    if (gap < 3_600_000L && epochDay(prevTsMs) == epochDay(tsMs)) return null
+    val time = SimpleDateFormat("h:mm a", Locale.getDefault()).format(Date(tsMs))
+    val dayDiff = epochDay(nowMs) - epochDay(tsMs)
+    val sameYear = Calendar.getInstance().apply { timeInMillis = tsMs }.get(Calendar.YEAR) ==
+        Calendar.getInstance().apply { timeInMillis = nowMs }.get(Calendar.YEAR)
+    return when {
+        dayDiff == 0L -> time
+        dayDiff == 1L -> "Yesterday, $time"
+        sameYear -> "${SimpleDateFormat("d MMM", Locale.getDefault()).format(Date(tsMs))}, $time"
+        else -> "${SimpleDateFormat("d MMM yyyy", Locale.getDefault()).format(Date(tsMs))}, $time"
+    }
+}
+
+/** ROUND 78 (WS-2): the separator's rendering — one small centred
+ *  muted label, in the unread divider's family (same InterTight face,
+ *  plain text rather than a pill: IG's current form). It rides INSIDE
+ *  the message's own lazy item, directly above the bubble, so the
+ *  list's item count, keys and every scroll index stay exactly as
+ *  they were — nothing about scroll, anchoring or pagination moves. */
+@Composable
+private fun RdTimeSeparator(label: String) {
+    Box(
+        Modifier.fillMaxWidth().padding(vertical = 6.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            label, color = RdSub, fontSize = 12.sp,
+            fontWeight = FontWeight.Medium, fontFamily = InterTight,
+            modifier = Modifier.testTag("time_separator"),
+        )
     }
 }
 
@@ -4977,6 +5030,21 @@ private fun RdChatContent(thread: ChatThread) {
                         }
                     }
                     Column {
+                        // ROUND 78 (WS-2): the IG-style time separator
+                        // for a conversation jump (see timeSeparator
+                        // Label) — rendered inside this message's own
+                        // item, above the unread divider and the
+                        // bubble, so no lazy item is added or moved.
+                        val sepLabel = if (idx > 0) {
+                            timeSeparatorLabel(
+                                visible[idx - 1].tsMs, m.tsMs,
+                                System.currentTimeMillis(),
+                            )
+                        } else null
+                        if (sepLabel != null) {
+                            RdTimeSeparator(sepLabel)
+                            Spacer(Modifier.height(4.dp))
+                        }
                         val pin = dividerPin
                         if (pin != null && m.id == pin.first) {
                             RdUnreadDivider(pin.second)

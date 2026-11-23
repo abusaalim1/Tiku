@@ -20,6 +20,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.click
 import androidx.compose.ui.test.doubleClick
 import androidx.compose.ui.test.hasScrollAction
@@ -31,9 +32,11 @@ import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
+import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performScrollToIndex
 import androidx.compose.ui.test.performScrollToNode
+import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.swipeLeft
 import androidx.compose.ui.unit.dp
@@ -3737,5 +3740,276 @@ class ScreenshotsTest {
                 .fetchSemanticsNodes().isEmpty(),
         )
         shot("96-chat-deleted-photo-retained.png")
+    }
+
+    // ---------- ROUND 78 (WS-1): the slash-command sheet ----------
+    // The owner's regression: typing "/" shows NOTHING. Three stagings
+    // triangulate the break: the real keystroke path (semantics text
+    // input into the live field), the draft-restored path (the R75
+    // state entry point), and the companion (same RdChatInput).
+
+    /** Type [text] into the frame's one editable field (the composer). */
+    private fun typeIntoComposer(text: String) {
+        val field = composeRule.onAllNodes(androidx.compose.ui.test.hasSetTextAction())
+            .fetchSemanticsNodes()
+        org.junit.Assert.assertEquals(
+            "the frame must hold exactly one editable field (the composer)",
+            1, field.size,
+        )
+        composeRule.onNode(androidx.compose.ui.test.hasSetTextAction())
+            .performClick()
+        composeRule.waitForIdle()
+        composeRule.onNode(androidx.compose.ui.test.hasSetTextAction())
+            .performTextInput(text)
+        composeRule.waitForIdle()
+    }
+
+    private fun assertSlashSheetVisible(where: String) {
+        org.junit.Assert.assertTrue(
+            "$where: typing '/' must list /tiku",
+            composeRule.onAllNodesWithText("/tiku").fetchSemanticsNodes().isNotEmpty(),
+        )
+        org.junit.Assert.assertTrue(
+            "$where: typing '/' must list /tika",
+            composeRule.onAllNodesWithText("/tika").fetchSemanticsNodes().isNotEmpty(),
+        )
+        org.junit.Assert.assertTrue(
+            "$where: typing '/' must list /babeg",
+            composeRule.onAllNodesWithText("/babeg").fetchSemanticsNodes().isNotEmpty(),
+        )
+    }
+
+    @Test fun shot97_slashSheetChatTyped() {
+        val th = AppState.threads.value.first()
+        AppState.go(Screen.Chat(th.id))
+        frame { ChatScreen(th.id) }
+        typeIntoComposer("/")
+        assertSlashSheetVisible("normal chat, typed")
+        shot("97-slash-menu-chat.png")
+    }
+
+    @Test fun shot98_slashSheetCompanionTyped() {
+        stageCompanionR73C()
+        frame { TikaBotScreen() }
+        typeIntoComposer("/")
+        assertSlashSheetVisible("companion, typed")
+        shot("98-slash-menu-companion.png")
+    }
+
+    @Test fun shot99_slashSheetChatDraftRestored() {
+        val th = AppState.threads.value.first()
+        DraftStore.setChat(th.id, "/")
+        try {
+            AppState.go(Screen.Chat(th.id))
+            frame { ChatScreen(th.id) }
+            composeRule.waitForIdle()
+            assertSlashSheetVisible("normal chat, draft-restored")
+            shot("99-slash-menu-draft.png")
+        } finally {
+            DraftStore.setChat(th.id, "")
+        }
+    }
+
+    // ---------- ROUND 78 (WS-2): IG-style time separators ----------
+    // A staged conversation: 10:00 and 12:00 the same day (a 2-hour
+    // jump → exactly one separator, labelled with the later group's
+    // time) and 12:05 (quick succession → no separator).
+
+    private fun todayAtR78(hour: Int, minute: Int): Long {
+        val c = java.util.Calendar.getInstance()
+        c.set(java.util.Calendar.HOUR_OF_DAY, hour)
+        c.set(java.util.Calendar.MINUTE, minute)
+        c.set(java.util.Calendar.SECOND, 0)
+        c.set(java.util.Calendar.MILLISECOND, 0)
+        return c.timeInMillis
+    }
+
+    @Test fun shot100_timeSeparatorBetweenGroups() {
+        val p = PreviewStore.people.first()
+        val id = PreviewRepo.startThreadWith(p)
+        AppState.updateThread(id) { th ->
+            th.messages.clear()
+            th.messages.addAll(
+                listOf(
+                    TikuMessage(
+                        id = "r78a", senderUid = p.uid, kind = MsgKind.TEXT,
+                        text = "morning wala message", time = "10:00 AM",
+                        me = false, tsMs = todayAtR78(10, 0),
+                    ),
+                    TikuMessage(
+                        id = "r78b", senderUid = p.uid, kind = MsgKind.TEXT,
+                        text = "dopeher wala message", time = "12:00 PM",
+                        me = false, tsMs = todayAtR78(12, 0),
+                    ),
+                    TikuMessage(
+                        id = "r78c", senderUid = p.uid, kind = MsgKind.TEXT,
+                        text = "turant baad wala", time = "12:05 PM",
+                        me = false, tsMs = todayAtR78(12, 5),
+                    ),
+                ),
+            )
+        }
+        AppState.go(Screen.Chat(id))
+        frame { ChatScreen(id) }
+        composeRule.waitForIdle()
+        val seps = composeRule.onAllNodesWithTag("time_separator").fetchSemanticsNodes()
+        org.junit.Assert.assertEquals(
+            "a 2-hour jump earns exactly one time separator (quick succession earns none)",
+            1, seps.size,
+        )
+        composeRule.onNodeWithTag("time_separator")
+            .assertTextEquals("12:00 PM")
+        shot("100-time-separator.png")
+    }
+
+    @Test fun timeSeparatorLabelContractR78() {
+        val now = todayAtR78(15, 0)
+        // quick succession, same day → no separator
+        org.junit.Assert.assertNull(timeSeparatorLabel(todayAtR78(12, 0), todayAtR78(12, 5), now))
+        org.junit.Assert.assertNull(timeSeparatorLabel(todayAtR78(12, 0), todayAtR78(12, 59), now))
+        // exactly one hour → separator with the later time
+        org.junit.Assert.assertEquals(
+            "1:00 PM", timeSeparatorLabel(todayAtR78(12, 0), todayAtR78(13, 0), now),
+        )
+        // the owner's case: 10:00 → 12:00
+        org.junit.Assert.assertEquals(
+            "12:00 PM", timeSeparatorLabel(todayAtR78(10, 0), todayAtR78(12, 0), now),
+        )
+        // a short gap across midnight still separates the days
+        val yday2350 = todayAtR78(23, 50) - 86_400_000L
+        val today0010 = todayAtR78(0, 10)
+        org.junit.Assert.assertEquals(
+            "12:10 AM", timeSeparatorLabel(yday2350, today0010, now),
+        )
+        // yesterday's group, seen today → "Yesterday, …"
+        val yday1500 = todayAtR78(15, 0) - 86_400_000L
+        val yday1200 = todayAtR78(12, 0) - 86_400_000L
+        org.junit.Assert.assertEquals(
+            "Yesterday, 3:00 PM", timeSeparatorLabel(yday1200, yday1500, now),
+        )
+        // missing stamps never separate
+        org.junit.Assert.assertNull(timeSeparatorLabel(0L, todayAtR78(12, 0), now))
+        org.junit.Assert.assertNull(timeSeparatorLabel(todayAtR78(10, 0), 0L, now))
+    }
+
+    // ---------- ROUND 78 (WS-3): the send outbox ----------
+    // Store fidelity (enqueue → persist → read back byte-faithful),
+    // the drain plan (a landed id drops, an unlanded id delivers —
+    // exactly-once), and the pending affordance on a staged SENDING
+    // bubble (it stays rendered, captioned "Sending…", never gone).
+
+    @Test fun outboxStoreRoundTripR78() {
+        OutboxStore.clearAll()
+        try {
+            OutboxStore.enqueue(
+                OutboxStore.PendingSend(
+                    msgId = "r78t1", chatId = "chatA", kind = "text", tsMs = 111L,
+                    text = "hello outbox", replyQuote = "quoted line",
+                    replyToId = "__note__", fx = "hearts", ai = true,
+                ),
+            )
+            OutboxStore.enqueue(
+                OutboxStore.PendingSend(
+                    msgId = "r78v1", chatId = "chatA", kind = "voice", tsMs = 222L,
+                    localPath = "/tmp/voice.m4a", voiceDurSec = 7,
+                    amps = listOf(1, 5, 9, 3),
+                ),
+            )
+            OutboxStore.enqueue(
+                OutboxStore.PendingSend(
+                    msgId = "r78i1", chatId = "chatB", kind = "image", tsMs = 333L,
+                    localPath = "/tmp/outbox_r78i1.jpg", vo = 2,
+                ),
+            )
+            val all = OutboxStore.all()
+            org.junit.Assert.assertEquals(3, all.size)
+            val t = all.first { it.msgId == "r78t1" }
+            org.junit.Assert.assertEquals("hello outbox", t.text)
+            org.junit.Assert.assertEquals("quoted line", t.replyQuote)
+            org.junit.Assert.assertEquals("__note__", t.replyToId)
+            org.junit.Assert.assertEquals("hearts", t.fx)
+            org.junit.Assert.assertTrue(t.ai)
+            val v = all.first { it.msgId == "r78v1" }
+            org.junit.Assert.assertEquals(listOf(1, 5, 9, 3), v.amps)
+            org.junit.Assert.assertEquals(7, v.voiceDurSec)
+            val im = all.first { it.msgId == "r78i1" }
+            org.junit.Assert.assertEquals(2, im.vo)
+            // re-enqueue replaces, never duplicates
+            OutboxStore.enqueue(
+                OutboxStore.PendingSend(
+                    msgId = "r78t1", chatId = "chatA", kind = "text",
+                    tsMs = 111L, text = "hello outbox v2",
+                ),
+            )
+            org.junit.Assert.assertEquals(3, OutboxStore.all().size)
+            org.junit.Assert.assertEquals(
+                "hello outbox v2",
+                OutboxStore.all().first { it.msgId == "r78t1" }.text,
+            )
+            // remove drops exactly one
+            OutboxStore.remove("r78v1")
+            org.junit.Assert.assertEquals(
+                setOf("r78t1", "r78i1"),
+                OutboxStore.all().map { it.msgId }.toSet(),
+            )
+        } finally {
+            OutboxStore.clearAll()
+        }
+    }
+
+    @Test fun outboxDrainPlanR78() {
+        val entries = listOf(
+            OutboxStore.PendingSend(msgId = "landed1", chatId = "c", kind = "text", tsMs = 1L, text = "a"),
+            OutboxStore.PendingSend(msgId = "pending1", chatId = "c", kind = "text", tsMs = 2L, text = "b"),
+            OutboxStore.PendingSend(msgId = "pending2", chatId = "c", kind = "voice", tsMs = 3L, localPath = "/tmp/x.m4a"),
+        )
+        val (deliver, drop) = OutboxStore.planDrain(entries, setOf("landed1"))
+        org.junit.Assert.assertEquals(
+            "an entry whose doc already landed is dropped, never resent (exactly-once)",
+            listOf("landed1"), drop.map { it.msgId },
+        )
+        org.junit.Assert.assertEquals(
+            "every unlanded entry delivers, exactly once each",
+            listOf("pending1", "pending2"), deliver.map { it.msgId },
+        )
+        val (deliverAll, dropNone) = OutboxStore.planDrain(entries, emptySet())
+        org.junit.Assert.assertEquals(3, deliverAll.size)
+        org.junit.Assert.assertTrue(dropNone.isEmpty())
+    }
+
+    @Test fun shot101_sendingBubbleStaysRendered() {
+        val p = PreviewStore.people.first()
+        val id = PreviewRepo.startThreadWith(p)
+        AppState.updateThread(id) { th ->
+            th.messages.clear()
+            th.messages.addAll(
+                listOf(
+                    TikuMessage(
+                        id = "r78old", senderUid = p.uid, kind = MsgKind.TEXT,
+                        text = "purana message", time = "10:00 AM",
+                        me = false, tsMs = todayAtR78(10, 0),
+                    ),
+                    TikuMessage(
+                        id = "r78pend", senderUid = "me", kind = MsgKind.TEXT,
+                        text = "r78 pending hello", time = "12:00 PM",
+                        me = true, tsMs = todayAtR78(12, 0),
+                        status = SendStatus.SENDING,
+                    ),
+                ),
+            )
+        }
+        AppState.go(Screen.Chat(id))
+        frame { ChatScreen(id) }
+        composeRule.waitForIdle()
+        org.junit.Assert.assertTrue(
+            "a pending send stays rendered in place — it never vanishes",
+            composeRule.onAllNodesWithText("r78 pending hello", substring = true)
+                .fetchSemanticsNodes().isNotEmpty(),
+        )
+        org.junit.Assert.assertTrue(
+            "a pending send carries the subtle Sending… caption",
+            composeRule.onAllNodesWithText("Sending…").fetchSemanticsNodes().isNotEmpty(),
+        )
+        shot("101-sending-pending.png")
     }
 }
