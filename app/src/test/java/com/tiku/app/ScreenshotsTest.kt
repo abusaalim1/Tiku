@@ -5122,21 +5122,23 @@ class ScreenshotsTest {
         }
         AppState.go(Screen.Chat(id))
         frame { ChatScreen(id) }
-        // Tap the bubble (its time chip sits inside the tap region).
-        // The time text can exist on more than one composed node —
-        // tap each candidate until the viewer opens.
-        val timeNodes = composeRule.onAllNodesWithText("10:15 AM")
-        val candidates = timeNodes.fetchSemanticsNodes().size
-        org.junit.Assert.assertTrue("the photo bubble must render", candidates > 0)
-        for (i in 0 until candidates) {
-            if (composeRule.onAllNodesWithTag("image_viewer")
-                    .fetchSemanticsNodes().isNotEmpty()
-            ) break
-            runCatching {
-                timeNodes[i].performTouchInput { click(center) }
-            }
-            composeRule.waitForIdle()
+        // Tap the photo itself: the bubble's time chip sits at the
+        // frame's bottom-end corner (inset 8 dp), so the frame's
+        // centre is a fixed offset up-left from the chip's centre —
+        // (69 dp, 113 dp) at this harness's 3x density. A direct
+        // touch on the image is the tap a finger makes; the row's
+        // tap detector routes it to the viewer.
+        val chipNodes = composeRule.onAllNodesWithText("10:15 AM").fetchSemanticsNodes()
+        org.junit.Assert.assertTrue("the photo bubble must render", chipNodes.isNotEmpty())
+        val chipCentre = chipNodes.first().boundsInRoot.center
+        composeRule.onRoot().performTouchInput {
+            click(
+                androidx.compose.ui.geometry.Offset(
+                    chipCentre.x - 207f, chipCentre.y - 339f,
+                ),
+            )
         }
+        composeRule.waitForIdle()
         org.junit.Assert.assertTrue(
             "tapping a normal camera photo must open the full-screen viewer",
             composeRule.onAllNodesWithTag("image_viewer").fetchSemanticsNodes().isNotEmpty(),
@@ -5229,14 +5231,8 @@ class ScreenshotsTest {
         TikaBotStore.setThemeId("t1")
         try {
             AppState.sheet {
-                Column(Modifier.padding(20.dp)) {
-                    Text(
-                        "Chat theme", color = Color(0xFF26232B), fontFamily = PoppinsFamily,
-                        fontWeight = FontWeight.SemiBold, fontSize = 15.sp,
-                    )
-                    Box(Modifier.padding(top = 12.dp)) {
-                        BotThemeGrid(onPick = {}, onCustomPick = {})
-                    }
+                Column(Modifier.padding(12.dp)) {
+                    BotThemeGrid(onPick = {}, onCustomPick = {})
                 }
             }
             frame { Box(Modifier.fillMaxSize().background(Color(0xFF14161A))) }
