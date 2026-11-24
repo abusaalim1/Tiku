@@ -4956,4 +4956,74 @@ class ScreenshotsTest {
         )
         shot("116-pinned-jump-lands.png")
     }
+
+    /** ROUND 84: the paging plan's contract, executed (the fuller
+     *  matrix lives in PinJumpR84Test). A simulated history is driven
+     *  through PinJumpPlan exactly as jumpToMessage drives it: the pin
+     *  4,900 messages deep in a 5,000-message chat must be REACHED
+     *  (the build-47 loop capped out at ~600), and a target that is
+     *  genuinely absent (deleted for me) may give up only once the
+     *  history is fully loaded — never a page early. */
+    @Test fun pinJumpPlanContractR84() {
+        // branch spot-checks
+        org.junit.Assert.assertEquals(
+            PinJumpPlan.Step.SCROLL, PinJumpPlan.step(3, hasOlder = true, pagesLoaded = 0, stalls = 0))
+        org.junit.Assert.assertEquals(
+            PinJumpPlan.Step.LOAD, PinJumpPlan.step(-1, hasOlder = true, pagesLoaded = 0, stalls = 0))
+        org.junit.Assert.assertEquals(
+            PinJumpPlan.Step.GIVE_UP, PinJumpPlan.step(-1, hasOlder = false, pagesLoaded = 12, stalls = 0))
+        org.junit.Assert.assertEquals(
+            PinJumpPlan.Step.GIVE_UP,
+            PinJumpPlan.step(-1, hasOlder = true, pagesLoaded = PinJumpPlan.MAX_PAGES, stalls = 0))
+        org.junit.Assert.assertTrue(PinJumpPlan.progressed(60, "a", 120, "b", afterHasOlder = true))
+        org.junit.Assert.assertFalse(PinJumpPlan.progressed(60, "a", 60, "a", afterHasOlder = true))
+
+        // the walk: window starts at the newest 60 of 5,000; each LOAD
+        // prepends one 60-message page; the pin is message #100.
+        var loadedFrom = 5_000 - 60
+        var pages = 0
+        var stalls = 0
+        var end: PinJumpPlan.Step? = null
+        while (end == null) {
+            val idx = if (100 >= loadedFrom) 100 - loadedFrom else -1
+            when (PinJumpPlan.step(idx, loadedFrom > 0, pages, stalls)) {
+                PinJumpPlan.Step.SCROLL -> end = PinJumpPlan.Step.SCROLL
+                PinJumpPlan.Step.GIVE_UP -> end = PinJumpPlan.Step.GIVE_UP
+                PinJumpPlan.Step.LOAD -> {
+                    val before = loadedFrom
+                    loadedFrom = maxOf(0, loadedFrom - 60)
+                    if (PinJumpPlan.progressed(
+                            5_000 - before, "m$before", 5_000 - loadedFrom, "m$loadedFrom", loadedFrom > 0,
+                        )
+                    ) { pages++; stalls = 0 } else { stalls++ }
+                }
+            }
+        }
+        org.junit.Assert.assertEquals(PinJumpPlan.Step.SCROLL, end)
+        org.junit.Assert.assertEquals(81, pages)
+
+        // the absent walk: same history, target never appears — the
+        // plan must load every page and give up only at the very top.
+        loadedFrom = 700 - 60
+        pages = 0
+        stalls = 0
+        end = null
+        while (end == null) {
+            when (PinJumpPlan.step(-1, loadedFrom > 0, pages, stalls)) {
+                PinJumpPlan.Step.SCROLL -> end = PinJumpPlan.Step.SCROLL
+                PinJumpPlan.Step.GIVE_UP -> end = PinJumpPlan.Step.GIVE_UP
+                PinJumpPlan.Step.LOAD -> {
+                    val before = loadedFrom
+                    loadedFrom = maxOf(0, loadedFrom - 60)
+                    if (PinJumpPlan.progressed(
+                            700 - before, "m$before", 700 - loadedFrom, "m$loadedFrom", loadedFrom > 0,
+                        )
+                    ) { pages++; stalls = 0 } else { stalls++ }
+                }
+            }
+        }
+        org.junit.Assert.assertEquals(PinJumpPlan.Step.GIVE_UP, end)
+        org.junit.Assert.assertEquals(0, loadedFrom)
+        org.junit.Assert.assertEquals(11, pages)
+    }
 }
