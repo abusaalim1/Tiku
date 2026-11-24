@@ -1292,74 +1292,58 @@ class ScreenshotsTest {
     // hard-503 (capacity) in every probe and 3.5-flash, the one
     // answering model, 429s under any burst; the old cascade burned
     // through all three in seconds and gave up. These tests pin the
-    // app side DETERMINISTICALLY against a local stub server
-    // (GeminiConfig.BASE seam): the cascades must ride over dead
-    // models, the new second pass must ride out a quota storm, and
-    // the full UI send path must land the reply on both surfaces.
+    // app side DETERMINISTICALLY at GeminiClient's transport seams
+    // (the sandbox cannot host a local HTTP server): the cascades
+    // must ride over dead models, the new second pass must ride
+    // out a quota storm, and the full UI send path must land the
+    // reply on both surfaces.
 
-    /** A local stand-in for the Gemini endpoint. Behaviours are
-     *  per-model lambdas of (hitCount, isStream) so a test can
-     *  script sequences (429 on pass 1, 200 on pass 2). */
-    private class GeminiStub {
-        val behaviours = mutableMapOf<String, (Int, Boolean) -> Triple<Int, String, String>>()
-        val hits = java.util.concurrent.ConcurrentHashMap<String, Int>()
-        private val server = com.sun.net.httpserver.HttpServer.create(
-            java.net.InetSocketAddress("127.0.0.1", 0), 0)
-        val base: String get() = "http://127.0.0.1:${server.address.port}/v1beta/models"
-        fun start(): GeminiStub {
-            server.createContext("/v1beta/models/") { ex ->
-                val path = ex.requestURI.path
-                val model = path.substringAfterLast("/").substringBefore(":")
-                val stream = path.contains("streamGenerateContent")
-                val n = hits.merge(model, 1) { a, b -> a + b } ?: 1
-                val (code, ctype, body) = behaviours[model]?.invoke(n, stream)
-                    ?: Triple(500, "application/json", "{}")
-                val bytes = body.toByteArray(Charsets.UTF_8)
-                ex.responseHeaders.set("Content-Type", ctype)
-                ex.sendResponseHeaders(code, bytes.size.toLong())
-                ex.responseBody.use { it.write(bytes) }
-            }
-            server.start()
-            return this
-        }
-        fun stop() = server.stop(0)
+    /** Scripted outcomes for the transport seams: [raw] answers
+     *  the non-streaming leaf per (model, hitCount); [stream]
+     *  answers the streaming leaf per model. */
+    private class GeminiScript {
+        val rawHits = java.util.concurrent.ConcurrentHashMap<String, Int>()
+        var raw: (String, Int) -> GeminiClient.Raw =
+            { _, _ -> GeminiClient.Raw.Failed(500) }
+        var stream: (String, (String) -> Unit) -> GeminiClient.StreamResult =
+            { _, _ -> GeminiClient.StreamResult.FailedBeforeText(500) }
     }
 
-    private fun stubError(code: Int): Triple<Int, String, String> =
-        Triple(code, "application/json", """{"error":{"code":$code,"status":"STUB"}}""")
+    private fun stubRawOk(text: String): GeminiClient.Raw =
+        GeminiClient.Raw.Ok(org.json.JSONObject(
+            """{"candidates":[{"content":{"parts":[{"text":"$text"}]},"finishReason":"STOP"}]}"""))
 
-    private fun stubJsonAnswer(text: String): Triple<Int, String, String> =
-        Triple(200, "application/json",
-            """{"candidates":[{"content":{"parts":[{"text":"$text"}]},"finishReason":"STOP"}]}""")
-
-    private fun stubSseAnswer(vararg chunks: String): Triple<Int, String, String> =
-        Triple(200, "text/event-stream", chunks.joinToString("") { c ->
-            "data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"$c\"}]}}]}\n\n"
-        })
-
-    /** Run [block] with GeminiClient pointed at [stub] and the
-     *  Round-86 cascade retry delay shortened; always restores. */
-    private fun <T> withGeminiStub(stub: GeminiStub, block: () -> T): T {
+    /** Run [block] with the transport seams scripted by [script]
+     *  and the Round-86 cascade retry delay shortened; always
+     *  restores the real transports afterwards. */
+    private fun <T> withGeminiScript(script: GeminiScript, block: () -> T): T {
+        val oldRaw = GeminiClient.rawTransport
+        val oldStream = GeminiClient.streamTransport
         val oldDelay = GeminiClient.cascadeRetryDelayMs
-        System.setProperty("tiku.gemini.base", stub.base)
+        GeminiClient.rawTransport = { model, _, _ ->
+            val n = script.rawHits.merge(model, 1) { a, b -> a + b } ?: 1
+            script.raw(model, n)
+        }
+        GeminiClient.streamTransport = { model, _, onText -> script.stream(model, onText) }
         GeminiClient.cascadeRetryDelayMs = 50
         try {
             return block()
         } finally {
-            System.clearProperty("tiku.gemini.base")
+            GeminiClient.rawTransport = oldRaw
+            GeminiClient.streamTransport = oldStream
             GeminiClient.cascadeRetryDelayMs = oldDelay
-            stub.stop()
         }
     }
 
     /** The /tiku cascade must step over a hard-down first model and
      *  take the second model's answer. */
     @Test fun r86stub_answerTextCascadesPastDeadFirstModel() {
-        val stub = GeminiStub().start()
-        stub.behaviours["gemini-3.5-flash"] = { _, _ -> stubError(503) }
-        stub.behaviours["gemini-3.1-flash-lite"] = { _, _ -> stubJsonAnswer("stub lite answer") }
-        stub.behaviours["gemini-3.8-flash"] = { _, _ -> stubError(503) }
-        val out = withGeminiStub(stub) {
+        val script = GeminiScript()
+        script.raw = { model, _ ->
+            if (model == "gemini-3.1-flash-lite") stubRawOk("stub lite answer")
+            else GeminiClient.Raw.Failed(503)
+        }
+        val out = withGeminiScript(script) {
             runBlocking { GeminiClient.answerText("hello there") }
         }
         org.junit.Assert.assertEquals(
@@ -1367,37 +1351,44 @@ class ScreenshotsTest {
     }
 
     /** THE Round-86 fix: a first pass that meets only transient
-     *  failures (429 quota + 503 capacity) must NOT be the end —
-     *  after the pause, a second pass runs and its answer lands. */
+     *  failures (quota + 503 capacity) must NOT be the end — after
+     *  the pause, a second pass runs and its answer lands. */
     @Test fun r86stub_answerTextRetryPassRidesOutQuota() {
-        val stub = GeminiStub().start()
-        stub.behaviours["gemini-3.5-flash"] = { n, _ ->
-            if (n == 1) stubError(429) else stubJsonAnswer("second pass answer")
+        val script = GeminiScript()
+        script.raw = { model, n ->
+            when {
+                model == "gemini-3.5-flash" && n == 1 -> GeminiClient.Raw.Quota
+                model == "gemini-3.5-flash" -> stubRawOk("second pass answer")
+                else -> GeminiClient.Raw.Failed(503)
+            }
         }
-        stub.behaviours["gemini-3.1-flash-lite"] = { _, _ -> stubError(503) }
-        stub.behaviours["gemini-3.8-flash"] = { _, _ -> stubError(503) }
-        val out = withGeminiStub(stub) {
+        val out = withGeminiScript(script) {
             runBlocking { GeminiClient.answerText("hello there") }
         }
         org.junit.Assert.assertEquals(
             GeminiClient.Outcome.Ok("second pass answer"), out)
         org.junit.Assert.assertTrue(
             "the primary model must be hit on both passes",
-            (stub.hits["gemini-3.5-flash"] ?: 0) >= 2,
+            (script.rawHits["gemini-3.5-flash"] ?: 0) >= 2,
         )
     }
 
     /** The companion's streaming cascade must step over a hard-down
      *  lite (its first model) and stream the fallback's answer. */
     @Test fun r86stub_companionStreamCascadesPastDeadLite() {
-        val stub = GeminiStub().start()
-        stub.behaviours["gemini-3.1-flash-lite"] = { _, _ -> stubError(503) }
-        stub.behaviours["gemini-3.5-flash"] = { _, stream ->
-            if (stream) stubSseAnswer("Hello ", "there") else stubJsonAnswer("Hello there")
+        val script = GeminiScript()
+        script.stream = { model, onText ->
+            if (model == "gemini-3.5-flash") {
+                onText("Hello ")
+                onText("Hello there")
+                GeminiClient.StreamResult.Completed("Hello there")
+            } else {
+                GeminiClient.StreamResult.FailedBeforeText(503)
+            }
         }
-        stub.behaviours["gemini-3.8-flash"] = { _, _ -> stubError(503) }
+        script.raw = { _, _ -> stubRawOk("Hello there") }
         val partials = mutableListOf<String>()
-        val out = withGeminiStub(stub) {
+        val out = withGeminiScript(script) {
             runBlocking {
                 GeminiClient.companionReplyStreaming(listOf(true to "hi"), "persona") { p ->
                     synchronized(partials) { partials += p }
@@ -1440,14 +1431,12 @@ class ScreenshotsTest {
     }
 
     @Test fun r86_chatSlashCommandReplyLands() {
-        val stub = GeminiStub().start()
-        for (m in listOf("gemini-3.5-flash", "gemini-3.1-flash-lite", "gemini-3.8-flash")) {
-            stub.behaviours[m] = { _, _ -> stubJsonAnswer("Stub reply text") }
-        }
+        val script = GeminiScript()
+        script.raw = { _, _ -> stubRawOk("Stub reply text") }
         val p = PreviewStore.people[1]
         val id = PreviewRepo.startThreadWith(p)
         try {
-            withGeminiStub(stub) {
+            withGeminiScript(script) {
                 AppState.go(Screen.Chat(id))
                 frame { ChatScreen(id) }
                 composeRule.waitForIdle()
@@ -1484,19 +1473,23 @@ class ScreenshotsTest {
     }
 
     @Test fun r86_companionReplyLands() {
-        val stub = GeminiStub().start()
+        val script = GeminiScript()
         // The companion leads with lite — scripted hard-down, exactly
         // like the live route today; the stream must fall through to
-        // 3.5-flash's SSE answer.
-        stub.behaviours["gemini-3.1-flash-lite"] = { _, _ -> stubError(503) }
-        stub.behaviours["gemini-3.5-flash"] = { _, stream ->
-            if (stream) stubSseAnswer("Companion stub reply") else stubJsonAnswer("Companion stub reply")
+        // 3.5-flash's answer.
+        script.stream = { model, onText ->
+            if (model == "gemini-3.5-flash") {
+                onText("Companion stub reply")
+                GeminiClient.StreamResult.Completed("Companion stub reply")
+            } else {
+                GeminiClient.StreamResult.FailedBeforeText(503)
+            }
         }
-        stub.behaviours["gemini-3.8-flash"] = { _, _ -> stubError(503) }
+        script.raw = { _, _ -> stubRawOk("Companion stub reply") }
         stageCompanionR73C()
         val base = TikaBotStore.messages.value.size
         try {
-            withGeminiStub(stub) {
+            withGeminiScript(script) {
                 frame { TikaBotScreen() }
                 composeRule.waitForIdle()
                 typeIntoComposer("hello tika, how are you?")

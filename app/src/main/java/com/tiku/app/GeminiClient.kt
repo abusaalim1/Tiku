@@ -74,7 +74,7 @@ object GeminiClient {
         data object Failed : Outcome<Nothing>
     }
 
-    private sealed interface Raw {
+    internal sealed interface Raw {
         data class Ok(val json: JSONObject) : Raw
         data object Quota : Raw
 
@@ -715,7 +715,7 @@ object GeminiClient {
      *  transport exception) so the cascade can apply the lite
      *  503-retry rule; [FailedMidStream] keeps the partial text so
      *  a reply that was already arriving is never thrown away. */
-    private sealed interface StreamResult {
+    internal sealed interface StreamResult {
         data class Completed(val text: String) : StreamResult
         data object Empty : StreamResult
         data object Quota : StreamResult
@@ -801,7 +801,7 @@ object GeminiClient {
         var idx = 0
         while (idx < COMPANION_TEXT_MODELS.size && winningText == null) {
             val model = COMPANION_TEXT_MODELS[idx]
-            when (val r = postStream(model, body, onText)) {
+            when (val r = streamTransport(model, body, onText)) {
                 is StreamResult.Completed -> {
                     if (r.text.isNotBlank()) {
                         winningText = r.text.trim()
@@ -1672,7 +1672,22 @@ object GeminiClient {
      *  non-2xx and every transport/parse failure maps to [Raw.Failed]
      *  so the cascade moves on. Game generation passes a longer read
      *  timeout (a whole HTML file is a lot of tokens). */
-    private suspend fun post(model: String, body: JSONObject, readTimeoutMs: Int = 60_000): Raw = withContext(Dispatchers.IO) {
+    /** ROUND 86 — test seams at the socket leaf. Production always
+     *  runs the real HTTP calls ([postReal] / [postStream]); the
+     *  harness swaps these two vars to script per-model outcomes
+     *  deterministically (the sandbox cannot host a local HTTP
+     *  server), then restores them. The cascade logic under test
+     *  always runs for real. */
+    internal var rawTransport: suspend (String, JSONObject, Int) -> Raw =
+        { m, b, t -> postReal(m, b, t) }
+
+    internal var streamTransport: suspend (String, JSONObject, (String) -> Unit) -> StreamResult =
+        { m, b, cb -> postStream(m, b, cb) }
+
+    private suspend fun post(model: String, body: JSONObject, readTimeoutMs: Int = 60_000): Raw =
+        rawTransport(model, body, readTimeoutMs)
+
+    private suspend fun postReal(model: String, body: JSONObject, readTimeoutMs: Int = 60_000): Raw = withContext(Dispatchers.IO) {
         var conn: HttpURLConnection? = null
         try {
             conn = (URL("${GeminiConfig.BASE}/$model:generateContent").openConnection()
