@@ -5131,7 +5131,7 @@ class ScreenshotsTest {
         // region), then flush the row detector's double-tap window
         // on the compose clock so its single-tap route fires.
         runCatching { chipNodes[0].performTouchInput { click(center) } }
-        composeRule.mainClock.advanceBy(700)
+        composeRule.mainClock.advanceTimeBy(700)
         composeRule.waitForIdle()
         if (composeRule.onAllNodesWithTag("image_viewer").fetchSemanticsNodes().isEmpty()) {
             // Attempt 2: a raw touch on the photo's centre, derived
@@ -5144,7 +5144,7 @@ class ScreenshotsTest {
                     click(androidx.compose.ui.geometry.Offset(c.x - 207f, c.y - 339f))
                 }
             }
-            composeRule.mainClock.advanceBy(700)
+            composeRule.mainClock.advanceTimeBy(700)
             composeRule.waitForIdle()
         }
         org.junit.Assert.assertTrue(
