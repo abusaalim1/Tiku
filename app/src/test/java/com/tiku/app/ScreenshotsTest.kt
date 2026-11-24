@@ -4374,4 +4374,29 @@ class ScreenshotsTest {
         )
         shot("108-note-song-peer.png")
     }
+
+    // ================= ROUND 79 WS-5 — companion @mentions =================
+    // The companion composer offers the signed-in user's OWN chat
+    // partners while an "@…" tail is typed (RdChatInput's mention
+    // sheet — the companion is the only caller that passes
+    // candidates). Two partners are seeded as threads; typing "@"
+    // must surface their suggestion rows (name + @username).
+
+    @Test fun shot109_companionMentionSuggestions() {
+        PreviewRepo.startThreadWith(PreviewStore.people[0]) // Aarav / @aarav
+        PreviewRepo.startThreadWith(PreviewStore.people[1]) // Meera / @meera
+        stageCompanionR73C()
+        frame { TikaBotScreen() }
+        typeIntoComposer("@")
+        composeRule.waitForIdle()
+        org.junit.Assert.assertTrue(
+            "typing @ in the companion offers partner @aarav",
+            composeRule.onAllNodesWithText("@aarav").fetchSemanticsNodes().isNotEmpty(),
+        )
+        org.junit.Assert.assertTrue(
+            "typing @ in the companion offers partner @meera",
+            composeRule.onAllNodesWithText("@meera").fetchSemanticsNodes().isNotEmpty(),
+        )
+        shot("109-companion-mention-suggestions.png")
+    }
 }

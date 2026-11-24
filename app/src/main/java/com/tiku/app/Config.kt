@@ -32,6 +32,19 @@ object Config {
     const val OWNER_EMAIL = "taiwanserverforff123@gmail.com"
 
     /**
+     * ROUND 79 (WS-5): ATIKA's account — the owner's wife (identity
+     * settled by the owner 2026-11-24: rejabulkorim008@gmail.com,
+     * username slvyy_011). Matched by EMAIL for the AI wife
+     * treatment ([OwnerState.isAtika] — the owner-info refusal never
+     * applies to her questions about Abu Saalim; see GeminiClient's
+     * fact block), and by USERNAME where a chat partner must be
+     * recognised as her (the companion's @mention context). Like
+     * [OWNER_EMAIL], identity is the email — never a uid.
+     */
+    const val ATIKA_EMAIL = "rejabulkorim008@gmail.com"
+    const val ATIKA_USERNAME = "slvyy_011"
+
+    /**
      * WebRTC ICE servers (real P2P calls). STUN for NAT discovery; Open Relay
      * Project free TURN as fallback. Swappable without code changes elsewhere.
      */

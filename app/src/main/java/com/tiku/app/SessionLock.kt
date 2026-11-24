@@ -78,6 +78,22 @@ object OwnerState {
         get() = previewOverride
             ?: (!Config.PREVIEW_UI_ONLY &&
                 FirebaseEngine.signedInEmail.equals(Config.OWNER_EMAIL, ignoreCase = true))
+
+    /** ROUND 79 (WS-5): harness seam twin of [previewOverride] —
+     *  decides wife-ness without a live Firebase session. Production
+     *  code never sets it. */
+    @Volatile var previewWifeOverride: Boolean? = null
+
+    /** ROUND 79 (WS-5): true when the signed-in account is ATIKA's
+     *  (the owner's wife) — matched by her signed-in EMAIL against
+     *  [Config.ATIKA_EMAIL], exactly the [isOwner] discipline. The
+     *  AI paths read this to give her the wife treatment: the
+     *  owner-info refusal never applies to her questions about Abu
+     *  Saalim (GeminiClient's gate + wife prompt variant). */
+    val isAtika: Boolean
+        get() = previewWifeOverride
+            ?: (!Config.PREVIEW_UI_ONLY &&
+                FirebaseEngine.signedInEmail.equals(Config.ATIKA_EMAIL, ignoreCase = true))
 }
 
 /**

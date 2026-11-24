@@ -3260,6 +3260,16 @@ fun RdChatInput(
      *  (screenshot harness) compiling unchanged. */
     editing: Boolean = false,
     onCancelEdit: () -> Unit = {},
+    /** ROUND 79 (WS-5): companion @mentions — the signed-in user's
+     *  chat partners offered while an "@…" tail is being typed.
+     *  Empty (the default) = the feature is off and this composer is
+     *  exactly the pre-round one; only the companion passes
+     *  candidates. [onMentionPick] records the tagged partner so the
+     *  caller can pass them to the AI as profile-level context —
+     *  username + display name only, NEVER any chat content (the AI
+     *  privacy law). */
+    mentionCandidates: List<Person> = emptyList(),
+    onMentionPick: ((Person) -> Unit)? = null,
 ) {
     // ROUND 26: themed composer colours. Every value falls back to the
     // EXACT pre-round expression when theme == null, so the Default
@@ -3317,6 +3327,18 @@ fun RdChatInput(
         val caret = cmd.name.length + 1
         tfv = TextFieldValue(inserted, TextRange(caret))
         onChange(inserted)
+    }
+    /** ROUND 79 (WS-5): a mention-sheet tap — replaces the trailing
+     *  "@query" with "@username " and places the caret right after
+     *  it (the slash insert's caret discipline applied to mentions),
+     *  then reports the pick so the caller can record the partner. */
+    fun insertMention(p: Person) {
+        val at = value.lastIndexOf('@')
+        if (at < 0) return
+        val inserted = value.substring(0, at) + "@" + p.username + " "
+        tfv = TextFieldValue(inserted, TextRange(inserted.length))
+        onChange(inserted)
+        onMentionPick?.invoke(p)
     }
     // ROUND 22: typed emoji render as iOS glyphs while typing (the
     // same font the bubbles use — EmojiArt.kt, worker A §5).
@@ -3393,6 +3415,60 @@ fun RdChatInput(
                         "✕", color = subCol, fontSize = 13.sp,
                         modifier = Modifier.rdPress(onFxDisarm).padding(start = 8.dp, end = 2.dp, top = 2.dp, bottom = 2.dp),
                     )
+                }
+            }
+        }
+        // ROUND 79 (WS-5): the @mention sheet — the slash sheet's
+        // sibling, shown only when a caller passed mention
+        // candidates (the companion) and the text ends in an "@…"
+        // tail with no space in it. A tap tags the partner into the
+        // text as "@username " via insertMention. Same exit-animation
+        // discipline as the slash sheet (last matches stay composed
+        // while it closes).
+        val mentionQuery: String? = if (
+            mentionCandidates.isEmpty() || recording || editing
+        ) null else {
+            val at = value.lastIndexOf('@')
+            if (at < 0) null else {
+                val tail = value.substring(at + 1)
+                if (tail.any { it == ' ' || it == '\n' }) null else tail
+            }
+        }
+        val mentionMatches = if (mentionQuery == null) emptyList() else mentionCandidates
+            .filter { p ->
+                p.username.contains(mentionQuery, ignoreCase = true) ||
+                    p.name.contains(mentionQuery, ignoreCase = true)
+            }.take(5)
+        var lastMentionMatches by remember { mutableStateOf<List<Person>>(emptyList()) }
+        LaunchedEffect(mentionMatches) { if (mentionMatches.isNotEmpty()) lastMentionMatches = mentionMatches }
+        AnimatedVisibility(
+            visible = mentionMatches.isNotEmpty(),
+            enter = fadeIn() + expandVertically(),
+            exit = fadeOut() + shrinkVertically(),
+        ) {
+            val rows = mentionMatches.ifEmpty { lastMentionMatches }
+            if (rows.isNotEmpty()) {
+                Column(
+                    Modifier.fillMaxWidth().then(barMod(RoundedCornerShape(24.dp))).padding(vertical = 6.dp),
+                ) {
+                    rows.forEachIndexed { i, p ->
+                        if (i > 0) Box(
+                            Modifier.padding(horizontal = 16.dp).fillMaxWidth().height(1.dp)
+                                .background(contentCol.copy(alpha = 0.07f)),
+                        )
+                        Row(
+                            Modifier.fillMaxWidth().rdPress { insertMention(p) }
+                                .padding(horizontal = 16.dp, vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Av(p, 32)
+                            Column(Modifier.weight(1f).padding(horizontal = 10.dp)) {
+                                Text(p.name, color = contentCol, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, fontFamily = PoppinsFamily)
+                                if (p.username.isNotEmpty()) Text("@${p.username}", color = subCol, fontSize = 12.5.sp, fontFamily = PoppinsFamily)
+                            }
+                            Text("›", color = subCol, fontSize = 18.sp)
+                        }
+                    }
                 }
             }
         }
