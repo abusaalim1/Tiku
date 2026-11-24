@@ -301,19 +301,24 @@ object PreviewRepo : ChatRepo {
         "Okay, 7 pm works 🌿", "Love that 🤍",
     ).random()
 
-    override fun sendText(id: String, text: String, quote: String?) {
-        push(id, TikuMessage(UUID.randomUUID().toString(), "", MsgKind.TEXT, text, "now", me = true,
+    override fun sendText(id: String, text: String, quote: String?): String? {
+        // ROUND 82: return the staged id (the engine's delete-link).
+        val msgId = UUID.randomUUID().toString()
+        push(id, TikuMessage(msgId, "", MsgKind.TEXT, text, "now", me = true,
             amps = List(22) { 8 }, replyQuote = quote, tsMs = System.currentTimeMillis()))
         simulateReply(id)
+        return msgId
     }
 
     /** ROUND 22 (parent): keep the armed effect on preview sends too,
      *  so the harness renders gift/fire/confetti/hearts bubbles. */
-    override fun sendTextFx(id: String, text: String, quote: String?, fx: String?) {
-        push(id, TikuMessage(UUID.randomUUID().toString(), "", MsgKind.TEXT, text, "now", me = true,
+    override fun sendTextFx(id: String, text: String, quote: String?, fx: String?): String? {
+        val msgId = UUID.randomUUID().toString()
+        push(id, TikuMessage(msgId, "", MsgKind.TEXT, text, "now", me = true,
             amps = List(22) { 8 }, replyQuote = quote, tsMs = System.currentTimeMillis(),
             fx = fx?.takeIf { it in MESSAGE_FX_KINDS }))
         simulateReply(id)
+        return msgId
     }
 
     override fun sendPhoto(id: String, bmp: Bitmap) {
@@ -551,6 +556,8 @@ object PreviewRepo : ChatRepo {
     }
 
     override fun deleteForMe(id: String, msgId: String) {
+        // ROUND 82 (delete = cancel): same hook as the real engine.
+        AiJobs.cancelForCommand(id, msgId)
         AppState.updateThread(id) {
             it.messages.replaceAll { m -> if (m.id == msgId) m.copy(deletedForMe = true) else m }
         }

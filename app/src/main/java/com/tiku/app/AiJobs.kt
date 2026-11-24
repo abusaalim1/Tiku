@@ -4,9 +4,10 @@ import android.util.Log
 import androidx.compose.runtime.mutableStateMapOf
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withTimeoutOrNull
 
 /**
  * ROUND 71 (Fix 3) — AI jobs outlive the screens that start them.
@@ -60,6 +61,55 @@ import kotlinx.coroutines.withTimeoutOrNull
  * state only inside their LazyColumn content lambdas — see the
  * Round-73 worker-B report); the dynamic-flip tests in
  * ScreenshotsTest pin the behaviour end to end.
+ *
+ * ROUND 82 — the bound that could never fire, and delete = cancel.
+ *
+ * The owner (2026-11-24): a slash-command reply "takes hours", the
+ * typing animation shows the whole time, and UNSENDING or permanently
+ * deleting the command message leaves the animation running. Two
+ * distinct defects, both pinned from code:
+ *
+ * 1. R73's backstop was `withTimeoutOrNull` AROUND the block — and a
+ *    timeout coroutine cannot complete while its block sits inside a
+ *    NON-CANCELLABLE blocking call. GeminiClient's transport is
+ *    exactly that: HttpURLConnection reads on Dispatchers.IO whose
+ *    readTimeout is a per-read INACTIVITY timeout, not a total
+ *    deadline, so a slow-dripping response holds one call open
+ *    indefinitely and the model cascade chains such calls. Timeout
+ *    waits on the block, the block waits on the socket, the finally
+ *    that removes the [thinking] entry never runs — the animation
+ *    (and the single-flight gate) lives as long as the socket drips.
+ *    FIX: the bound is now a WATCHDOG — a separate coroutine that
+ *    sleeps on `delay` (a true suspension, fires on time no matter
+ *    what the block is doing) and then EXPIRES the job: the
+ *    [thinking] entry is removed synchronously, the work job is
+ *    cancelled, and the job's generation goes stale (see [Handle]).
+ *    The indicator's lifetime no longer depends on the block ever
+ *    returning.
+ *
+ * 2. Deletion was never wired into the job lifecycle: jobs were
+ *    keyed by chat only, the command message's id was minted inside
+ *    the send path and recorded nowhere, and the delete paths never
+ *    touched AiJobs — so the job ran on and, the sinks being
+ *    fire-and-forget (calling one synchronously upserts the AI
+ *    message), its reply posted in full for a deleted command.
+ *    FIX: [launch] records the command message's id ([Record]), the
+ *    repo delete paths call [cancelForCommand], and every block
+ *    receives a [Handle] whose [Handle.isActive] it must check
+ *    immediately before dispatching to a sink or a toast. A stale
+ *    handle can never post, even if its block is still unwinding
+ *    out of a blocking call when the cancel lands.
+ *
+ * Generations: every launch takes a monotonically increasing
+ * generation for its key. A job's finally clears the indicator ONLY
+ * if its generation is still the key's current one — a stale job
+ * finishing late can never clear a newer job's indicator, and an
+ * expired job's late return is a no-op everywhere.
+ *
+ * Nothing here is persisted: [thinking] and the records live in
+ * memory only, so process death takes every indicator with it —
+ * after relaunch there is no job, therefore no animation, by
+ * construction.
  */
 object AiJobs {
 
@@ -80,8 +130,119 @@ object AiJobs {
      * ROUND 73: this map is now the ONLY in-flight store — the
      * companion's busy flag is a view over its [COMPANION_KEY]
      * entry (see [companionBusy]).
+     *
+     * ROUND 82: the map stays the indicator's only store, but its
+     * entries are now owned by [Record]s — written at launch,
+     * removed by the job's own finally (while still current), by
+     * the watchdog on expiry, or by a delete-cancel — never left
+     * behind by a wedged block.
      */
     val thinking = mutableStateMapOf<String, String>()
+
+    /**
+     * ROUND 82: the capability handed to every job block. A block
+     * MUST consult [isActive] immediately before landing anything
+     * (a sink post, a store append, a toast): the sinks are
+     * fire-and-forget, so this check — not coroutine cancellation —
+     * is what guarantees a cancelled/expired job never posts. It is
+     * cheap, non-suspending, and safe to call from any thread.
+     */
+    class Handle internal constructor(
+        private val key: String,
+        private val generation: Long,
+    ) {
+        /** True only while this job is still its key's current,
+         *  unexpired, uncancelled job. */
+        fun isActive(): Boolean = isCurrent(key, generation)
+    }
+
+    /** One in-flight job's bookkeeping. [generation] identifies it
+     *  forever; [commandMsgId] links it to the chat message whose
+     *  deletion must cancel it (null for the companion's photo turn,
+     *  whose trigger is appended inside the job — the companion
+     *  store cancels by identity instead, see TikaBotStore). */
+    private class Record(
+        val generation: Long,
+        val commandMsgId: String?,
+        var job: Job? = null,
+        var watchdog: Job? = null,
+    )
+
+    private val lock = Any()
+    private val records = mutableMapOf<String, Record>()
+    private var nextGeneration = 0L
+
+    private fun isCurrent(key: String, generation: Long): Boolean =
+        synchronized(lock) { records[key]?.generation == generation } &&
+            thinking.containsKey(key)
+
+    /** The work job finished (any outcome). Clears the indicator
+     *  ONLY if this generation is still the key's current one — a
+     *  stale job's finally must never clear a newer job's entry. */
+    private fun finish(key: String, generation: Long) {
+        val wd: Job?
+        synchronized(lock) {
+            val rec = records[key]
+            if (rec == null || rec.generation != generation) return
+            records.remove(key)
+            thinking.remove(key)
+            wd = rec.watchdog
+        }
+        wd?.cancel()
+    }
+
+    /** Expire the key's job of [generation]: the indicator entry is
+     *  removed SYNCHRONOUSLY (the animation dies now, not whenever
+     *  the block unwinds), the record is dropped (the generation is
+     *  stale from this instant — [Handle.isActive] false forever),
+     *  and the work job is cancelled as a courtesy to whatever part
+     *  of it can still hear cancellation. Returns false when the
+     *  generation was already gone (nothing to expire). */
+    private fun expire(key: String, generation: Long): Boolean {
+        val rec: Record
+        synchronized(lock) {
+            val r = records[key]
+            if (r == null || r.generation != generation) return false
+            records.remove(key)
+            thinking.remove(key)
+            rec = r
+        }
+        rec.watchdog?.cancel()
+        rec.job?.cancel()
+        return true
+    }
+
+    /** Cancel the key's current job, whatever it is (companion
+     *  cleanup, test teardown). The indicator clears immediately. */
+    fun cancel(key: String) {
+        val gen = synchronized(lock) { records[key]?.generation } ?: run {
+            // No record (a label written directly, e.g. by a test):
+            // still honour the clear.
+            thinking.remove(key)
+            return
+        }
+        expire(key, gen)
+    }
+
+    /**
+     * ROUND 82 (delete = cancel): if the in-flight job for [key]
+     * was triggered by the command message [msgId], cancel it NOW —
+     * indicator cleared synchronously, generation staled, so no
+     * reply can ever land for that command. Called by the repo
+     * delete paths (delete-for-me and delete-for-everyone, real
+     * engine and preview store alike) before they do their own
+     * work. Returns true when a job was cancelled.
+     */
+    fun cancelForCommand(key: String, msgId: String): Boolean {
+        val gen = synchronized(lock) {
+            records[key]?.takeIf { it.commandMsgId == msgId }?.generation
+        } ?: return false
+        val cancelled = expire(key, gen)
+        if (cancelled) {
+            Log.i("AiJobs", "AI job for '$key' cancelled — its command message was deleted")
+        }
+        return cancelled
+    }
 
     /**
      * The companion chat's single-flight busy flag (TikaBotScreen's
@@ -97,12 +258,22 @@ object AiJobs {
      * independent `mutableStateOf` in lockstep by hand). The setter
      * stays live for test cleanup (`AiJobs.companionBusy = false`
      * in the harness setup clears the companion's map entry).
+     *
+     * ROUND 82: setting it false is now a full cancel of the
+     * companion's current job (record, watchdog and all), not just
+     * a label removal — cleanup can never leave a job running
+     * behind a cleared flag.
      */
     var companionBusy: Boolean
         get() = thinking.containsKey(COMPANION_KEY)
         set(value) {
-            if (value) thinking[COMPANION_KEY] = COMPANION_LABEL
-            else thinking.remove(COMPANION_KEY)
+            if (value) {
+                if (!thinking.containsKey(COMPANION_KEY)) {
+                    thinking[COMPANION_KEY] = COMPANION_LABEL
+                }
+            } else {
+                cancel(COMPANION_KEY)
+            }
         }
 
     /** The companion's key in [thinking] — registered by
@@ -128,75 +299,80 @@ object AiJobs {
      * sites gate on `thinking[threadId]` first and toast; this is
      * the backstop so no path can ever double-fire). The label is
      * registered SYNCHRONOUSLY, before the coroutine is dispatched,
-     * so the gate has no window; it is cleared in a finally inside
-     * the job, so completion, failure and even a thrown exception
-     * all release the chat.
+     * so the gate has no window.
      *
-     * ROUND 73: [block] runs under a [timeoutMs] backstop
-     * (withTimeoutOrNull). The default — 660 s — is deliberately
-     * ABOVE the longest self-bounded workload (game generation
-     * self-bounds at 600 s inside GeminiClient.generateGame), so
-     * the ceiling never cuts a legitimate job; it exists only so a
-     * wedged provider call can never hold the indicator (or the
-     * gate) forever. On timeout the block is cancelled mid-flight:
-     * its outcome handling simply never runs — nothing is posted —
-     * the timeout is logged, and the finally clears the label,
-     * exactly as if the job had failed.
+     * ROUND 82: the [timeoutMs] backstop is enforced by a WATCHDOG,
+     * not by wrapping the block (the R73 `withTimeoutOrNull` could
+     * not complete while the block sat in a non-cancellable blocking
+     * read — see the class doc). The watchdog sleeps on `delay`,
+     * then expires the job: indicator removed, job cancelled,
+     * generation staled. [commandMsgId] links the job to its
+     * command message so deleting that message cancels the job via
+     * [cancelForCommand]. The block receives a [Handle] and must
+     * check [Handle.isActive] immediately before landing anything.
      */
-    fun launch(key: String, label: String, timeoutMs: Long = 660_000L, block: suspend () -> Unit): Boolean {
-        if (thinking.containsKey(key)) return false
-        thinking[key] = label
-        scope.launch {
+    fun launch(
+        key: String,
+        label: String,
+        timeoutMs: Long = 660_000L,
+        commandMsgId: String? = null,
+        block: suspend (Handle) -> Unit,
+    ): Boolean {
+        val record: Record
+        synchronized(lock) {
+            if (thinking.containsKey(key)) return false
+            record = Record(++nextGeneration, commandMsgId)
+            records[key] = record
+            thinking[key] = label
+        }
+        val handle = Handle(key, record.generation)
+        val job = scope.launch {
             try {
-                val finished = withTimeoutOrNull(timeoutMs) {
-                    block()
-                    true
-                }
-                if (finished == null) {
-                    Log.w(
-                        "AiJobs",
-                        "AI job for '$key' hit the ${timeoutMs}ms backstop and was cancelled; " +
-                            "indicator cleared, nothing posted by the timeout path",
-                    )
-                }
+                block(handle)
             } finally {
-                thinking.remove(key)
+                finish(key, record.generation)
             }
         }
+        val watchdog = scope.launch {
+            delay(timeoutMs)
+            if (expire(key, record.generation)) {
+                Log.w(
+                    "AiJobs",
+                    "AI job for '$key' hit the ${timeoutMs}ms backstop and was expired; " +
+                        "indicator cleared, and its handle is stale so nothing can post",
+                )
+            }
+        }
+        synchronized(lock) {
+            record.job = job
+            record.watchdog = watchdog
+        }
+        // The block may have finished (or been expired) before the
+        // handles were wired in — never leave a watchdog running
+        // behind a dead record.
+        if (!isCurrent(key, record.generation)) watchdog.cancel()
         return true
     }
 
     /**
-     * Launch [block] as the companion's one AI job. Same contract as
-     * [launch], on the companion's own gate: returns false without
-     * launching while [companionBusy]; the flag is set synchronously
-     * and cleared in the job's finally, whatever the block does.
-     * ROUND 73: registration writes the companion's [thinking]
-     * entry through the [companionBusy] view (one store, one fact),
-     * and the job runs under the [COMPANION_TIMEOUT_MS] backstop —
-     * on timeout nothing is posted, the timeout is logged, and the
-     * finally still clears the flag.
+     * Launch [block] as the companion's one AI job. Same contract
+     * as [launch], on the companion's own gate: returns false
+     * without launching while [companionBusy]; the flag is set
+     * synchronously and cleared when the job ends — by completion,
+     * by the [COMPANION_TIMEOUT_MS] watchdog, or by
+     * [cancelCompanion] (the companion store's delete hook). The
+     * block's [Handle] guards every landing, exactly as in a
+     * normal chat.
      */
-    fun launchCompanion(block: suspend () -> Unit): Boolean {
-        if (companionBusy) return false
-        companionBusy = true
-        scope.launch {
-            try {
-                val finished = withTimeoutOrNull(COMPANION_TIMEOUT_MS) {
-                    block()
-                    true
-                }
-                if (finished == null) {
-                    Log.w(
-                        "AiJobs",
-                        "Companion AI job hit the ${COMPANION_TIMEOUT_MS}ms backstop and was " +
-                            "cancelled; indicator cleared, nothing posted by the timeout path",
-                    )
-                }
-            } finally {
-                companionBusy = false
-            }
-        }
-        return true
+    fun launchCompanion(
+        timeoutMs: Long = COMPANION_TIMEOUT_MS,
+        block: suspend (Handle) -> Unit,
+    ): Boolean = launch(COMPANION_KEY, COMPANION_LABEL, timeoutMs, null, block)
+
+    /** ROUND 82: cancel the companion's in-flight job (its trigger
+     *  message was deleted). Busy flag + indicator clear now; the
+     *  job's handle goes stale so its reply can never land. */
+    fun cancelCompanion() {
+        cancel(COMPANION_KEY)
     }
 }

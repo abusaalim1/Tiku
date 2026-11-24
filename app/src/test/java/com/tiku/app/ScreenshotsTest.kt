@@ -50,6 +50,7 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withContext
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
@@ -1054,6 +1055,347 @@ class ScreenshotsTest {
             "companionBusy must clear when the job ends",
             AiJobs.companionBusy,
         )
+    }
+
+    // ---------- ROUND 82: the bound that fires + delete = cancel ----------
+    /** The R82 defect, reproduced without any UI: the job's block is
+     *  wedged in a TRULY blocking call (a latch await on IO — no
+     *  suspension point, so neither withTimeoutOrNull nor job
+     *  cancellation can reach it; this is GeminiClient's
+     *  HttpURLConnection slow-drip shape). The watchdog must still
+     *  clear the indicator on schedule, release the single-flight
+     *  gate, and stale the job's handle — and when the wedged block
+     *  finally unwinds, its guarded dispatch must post NOTHING. */
+    @Test fun aiJobs_watchdogExpiresWedgedJob() {
+        val key = "aijobs-r82-wedged"
+        AiJobs.cancel(key)
+        val wedge = java.util.concurrent.CountDownLatch(1)
+        val entered = java.util.concurrent.CountDownLatch(1)
+        val posted = java.util.concurrent.atomic.AtomicBoolean(false)
+        val handleRef = java.util.concurrent.atomic.AtomicReference<AiJobs.Handle?>(null)
+        try {
+            val launched = AiJobs.launch(key, "Tika is thinking…", timeoutMs = 400) { job ->
+                handleRef.set(job)
+                withContext(Dispatchers.IO) {
+                    entered.countDown()
+                    wedge.await()
+                }
+                if (job.isActive()) posted.set(true)
+            }
+            org.junit.Assert.assertTrue("launch must be accepted", launched)
+            org.junit.Assert.assertTrue(
+                "block must reach the wedge",
+                entered.await(5, java.util.concurrent.TimeUnit.SECONDS),
+            )
+            org.junit.Assert.assertEquals("Tika is thinking…", AiJobs.thinking[key])
+            // The block is STILL wedged (latch never released) — the
+            // watchdog alone must clear the indicator.
+            val deadline = System.currentTimeMillis() + 5_000
+            while (AiJobs.thinking.containsKey(key) && System.currentTimeMillis() < deadline) {
+                Thread.sleep(25)
+            }
+            org.junit.Assert.assertFalse(
+                "watchdog must clear the indicator while the block is wedged",
+                AiJobs.thinking.containsKey(key),
+            )
+            org.junit.Assert.assertFalse(
+                "the expired job's handle must be stale",
+                handleRef.get()!!.isActive(),
+            )
+            // The single-flight gate is released by the expiry.
+            org.junit.Assert.assertTrue(
+                "a new launch must be accepted after expiry",
+                AiJobs.launch(key, "Tika is creating…") { },
+            )
+            val deadline2 = System.currentTimeMillis() + 5_000
+            while (AiJobs.thinking.containsKey(key) && System.currentTimeMillis() < deadline2) {
+                Thread.sleep(25)
+            }
+            // Release the wedge: the stale block unwinds (or dies by
+            // cancellation) — either way it must never post.
+            wedge.countDown()
+            Thread.sleep(500)
+            org.junit.Assert.assertFalse(
+                "a stale job must never post",
+                posted.get(),
+            )
+        } finally {
+            wedge.countDown()
+            AiJobs.cancel(key)
+        }
+    }
+
+    /** Delete = cancel: cancelForCommand with the WRONG id is a
+     *  no-op; with the command's own id it clears the indicator
+     *  SYNCHRONOUSLY (the animation dies with the delete tap, not
+     *  when the job unwinds), and the in-flight block — released
+     *  afterwards — posts nothing through its guarded dispatch. */
+    @Test fun aiJobs_deleteCancelsCommandJob() {
+        val key = "aijobs-r82-delete"
+        AiJobs.cancel(key)
+        val release = java.util.concurrent.CountDownLatch(1)
+        val entered = java.util.concurrent.CountDownLatch(1)
+        val posted = java.util.concurrent.atomic.AtomicBoolean(false)
+        try {
+            val launched = AiJobs.launch(
+                key, "Tika is thinking…", commandMsgId = "cmd-r82",
+            ) { job ->
+                withContext(Dispatchers.IO) {
+                    entered.countDown()
+                    release.await()
+                }
+                if (job.isActive()) posted.set(true)
+            }
+            org.junit.Assert.assertTrue("launch must be accepted", launched)
+            org.junit.Assert.assertTrue(
+                "block must be in flight",
+                entered.await(5, java.util.concurrent.TimeUnit.SECONDS),
+            )
+            org.junit.Assert.assertFalse(
+                "deleting some other message must not cancel the job",
+                AiJobs.cancelForCommand(key, "some-other-msg"),
+            )
+            org.junit.Assert.assertEquals("Tika is thinking…", AiJobs.thinking[key])
+            org.junit.Assert.assertTrue(
+                "deleting the command message must cancel its job",
+                AiJobs.cancelForCommand(key, "cmd-r82"),
+            )
+            org.junit.Assert.assertFalse(
+                "the indicator must clear synchronously on delete",
+                AiJobs.thinking.containsKey(key),
+            )
+            release.countDown()
+            Thread.sleep(500)
+            org.junit.Assert.assertFalse(
+                "no reply may land for a deleted command",
+                posted.get(),
+            )
+        } finally {
+            release.countDown()
+            AiJobs.cancel(key)
+        }
+    }
+
+    /** Generation discipline: job A expires by watchdog while wedged;
+     *  job B takes the key over; when A finally unwinds, A's finally
+     *  must NOT clear B's indicator. */
+    @Test fun aiJobs_staleJobCannotClearNewerJob() {
+        val key = "aijobs-r82-stale"
+        AiJobs.cancel(key)
+        val wedgeA = java.util.concurrent.CountDownLatch(1)
+        val releaseB = java.util.concurrent.atomic.AtomicBoolean(false)
+        try {
+            org.junit.Assert.assertTrue(
+                AiJobs.launch(key, "A thinking…", timeoutMs = 300) {
+                    withContext(Dispatchers.IO) { wedgeA.await() }
+                },
+            )
+            val deadline = System.currentTimeMillis() + 5_000
+            while (AiJobs.thinking.containsKey(key) && System.currentTimeMillis() < deadline) {
+                Thread.sleep(25)
+            }
+            org.junit.Assert.assertFalse(
+                "A must be expired by its watchdog",
+                AiJobs.thinking.containsKey(key),
+            )
+            org.junit.Assert.assertTrue(
+                AiJobs.launch(key, "B thinking…") {
+                    while (!releaseB.get()) delay(20)
+                },
+            )
+            org.junit.Assert.assertEquals("B thinking…", AiJobs.thinking[key])
+            // A unwinds now — its finally runs against a stale
+            // generation and must leave B's entry untouched.
+            wedgeA.countDown()
+            Thread.sleep(500)
+            org.junit.Assert.assertEquals(
+                "a stale job's finally must not clear the newer job's indicator",
+                "B thinking…", AiJobs.thinking[key],
+            )
+            releaseB.set(true)
+            val deadline2 = System.currentTimeMillis() + 5_000
+            while (AiJobs.thinking.containsKey(key) && System.currentTimeMillis() < deadline2) {
+                Thread.sleep(25)
+            }
+            org.junit.Assert.assertFalse(
+                "B clears its own indicator when it ends",
+                AiJobs.thinking.containsKey(key),
+            )
+        } finally {
+            wedgeA.countDown()
+            releaseB.set(true)
+            AiJobs.cancel(key)
+        }
+    }
+
+    /** The companion obeys the same two rules: its watchdog expires
+     *  a wedged job (busy flag drops while the block is still stuck),
+     *  and cancelCompanion (the store's delete hook) drops the flag
+     *  synchronously with the stale handle blocking any landing. */
+    @Test fun aiJobs_companionWatchdogAndCancel() {
+        AiJobs.cancelCompanion()
+        org.junit.Assert.assertFalse(AiJobs.companionBusy)
+        val wedge = java.util.concurrent.CountDownLatch(1)
+        val posted = java.util.concurrent.atomic.AtomicBoolean(false)
+        val release = java.util.concurrent.atomic.AtomicBoolean(false)
+        val posted2 = java.util.concurrent.atomic.AtomicBoolean(false)
+        try {
+            org.junit.Assert.assertTrue(
+                AiJobs.launchCompanion(timeoutMs = 300) { job ->
+                    withContext(Dispatchers.IO) { wedge.await() }
+                    if (job.isActive()) posted.set(true)
+                },
+            )
+            org.junit.Assert.assertTrue(AiJobs.companionBusy)
+            val deadline = System.currentTimeMillis() + 5_000
+            while (AiJobs.companionBusy && System.currentTimeMillis() < deadline) {
+                Thread.sleep(25)
+            }
+            org.junit.Assert.assertFalse(
+                "the companion watchdog must drop the busy flag while wedged",
+                AiJobs.companionBusy,
+            )
+            wedge.countDown()
+            Thread.sleep(500)
+            org.junit.Assert.assertFalse("a stale companion job must not post", posted.get())
+            // Delete-cancel path: flag drops synchronously.
+            org.junit.Assert.assertTrue(
+                AiJobs.launchCompanion { job ->
+                    while (!release.get()) delay(20)
+                    if (job.isActive()) posted2.set(true)
+                },
+            )
+            org.junit.Assert.assertTrue(AiJobs.companionBusy)
+            AiJobs.cancelCompanion()
+            org.junit.Assert.assertFalse(
+                "cancelCompanion must drop the busy flag synchronously",
+                AiJobs.companionBusy,
+            )
+            release.set(true)
+            Thread.sleep(300)
+            org.junit.Assert.assertFalse(
+                "a cancelled companion job must not post",
+                posted2.get(),
+            )
+        } finally {
+            wedge.countDown()
+            release.set(true)
+            AiJobs.cancelCompanion()
+        }
+    }
+
+    /** Staging helper for the R82 shots: a two-message preview
+     *  thread whose second message IS the slash command, staged with
+     *  the exact id the AiJobs job will be linked to. */
+    private fun r82StageThread(): String {
+        val p = PreviewStore.people[1]
+        val id = PreviewRepo.startThreadWith(p)
+        AppState.upsertMessage(id, TikuMessage(
+            id = "ai82a", senderUid = p.uid, kind = MsgKind.TEXT,
+            text = "Can Tika think for us?", time = "9:41", me = false, tsMs = 1))
+        AppState.upsertMessage(id, TikuMessage(
+            id = "ai82cmd", senderUid = "me", kind = MsgKind.TEXT,
+            text = "/tiku tell me a story", time = "9:41", me = true, tsMs = 2))
+        return id
+    }
+
+    /** R82 staging (a): a REAL AiJobs launch (wedged block, as a
+     *  slow provider call would be) drives the indicator — the
+     *  animation is the job's own state, nothing else. */
+    @Test fun shot111_chatAiTypingLiveJob() {
+        composeRule.mainClock.autoAdvance = false
+        val id = r82StageThread()
+        val wedge = java.util.concurrent.CountDownLatch(1)
+        try {
+            org.junit.Assert.assertTrue(
+                AiJobs.launch(id, "Tika is thinking…", commandMsgId = "ai82cmd") {
+                    withContext(Dispatchers.IO) { wedge.await() }
+                },
+            )
+            AppState.go(Screen.Chat(id))
+            frame { ChatScreen(id) }
+            composeRule.waitForIdle()
+            org.junit.Assert.assertTrue(
+                "chat must show the typing indicator while the job runs",
+                composeRule.onAllNodesWithText("Tika is thinking…")
+                    .fetchSemanticsNodes().isNotEmpty(),
+            )
+            shot("111-chat-ai-typing-live-job.png")
+        } finally {
+            wedge.countDown()
+            AiJobs.cancel(id)
+        }
+    }
+
+    /** R82 staging (b): the SAME live job — then the command message
+     *  is deleted through the repo (the exact call the long-press
+     *  menu makes). The indicator must be gone in the very next
+     *  frame: delete = cancel, no waiting for the wedged block. */
+    @Test fun shot112_chatAiTypingClearedOnDelete() {
+        composeRule.mainClock.autoAdvance = false
+        val id = r82StageThread()
+        val wedge = java.util.concurrent.CountDownLatch(1)
+        try {
+            org.junit.Assert.assertTrue(
+                AiJobs.launch(id, "Tika is thinking…", commandMsgId = "ai82cmd") {
+                    withContext(Dispatchers.IO) { wedge.await() }
+                },
+            )
+            AppState.repo.deleteForMe(id, "ai82cmd")
+            org.junit.Assert.assertFalse(
+                "delete must clear the AiJobs entry synchronously",
+                AiJobs.thinking.containsKey(id),
+            )
+            AppState.go(Screen.Chat(id))
+            frame { ChatScreen(id) }
+            composeRule.waitForIdle()
+            org.junit.Assert.assertTrue(
+                "chat must NOT show the typing indicator after the command was deleted",
+                composeRule.onAllNodesWithText("Tika is thinking…")
+                    .fetchSemanticsNodes().isEmpty(),
+            )
+            shot("112-chat-ai-typing-cleared-on-delete.png")
+        } finally {
+            wedge.countDown()
+            AiJobs.cancel(id)
+        }
+    }
+
+    /** R82 staging (c): the job's block is STILL wedged, but its
+     *  watchdog has expired it — a chat opened now (the relaunch /
+     *  re-entry shape) must show NO animation: stale job state can
+     *  never render. */
+    @Test fun shot113_chatAiTypingGoneAfterExpiry() {
+        composeRule.mainClock.autoAdvance = false
+        val id = r82StageThread()
+        val wedge = java.util.concurrent.CountDownLatch(1)
+        try {
+            org.junit.Assert.assertTrue(
+                AiJobs.launch(id, "Tika is thinking…", timeoutMs = 300, commandMsgId = "ai82cmd") {
+                    withContext(Dispatchers.IO) { wedge.await() }
+                },
+            )
+            val deadline = System.currentTimeMillis() + 5_000
+            while (AiJobs.thinking.containsKey(id) && System.currentTimeMillis() < deadline) {
+                Thread.sleep(25)
+            }
+            org.junit.Assert.assertFalse(
+                "the watchdog must have expired the wedged job",
+                AiJobs.thinking.containsKey(id),
+            )
+            AppState.go(Screen.Chat(id))
+            frame { ChatScreen(id) }
+            composeRule.waitForIdle()
+            org.junit.Assert.assertTrue(
+                "chat must NOT show the typing indicator for an expired job",
+                composeRule.onAllNodesWithText("Tika is thinking…")
+                    .fetchSemanticsNodes().isEmpty(),
+            )
+            shot("113-chat-ai-typing-gone-after-expiry.png")
+        } finally {
+            wedge.countDown()
+            AiJobs.cancel(id)
+        }
     }
 
     // ---------- ROUND 71: deterministic identity intercept ----------

@@ -410,6 +410,19 @@ object TikaBotStore {
         persist()
         if (m.img != null) runCatching { File(m.img).delete() }
         if (m.game != null) runCatching { File(m.game).delete() }
+        // ROUND 82 (delete = cancel, companion mirror of the normal
+        // chat's rule): the in-flight turn's trigger is always the
+        // LAST of my messages — the composer refuses new sends while
+        // a job runs, so no newer mine-message can exist mid-flight.
+        // Deleting that message cancels the job: the busy flag drops
+        // now, the streaming partial is cleared, and the job's stale
+        // handle guarantees no reply lands for it.
+        if (m.mine && AiJobs.companionBusy &&
+            list.drop(index + 1).none { it.mine }
+        ) {
+            AiJobs.cancelCompanion()
+            setLiveText(null)
+        }
     }
 
     /** ROUND 68 (WS1 parity): rename Tika in this chat (local only).
@@ -963,16 +976,26 @@ fun TikaBotScreen() {
      *  the landed message is the Outcome's value, not the last
      *  partial. The other branches (photo/vision, /tiku, /tika,
      *  /babeg) stay single-shot, exactly as before. */
-    suspend fun companionTurnStreaming(mentionContext: String? = null) {
+    suspend fun companionTurnStreaming(job: AiJobs.Handle, mentionContext: String? = null) {
         // ROUND 79 (WS-5): a tagged partner's profile-level context
         // rides INSIDE the persona string (the system instruction) —
         // never in the history, so the identity gate (which reads
         // the latest history turn) is untouched by it.
         val persona = TikaBotStore.personaPrompt() +
             (mentionContext?.let { "\n\n" + it } ?: "")
-        when (val outcome = GeminiClient.companionReplyStreaming(
+        // ROUND 82: partials render only while the job is live (a
+        // cancelled/expired job's wedged stream can never resurrect
+        // the streaming bubble), and the final dispatch is guarded
+        // by the same handle — a stale job clears its partial and
+        // lands nothing.
+        val outcome = GeminiClient.companionReplyStreaming(
             TikaBotStore.aiHistory(), persona,
-        ) { partial -> TikaBotStore.setLiveText(partial) }) {
+        ) { partial -> if (job.isActive()) TikaBotStore.setLiveText(partial) }
+        if (!job.isActive()) {
+            TikaBotStore.setLiveText(null)
+            return
+        }
+        when (outcome) {
             is GeminiClient.Outcome.Ok -> {
                 TikaBotStore.appendBot(outcome.value)
                 TikaBotStore.setLiveText(null)
@@ -1028,46 +1051,57 @@ fun TikaBotScreen() {
             gamePrompt != null -> {
                 TikaBotStore.appendUser(text, reply = quote)
                 // ROUND 71 (Fix 3): AiJobs owns the job + busy flag.
-                AiJobs.launchCompanion {
-                    when (val out = GeminiClient.generateGame(gamePrompt)) {
-                        is GeminiClient.Outcome.Ok -> {
-                            val path = withContext(Dispatchers.IO) {
-                                val dir = TikaBotStore.gameDir()
-                                dir.mkdirs()
-                                val f = File(dir, "${System.currentTimeMillis()}.html")
-                                f.writeText(out.value, Charsets.UTF_8)
-                                f.absolutePath
+                // ROUND 82: the dispatch is guarded by the job's
+                // handle — a cancelled/expired job lands nothing.
+                AiJobs.launchCompanion { job ->
+                    val out = GeminiClient.generateGame(gamePrompt)
+                    if (job.isActive()) {
+                        when (out) {
+                            is GeminiClient.Outcome.Ok -> {
+                                val path = withContext(Dispatchers.IO) {
+                                    val dir = TikaBotStore.gameDir()
+                                    dir.mkdirs()
+                                    val f = File(dir, "${System.currentTimeMillis()}.html")
+                                    f.writeText(out.value, Charsets.UTF_8)
+                                    f.absolutePath
+                                }
+                                TikaBotStore.appendBotGame("Your game is ready — tap to play", path)
                             }
-                            TikaBotStore.appendBotGame("Your game is ready — tap to play", path)
+                            else -> TikaBotStore.appendSys("Tika couldn't build that game — try again")
                         }
-                        else -> TikaBotStore.appendSys("Tika couldn't build that game — try again")
                     }
                 }
             }
             tikaCmd != null -> {
                 TikaBotStore.appendUser(text, reply = quote)
                 // ROUND 71 (Fix 3): AiJobs owns the job + busy flag.
-                AiJobs.launchCompanion {
+                // ROUND 82: every landing below is guarded by the
+                // job's handle — a cancelled/expired job lands
+                // nothing and appends nothing.
+                AiJobs.launchCompanion { job ->
                     if (tikaCmd.first) {
                         // /tika — a generated photo, saved locally and
                         // rendered as Tika's photo bubble (her image
                         // messages are local files, like the user's).
-                        when (val out = GeminiClient.generateImage(tikaCmd.second)) {
-                            is GeminiClient.Outcome.Ok -> {
-                                val path = withContext(Dispatchers.IO) {
-                                    val dir = TikaBotStore.imageDir()
-                                    dir.mkdirs()
-                                    val f = File(dir, "tika_${System.currentTimeMillis()}.jpg")
-                                    val stream = java.io.ByteArrayOutputStream()
-                                    out.value.compress(
-                                        android.graphics.Bitmap.CompressFormat.JPEG, 85, stream,
-                                    )
-                                    f.writeBytes(stream.toByteArray())
-                                    f.absolutePath
+                        val out = GeminiClient.generateImage(tikaCmd.second)
+                        if (job.isActive()) {
+                            when (out) {
+                                is GeminiClient.Outcome.Ok -> {
+                                    val path = withContext(Dispatchers.IO) {
+                                        val dir = TikaBotStore.imageDir()
+                                        dir.mkdirs()
+                                        val f = File(dir, "tika_${System.currentTimeMillis()}.jpg")
+                                        val stream = java.io.ByteArrayOutputStream()
+                                        out.value.compress(
+                                            android.graphics.Bitmap.CompressFormat.JPEG, 85, stream,
+                                        )
+                                        f.writeBytes(stream.toByteArray())
+                                        f.absolutePath
+                                    }
+                                    TikaBotStore.appendBotImage(path)
                                 }
-                                TikaBotStore.appendBotImage(path)
+                                else -> TikaBotStore.appendSys("Tika couldn't create that photo — try again")
                             }
-                            else -> TikaBotStore.appendSys("Tika couldn't create that photo — try again")
                         }
                     } else {
                         // /tiku — the normal chat's text-answer path
@@ -1079,22 +1113,30 @@ fun TikaBotScreen() {
                             val jpeg = withContext(Dispatchers.IO) {
                                 runCatching { File(replyPhoto).readBytes() }.getOrNull()
                             }
-                            if (jpeg != null) {
+                            if (!job.isActive()) {
+                                // Cancelled/expired — land nothing.
+                            } else if (jpeg != null) {
                                 val historyBefore = TikaBotStore.aiHistory().dropLast(1)
-                                when (val out = GeminiClient.companionImageReply(
+                                val out = GeminiClient.companionImageReply(
                                     historyBefore, TikaBotStore.personaPrompt(),
                                     tikaCmd.second, jpeg,
-                                )) {
-                                    is GeminiClient.Outcome.Ok -> TikaBotStore.appendBot(out.value)
-                                    else -> TikaBotStore.appendSys("Tika couldn't reply — try again")
+                                )
+                                if (job.isActive()) {
+                                    when (out) {
+                                        is GeminiClient.Outcome.Ok -> TikaBotStore.appendBot(out.value)
+                                        else -> TikaBotStore.appendSys("Tika couldn't reply — try again")
+                                    }
                                 }
                             } else {
                                 TikaBotStore.appendSys("Tika couldn't reply — try again")
                             }
                         } else {
-                            when (val out = GeminiClient.answerText(tikaCmd.second)) {
-                                is GeminiClient.Outcome.Ok -> TikaBotStore.appendBot(out.value)
-                                else -> TikaBotStore.appendSys("Tika couldn't reply — try again")
+                            val out = GeminiClient.answerText(tikaCmd.second)
+                            if (job.isActive()) {
+                                when (out) {
+                                    is GeminiClient.Outcome.Ok -> TikaBotStore.appendBot(out.value)
+                                    else -> TikaBotStore.appendSys("Tika couldn't reply — try again")
+                                }
                             }
                         }
                     }
@@ -1103,7 +1145,8 @@ fun TikaBotScreen() {
             else -> {
                 TikaBotStore.appendUser(text, reply = quote)
                 // ROUND 71 (Fix 3): AiJobs owns the job + busy flag.
-                AiJobs.launchCompanion {
+                // ROUND 82: landings guarded by the job's handle.
+                AiJobs.launchCompanion { job ->
                     // A reply to a photo asks ABOUT that photo (the
                     // normal chat's /tiku vision rule): the photo the
                     // user deliberately replied to rides this one
@@ -1112,19 +1155,24 @@ fun TikaBotScreen() {
                         val jpeg = withContext(Dispatchers.IO) {
                             runCatching { File(replyPhoto).readBytes() }.getOrNull()
                         }
-                        if (jpeg != null) {
+                        if (!job.isActive()) {
+                            // Cancelled/expired — land nothing.
+                        } else if (jpeg != null) {
                             val historyBefore = TikaBotStore.aiHistory().dropLast(1)
-                            when (val out = GeminiClient.companionImageReply(
+                            val out = GeminiClient.companionImageReply(
                                 historyBefore, TikaBotStore.personaPrompt(), text, jpeg,
-                            )) {
-                                is GeminiClient.Outcome.Ok -> TikaBotStore.appendBot(out.value)
-                                else -> TikaBotStore.appendSys("Tika couldn't reply — try again")
+                            )
+                            if (job.isActive()) {
+                                when (out) {
+                                    is GeminiClient.Outcome.Ok -> TikaBotStore.appendBot(out.value)
+                                    else -> TikaBotStore.appendSys("Tika couldn't reply — try again")
+                                }
                             }
                         } else {
                             TikaBotStore.appendSys("Tika couldn't reply — try again")
                         }
                     } else {
-                        companionTurnStreaming(mentionContext)
+                        companionTurnStreaming(job, mentionContext)
                     }
                 }
             }
@@ -1147,7 +1195,10 @@ fun TikaBotScreen() {
         // reply lands even if the user leaves this screen while
         // Tika is still looking at it. (The old try/finally that
         // cleared `sending` is subsumed by launchCompanion's.)
-        AiJobs.launchCompanion {
+        // ROUND 82: landings guarded by the job's handle — a
+        // cancelled/expired job appends neither the photo turn's
+        // reply nor a failure line.
+        AiJobs.launchCompanion { job ->
             val jpeg = withContext(Dispatchers.IO) {
                 val bytes = ctx.contentResolver.openInputStream(uri)?.use { it.readBytes() }
                     ?: return@withContext null
@@ -1155,7 +1206,9 @@ fun TikaBotScreen() {
                     ?: return@withContext null
                 MediaStore.compressPhoto(bmp, maxSide = 1024, quality = 82)
             }
-            if (jpeg == null) {
+            if (!job.isActive()) {
+                // Cancelled/expired — land nothing.
+            } else if (jpeg == null) {
                 TikaBotStore.appendSys("Tika couldn't reply — try again")
             } else {
                 val path = withContext(Dispatchers.IO) {
@@ -1169,11 +1222,14 @@ fun TikaBotScreen() {
                 // call carries the photo as its own final turn.
                 val historyBefore = TikaBotStore.aiHistory()
                 TikaBotStore.appendUserImage(caption, path, reply = quote)
-                when (val out = GeminiClient.companionImageReply(
+                val out = GeminiClient.companionImageReply(
                     historyBefore, TikaBotStore.personaPrompt(), caption, jpeg,
-                )) {
-                    is GeminiClient.Outcome.Ok -> TikaBotStore.appendBot(out.value)
-                    else -> TikaBotStore.appendSys("Tika couldn't reply — try again")
+                )
+                if (job.isActive()) {
+                    when (out) {
+                        is GeminiClient.Outcome.Ok -> TikaBotStore.appendBot(out.value)
+                        else -> TikaBotStore.appendSys("Tika couldn't reply — try again")
+                    }
                 }
             }
         }
@@ -1473,8 +1529,15 @@ fun TikaBotScreen() {
                 // theme — instead of the old static "typing…" pill.
                 // companionBusyNow is the hoisted §1 read: this
                 // lambda only consumes captured values.
+                // ROUND 82: the streaming bubble is part of the
+                // in-flight UI, so it renders only while the job
+                // itself is live — a stale partial left behind by a
+                // cancelled/expired job's wedged stream can never
+                // strand on screen (companionBusyNow is the derived
+                // AiJobs state; in normal flow liveText is cleared
+                // before the busy flag drops, so nothing changes).
                 val live = liveText
-                if (live != null) {
+                if (live != null && companionBusyNow) {
                     item(key = "bot_live") {
                         BotBubble(
                             m = TikaBotStore.BotMsg(false, live),

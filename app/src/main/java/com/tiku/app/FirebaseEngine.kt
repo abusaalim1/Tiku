@@ -2871,7 +2871,7 @@ object FirebaseEngine : ChatRepo {
 
     private fun newLocalId() = "m" + UUID.randomUUID().toString().replace("-", "")
 
-    override fun sendText(id: String, text: String, quote: String?) =
+    override fun sendText(id: String, text: String, quote: String?): String? =
         sendTextFx(id, text, quote, null)
 
     /** ROUND 22: the effect-carrying send. The local optimistic copy
@@ -2880,7 +2880,7 @@ object FirebaseEngine : ChatRepo {
      *  server echo — same client-chosen id, fx read back by decryptDoc —
      *  replaces it 1:1. Retry rides this same [local] through
      *  [deliverText], so a failed effect send keeps its effect. */
-    override fun sendTextFx(id: String, text: String, quote: String?, fx: String?) =
+    override fun sendTextFx(id: String, text: String, quote: String?, fx: String?): String? =
         sendTextInternal(id, text, quote, fx, null)
 
     /** ROUND 79 (WS-2): the reply-carrying send — identical staging
@@ -2889,11 +2889,11 @@ object FirebaseEngine : ChatRepo {
      *  `replyToId` field (deliverText already writes it; decryptDoc
      *  already reads it). The id is what lets every receiver resolve
      *  the original message for the quote thumbnail + tap-to-jump. */
-    override fun sendReply(id: String, text: String, quote: String?, fx: String?, replyToId: String?) =
+    override fun sendReply(id: String, text: String, quote: String?, fx: String?, replyToId: String?): String? =
         sendTextInternal(id, text, quote, fx, replyToId)
 
-    private fun sendTextInternal(id: String, text: String, quote: String?, fx: String?, replyToId: String?) {
-        val th = AppState.thread(id) ?: return
+    private fun sendTextInternal(id: String, text: String, quote: String?, fx: String?, replyToId: String?): String? {
+        val th = AppState.thread(id) ?: return null
         val local = TikuMessage(
             id = newLocalId(), senderUid = uid, kind = MsgKind.TEXT, text = text,
             time = fmtTime(System.currentTimeMillis()), me = true, replyQuote = quote,
@@ -2917,6 +2917,8 @@ object FirebaseEngine : ChatRepo {
         // exact local once it composes as the tail (see AppState).
         AppState.requestTailScroll(id, local.id)
         scope.launch { deliverText(id, th.person.uid, local) }
+        // ROUND 82: the staged id, for the AI send sites' delete-link.
+        return local.id
     }
 
     /** ROUND 37: the AI (Tika) text send — the asking client posts
@@ -3949,6 +3951,10 @@ object FirebaseEngine : ChatRepo {
 
     /** Delete = delete-for-me ONLY (append uid to deletedFor). Never a hard delete. */
     override fun deleteForMe(id: String, msgId: String) {
+        // ROUND 82 (delete = cancel): if this message is the command
+        // that triggered the chat's in-flight AI job, the job dies
+        // with it — indicator cleared now, no reply can ever land.
+        AiJobs.cancelForCommand(id, msgId)
         // ROUND 78 (WS-3): hiding a message that is still a pending
         // send cancels the send — its outbox entry drops here, or the
         // next drain would resurrect a message the user just hid.
@@ -4005,6 +4011,10 @@ object FirebaseEngine : ChatRepo {
      * FAILED one never reliably landed — both are refused / local-only.
      */
     override fun deleteForEveryone(id: String, msgId: String) {
+        // ROUND 82 (delete = cancel): FIRST, before any guard below
+        // can refuse the tombstone (e.g. "still sending") — unsending
+        // a slash-command message cancels its in-flight AI job.
+        AiJobs.cancelForCommand(id, msgId)
         val m = AppState.thread(id)?.messages?.firstOrNull { it.id == msgId } ?: return
         if (!m.me || m.deletedForEveryone) return
         when (m.status) {

@@ -4698,21 +4698,29 @@ private fun RdChatContent(thread: ChatThread) {
                 AppState.toast("Tika is busy with the previous task")
                 return
             }
-            AppState.repo.sendText(threadId, v, null)
+            // ROUND 82: the command message's id links the job to it
+            // — deleting this message cancels the job (AiJobs).
+            val cmdId = AppState.repo.sendText(threadId, v, null)
             input = ""
             scope.launch { AppState.repo.setTyping(threadId, false) }
             // ROUND 71 (Fix 3): AiJobs owns the job (app scope) and
             // clears the label in its finally — the build survives
             // leaving this chat, and sendGame still lands the game.
-            AiJobs.launch(threadId, "Tika is creating your game…") {
-                when (val out = GeminiClient.generateGame(gamePrompt)) {
-                    is GeminiClient.Outcome.Ok -> AppState.repo.sendGame(
-                        threadId, out.value, gamePrompt.take(48),
-                    )
-                    GeminiClient.Outcome.Quota ->
-                        AppState.toast("Tika: the quota is finished — try again in a little while")
-                    GeminiClient.Outcome.Failed ->
-                        AppState.toast("Tika couldn't create the game — try again")
+            // ROUND 82: the dispatch is guarded by the job's handle —
+            // a job cancelled/expired while generateGame was wedged
+            // lands nothing and says nothing.
+            AiJobs.launch(threadId, "Tika is creating your game…", commandMsgId = cmdId) { job ->
+                val out = GeminiClient.generateGame(gamePrompt)
+                if (job.isActive()) {
+                    when (out) {
+                        is GeminiClient.Outcome.Ok -> AppState.repo.sendGame(
+                            threadId, out.value, gamePrompt.take(48),
+                        )
+                        GeminiClient.Outcome.Quota ->
+                            AppState.toast("Tika: the quota is finished — try again in a little while")
+                        GeminiClient.Outcome.Failed ->
+                            AppState.toast("Tika couldn't create the game — try again")
+                    }
                 }
             }
             return
@@ -4745,28 +4753,38 @@ private fun RdChatContent(thread: ChatThread) {
             val question = visionQuestion.ifEmpty { "What is in this photo? Describe it." }
             val targetId = visionTarget.id
             val snapshot = visionTarget.photo
-            AppState.repo.sendReply(threadId, v, replyQuoteLabel(visionTarget), null, visionTarget.id)
+            // ROUND 82: the command message's id links the job to it
+            // — deleting this message cancels the job (AiJobs).
+            val cmdId = AppState.repo.sendReply(threadId, v, replyQuoteLabel(visionTarget), null, visionTarget.id)
             input = ""; replyTarget = null
             scope.launch { AppState.repo.setTyping(threadId, false) }
             // ROUND 71 (Fix 3): AiJobs owns the job (app scope) and
             // clears the label in its finally — loadReplyPhoto polls
             // AppState thread state, so the vision ask survives
             // leaving this chat and the answer still lands.
-            AiJobs.launch(threadId, "Tika is thinking…") {
+            // ROUND 82: the handle is checked before the vision call
+            // and again before the dispatch — a cancelled/expired job
+            // lands nothing and says nothing.
+            AiJobs.launch(threadId, "Tika is thinking…", commandMsgId = cmdId) { job ->
                 val bmp = loadReplyPhoto(targetId, snapshot)
-                if (bmp == null) {
+                if (!job.isActive()) {
+                    // Cancelled/expired while loading — land nothing.
+                } else if (bmp == null) {
                     AppState.toast("Couldn't load that photo")
                 } else {
                     // Vision payload: ≤1024 px on the long edge,
                     // JPEG — the question is about the content,
                     // not the pixels.
                     val jpeg = MediaStore.compressPhoto(bmp, maxSide = 1024, quality = 82)
-                    when (val out = GeminiClient.answerImage(question, jpeg)) {
-                        is GeminiClient.Outcome.Ok -> AppState.repo.sendTextAi(threadId, out.value)
-                        GeminiClient.Outcome.Quota ->
-                            AppState.toast("Tika: the quota is finished — try again in a little while")
-                        GeminiClient.Outcome.Failed ->
-                            AppState.toast("Tika couldn't answer — try again")
+                    val out = GeminiClient.answerImage(question, jpeg)
+                    if (job.isActive()) {
+                        when (out) {
+                            is GeminiClient.Outcome.Ok -> AppState.repo.sendTextAi(threadId, out.value)
+                            GeminiClient.Outcome.Quota ->
+                                AppState.toast("Tika: the quota is finished — try again in a little while")
+                            GeminiClient.Outcome.Failed ->
+                                AppState.toast("Tika couldn't answer — try again")
+                        }
                     }
                 }
             }
@@ -4779,28 +4797,39 @@ private fun RdChatContent(thread: ChatThread) {
                 return
             }
             val (isImage, prompt) = cmd
-            AppState.repo.sendText(threadId, v, null)
+            // ROUND 82: the command message's id links the job to it
+            // — deleting this message cancels the job (AiJobs).
+            val cmdId = AppState.repo.sendText(threadId, v, null)
             input = ""
             scope.launch { AppState.repo.setTyping(threadId, false) }
             // ROUND 71 (Fix 3): AiJobs owns the job (app scope) and
             // clears the label in its finally — the /tiku answer or
             // /tika photo still lands after leaving this chat.
-            AiJobs.launch(threadId, if (isImage) "Tika is creating…" else "Tika is thinking…") {
+            // ROUND 82: each dispatch is guarded by the job's handle —
+            // a job cancelled/expired while its provider call was
+            // wedged lands nothing and says nothing.
+            AiJobs.launch(threadId, if (isImage) "Tika is creating…" else "Tika is thinking…", commandMsgId = cmdId) { job ->
                 if (isImage) {
-                    when (val out = GeminiClient.generateImage(prompt)) {
-                        is GeminiClient.Outcome.Ok -> AppState.repo.sendPhotoAi(threadId, out.value)
-                        GeminiClient.Outcome.Quota ->
-                            AppState.toast("Tika: the image quota is finished — try again in a little while")
-                        GeminiClient.Outcome.Failed ->
-                            AppState.toast("Tika couldn't create the image — try again")
+                    val out = GeminiClient.generateImage(prompt)
+                    if (job.isActive()) {
+                        when (out) {
+                            is GeminiClient.Outcome.Ok -> AppState.repo.sendPhotoAi(threadId, out.value)
+                            GeminiClient.Outcome.Quota ->
+                                AppState.toast("Tika: the image quota is finished — try again in a little while")
+                            GeminiClient.Outcome.Failed ->
+                                AppState.toast("Tika couldn't create the image — try again")
+                        }
                     }
                 } else {
-                    when (val out = GeminiClient.answerText(prompt)) {
-                        is GeminiClient.Outcome.Ok -> AppState.repo.sendTextAi(threadId, out.value)
-                        GeminiClient.Outcome.Quota ->
-                            AppState.toast("Tika: the quota is finished — try again in a little while")
-                        GeminiClient.Outcome.Failed ->
-                            AppState.toast("Tika couldn't answer — try again")
+                    val out = GeminiClient.answerText(prompt)
+                    if (job.isActive()) {
+                        when (out) {
+                            is GeminiClient.Outcome.Ok -> AppState.repo.sendTextAi(threadId, out.value)
+                            GeminiClient.Outcome.Quota ->
+                                AppState.toast("Tika: the quota is finished — try again in a little while")
+                            GeminiClient.Outcome.Failed ->
+                                AppState.toast("Tika couldn't answer — try again")
+                        }
                     }
                 }
             }

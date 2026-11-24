@@ -268,15 +268,21 @@ object AppState {
 interface ChatRepo {
     fun openThread(id: String)
     fun closeThread(id: String) {}
-    fun sendText(id: String, text: String, quote: String?)
+    /** Send a plain text message; returns the client-chosen local
+     *  id of the staged message (ROUND 82: the AI send sites capture
+     *  it to link the slash-command message to its AiJobs job, so
+     *  deleting that message can cancel the job), or null when the
+     *  send staged nothing. Callers that don't care ignore it. */
+    fun sendText(id: String, text: String, quote: String?): String?
     /** ROUND 22: send a text message carrying an Instagram-style send
      *  effect ([fx] = "gift" | "fire" | "confetti" | "hearts", null =
      *  plain). Default routes to the plain send and drops the effect,
      *  so implementers that predate effects (the preview store) keep
      *  compiling and behaving exactly as before; the real engine
-     *  overrides it and writes the additive `fx` doc field. */
-    fun sendTextFx(id: String, text: String, quote: String?, fx: String?) {
-        sendText(id, text, quote)
+     *  overrides it and writes the additive `fx` doc field.
+     *  ROUND 82: returns the staged message's id, like [sendText]. */
+    fun sendTextFx(id: String, text: String, quote: String?, fx: String?): String? {
+        return sendText(id, text, quote)
     }
     /** ROUND 79 (WS-2): a reply send that also carries the quoted
      *  message's id — written to the doc's additive `replyToId` field
@@ -288,8 +294,8 @@ interface ChatRepo {
      *  the plain effect send and drops the id, so implementers that
      *  predate it (the preview store) keep compiling and behaving
      *  exactly as before; the real engine overrides it. */
-    fun sendReply(id: String, text: String, quote: String?, fx: String?, replyToId: String?) {
-        sendTextFx(id, text, quote, fx)
+    fun sendReply(id: String, text: String, quote: String?, fx: String?, replyToId: String?): String? {
+        return sendTextFx(id, text, quote, fx)
     }
     /** ROUND 37: send a TEXT answer authored by the in-chat AI (Tika)
      *  — the asking client posts it through the ordinary encrypted
