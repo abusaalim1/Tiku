@@ -373,8 +373,8 @@ class ScreenshotsTest {
             composeRule.onAllNodesWithText("Messages").fetchSemanticsNodes().isNotEmpty(),
         )
         org.junit.Assert.assertTrue(
-            "Messages must carry the notes row (Your note)",
-            composeRule.onAllNodesWithText("Your note").fetchSemanticsNodes().isNotEmpty(),
+            "Messages must carry the whispers row (Your whisper)",
+            composeRule.onAllNodesWithText("Your whisper").fetchSemanticsNodes().isNotEmpty(),
         )
         shot("11-messages-home.png")
     }
@@ -640,7 +640,7 @@ class ScreenshotsTest {
         composeRule.waitForIdle()
         org.junit.Assert.assertTrue(
             "retired Watch destination must fall back to the Messages pane",
-            composeRule.onAllNodesWithText("Your note", substring = true)
+            composeRule.onAllNodesWithText("Your whisper", substring = true)
                 .fetchSemanticsNodes().isNotEmpty(),
         )
         org.junit.Assert.assertTrue(
@@ -684,7 +684,7 @@ class ScreenshotsTest {
         composeRule.waitForIdle()
         org.junit.Assert.assertTrue(
             "partner note sheet must offer the note reply field",
-            composeRule.onAllNodesWithText("Reply to note", substring = true)
+            composeRule.onAllNodesWithText("Reply to whisper", substring = true)
                 .fetchSemanticsNodes().isNotEmpty(),
         )
         org.junit.Assert.assertTrue(
@@ -699,7 +699,7 @@ class ScreenshotsTest {
         AppState.homeTab = HomeTab.CHATS
         AppState.go(Screen.Home)
         frame { HomeScreen() }
-        composeRule.onAllNodesWithText("Your note")[0].performTouchInput { click() }
+        composeRule.onAllNodesWithText("Your whisper")[0].performTouchInput { click() }
         composeRule.waitForIdle()
         org.junit.Assert.assertTrue(
             "my note sheet must offer the thought field",
@@ -707,9 +707,9 @@ class ScreenshotsTest {
                 .fetchSemanticsNodes().isNotEmpty(),
         )
         org.junit.Assert.assertTrue(
-            "ROUND 75 (WS4): my note sheet must NOT offer Add music any more",
+            "ROUND 79 (WS-3): my whisper sheet offers Add music (the LOCAL picker)",
             composeRule.onAllNodesWithText("Add music", substring = true)
-                .fetchSemanticsNodes().isEmpty(),
+                .fetchSemanticsNodes().isNotEmpty(),
         )
         shot("26-note-sheet-mine.png")
     }
@@ -2165,15 +2165,17 @@ class ScreenshotsTest {
         shot("64-chat-menu-very-long.png")
     }
 
-    // ---------- ROUND 75 (WS4): Notes music is REMOVED ----------
-    @Test fun shot65_noteSheetHasNoMusic() {
-        // ROUND 75 (WS4): the note sheet must offer NO music affordance
-        // at all — no "Add music", no "Pick a song", no paste field —
-        // while the note composer itself works exactly as before.
+    // ---------- ROUND 75 (WS4) → ROUND 79 (WS-3): music is LOCAL-only ----------
+    @Test fun shot65_noteSheetLocalMusicOnly() {
+        // ROUND 75 removed the YouTube music; ROUND 79 (WS-3) brings
+        // music back as a LOCAL file pick only. The contract now:
+        // "Add music" (the device picker) IS offered; the YouTube
+        // surfaces ("Pick a song" search, paste-a-link field) stay
+        // gone forever; the composer itself works as before.
         AppState.homeTab = HomeTab.CHATS
         AppState.go(Screen.Home)
         frame { HomeScreen() }
-        composeRule.onAllNodesWithText("Your note")[0].performTouchInput { click() }
+        composeRule.onAllNodesWithText("Your whisper")[0].performTouchInput { click() }
         composeRule.waitForIdle()
         org.junit.Assert.assertTrue(
             "my note sheet must still offer the thought field",
@@ -2181,9 +2183,9 @@ class ScreenshotsTest {
                 .fetchSemanticsNodes().isNotEmpty(),
         )
         org.junit.Assert.assertTrue(
-            "no Add music affordance may remain in the note sheet",
+            "ROUND 79 (WS-3): the local Add music affordance is offered",
             composeRule.onAllNodesWithText("Add music", substring = true)
-                .fetchSemanticsNodes().isEmpty(),
+                .fetchSemanticsNodes().isNotEmpty(),
         )
         org.junit.Assert.assertTrue(
             "no Pick a song action may remain in the note sheet",
@@ -4095,12 +4097,14 @@ class ScreenshotsTest {
                 )
             }
             AppState.go(Screen.Chat(id))
-            frame { ChatScreen(id) }
-            composeRule.waitForIdle()
+            // Pre-merge staging mimics the bug, asserted at the data
+            // level: the visible list holds no trace of the pending
+            // send (a second frame{} here is what the harness's
+            // setContent-once rule forbids — the render proof below
+            // uses the single frame).
             org.junit.Assert.assertTrue(
                 "pre-merge staging mimics the bug: the pending text is absent",
-                composeRule.onAllNodesWithText("r79 offline hello", substring = true)
-                    .fetchSemanticsNodes().isEmpty(),
+                AppState.thread(id)?.messages?.none { it.text == "r79 offline hello" } == true,
             )
             // Re-entry: the engine's rebuild re-derives the pending
             // local from the store (selectPending → rebuild → merge).
@@ -4120,7 +4124,8 @@ class ScreenshotsTest {
                 val merged = mergePendingById(th.messages.toList(), rebuilt)
                 th.messages.clear(); th.messages.addAll(merged)
             }
-            // Leaving and re-entering the composition must not lose it.
+            // The single composition: after the rebuild's merge the
+            // pending bubble renders, and stays rendered.
             frame { ChatScreen(id) }
             composeRule.waitForIdle()
             org.junit.Assert.assertTrue(
