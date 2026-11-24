@@ -31,8 +31,8 @@ object DecryptGate {
      *  doc for one of these with no chunk count yet is a doc whose
      *  sender is still uploading — pending by definition, because
      *  there is no ciphertext on the doc itself that could fail. */
-    fun mediaPayloadPending(kindRaw: String, mediaChunks: Int): Boolean =
-        mediaChunks <= 0 &&
+    fun mediaPayloadPending(kindRaw: String, mediaChunks: Int?): Boolean =
+        (mediaChunks ?: 0) <= 0 &&
             (kindRaw == "image" || kindRaw == "voice" ||
                 kindRaw == "video" || kindRaw == "audio")
 
