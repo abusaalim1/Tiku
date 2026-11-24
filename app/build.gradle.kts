@@ -65,15 +65,15 @@ android {
     compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
     kotlinOptions { jvmTarget = "17" }
 }
-// ROUND 83: some Google libraries in this graph drag in the EMPTY
-// listenablefuture:9999.0-empty marker, which wins version resolution
-// and shadows the real class — the release compile then cannot see
-// ListenableFuture at all (CI run for the first R83 push failed on
-// exactly this). Pin the real 1.0 artifact.
+// ROUND 83: the standalone listenablefuture module resolves in this
+// graph to the EMPTY 9999.0-empty marker, which shadows the real
+// ListenableFuture class at compile time (first R83 CI failure), while
+// adding the real standalone jar duplicates the class Guava already
+// carries (second R83 CI failure). Guava — already a transitive of
+// CameraX here — is a superset of that module, so drop the module
+// entirely and let Guava's copy be the only one.
 configurations.configureEach {
-    resolutionStrategy {
-        force("com.google.guava:listenablefuture:1.0")
-    }
+    exclude(group = "com.google.guava", module = "listenablefuture")
 }
 
 tasks.withType<Test>().configureEach {
@@ -120,9 +120,6 @@ dependencies {
     implementation("androidx.camera:camera-lifecycle:1.4.1")
     implementation("androidx.camera:camera-view:1.4.1")
     implementation("androidx.exifinterface:exifinterface:1.3.7")
-    // ROUND 83: CameraX's ProcessCameraProvider future needs the real
-    // ListenableFuture class (see the resolutionStrategy pin below).
-    implementation("com.google.guava:listenablefuture:1.0")
     // Real audio+video calls: maintained WebRTC fork (org.webrtc API), Maven Central.
     implementation("io.getstream:stream-webrtc-android:1.1.1")
     // ROUND 13: real backdrop blur for the owner-supplied liquid-glass design
