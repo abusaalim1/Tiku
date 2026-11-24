@@ -410,6 +410,14 @@ interface ChatRepo {
     /** ROUND 8: fetch the next page of OLDER messages for an open chat
      *  (pagination — a chat opens at its newest ~60). Default no-op. */
     fun loadOlder(id: String) {}
+    /** ROUND 84: like [loadOlder], but SUSPENDS until that page has
+     *  been applied to the thread (or has failed), joining a page
+     *  already in flight instead of starting a second one. The
+     *  pinned-strip jump awaits pages through this — the old
+     *  fire-and-forget call plus a fixed-timer poll gave up long
+     *  before deep history arrived. Default: the plain fire-and-
+     *  forget call, so test doubles / preview keep compiling. */
+    suspend fun loadOlderAndWait(id: String) { loadOlder(id) }
     /** ROUND 8: pin/unpin a chat in the list (IG-style). A per-user
      *  view preference. ROUND 52: the engine now ALSO records it on
      *  the chat doc (additive pinnedFor array — my uid in/out) so the

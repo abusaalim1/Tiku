@@ -21,6 +21,7 @@ import com.google.firebase.firestore.SetOptions
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
@@ -2403,49 +2404,75 @@ object FirebaseEngine : ChatRepo {
         if (isChatActivelyVisible(id)) markRead(id)
     }
 
+    /** ROUND 84: the in-flight older-page job per chat, so a caller that
+     *  needs the page APPLIED (the pinned-strip jump) can join it
+     *  instead of polling the thread on a timer. Main-dispatcher only,
+     *  like everything in this engine. */
+    private val olderPageJobs = mutableMapOf<String, Job>()
+
     /** ROUND 8 — PAGINATION: fetch the next page of messages OLDER than the
      *  oldest cached one (inclusive startAt + id-dedupe, so same-millisecond
      *  neighbours can never fall through a gap). Fetched incoming messages
      *  are seen-marked too (the chat is open while paging). */
     override fun loadOlder(id: String) {
         if (hasOlderCache[id] != true) return
+        if (loadingOlder.contains(id)) return
+        olderPageJobs[id] = scope.launch { pageOlder(id) }
+    }
+
+    /** ROUND 84: page once and SUSPEND until the page has been applied
+     *  to the thread (or has failed); joins the in-flight page when one
+     *  is already running rather than starting a second fetch. */
+    override suspend fun loadOlderAndWait(id: String) {
+        if (hasOlderCache[id] != true) return
+        val inFlight = olderPageJobs[id]
+        if (inFlight != null && inFlight.isActive) { inFlight.join(); return }
+        if (loadingOlder.contains(id)) return
+        val job = scope.launch { pageOlder(id) }
+        olderPageJobs[id] = job
+        job.join()
+    }
+
+    /** One older page, fetched + decrypted + applied to the cache and
+     *  the thread before it returns. The body is build-47's loadOlder
+     *  verbatim — ROUND 84 changed only how it is driven (the jump now
+     *  awaits it instead of out-polling it). */
+    private suspend fun pageOlder(id: String) {
         if (!loadingOlder.add(id)) return
-        scope.launch {
-            try {
-                runCatching {
-                    val peerUid = AppState.thread(id)?.person?.uid ?: return@runCatching
-                    val key = convKeyOrNull(id, peerUid) ?: return@runCatching
-                    val cache = msgCache[id] ?: return@runCatching
-                    val oldest = cache.values.minByOrNull { it.tsMs } ?: return@runCatching
-                    val snap = db.collection(Schema.Chats.COLL).document(id)
-                        .collection(Schema.Chats.MESSAGES)
-                        .orderBy("ts", Query.Direction.DESCENDING)
-                        .startAt(com.google.firebase.Timestamp(java.util.Date(oldest.tsMs)))
-                        .limit(PAGE_SIZE).get().await()
-                    if (openChatIds.contains(id)) markIncomingSeen(id, snap.documents)
-                    var added = 0
-                    for (doc in snap.documents) {
-                        if (cache.containsKey(doc.id)) continue
-                        // ROUND 19: same rule as the live listener — a
-                        // doc this device can't open still EXISTS in the
-                        // history as a placeholder (and counts as added,
-                        // so a page of old-key history doesn't read as
-                        // "end of history").
-                        val decoded = runCatching { decryptDoc(id, doc, key, peerUid) }.getOrNull()
-                            ?: undecryptableStub(doc)
-                        decoded?.let { cache[doc.id] = it; added++ }
-                    }
-                    // a short page — or one that added nothing new — is the top
-                    hasOlderCache[id] = snap.size() >= PAGE_SIZE.toInt() && added > 0
-                    // ROUND 44: a freshly paged-in window can hold an
-                    // expired /tika image the live listener's pass never
-                    // saw — sweep it before the rebuild, same rule.
-                    sweepExpiredAiImages(id, cache.values)
-                    applyCacheToThread(id)
-                }.onFailure { Log.e("TikuChat", "loadOlder failed for chat $id", it) }
-            } finally {
-                loadingOlder.remove(id)
-            }
+        try {
+            runCatching {
+                val peerUid = AppState.thread(id)?.person?.uid ?: return@runCatching
+                val key = convKeyOrNull(id, peerUid) ?: return@runCatching
+                val cache = msgCache[id] ?: return@runCatching
+                val oldest = cache.values.minByOrNull { it.tsMs } ?: return@runCatching
+                val snap = db.collection(Schema.Chats.COLL).document(id)
+                    .collection(Schema.Chats.MESSAGES)
+                    .orderBy("ts", Query.Direction.DESCENDING)
+                    .startAt(com.google.firebase.Timestamp(java.util.Date(oldest.tsMs)))
+                    .limit(PAGE_SIZE).get().await()
+                if (openChatIds.contains(id)) markIncomingSeen(id, snap.documents)
+                var added = 0
+                for (doc in snap.documents) {
+                    if (cache.containsKey(doc.id)) continue
+                    // ROUND 19: same rule as the live listener — a
+                    // doc this device can't open still EXISTS in the
+                    // history as a placeholder (and counts as added,
+                    // so a page of old-key history doesn't read as
+                    // "end of history").
+                    val decoded = runCatching { decryptDoc(id, doc, key, peerUid) }.getOrNull()
+                        ?: undecryptableStub(doc)
+                    decoded?.let { cache[doc.id] = it; added++ }
+                }
+                // a short page — or one that added nothing new — is the top
+                hasOlderCache[id] = snap.size() >= PAGE_SIZE.toInt() && added > 0
+                // ROUND 44: a freshly paged-in window can hold an
+                // expired /tika image the live listener's pass never
+                // saw — sweep it before the rebuild, same rule.
+                sweepExpiredAiImages(id, cache.values)
+                applyCacheToThread(id)
+            }.onFailure { Log.e("TikuChat", "loadOlder failed for chat $id", it) }
+        } finally {
+            loadingOlder.remove(id)
         }
     }
 

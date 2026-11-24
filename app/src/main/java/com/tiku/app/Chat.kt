@@ -4824,26 +4824,66 @@ private fun RdChatContent(thread: ChatThread) {
         AppState.repo.react(threadId, m.id, if (cur == emoji) null else emoji)
     }
 
-    /** Scroll to a message (the pinned strip's tap) — if it is beyond the
-     *  loaded window, page older messages in until it lands (build 47). */
+    /** Scroll to a message (the pinned strip's tap; the reply-quote tap
+     *  rides the same path) — if it is beyond the loaded window, page
+     *  older messages in until it lands (build 47).
+     *  ROUND 84: the build-47 loop fired loadOlder and re-polled on a
+     *  fixed 700 ms timer, giving up after 10 tries — a hard cap of
+     *  ~600 older messages, and a race real pages (fetch + 60 decrypts
+     *  on a throttled connection) routinely lost, so very old pins
+     *  answered "Couldn't find that message" while sitting intact in
+     *  the history. The loop now AWAITS each page (loadOlderAndWait)
+     *  and follows PinJumpPlan: it keeps paging while history remains
+     *  and pages keep landing, and gives up only when the history is
+     *  genuinely exhausted (the deleted-for-me case), the per-tap
+     *  bound is hit, or page loads repeatedly change nothing (a dead
+     *  network / exhausted quota — hanging the tap would be worse). */
     fun jumpToMessage(msgId: String) {
         scope.launch {
-            var tries = 0
+            var pages = 0
+            var stalls = 0
+            var graceUsed = false
             while (true) {
                 val th = AppState.thread(threadId) ?: return@launch
                 val msgs = th.messages.filter { !it.deletedForMe }
                 val idx = msgs.indexOfFirst { it.id == msgId }
-                if (idx >= 0) {
-                    runCatching { listState.animateScrollToItem(idx) }
-                    return@launch
+                when (PinJumpPlan.step(idx, th.hasOlder, pages, stalls)) {
+                    PinJumpPlan.Step.SCROLL -> {
+                        runCatching { listState.animateScrollToItem(idx) }
+                        return@launch
+                    }
+                    PinJumpPlan.Step.GIVE_UP -> {
+                        // In the first instant after a chat opens, the
+                        // open-chat listener may not have delivered
+                        // hasOlder yet — one short grace re-check
+                        // before believing there is no older history.
+                        if (!graceUsed && pages == 0 && stalls == 0) {
+                            graceUsed = true
+                            delay(500)
+                            continue
+                        }
+                        AppState.toast("Couldn't find that message")
+                        return@launch
+                    }
+                    PinJumpPlan.Step.LOAD -> {
+                        val beforeCount = msgs.size
+                        val beforeOldest = msgs.firstOrNull()?.id
+                        AppState.repo.loadOlderAndWait(threadId)
+                        val after = AppState.thread(threadId)
+                        val afterMsgs = after?.messages?.filter { !it.deletedForMe } ?: emptyList()
+                        if (PinJumpPlan.progressed(
+                                beforeCount, beforeOldest,
+                                afterMsgs.size, afterMsgs.firstOrNull()?.id,
+                                after?.hasOlder ?: false,
+                            )
+                        ) {
+                            pages++; stalls = 0
+                        } else {
+                            stalls++
+                            if (stalls <= PinJumpPlan.MAX_STALLS) delay(1200)
+                        }
+                    }
                 }
-                if (!th.hasOlder || tries >= 10) {
-                    AppState.toast("Couldn't find that message")
-                    return@launch
-                }
-                AppState.repo.loadOlder(threadId)
-                tries++
-                delay(700)
             }
         }
     }

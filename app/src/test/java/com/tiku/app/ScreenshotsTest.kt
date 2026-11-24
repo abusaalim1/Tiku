@@ -4902,4 +4902,58 @@ class ScreenshotsTest {
             ExifTransform(0, false), exifTransform(0),
         )
     }
+
+    // ---------- ROUND 84: pinned-strip jump lands on a deep pin ----------
+    // The paging half of the fix is unit-proven in PinJumpR84Test (the
+    // harness has no Firestore to page); this staging proves the
+    // LANDING half in the post-page state: a thread whose full history
+    // is loaded, the pinned message sitting far above the tail the
+    // chat opens on. Before the tap the pinned bubble is not even
+    // composed (the list rests at the tail); after tapping the strip
+    // it must be on screen.
+
+    @Test fun shot116_pinnedJumpLandsDeep() {
+        val p = PreviewStore.people.first()
+        val id = PreviewRepo.startThreadWith(p)
+        val base = todayAtR78(9, 0)
+        val msgs = (0 until 150).map { i ->
+            TikuMessage(
+                id = "r84m$i", senderUid = if (i % 2 == 0) p.uid else "me",
+                kind = MsgKind.TEXT,
+                text = if (i == 12) "r84 pinned long ago" else "r84 history $i",
+                time = "9:00 AM",
+                me = i % 2 != 0, tsMs = base + i * 60_000L,
+            )
+        }
+        AppState.updateThread(id) { th ->
+            th.messages.clear()
+            th.messages.addAll(msgs)
+        }
+        AppState.threads.value = AppState.threads.value.map {
+            if (it.id == id) it.copy(pinnedMsgIds = listOf("r84m12")) else it
+        }
+        AppState.go(Screen.Chat(id))
+        frame { ChatScreen(id) }
+        composeRule.waitForIdle()
+        // The strip is up, showing the pin's preview…
+        org.junit.Assert.assertTrue(
+            "the pinned strip shows the deep pin's preview",
+            composeRule.onAllNodesWithText("Pinned · r84 pinned long ago", substring = true)
+                .fetchSemanticsNodes().isNotEmpty(),
+        )
+        // …but the pinned bubble itself is NOT composed yet — the list
+        // rests at the tail, 138 messages below it.
+        org.junit.Assert.assertTrue(
+            "before the tap the deep pinned bubble is not composed",
+            composeRule.onAllNodesWithText("r84 pinned long ago").fetchSemanticsNodes().isEmpty(),
+        )
+        // Tap the strip → the jump scrolls to the pin.
+        composeRule.onNodeWithText("Pinned · r84 pinned long ago", substring = true).performClick()
+        composeRule.waitForIdle()
+        org.junit.Assert.assertTrue(
+            "after the tap the pinned bubble is on screen",
+            composeRule.onAllNodesWithText("r84 pinned long ago").fetchSemanticsNodes().isNotEmpty(),
+        )
+        shot("116-pinned-jump-lands.png")
+    }
 }
