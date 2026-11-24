@@ -66,12 +66,10 @@ android {
     kotlinOptions { jvmTarget = "17" }
 }
 // ROUND 83: the standalone listenablefuture module resolves in this
-// graph to the EMPTY 9999.0-empty marker, which shadows the real
-// ListenableFuture class at compile time (first R83 CI failure), while
-// adding the real standalone jar duplicates the class Guava already
-// carries (second R83 CI failure). Guava — already a transitive of
-// CameraX here — is a superset of that module, so drop the module
-// entirely and let Guava's copy be the only one.
+// graph to the EMPTY 9999.0-empty marker (no classes at all), while
+// the real standalone jar duplicates the ListenableFuture class
+// Guava carries. Drop the module entirely: Guava — declared directly
+// above — is a superset of it and stays the only provider.
 configurations.configureEach {
     exclude(group = "com.google.guava", module = "listenablefuture")
 }
@@ -120,6 +118,11 @@ dependencies {
     implementation("androidx.camera:camera-lifecycle:1.4.1")
     implementation("androidx.camera:camera-view:1.4.1")
     implementation("androidx.exifinterface:exifinterface:1.3.7")
+    // ROUND 83: CameraX brings Guava only as a RUNTIME-scoped
+    // transitive, so Kotlin cannot see ListenableFuture at compile
+    // time; declaring Guava directly makes it compile-visible (the
+    // version matches the transitive the graph already resolves).
+    implementation("com.google.guava:guava:32.1.3-android")
     // Real audio+video calls: maintained WebRTC fork (org.webrtc API), Maven Central.
     implementation("io.getstream:stream-webrtc-android:1.1.1")
     // ROUND 13: real backdrop blur for the owner-supplied liquid-glass design
