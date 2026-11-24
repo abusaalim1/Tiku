@@ -4387,6 +4387,52 @@ class ScreenshotsTest {
     // candidates). Two partners are seeded as threads; typing "@"
     // must surface their suggestion rows (name + @username).
 
+    @Test fun shot110_unreadThreadRow() {
+        // ROUND 79 (WS-7): the Messages list's unread treatment —
+        // an unread thread (3 unread) above a read one. The unread
+        // row must carry the count badge; bold name/preview are the
+        // eyeball check on the shot.
+        val pA = PreviewStore.people[0]
+        val pB = PreviewStore.people[1]
+        val unreadTh = ChatThread("r79-unread-th", pA)
+        unreadTh.messages.add(
+            TikuMessage(
+                id = "r79u1", senderUid = pA.uid, kind = MsgKind.TEXT,
+                text = "kal ka plan pakka?", time = "9:41 AM",
+                me = false, tsMs = todayAtR78(9, 41),
+            ),
+        )
+        unreadTh.unread = 3
+        val readTh = ChatThread("r79-read-th", pB)
+        readTh.messages.add(
+            TikuMessage(
+                id = "r79r1", senderUid = "me", kind = MsgKind.TEXT,
+                text = "photo bhej diya hai", time = "9:10 AM",
+                me = true, tsMs = todayAtR78(9, 10),
+            ),
+        )
+        AppState.threads.value = listOf(unreadTh, readTh)
+        AppState.homeTab = HomeTab.CHATS
+        AppState.go(Screen.Home)
+        frame { HomeScreen() }
+        composeRule.waitForIdle()
+        org.junit.Assert.assertTrue(
+            "the unread row must carry the count badge",
+            composeRule.onAllNodesWithText("3").fetchSemanticsNodes().isNotEmpty(),
+        )
+        org.junit.Assert.assertTrue(
+            "the unread preview summarises the count",
+            composeRule.onAllNodesWithText("3 new messages", substring = true)
+                .fetchSemanticsNodes().isNotEmpty(),
+        )
+        org.junit.Assert.assertTrue(
+            "the read row renders its plain preview, no badge",
+            composeRule.onAllNodesWithText("photo bhej diya hai", substring = true)
+                .fetchSemanticsNodes().isNotEmpty(),
+        )
+        shot("110-unread-thread-row.png")
+    }
+
     @Test fun shot109_companionMentionSuggestions() {
         PreviewRepo.startThreadWith(PreviewStore.people[0]) // Aarav / @aarav
         PreviewRepo.startThreadWith(PreviewStore.people[1]) // Meera / @meera

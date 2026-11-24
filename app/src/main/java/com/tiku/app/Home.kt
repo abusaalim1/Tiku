@@ -36,6 +36,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
@@ -789,22 +790,28 @@ private fun ThreadRow(th: ChatThread, idx: Int, modifier: Modifier = Modifier) {
             .padding(14.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
+        // ROUND 79 (WS-7): one unread predicate for the whole row —
+        // a real unread count or a manual mark-as-unread, and never
+        // on a muted thread (muted rows stay silent, as always).
+        val unreadActive = (th.unread > 0 || markedUnread) && !th.muted
         Av(th.person, 50)
         Column(Modifier.weight(1f).padding(horizontal = 14.dp)) {
-            Text(th.displayName, color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.SemiBold,
+            // ROUND 79 (WS-7): the standard unread treatment — an
+            // unread thread's name goes BOLD (read threads keep the
+            // SemiBold they have always had).
+            Text(th.displayName, color = Color.White, fontSize = 16.sp,
+                fontWeight = if (unreadActive) FontWeight.Bold else FontWeight.SemiBold,
                 maxLines = 1, overflow = TextOverflow.Ellipsis, fontFamily = InterTight)
-            // ROUND 52 (item 9): the IG emphasis — once a chat holds
-            // 4+ unread (the counts that render "4 new messages" /
-            // "4+ new messages" in threadPreview), the preview line
-            // itself goes MOTTA: Bold, +1sp, full-strength ink. The
-            // 1–3 unread states and every read chat keep the exact
-            // styling they have always had.
-            val heavyUnread = th.unread >= 4
+            // ROUND 52 (item 9) made 4+ unread previews bold/bright;
+            // ROUND 79 (WS-7) GENERALISES that emphasis to EVERY
+            // unread thread (any count, or a manual mark): Bold,
+            // full-strength ink, at the row's normal 14 sp. Read
+            // threads keep the exact muted regular preview.
             Text(
                 threadPreview(th), fontFamily = rememberChatFontFamily(),
-                color = if (heavyUnread) Color.White else Sub,
-                fontSize = if (heavyUnread) 15.sp else 14.sp,
-                fontWeight = if (heavyUnread) FontWeight.Bold else FontWeight.Normal,
+                color = if (unreadActive) Color.White else Sub,
+                fontSize = 14.sp,
+                fontWeight = if (unreadActive) FontWeight.Bold else FontWeight.Normal,
                 maxLines = 1, overflow = TextOverflow.Ellipsis,
             )
         }
@@ -815,8 +822,28 @@ private fun ThreadRow(th: ChatThread, idx: Int, modifier: Modifier = Modifier) {
                 }
                 Text(th.time, color = Sub, fontSize = 12.sp, fontFamily = PoppinsFamily)
             }
-            if ((th.unread > 0 || markedUnread) && !th.muted) {
-                Box(Modifier.padding(top = 8.dp).size(9.dp).clip(CircleShape).background(Rose))
+            // ROUND 79 (WS-7): the unread COUNT BADGE — a brand-rose
+            // pill with the count — replaces the barely-visible 9 dp
+            // dot as the primary unread signal. A manual mark-as-
+            // unread carries no count, so it keeps the plain dot.
+            if (unreadActive) {
+                if (th.unread > 0) {
+                    Box(
+                        Modifier.padding(top = 6.dp).height(18.dp)
+                            .defaultMinSize(minWidth = 18.dp)
+                            .clip(CircleShape).background(Rose)
+                            .padding(horizontal = 5.dp),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text(
+                            if (th.unread > 99) "99+" else th.unread.toString(),
+                            color = Color.White, fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold, fontFamily = PoppinsFamily,
+                        )
+                    }
+                } else {
+                    Box(Modifier.padding(top = 8.dp).size(9.dp).clip(CircleShape).background(Rose))
+                }
             }
         }
     }
