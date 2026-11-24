@@ -115,6 +115,9 @@ dependencies {
     // the capture orientation fix in decodeCameraCapture.
     implementation("androidx.camera:camera-core:1.4.1")
     implementation("androidx.camera:camera-camera2:1.4.1")
+    // ROUND 85 (WS-D): in-app video recording (VideoCapture/Recorder)
+    // in CameraCapture.kt — same CameraX line as the photo binding.
+    implementation("androidx.camera:camera-video:1.4.1")
     implementation("androidx.camera:camera-lifecycle:1.4.1")
     implementation("androidx.camera:camera-view:1.4.1")
     implementation("androidx.exifinterface:exifinterface:1.3.7")

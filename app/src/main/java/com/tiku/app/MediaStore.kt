@@ -26,6 +26,13 @@ import java.io.ByteArrayOutputStream
 object MediaStore {
     const val CHUNK_BYTES = 700 * 1024
 
+    /** ROUND 85: a chunk doc the count field already promises is not
+     *  readable yet (the sender commits chunks in batches; a fresh
+     *  read can race the tail of the upload). A DISTINCT type so the
+     *  decrypt gate (DecryptGate) can classify it as PENDING — retry —
+     *  instead of a permanent can't-open failure. */
+    class ChunkMissingException(message: String) : IllegalStateException(message)
+
     /** Upload an already-encrypted blob, chunked. Returns the chunk count. */
     suspend fun upload(db: FirebaseFirestore, chatId: String, msgId: String, ciphertext: ByteArray): Int {
         val chunksRef = db.collection(Schema.Chats.COLL).document(chatId)
@@ -60,7 +67,7 @@ object MediaStore {
             // (and read as a permanently broken message). Throwing here
             // lets fetchMedia's re-fetch + error path do its job.
             val d = byIndex[i]
-                ?: throw IllegalStateException("media chunk $i of $chunkCount missing for message $msgId")
+                ?: throw ChunkMissingException("media chunk $i of $chunkCount missing for message $msgId")
             out.write(Base64.decode(d, Base64.NO_WRAP))
         }
         return out.toByteArray()

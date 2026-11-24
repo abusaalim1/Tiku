@@ -2223,11 +2223,24 @@ object FirebaseEngine : ChatRepo {
                     // ready (fresh searched chat), a transient fetch error, or a broken
                     // doc must degrade to "no messages yet", never crash the process.
                     runCatching {
-                        val key = convKeyOrNull(id, peerUid) ?: run {
-                            // one delayed retry — the profile/key often lands a beat later
+                        // ROUND 85 (WS-A): the key gate no longer gives
+                        // up after one retry. On a cold open (the
+                        // notification-tap path above all) the identity
+                        // / peer key can land seconds after the first
+                        // snapshot; abandoning the pass left the chat
+                        // empty until some unrelated doc change happened
+                        // to re-fire the listener. Keep attempting the
+                        // ACTUAL missing piece while this chat stays
+                        // open — the render side shows the loading
+                        // treatment meanwhile, never a placeholder.
+                        var key = convKeyOrNull(id, peerUid)
+                        var keyTries = 0
+                        while (key == null && keyTries < 40 && openChatIds.contains(id)) {
                             delay(1500)
-                            convKeyOrNull(id, peerUid)
-                        } ?: return@runCatching
+                            key = convKeyOrNull(id, peerUid)
+                            keyTries++
+                        }
+                        val readyKey = key ?: return@runCatching
                         val cache = msgCache.getOrPut(id) { LinkedHashMap() }
                         val initialFill = cache.isEmpty()
                         // ROUND 8 — INCREMENTAL: decrypt/apply ONLY the docs
@@ -2239,22 +2252,10 @@ object FirebaseEngine : ChatRepo {
                                 com.google.firebase.firestore.DocumentChange.Type.ADDED,
                                 com.google.firebase.firestore.DocumentChange.Type.MODIFIED -> {
                                     val doc = change.document
-                                    val existing = cache[doc.id]
-                                    val decoded = runCatching {
-                                        decryptDoc(id, doc, key, peerUid, cached = existing)
-                                    }.getOrNull()
-                                    when {
-                                        decoded != null -> cache[doc.id] = decoded
-                                        // ROUND 19: decryption failed (a
-                                        // retired key's history). Keep an
-                                        // honest placeholder in the chat —
-                                        // but NEVER overwrite a copy whose
-                                        // plaintext we already hold with
-                                        // the stub.
-                                        existing == null || existing.undecryptable ->
-                                            undecryptableStub(doc)?.let { cache[doc.id] = it }
-                                        else -> Unit // held plaintext wins; keep it
-                                    }
+                                    // ROUND 85 (WS-A/B): the attempt is
+                                    // classified + applied by the shared
+                                    // gate path (see applyDecryptAttempt).
+                                    applyDecryptAttempt(id, doc, readyKey, peerUid, cache)
                                 }
                                 com.google.firebase.firestore.DocumentChange.Type.REMOVED -> {
                                     // Messages are NEVER hard-deleted in this
@@ -2264,6 +2265,19 @@ object FirebaseEngine : ChatRepo {
                                     // in the cache and in the visible history.
                                 }
                             }
+                        }
+                        // ROUND 85 (WS-B): pendings that were NOT part
+                        // of this snapshot's changes get a re-attempt
+                        // from the snapshot's own docs when their
+                        // payload count has landed (the count update
+                        // usually IS a change — this covers a pending
+                        // installed by an older page / a raced pass).
+                        val changedIds = snap.documentChanges.map { it.document.id }.toSet()
+                        for (doc in snap.documents) {
+                            if (doc.id in changedIds) continue
+                            if (pendingDecryptIds[id]?.contains(doc.id) != true) continue
+                            if ((doc.getLong("mediaChunks") ?: 0L) <= 0L) continue
+                            applyDecryptAttempt(id, doc, readyKey, peerUid, cache)
                         }
                         if (initialFill) {
                             hasOlderCache[id] = snap.size() >= PAGE_SIZE.toInt()
@@ -2278,6 +2292,157 @@ object FirebaseEngine : ChatRepo {
                     } // end runCatching guard — failure = "no messages yet", never a crash
                 }
             }
+    }
+
+    // ================= ROUND 85 (WS-A/B): pending-decrypt machinery ====
+    // A message whose payload hasn't landed yet (DecryptGate PENDING)
+    // is tracked here per chat. Chunk writes produce NO change event
+    // on the message doc, so a latched pending state needs its own
+    // re-attempt driver: the retry job below re-fetches the pending
+    // docs (the only trigger Firestore offers for subcollection
+    // completion), the listener re-attempts from its snapshots, and a
+    // bubble tap can force one pass via retryDecrypt. Success or a
+    // PERMANENT verdict removes the id; the job stops when the chat
+    // closes or the set empties.
+
+    private val pendingDecryptIds = mutableMapOf<String, MutableSet<String>>()
+    private val pendingRetryJobs = mutableMapOf<String, Job>()
+
+    /** A metadata-only PENDING copy for a doc whose decrypt threw in
+     *  a gate-pending way (a chunk missing mid-download): same honest
+     *  metadata as the Round-19 stub, but flagged pending — it renders
+     *  the loading treatment and is re-attempted, never the
+     *  placeholder. */
+    private fun pendingStub(doc: com.google.firebase.firestore.DocumentSnapshot): TikuMessage? {
+        val stub = undecryptableStub(doc) ?: return null
+        val kindRaw = doc.getString("kind") ?: "text"
+        val vo = (doc.getLong("vo")?.toInt())?.takeIf {
+            (kindRaw == "image" || kindRaw == "video") && it in 1..2
+        }
+        return stub.copy(
+            undecryptable = false,
+            pendingDecrypt = true,
+            mediaChunks = (doc.getLong("mediaChunks") ?: 0L).toInt(),
+            mimeType = doc.getString("mime") ?: "",
+            mediaBytes = doc.getLong("mediaBytes") ?: 0L,
+            vo = vo,
+        )
+    }
+
+    private fun markPendingDecrypt(chatId: String, msgId: String) {
+        pendingDecryptIds.getOrPut(chatId) { mutableSetOf() } += msgId
+        schedulePendingRetry(chatId)
+    }
+
+    private fun clearPendingDecrypt(chatId: String, msgId: String) {
+        pendingDecryptIds[chatId]?.remove(msgId)
+    }
+
+    private fun schedulePendingRetry(chatId: String) {
+        if (pendingRetryJobs[chatId]?.isActive == true) return
+        pendingRetryJobs[chatId] = scope.launch {
+            var attempt = 0
+            while (openChatIds.contains(chatId)) {
+                if (pendingDecryptIds[chatId].isNullOrEmpty()) break
+                // The missing piece is the sender's upload landing —
+                // re-check it on a gentle backoff (1.2 s → 10 s cap),
+                // for a bounded window; any later doc change, chat
+                // re-open or bubble tap re-arms the job.
+                delay(minOf(1200L * (attempt + 1), 10_000L))
+                attempt++
+                if (attempt > 30) break
+                runCatching { retryPendingDecrypts(chatId) }
+            }
+        }
+    }
+
+    /** One gate-classified decrypt attempt applied to the cache: the
+     *  ONE path the open-chat listener, the snapshot re-attempt pass,
+     *  pageOlder and the retry job all share. Returns true when the
+     *  cache entry changed. */
+    private suspend fun applyDecryptAttempt(
+        chatId: String,
+        doc: com.google.firebase.firestore.DocumentSnapshot,
+        key: javax.crypto.SecretKey,
+        peerUid: String,
+        cache: MutableMap<String, TikuMessage>,
+    ): Boolean {
+        val existing = cache[doc.id]
+        val attempt = runCatching { decryptDoc(chatId, doc, key, peerUid, cached = existing) }
+        val decoded = attempt.getOrNull()
+        val verdict = DecryptGate.verdict(
+            keyReady = true,
+            kindRaw = doc.getString("kind") ?: "text",
+            mediaChunks = (doc.getLong("mediaChunks") ?: 0L).toInt(),
+            error = attempt.exceptionOrNull(),
+        )
+        return when {
+            decoded != null && !decoded.pendingDecrypt -> {
+                cache[doc.id] = decoded
+                clearPendingDecrypt(chatId, doc.id)
+                true
+            }
+            decoded != null -> {
+                // decryptDoc's own pending build (payload in flight).
+                val changed = existing == null || !existing.hasPlaintext()
+                if (changed) cache[doc.id] = decoded
+                markPendingDecrypt(chatId, doc.id)
+                changed
+            }
+            verdict == DecryptGate.Verdict.PENDING -> {
+                // A throw the gate still reads as pending (a chunk
+                // missing mid-download): keep any held copy, else
+                // install a metadata pending copy; the retry set
+                // lands the payload when it arrives.
+                var changed = false
+                if (existing == null) {
+                    pendingStub(doc)?.let { cache[doc.id] = it; changed = true }
+                }
+                markPendingDecrypt(chatId, doc.id)
+                changed
+            }
+            else -> {
+                // PERMANENT (Round 19): the honest placeholder — but
+                // NEVER over a copy whose plaintext we already hold.
+                clearPendingDecrypt(chatId, doc.id)
+                if (existing == null || existing.undecryptable || existing.pendingDecrypt) {
+                    undecryptableStub(doc)?.let { cache[doc.id] = it }
+                    true
+                } else false // held plaintext wins; keep it
+            }
+        }
+    }
+
+    /** Re-fetch + re-attempt every pending doc of one chat (the retry
+     *  job's pass; also the bubble tap's forced pass). Applies the
+     *  rebuild once if anything landed. */
+    private suspend fun retryPendingDecrypts(chatId: String) {
+        val peerUid = AppState.thread(chatId)?.person?.uid ?: return
+        val key = convKeyOrNull(chatId, peerUid) ?: return
+        val cache = msgCache[chatId] ?: return
+        val ids = pendingDecryptIds[chatId]?.toList().orEmpty()
+        var changed = false
+        for (msgId in ids) {
+            val doc = runCatching { msgRef(chatId, msgId).get().await() }.getOrNull()
+            if (doc == null || !doc.exists()) {
+                clearPendingDecrypt(chatId, msgId)
+                continue
+            }
+            if (applyDecryptAttempt(chatId, doc, key, peerUid, cache)) changed = true
+        }
+        if (changed) applyCacheToThread(chatId)
+    }
+
+    /** ROUND 85 (WS-B/C): a tap on a still-loading media bubble forces
+     *  one immediate re-attempt pass for that message instead of
+     *  dead-ending (the old tap did nothing at all while the copy had
+     *  no photo). A genuinely undecryptable message simply re-fails
+     *  and keeps its placeholder. */
+    override fun retryDecrypt(id: String, msgId: String) {
+        scope.launch {
+            markPendingDecrypt(id, msgId)
+            runCatching { retryPendingDecrypts(id) }
+        }
     }
 
     /** Rebuild one thread's visible message list from the incremental cache:
@@ -2459,9 +2624,12 @@ object FirebaseEngine : ChatRepo {
                     // history as a placeholder (and counts as added,
                     // so a page of old-key history doesn't read as
                     // "end of history").
-                    val decoded = runCatching { decryptDoc(id, doc, key, peerUid) }.getOrNull()
-                        ?: undecryptableStub(doc)
-                    decoded?.let { cache[doc.id] = it; added++ }
+                    // ROUND 85: the same gate classification as the
+                    // live listener — a paged-in media doc whose
+                    // payload is still landing joins the pending set
+                    // instead of minting a placeholder.
+                    applyDecryptAttempt(id, doc, key, peerUid, cache)
+                    if (cache.containsKey(doc.id)) added++
                 }
                 // a short page — or one that added nothing new — is the top
                 hasOlderCache[id] = snap.size() >= PAGE_SIZE.toInt() && added > 0
@@ -2711,6 +2879,10 @@ object FirebaseEngine : ChatRepo {
         var mediaChunks = 0
         var mimeType = ""
         var mediaBytes = 0L
+        // ROUND 85 (WS-B): set by the media branch when the payload
+        // simply hasn't landed yet (see DecryptGate) — the built copy
+        // renders the loading treatment and the engine retries it.
+        var pendingMedia = false
         // ROUND 30 — OWNER VAULT: the decrypted payload of a fresh chunk
         // download, kept only so the vault stash below can file the exact
         // bytes this client produced for viewing (never a new download).
@@ -2788,6 +2960,33 @@ object FirebaseEngine : ChatRepo {
                     // (duration/size/mime only) and the payload loads only
                     // through fetchMedia() on an explicit tap.
                     durSec = ((doc.getLong("durationMs") ?: 0L) / 1000).toInt()
+                    // ROUND 85 (WS-B): the sender writes the doc FIRST
+                    // and the chunk count LAST (deliverMedia) — a file
+                    // doc with no count yet is still uploading, so the
+                    // bubble wears the pending treatment, not the
+                    // tap-to-load one (a tap would only be told "still
+                    // uploading" anyway; see fetchMedia).
+                    if (mediaChunks <= 0) pendingMedia = true
+                } else if ((kindRaw == "image" || kindRaw == "voice") && mediaChunks <= 0) {
+                    // ROUND 85 (WS-B) — THE CAN'T-OPEN FLASH: the doc
+                    // has landed but its payload count has not (the
+                    // sender is mid-upload: doc first, chunks next,
+                    // count last). Downloading now reads ZERO chunks
+                    // and the empty blob's GCM failure used to mint an
+                    // undecryptable stub — the placeholder flash, and
+                    // (when the count update's own re-attempt raced a
+                    // straggler chunk) a latch nothing ever retried.
+                    // This is PENDING, not failure: build the message
+                    // from its metadata, flag it, and let the retry
+                    // machinery (and the count update's MODIFIED event)
+                    // land the payload. A voice note still shows its
+                    // waveform + duration from the doc's own fields.
+                    pendingMedia = true
+                    if (kindRaw == "voice") {
+                        durSec = ((doc.getLong("durationMs") ?: 0L) / 1000).toInt()
+                        @Suppress("UNCHECKED_CAST")
+                        amps = (doc.get("amps") as? List<Long>)?.map { it.toInt() } ?: emptyList()
+                    }
                 } else {
                     val chunkCount = mediaChunks
                     val ctBytes = MediaStore.download(db, chatId, doc.id, chunkCount)
@@ -2840,7 +3039,9 @@ object FirebaseEngine : ChatRepo {
             // above (every other path here is a non-delAll doc → false,
             // exactly as before).
             deletedForEveryone = retained,
-            nikah = nikah, nikahState = nikahState, nikahKeepsake = nikahKeepsake)
+            nikah = nikah, nikahState = nikahState, nikahKeepsake = nikahKeepsake,
+            // ROUND 85 (WS-B): pending payload (see the media branch).
+            pendingDecrypt = pendingMedia)
         // ROUND 33 — HIDE RECOVERY: mirror this copy into the hidden
         // registry (or drop its entry, when the doc no longer hides it
         // for me — e.g. right after an unhide lands).

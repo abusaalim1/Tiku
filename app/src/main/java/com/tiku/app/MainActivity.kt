@@ -156,6 +156,17 @@ class MainActivity : ComponentActivity() {
         if (ChatSession.unlocked && FirebaseEngine.signedIn) {
             AppState.repo.openThread(threadId)
             AppState.go(Screen.Chat(threadId))
+        } else {
+            // ROUND 85 (WS-A): a COLD tap reaches onCreate BEFORE the
+            // gate — the session is locked / not yet signed in, and
+            // the old code simply dropped the target: after unlocking,
+            // the user landed on Home and the tapped chat was lost.
+            // Stash the target instead; ChatSession.unlockFlow /
+            // unlockLocalSession consume it the moment the session
+            // lands inside, so the tap still ends in its chat. The
+            // gate itself is untouched: locked still shows the gate
+            // first, exactly as before.
+            AppState.pendingChatThread = threadId
         }
     }
 

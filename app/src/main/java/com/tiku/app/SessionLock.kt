@@ -410,6 +410,10 @@ object ChatSession {
             }
         }
         AppState.go(Screen.Home)
+        // ROUND 85 (WS-A): a notification tapped while locked stashed
+        // its chat target (MainActivity) — land in that chat now
+        // instead of leaving the user on Home with the target lost.
+        AppState.consumePendingChatThread()
     }
 
     /**
@@ -456,6 +460,10 @@ object ChatSession {
         FirebaseEngine.setPresence(true)
         AppState.scope.launch { FirebaseEngine.loadMyProfile() }
         AppState.instantGo(Screen.Home)
+        // ROUND 85 (WS-A): same pending-target consumption as
+        // unlockFlow (a stashed notification target can only exist
+        // here if an earlier locked launch stashed it).
+        AppState.consumePendingChatThread()
         return true
     }
 }

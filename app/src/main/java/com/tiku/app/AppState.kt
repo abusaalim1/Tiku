@@ -79,6 +79,27 @@ object AppState {
     var homeTab by mutableStateOf(HomeTab.CHATS)
     var authBusy by mutableStateOf(false)
 
+    /** ROUND 85 (WS-A): the chat a notification tap asked for while
+     *  the session was not yet ready to open it (cold start / locked).
+     *  Stashed by MainActivity's alert-intent handling and consumed
+     *  exactly once by the unlock paths (ChatSession.unlockFlow /
+     *  unlockLocalSession) when they land the user inside — the tap's
+     *  target is never lost to a Home landing. */
+    @Volatile var pendingChatThread: String? = null
+
+    /** Consume [pendingChatThread]: if one is stashed, open that chat
+     *  now (the caller has just established a live unlocked session
+     *  and landed inside). One-shot — a consumed target never
+     *  re-opens on a later unlock. */
+    fun consumePendingChatThread() {
+        val target = pendingChatThread ?: return
+        pendingChatThread = null
+        runCatching {
+            repo.openThread(target)
+            go(Screen.Chat(target))
+        }
+    }
+
     /** ROUND 14 — the redesign shell's destination INSIDE Screen.Home:
      *  0 Messages · 1 Calls · 3 Setting · 7 Requests. (Chat and
      *  Info stay Screen-routed overlays — Screen.Chat / Screen.ChatDetails.)
@@ -362,6 +383,11 @@ interface ChatRepo {
     /** Load one VIDEO / AUDIO message's payload on demand (tap-to-load —
      *  these kinds never auto-download). Default no-op. */
     fun fetchMedia(id: String, msgId: String) {}
+    /** ROUND 85 (WS-B/C): force one re-attempt of a message whose
+     *  decryption is PENDING (its payload chunks hadn't landed when
+     *  the listener last tried) — the tap on a still-loading media
+     *  bubble. Default no-op keeps test doubles compiling. */
+    fun retryDecrypt(id: String, msgId: String) {}
     // ---- ROUND 31: view-once / view-twice media ----
     /** Send a PHOTO the recipient may view only [vo] times (1 or 2;
      *  null = unlimited, the plain send). The choice rides the additive

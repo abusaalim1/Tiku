@@ -189,6 +189,17 @@ data class TikuMessage(
      *  when the payload is absent or cannot be opened on this device;
      *  the card then falls back to its plain fallback text. */
     val nikahKeepsake: NikahKeepsake? = null,
+    // ---- ROUND 85 (appended last, same discipline) ----
+    /** LOCAL-ONLY render state (never a Firestore field): this copy is
+     *  PENDING decryption, not failed — the conversation key was not
+     *  ready when it was attempted, or a media message's payload chunks
+     *  have not finished landing (the sender writes the doc first and
+     *  the chunk count last). Pending copies render the neutral loading
+     *  treatment, NEVER the can't-open placeholder, and the engine
+     *  re-attempts them when the missing piece arrives. The placeholder
+     *  ([undecryptable]) is reserved for key-ready + genuine decrypt
+     *  failure — see DecryptGate. */
+    val pendingDecrypt: Boolean = false,
 )
 
 /** ROUND 60 — the self-contained payload of a Nikah keepsake card: everything

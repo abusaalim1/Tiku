@@ -5026,4 +5026,338 @@ class ScreenshotsTest {
         org.junit.Assert.assertEquals(0, loadedFrom)
         org.junit.Assert.assertEquals(11, pages)
     }
+
+    // ================= ROUND 85 =================
+    // WS-A/B: a message whose payload hasn't landed renders the
+    // neutral LOADING treatment (tag msg_pending) — never the
+    // can't-open placeholder. WS-C: a normal camera photo opens the
+    // full-screen viewer. WS-D: video-mode chrome + timer choices.
+    // WS-E: the confirm screen's looks selector. WS-F: staged
+    // thumbnails in the composer. WS-G: the companion theme grid.
+    // WS-H: Back closes an open sheet before anything else moves.
+
+    @Test fun shot117_pendingLoadingNotPlaceholder() {
+        val p = PreviewStore.people.first()
+        val id = PreviewRepo.startThreadWith(p)
+        AppState.updateThread(id) { th ->
+            th.messages.clear()
+            th.messages.addAll(
+                listOf(
+                    TikuMessage(
+                        id = "r85pendimg", senderUid = p.uid, kind = MsgKind.IMAGE,
+                        time = "9:41 AM", me = false, tsMs = todayAtR78(9, 41),
+                        mediaChunks = 0, pendingDecrypt = true,
+                    ),
+                    TikuMessage(
+                        id = "r85pendtxt", senderUid = p.uid, kind = MsgKind.TEXT,
+                        time = "9:42 AM", me = false, tsMs = todayAtR78(9, 42),
+                        pendingDecrypt = true,
+                    ),
+                ),
+            )
+        }
+        AppState.goChat(id)
+        frame { ChatScreen(id) }
+        // The loading treatment is on screen…
+        org.junit.Assert.assertTrue(
+            "a pending media message must render the loading row",
+            composeRule.onAllNodesWithTag("msg_pending").fetchSemanticsNodes().isNotEmpty(),
+        )
+        // …and the can't-open placeholder is NOWHERE.
+        org.junit.Assert.assertTrue(
+            "a pending message must never render the can't-open placeholder",
+            composeRule.onAllNodesWithText("This message can't be opened on this phone")
+                .fetchSemanticsNodes().isEmpty(),
+        )
+        shot("117-pending-loading.png")
+    }
+
+    @Test fun shot118_pendingLandedRendersImage() {
+        val p = PreviewStore.people.first()
+        val id = PreviewRepo.startThreadWith(p)
+        val bmp = solidBitmapR79(200, 260, 0xFF8A5A44.toInt())
+        AppState.updateThread(id) { th ->
+            th.messages.clear()
+            th.messages.addAll(
+                listOf(
+                    TikuMessage(
+                        id = "r85pendimg", senderUid = p.uid, kind = MsgKind.IMAGE,
+                        time = "9:41 AM", me = false, tsMs = todayAtR78(9, 41),
+                        photo = bmp, mediaChunks = 3, pendingDecrypt = false,
+                    ),
+                    TikuMessage(
+                        id = "r85pendtxt", senderUid = p.uid, kind = MsgKind.TEXT,
+                        time = "9:42 AM", me = false, tsMs = todayAtR78(9, 42),
+                        text = "It arrived!",
+                    ),
+                ),
+            )
+        }
+        AppState.goChat(id)
+        frame { ChatScreen(id) }
+        org.junit.Assert.assertTrue(
+            "once the payload lands, the pending row is gone",
+            composeRule.onAllNodesWithTag("msg_pending").fetchSemanticsNodes().isEmpty(),
+        )
+        composeRule.onNodeWithText("It arrived!").assertIsDisplayed()
+        shot("118-pending-landed.png")
+    }
+
+    @Test fun shot119_cameraPhotoOpensViewer() {
+        // WS-C: a NORMAL camera capture (view-once off) stages and
+        // sends through the exact same photo funnel as a gallery pick;
+        // its bubble tap must open the full-screen viewer.
+        val p = PreviewStore.people.first()
+        val id = PreviewRepo.startThreadWith(p)
+        val bmp = solidBitmapR79(220, 260, 0xFF4E6B8A.toInt())
+        AppState.updateThread(id) { th ->
+            th.messages.clear()
+            th.messages.add(
+                TikuMessage(
+                    id = "r85camphoto", senderUid = "me", kind = MsgKind.IMAGE,
+                    time = "10:15 AM", me = true, tsMs = todayAtR78(10, 15),
+                    photo = bmp, mediaChunks = 2, viewOnce = null,
+                ),
+            )
+        }
+        AppState.goChat(id)
+        frame { ChatScreen(id) }
+        // Tap the bubble (its time chip sits inside the tap region).
+        composeRule.onAllNodesWithText("10:15 AM").fetchSemanticsNodes().size.let {
+            org.junit.Assert.assertTrue("the photo bubble must render", it > 0)
+        }
+        composeRule.onAllNodesWithText("10:15 AM")[0]
+            .performTouchInput { click(center) }
+        composeRule.waitForIdle()
+        org.junit.Assert.assertTrue(
+            "tapping a normal camera photo must open the full-screen viewer",
+            composeRule.onAllNodesWithTag("image_viewer").fetchSemanticsNodes().isNotEmpty(),
+        )
+        shot("119-camera-photo-viewer.png")
+    }
+
+    @Test fun shot120_videoModeChrome() {
+        frame {
+            CameraChrome(
+                flashMode = 0, hasFlash = true, capturing = false,
+                onClose = {}, onFlash = {}, onShutter = {}, onFlip = {},
+                videoMode = true,
+            ) {
+                Box(Modifier.fillMaxSize().background(Color(0xFF2A2D33)))
+            }
+        }
+        composeRule.onNodeWithTag("camera_timer_30").assertIsDisplayed()
+        composeRule.onNodeWithTag("camera_timer_60").assertIsDisplayed()
+        composeRule.onNodeWithTag("camera_timer_custom").assertIsDisplayed()
+        composeRule.onNodeWithTag("camera_mode_video").assertIsDisplayed()
+        composeRule.onNodeWithText("30s").assertIsDisplayed()
+        composeRule.onNodeWithText("60s").assertIsDisplayed()
+        shot("120-video-mode-chrome.png")
+    }
+
+    @Test fun shot121_videoRecordingChrome() {
+        frame {
+            CameraChrome(
+                flashMode = 0, hasFlash = true, capturing = false,
+                onClose = {}, onFlash = {}, onShutter = {}, onFlip = {},
+                videoMode = true, recording = true,
+                recElapsedSec = 7, recLimitSec = 30,
+            ) {
+                Box(Modifier.fillMaxSize().background(Color(0xFF2A2D33)))
+            }
+        }
+        composeRule.onNodeWithTag("camera_rec_pill").assertIsDisplayed()
+        composeRule.onNodeWithText("0:07 / 0:30").assertIsDisplayed()
+        shot("121-video-recording-chrome.png")
+    }
+
+    @Test fun shot122_confirmLooksSelector() {
+        val bmp = solidBitmapR79(200, 260, 0xFF6B4E8A.toInt())
+        frame {
+            CameraConfirmView(
+                bmp = bmp,
+                showLooks = true, looks = 1, onLooks = {},
+                onRetake = {}, onUse = {},
+            )
+        }
+        composeRule.onNodeWithTag("looks_selector").assertIsDisplayed()
+        composeRule.onNodeWithText("One look").assertIsDisplayed()
+        composeRule.onNodeWithText("Two looks").assertIsDisplayed()
+        composeRule.onNodeWithText("Keep").assertIsDisplayed()
+        shot("122-confirm-looks-selector.png")
+    }
+
+    @Test fun shot123_stagedComposerStrip() {
+        val p = PreviewStore.people.first()
+        val id = PreviewRepo.startThreadWith(p)
+        AppState.updateThread(id) { th -> th.messages.clear() }
+        val bmp = solidBitmapR79(120, 150, 0xFF7A4E8F.toInt())
+        val poster = solidBitmapR79(120, 150, 0xFF44586B.toInt())
+        val vf = java.io.File(ctx.cacheDir, "r85-staged.mp4").apply { writeBytes(byteArrayOf(1, 2, 3)) }
+        StagedMediaStore.add(id, StagedMedia.Photo("r85s1", bmp, null))
+        StagedMediaStore.add(id, StagedMedia.Video("r85s2", vf, "video/mp4", 12, poster, 1))
+        AppState.goChat(id)
+        frame { ChatScreen(id) }
+        composeRule.onNodeWithTag("staged_strip").assertIsDisplayed()
+        org.junit.Assert.assertEquals(
+            2, composeRule.onAllNodesWithTag("staged_remove").fetchSemanticsNodes().size,
+        )
+        org.junit.Assert.assertEquals(2, StagedMediaStore.count(id))
+        shot("123-staged-composer.png")
+        StagedMediaStore.clear(id)
+        vf.delete()
+    }
+
+    @Test fun shot124_companionThemeGrid() {
+        // WS-G: the companion's theme picker is the normal chat's
+        // tile grid — Default + six built-ins + the Custom photo tile.
+        AppState.appCtx = ctx
+        TikaBotStore.setThemeId("t1")
+        AppState.sheet {
+            Column(Modifier.padding(20.dp)) {
+                Text(
+                    "Chat theme", color = RdInk, fontFamily = PoppinsFamily,
+                    fontWeight = FontWeight.SemiBold, fontSize = 15.sp,
+                )
+                Spacer(Modifier.height(12.dp))
+                BotThemeGrid(onPick = {}, onCustomPick = {})
+            }
+        }
+        frame { Box(Modifier.fillMaxSize().background(Color(0xFF14161A))) }
+        composeRule.onNodeWithTag("bot_theme_grid").assertIsDisplayed()
+        composeRule.onNodeWithTag("bot_theme_custom").assertIsDisplayed()
+        composeRule.onNodeWithText("Blush Kisses").assertIsDisplayed()
+        composeRule.onNodeWithText("Custom photo").assertIsDisplayed()
+        shot("124-companion-theme-grid.png")
+        AppState.closeSheet()
+        TikaBotStore.setThemeId("")
+    }
+
+    @Test fun shot125_companionThemedChat() {
+        // WS-G: a non-default theme applies live in the companion —
+        // wallpaper behind the list + the theme's bubble colours.
+        stageCompanionR73C()
+        TikaBotStore.setThemeId("t3")
+        val base = TikaBotStore.messages.value.size
+        TikaBotStore.appendBot("Themed bubbles, themed wall.")
+        TikaBotStore.appendUser("Looks right.")
+        frame { TikaBotScreen() }
+        composeRule.onNodeWithText("Themed bubbles, themed wall.").assertIsDisplayed()
+        shot("125-companion-themed.png")
+        cleanupCompanionR73C(base)
+        TikaBotStore.setThemeId("")
+    }
+
+    @Test fun shot126_sheetBackClosesFirst() {
+        // WS-H: with ANY sheet open (the theme confirm sheet rides
+        // this host), Back must close the sheet and leave the surface
+        // underneath exactly where it was — never navigate away.
+        val p = PreviewStore.people.first()
+        val id = PreviewRepo.startThreadWith(p)
+        AppState.updateThread(id) { th -> th.messages.clear() }
+        AppState.goChat(id)
+        AppState.sheet {
+            Column(Modifier.padding(24.dp)) {
+                Text(
+                    "Use this theme", color = RdInk, fontFamily = PoppinsFamily,
+                    fontWeight = FontWeight.SemiBold, fontSize = 15.sp,
+                )
+            }
+        }
+        frame { ChatScreen(id) }
+        composeRule.onNodeWithText("Use this theme").assertIsDisplayed()
+        composeRule.activity.onBackPressedDispatcher.onBackPressed()
+        composeRule.waitForIdle()
+        org.junit.Assert.assertTrue(
+            "Back must close the open sheet",
+            composeRule.onAllNodesWithText("Use this theme").fetchSemanticsNodes().isEmpty(),
+        )
+        org.junit.Assert.assertTrue(
+            "Back must NOT navigate away from the chat while a sheet was open",
+            AppState.screen is Screen.Chat,
+        )
+        shot("126-sheet-back-closes.png")
+        AppState.closeSheet()
+    }
+
+    // ---------- ROUND 85 plain contracts (no composition) ----------
+
+    @Test fun decryptGateR85_pendingVsPermanent() {
+        val gcmFail = javax.crypto.AEADBadTagException("tag mismatch")
+        // Key not loaded yet → PENDING whatever else is true, and the
+        // placeholder is never allowed.
+        org.junit.Assert.assertEquals(
+            DecryptGate.Verdict.PENDING,
+            DecryptGate.verdict(keyReady = false, kindRaw = "text", mediaChunks = null, error = gcmFail),
+        )
+        org.junit.Assert.assertFalse(DecryptGate.placeholderAllowed(keyReady = false, verdict = DecryptGate.Verdict.PENDING))
+        // Media payload not landed (count 0) → PENDING even with a
+        // decrypt error in hand — the sender publishes the count last.
+        org.junit.Assert.assertEquals(
+            DecryptGate.Verdict.PENDING,
+            DecryptGate.verdict(keyReady = true, kindRaw = "image", mediaChunks = 0, error = gcmFail),
+        )
+        org.junit.Assert.assertEquals(
+            DecryptGate.Verdict.PENDING,
+            DecryptGate.verdict(keyReady = true, kindRaw = "voice", mediaChunks = 0, error = null),
+        )
+        // A missing chunk file is the same pending shape.
+        org.junit.Assert.assertEquals(
+            DecryptGate.Verdict.PENDING,
+            DecryptGate.verdict(
+                keyReady = true, kindRaw = "image", mediaChunks = 2,
+                error = MediaStore.ChunkMissingException("chunk 1 missing"),
+            ),
+        )
+        // Key ready + payload present + genuine GCM failure → the one
+        // PERMANENT case, and only here is the placeholder allowed.
+        org.junit.Assert.assertEquals(
+            DecryptGate.Verdict.PERMANENT,
+            DecryptGate.verdict(keyReady = true, kindRaw = "text", mediaChunks = null, error = gcmFail),
+        )
+        org.junit.Assert.assertTrue(DecryptGate.placeholderAllowed(keyReady = true, verdict = DecryptGate.Verdict.PERMANENT))
+        // No error → READY.
+        org.junit.Assert.assertEquals(
+            DecryptGate.Verdict.READY,
+            DecryptGate.verdict(keyReady = true, kindRaw = "image", mediaChunks = 2, error = null),
+        )
+        org.junit.Assert.assertTrue(DecryptGate.mediaPayloadPending("video", 0))
+        org.junit.Assert.assertFalse(DecryptGate.mediaPayloadPending("video", 1))
+        org.junit.Assert.assertFalse(DecryptGate.mediaPayloadPending("text", 0))
+    }
+
+    @Test fun videoTimerPolicyR85_autoStopAndSanitize() {
+        org.junit.Assert.assertFalse(VideoTimerPolicy.shouldAutoStop(29, 30))
+        org.junit.Assert.assertTrue(VideoTimerPolicy.shouldAutoStop(30, 30))
+        org.junit.Assert.assertTrue(VideoTimerPolicy.shouldAutoStop(45, 30))
+        org.junit.Assert.assertFalse(VideoTimerPolicy.shouldAutoStop(9999, null))
+        org.junit.Assert.assertEquals(45, VideoTimerPolicy.sanitizeCustom("45"))
+        org.junit.Assert.assertEquals(3600, VideoTimerPolicy.sanitizeCustom("3600"))
+        org.junit.Assert.assertNull(VideoTimerPolicy.sanitizeCustom("3"))
+        org.junit.Assert.assertNull(VideoTimerPolicy.sanitizeCustom("3601"))
+        org.junit.Assert.assertNull(VideoTimerPolicy.sanitizeCustom("abc"))
+        org.junit.Assert.assertNull(VideoTimerPolicy.sanitizeCustom(""))
+        org.junit.Assert.assertEquals("0:07", VideoTimerPolicy.formatClock(7))
+        org.junit.Assert.assertEquals("1:30", VideoTimerPolicy.formatClock(90))
+        org.junit.Assert.assertEquals("10:00", VideoTimerPolicy.formatClock(600))
+    }
+
+    @Test fun stagedSendRouteR85_mapping() {
+        val bmp = solidBitmapR79(40, 40, 0xFF123456.toInt())
+        val photo = StagedMedia.Photo("k1", bmp, null)
+        val photoVo = StagedMedia.Photo("k2", bmp, 2)
+        val vf = java.io.File(ctx.cacheDir, "r85-route.mp4").apply { writeBytes(byteArrayOf(9)) }
+        val video = StagedMedia.Video("k3", vf, "video/mp4", 9, null, 1)
+        // Every staged item routes into the view-once send funnel with
+        // its own looks value — the exact pipeline entry sendCurrent
+        // commits through.
+        org.junit.Assert.assertEquals(StagedSendRoute.PHOTO_VO, stagedSendRoute(photo))
+        org.junit.Assert.assertEquals(StagedSendRoute.PHOTO_VO, stagedSendRoute(photoVo))
+        org.junit.Assert.assertEquals(StagedSendRoute.VIDEO_VO, stagedSendRoute(video))
+        org.junit.Assert.assertNull(photo.vo)
+        org.junit.Assert.assertEquals(2, photoVo.vo)
+        org.junit.Assert.assertEquals(1, video.vo)
+        vf.delete()
+    }
+
 }

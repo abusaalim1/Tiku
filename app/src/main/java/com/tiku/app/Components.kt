@@ -1,6 +1,7 @@
 package com.tiku.app
 
 import android.graphics.Bitmap
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
@@ -224,6 +225,24 @@ fun BoxScope.DesignToast() {
 @Composable
 fun BoxScope.BottomSheetHost() {
     val content = AppState.sheetContent
+    // ROUND 85 (WS-H) — Back closes the SHEET first. Until this round
+    // the sheet host carried no BackHandler at all, so while any
+    // AppState sheet was open (the custom-theme confirm over the
+    // Customize page, the companion's details sheet, …) a Back press
+    // fell through to whatever screen sat UNDERNEATH: InfoScreen's
+    // handler popped the Customize page or left for the chat, the
+    // companion's left for Home — and the sheet itself stayed open
+    // over the new surface, so Back appeared simply broken ("back
+    // bhi nhi hota hai"). This host composes AFTER every screen in
+    // TikuRoot, so while a sheet is open this handler is the most
+    // recently composed enabled one and wins; it does exactly what
+    // the scrim tap and every sheet's own Cancel already do
+    // (closeSheet) — the pickers' apply semantics are untouched:
+    // live-applied choices stay applied, an un-confirmed custom pick
+    // is discarded, exactly as Cancel discards it. With no sheet
+    // open the handler is disabled and Back behaves exactly as
+    // before everywhere — the app-lock one-Back re-lock included.
+    BackHandler(enabled = content != null) { AppState.closeSheet() }
     if (AppState.isChatRoot(AppState.screen)) {
         // ROUND 14: the Tik sheet host wears the redesign's sheet skin —
         // solid #16161B, r28 corners, white-alpha hairline + grabber, black

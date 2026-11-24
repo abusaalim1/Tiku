@@ -18,6 +18,7 @@ import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -71,6 +72,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextStyle
@@ -196,6 +198,46 @@ object TikaBotStore {
     private val _themeId = MutableStateFlow("")
     val themeId: StateFlow<String> = _themeId
 
+    /** ROUND 85 (WS-G): this chat's CUSTOM theme wallpaper (a picked
+     *  photo), the companion half of the normal chat's Round-35
+     *  custom themes. The normal chat stores its photo as an
+     *  encrypted asset on the shared chat doc; the companion has no
+     *  chat doc and no peer, so its photo lives in ONE app-private
+     *  file per account (see [customWallpaperFile]) and the decoded
+     *  bitmap publishes here for the render side. The theme VALUE
+     *  uses the exact normal-chat encoding — "custom" /
+     *  "custom:<paletteId>" in [themeId] (ChatThemes.customValue) —
+     *  so paletteFor resolves its colours identically. */
+    private val _customWallpaper = MutableStateFlow<android.graphics.Bitmap?>(null)
+    val customWallpaper: StateFlow<android.graphics.Bitmap?> = _customWallpaper
+
+    /** The account's custom-wallpaper file (app-private; null in
+     *  preview builds, where the bitmap is memory-only). */
+    private fun customWallpaperFile(): java.io.File? {
+        if (Config.PREVIEW_UI_ONLY) return null
+        return runCatching {
+            java.io.File(AppState.appCtx.filesDir, "tika_bot_theme/${storeKey()}/wallpaper.jpg")
+        }.getOrNull()
+    }
+
+    /** ROUND 85 (WS-G): apply a picked photo as this chat's custom
+     *  theme with the chosen colour palette — the companion mirror
+     *  of the normal chat's confirm-sheet apply (which uploads the
+     *  photo encrypted to the chat doc; here the same JPEG simply
+     *  lands in the account's private file). Live-applies through
+     *  [themeId] + [customWallpaper] exactly like a built-in pick. */
+    fun setCustomWallpaper(jpeg: ByteArray, paletteId: String) {
+        customWallpaperFile()?.let { f ->
+            runCatching {
+                f.parentFile?.mkdirs()
+                f.writeBytes(jpeg)
+            }
+        }
+        _customWallpaper.value =
+            android.graphics.BitmapFactory.decodeByteArray(jpeg, 0, jpeg.size)
+        setThemeId(ChatThemes.customValue(paletteId))
+    }
+
     private var loadedKey: String? = null
 
     /** The current account's store key — names the prefs file AND
@@ -233,6 +275,17 @@ object TikaBotStore {
         _role.value = p?.getString("role", null)
         _nickname.value = p?.getString("nickname", null)?.takeIf { it.isNotBlank() }
         _themeId.value = p?.getString("themeId", "") ?: ""
+        // ROUND 85 (WS-G): a stored custom theme re-loads its photo
+        // from the account's private file (a missing file simply
+        // leaves the wallpaper undrawn until a new pick — the same
+        // "absent = not downloaded yet" contract as CustomThemeStore).
+        _customWallpaper.value = if (ChatThemes.isCustom(_themeId.value)) {
+            runCatching {
+                customWallpaperFile()?.takeIf { it.exists() }?.let {
+                    android.graphics.BitmapFactory.decodeFile(it.absolutePath)
+                }
+            }.getOrNull()
+        } else null
         val raw = p?.getString("msgs", null)
         val loaded = mutableListOf<BotMsg>()
         if (!raw.isNullOrBlank()) {
@@ -489,11 +542,13 @@ object TikaBotStore {
         _role.value = null
         _nickname.value = null
         _themeId.value = ""
+        _customWallpaper.value = null
         _liveText.value = null
         _messages.value = emptyList()
         prefs()?.edit()?.clear()?.apply()
         runCatching { imageDir().deleteRecursively() }
         runCatching { gameDir().deleteRecursively() }
+        runCatching { customWallpaperFile()?.delete() }
         AiShare.revokeMine()
         seedOnboarding()
     }
@@ -904,6 +959,10 @@ fun TikaBotScreen() {
     // chat). The wallpaper, bubble colours and composer all read
     // from it below.
     val chatTheme = ChatThemes.paletteFor(themeId)
+    // ROUND 85 (WS-G): the custom theme's picked photo (the palette
+    // above still comes from paletteFor — colours and wallpaper are
+    // separate sources, exactly as in a normal chat).
+    val customWallpaper by TikaBotStore.customWallpaper.collectAsState()
     val haze = LocalHazeState.current
     // ROUND 75 (WS5): the composer text is a DRAFT (DraftStore's
     // reserved companion slot — never a real thread id) — restored
@@ -1239,6 +1298,32 @@ fun TikaBotScreen() {
         ActivityResultContracts.PickVisualMedia(),
     ) { uri -> if (uri != null) sendImage(uri) }
 
+    // ROUND 85 (WS-G): the custom-theme photo pick — the
+    // RdICustomizePage flow mirrored: decode → ≤1080px JPEG → the
+    // confirm sheet (openBotCustomThemeConfirm); nothing is written
+    // until that sheet's apply, and a cancelled pick leaves the
+    // details sheet exactly as it was.
+    val pickBotThemePhoto = rememberLauncherForActivityResult(
+        ActivityResultContracts.PickVisualMedia(),
+    ) { uri ->
+        if (uri != null) {
+            val picked = runCatching {
+                val raw = ctx.contentResolver.openInputStream(uri)
+                    ?.use { android.graphics.BitmapFactory.decodeStream(it) }
+                raw?.let {
+                    val jpeg = MediaStore.compressPhoto(it, maxSide = 1080, quality = 82)
+                    android.graphics.BitmapFactory.decodeByteArray(jpeg, 0, jpeg.size)
+                        ?.let { small -> small to jpeg }
+                }
+            }.getOrNull()
+            if (picked != null) {
+                openBotCustomThemeConfirm(picked.first, picked.second)
+            } else {
+                AppState.toast("Couldn't read that photo")
+            }
+        }
+    }
+
     // ROUND 75 (WS6): the screen root is now a Box whose FIRST child
     // is a TouchShield — this surface previously had NO shield at
     // all (a plain background Column: background draws but consumes
@@ -1350,18 +1435,26 @@ fun TikaBotScreen() {
                                 Text("Chat theme", color = BotSub, fontSize = 12.sp,
                                     fontFamily = PoppinsFamily)
                                 Spacer(Modifier.height(6.dp))
-                                // Default + the six built-in themes,
-                                // the same list a normal chat offers.
-                                (listOf("" to "Default") + ChatThemes.all.map { it.id to it.name })
-                                    .forEach { (id, name) ->
-                                        CardRow({ TikaBotStore.setThemeId(id) }) {
-                                            TwoLine(
-                                                name,
-                                                if (themeId == id) "Selected" else null,
-                                                Modifier.weight(1f),
-                                            )
-                                        }
-                                    }
+                                // ROUND 85 (WS-G): the SAME picker a
+                                // normal chat offers (RdThemeGrid in
+                                // the Customize page): Default + the
+                                // six built-in wallpaper tiles + the
+                                // Custom photo tile, same grid, same
+                                // ring + ✓ selection, live-applying.
+                                // Before this round the companion had
+                                // a plain text row list with built-ins
+                                // only — no wallpaper previews and no
+                                // custom theme at all.
+                                BotThemeGrid(
+                                    onPick = { TikaBotStore.setThemeId(it) },
+                                    onCustomPick = {
+                                        pickBotThemePhoto.launch(
+                                            PickVisualMediaRequest(
+                                                ActivityResultContracts.PickVisualMedia.ImageOnly,
+                                            ),
+                                        )
+                                    },
+                                )
                                 Spacer(Modifier.height(16.dp))
                                 // ROUND 73 (message-menu parity): the
                                 // Starred messages section — every
@@ -1479,8 +1572,19 @@ fun TikaBotScreen() {
         // ROUND 68 (WS1): the theme wallpaper sits behind the list
         // (the RdChatContent pattern: the owner's asset decoded once
         // per theme; Default draws nothing — black, as today).
+        // ROUND 85 (WS-G): a CUSTOM theme draws its own picked photo
+        // (the store's local bitmap) instead of the palette theme's
+        // asset — the exact split Chat.kt makes between
+        // CustomThemeStore and the built-in assets.
         Box(Modifier.weight(1f).fillMaxWidth()) {
-            if (chatTheme != null) {
+            if (ChatThemes.isCustom(themeId)) {
+                if (customWallpaper != null) {
+                    Image(
+                        customWallpaper!!.asImageBitmap(), null,
+                        Modifier.fillMaxSize(), contentScale = ContentScale.Crop,
+                    )
+                }
+            } else if (chatTheme != null) {
                 val wallpaper = remember(chatTheme.id) {
                     runCatching {
                         ctx.assets.open("themes/${chatTheme.asset}")
@@ -2271,5 +2375,274 @@ private fun BotChipRow(
                     fontWeight = FontWeight.Medium, fontFamily = PoppinsFamily)
             }
         }
+    }
+}
+
+// ================= ROUND 85 (WS-G): theme picker parity =================
+// The companion's theme picker, a value-for-value mirror of the
+// normal chat's RdThemeGrid / RdThemeTile / RdCustomThemeTile /
+// RdPaletteDot / openRdCustomThemeConfirm (ChatDetails.kt) — same
+// tiles, same list (Default + six built-ins + Custom photo), same
+// ring + ✓ selection language, same confirm-sheet flow for a custom
+// photo (photo + palette dots + "Use this theme"). The ONE inherent
+// difference is storage, not form: a normal chat's theme is SHARED
+// (the chat doc's theme field + an encrypted theme asset both
+// phones read), while the companion is local-only, so its value
+// persists in TikaBotStore under the same "custom:<palette>"
+// encoding and its photo in the account's private file. The grid
+// reads the store directly so the selection ring stays live while
+// the details sheet is open (the sheet lambda itself is captured at
+// open time).
+
+@Composable
+internal fun BotThemeGrid(onPick: (String) -> Unit, onCustomPick: () -> Unit) {
+    val themeId by TikaBotStore.themeId.collectAsState()
+    val specs: List<ChatTheme?> = listOf(null) + ChatThemes.all
+    Column(Modifier.testTag("bot_theme_grid")) {
+        // Built-in rows (Default + six), then the Custom tile row —
+        // the same chunked(3) grid as RdThemeGrid, whose eighth tile
+        // is Custom.
+        val rows = (specs.map { BotThemeTileSpec.Builtin(it) } + BotThemeTileSpec.Custom)
+            .chunked(3)
+        rows.forEachIndexed { rowIdx, rowTiles ->
+            if (rowIdx > 0) Spacer(Modifier.height(12.dp))
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                rowTiles.forEach { spec ->
+                    when (spec) {
+                        is BotThemeTileSpec.Builtin -> BotThemeTile(
+                            theme = spec.theme,
+                            selected = (spec.theme?.id ?: "") == themeId &&
+                                !ChatThemes.isCustom(themeId),
+                            modifier = Modifier.weight(1f),
+                        ) { onPick(spec.theme?.id ?: "") }
+                        BotThemeTileSpec.Custom -> BotCustomThemeTile(
+                            selected = ChatThemes.isCustom(themeId),
+                            modifier = Modifier.weight(1f),
+                            onClick = onCustomPick,
+                        )
+                    }
+                }
+                repeat(3 - rowTiles.size) { Spacer(Modifier.weight(1f)) }
+            }
+        }
+    }
+}
+
+private sealed interface BotThemeTileSpec {
+    data class Builtin(val theme: ChatTheme?) : BotThemeTileSpec
+    data object Custom : BotThemeTileSpec
+}
+
+/** One picker tile — RdThemeTile's exact geometry: the wallpaper
+ *  itself (Default = plain black), rose ring + ✓ on the live theme,
+ *  name beneath. */
+@Composable
+private fun BotThemeTile(
+    theme: ChatTheme?,
+    selected: Boolean,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit,
+) {
+    val ctx = LocalContext.current
+    Column(modifier.testTag(if (theme == null) "bot_theme_default" else "bot_theme_${theme.id}")) {
+        Box(
+            Modifier.fillMaxWidth().aspectRatio(0.66f)
+                .clip(RoundedCornerShape(14.dp))
+                .background(Color.Black)
+                .then(
+                    if (selected) Modifier.border(2.5.dp, Rose, RoundedCornerShape(14.dp))
+                    else Modifier.border(1.dp, Color.White.copy(0.14f), RoundedCornerShape(14.dp)),
+                )
+                .press(onClick),
+            contentAlignment = Alignment.Center,
+        ) {
+            if (theme != null) {
+                val bmp = remember(theme.id) {
+                    runCatching {
+                        ctx.assets.open("themes/${theme.asset}")
+                            .use { android.graphics.BitmapFactory.decodeStream(it) }
+                    }.getOrNull()
+                }
+                if (bmp != null) {
+                    Image(
+                        bmp.asImageBitmap(), null, Modifier.fillMaxSize(),
+                        contentScale = ContentScale.Crop,
+                    )
+                }
+            }
+            if (selected) {
+                Box(
+                    Modifier.align(Alignment.TopEnd).padding(6.dp).size(20.dp)
+                        .clip(CircleShape).background(Rose),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text("✓", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                }
+            }
+        }
+        Spacer(Modifier.height(6.dp))
+        Text(
+            theme?.name ?: "Default",
+            color = if (selected) Color.White else BotSub,
+            fontSize = 12.5.sp, textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+            modifier = Modifier.fillMaxWidth(), fontFamily = PoppinsFamily,
+        )
+    }
+}
+
+/** The Custom tile — RdCustomThemeTile's mirror: this chat's current
+ *  custom wallpaper when one is held, else the ＋ Photo placeholder. */
+@Composable
+private fun BotCustomThemeTile(
+    selected: Boolean,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit,
+) {
+    val customWallpaper by TikaBotStore.customWallpaper.collectAsState()
+    val bmp = customWallpaper
+    Column(modifier.testTag("bot_theme_custom")) {
+        Box(
+            Modifier.fillMaxWidth().aspectRatio(0.66f)
+                .clip(RoundedCornerShape(14.dp))
+                .background(Color(0xFF26232B))
+                .then(
+                    if (selected) Modifier.border(2.5.dp, Rose, RoundedCornerShape(14.dp))
+                    else Modifier.border(1.dp, Color.White.copy(0.14f), RoundedCornerShape(14.dp)),
+                )
+                .press(onClick),
+            contentAlignment = Alignment.Center,
+        ) {
+            if (bmp != null) {
+                Image(
+                    bmp.asImageBitmap(), null, Modifier.fillMaxSize(),
+                    contentScale = ContentScale.Crop,
+                )
+            } else {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text("＋", color = Color.White, fontSize = 24.sp, fontWeight = FontWeight.Bold)
+                    Text("Photo", color = BotSub, fontSize = 11.sp, fontFamily = PoppinsFamily)
+                }
+            }
+            if (selected) {
+                Box(
+                    Modifier.align(Alignment.TopEnd).padding(6.dp).size(20.dp)
+                        .clip(CircleShape).background(Rose),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text("✓", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                }
+            }
+        }
+        Spacer(Modifier.height(6.dp))
+        Text(
+            "Custom photo",
+            color = if (selected) Color.White else BotSub,
+            fontSize = 12.5.sp, textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+            modifier = Modifier.fillMaxWidth(), fontFamily = PoppinsFamily,
+        )
+    }
+}
+
+/** The custom-theme confirm sheet — openRdCustomThemeConfirm's
+ *  mirror: the picked photo, the palette its bubbles + composer will
+ *  wear, and the apply action. The dots start on the palette already
+ *  in force. Apply stores the photo LOCALLY (the companion has no
+ *  chat doc to upload to) under the same "custom:<palette>" value. */
+private fun openBotCustomThemeConfirm(bmp: android.graphics.Bitmap, jpeg: ByteArray) {
+    val current = TikaBotStore.themeId.value
+    val initialPalette = when {
+        ChatThemes.isCustom(current) -> ChatThemes.customPaletteId(current)
+        else -> current
+    }
+    AppState.sheet {
+        var paletteId by remember { mutableStateOf(initialPalette) }
+        Column(Modifier.padding(horizontal = 6.dp)) {
+            Text(
+                "Custom photo", color = Color.White, fontSize = 20.sp,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp), fontFamily = InterTight,
+            )
+            Text(
+                "This photo becomes the chat wallpaper",
+                color = BotSub, fontSize = 12.sp,
+                modifier = Modifier.padding(horizontal = 16.dp), fontFamily = PoppinsFamily,
+            )
+            Spacer(Modifier.height(12.dp))
+            Image(
+                bmp.asImageBitmap(), null,
+                Modifier.fillMaxWidth().padding(horizontal = 10.dp).aspectRatio(1.6f)
+                    .clip(RoundedCornerShape(14.dp)),
+                contentScale = ContentScale.Crop,
+            )
+            Spacer(Modifier.height(14.dp))
+            Text(
+                "Message colours", color = BotSub, fontSize = 13.sp,
+                modifier = Modifier.padding(horizontal = 16.dp), fontFamily = InterTight,
+            )
+            Spacer(Modifier.height(8.dp))
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                BotPaletteDot(theme = null, selected = paletteId.isEmpty()) { paletteId = "" }
+                ChatThemes.all.forEach { t ->
+                    BotPaletteDot(theme = t, selected = paletteId == t.id) { paletteId = t.id }
+                }
+            }
+            Spacer(Modifier.height(8.dp))
+            Text(
+                "Colours: ${ChatThemes.byId(paletteId)?.name ?: "Default"}",
+                color = Color.White, fontSize = 12.5.sp,
+                modifier = Modifier.padding(horizontal = 16.dp), fontFamily = PoppinsFamily,
+            )
+            Spacer(Modifier.height(16.dp))
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = 10.dp),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                BotPill("Cancel", filled = false) { AppState.closeSheet() }
+                BotPill("Use this theme", filled = true) {
+                    TikaBotStore.setCustomWallpaper(jpeg, paletteId)
+                    AppState.closeSheet()
+                }
+            }
+            Spacer(Modifier.height(6.dp))
+        }
+    }
+}
+
+/** One palette dot in the confirm sheet — RdPaletteDot's mirror. */
+@Composable
+private fun BotPaletteDot(theme: ChatTheme?, selected: Boolean, onClick: () -> Unit) {
+    Box(
+        Modifier.size(34.dp).clip(CircleShape)
+            .background(theme?.ownBubble ?: Color(0xFF3A3A40))
+            .then(
+                if (selected) Modifier.border(2.5.dp, Color.White, CircleShape)
+                else Modifier.border(1.dp, Color.White.copy(0.18f), CircleShape),
+            )
+            .press(onClick),
+    )
+}
+
+/** The confirm sheet's pill — RdIPill's mirror (rose gradient filled,
+ *  card outline ghost). */
+@Composable
+private fun BotPill(text: String, filled: Boolean, onClick: () -> Unit) {
+    Box(
+        Modifier.clip(RoundedCornerShape(999.dp))
+            .background(
+                if (filled) Brush.linearGradient(listOf(Rose, RoseDeep))
+                else SolidColor(BotCard),
+            )
+            .press(onClick)
+            .padding(horizontal = 18.dp, vertical = 10.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(text, color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, fontFamily = PoppinsFamily)
     }
 }

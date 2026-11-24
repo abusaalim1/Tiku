@@ -1315,6 +1315,71 @@ private fun vaultDownscaleBlur(src: android.graphics.Bitmap): android.graphics.B
  *  blank bubble. Side follows the original sender (mine right, theirs
  *  left with avatar). No reactions / reply / star / media on it: the
  *  long-press menu offers Delete-for-me only (see the menu overlay). */
+/** ROUND 85 (WS-A/B) — the PENDING row: a message whose decryption
+ *  hasn't completed its first successful attempt (conversation key
+ *  still loading, or a media payload whose chunks are still landing).
+ *  Neutral loading treatment ONLY — spinner + "Loading…" — never the
+ *  can't-open placeholder, which DecryptGate reserves for key-ready +
+ *  genuine failure. Media kinds wear the media frame (the photo /
+ *  video bubble's own 220×260 card) so the layout doesn't jump when
+ *  the payload lands; text/voice wear a muted pill in the
+ *  placeholder row's shape. No menu, no actions: there is nothing to
+ *  act on yet — a tap on a media frame asks the engine for one
+ *  immediate re-attempt (wired by the caller through [onTap]). */
+@Composable
+private fun RdPendingRow(m: TikuMessage, person: Person, onTap: () -> Unit) {
+    if (m.kind == MsgKind.IMAGE || m.kind == MsgKind.VIDEO) {
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = if (m.me) Arrangement.End else Arrangement.Start,
+            verticalAlignment = Alignment.Bottom,
+        ) {
+            if (!m.me) { RdAv(person, 28); Spacer(Modifier.width(8.dp)) }
+            Box(
+                Modifier.size(220.dp, 260.dp).clip(RoundedCornerShape(22.dp)).background(RdCard)
+                    .testTag("msg_pending")
+                    .pointerInput(m.id) { detectTapGestures(onTap = { onTap() }) },
+                contentAlignment = Alignment.Center,
+            ) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    androidx.compose.material3.CircularProgressIndicator(
+                        color = RdRose, modifier = Modifier.size(26.dp),
+                    )
+                    Spacer(Modifier.height(10.dp))
+                    Text(
+                        if (m.kind == MsgKind.VIDEO) "Receiving video…" else "Loading photo…",
+                        color = RdSub, fontSize = 12.5.sp, fontFamily = PoppinsFamily,
+                    )
+                }
+            }
+        }
+        return
+    }
+    Row(
+        Modifier.fillMaxWidth(),
+        horizontalArrangement = if (m.me) Arrangement.End else Arrangement.Start,
+        verticalAlignment = Alignment.Bottom,
+    ) {
+        if (!m.me) { RdAv(person, 28); Spacer(Modifier.width(8.dp)) }
+        Row(
+            Modifier.clip(RoundedCornerShape(22.dp)).background(Color.White.copy(0.04f))
+                .border(1.dp, Color.White.copy(0.05f), RoundedCornerShape(22.dp))
+                .testTag("msg_pending")
+                .padding(horizontal = 14.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            androidx.compose.material3.CircularProgressIndicator(
+                color = RdRose, modifier = Modifier.size(14.dp), strokeWidth = 2.dp,
+            )
+            Spacer(Modifier.width(9.dp))
+            Text(
+                "Loading…",
+                color = RdSub, fontSize = 13.5.sp, fontFamily = InterFamily,
+            )
+        }
+    }
+}
+
 @Composable
 private fun RdUndecryptableRow(m: TikuMessage, person: Person, onMenu: () -> Unit) {
     Row(
@@ -3217,6 +3282,12 @@ private object CommandBoldTransformation : VisualTransformation {
 }
 
 @Composable
+/** ROUND 85 (WS-F): one staged item as the composer strip draws it —
+ *  its store key (the ✕ reports it back), a thumbnail (a photo's
+ *  bitmap or a video's poster; null draws the video glyph tile), and
+ *  whether it is a video (the play badge). */
+data class StagedThumbUi(val key: String, val thumb: android.graphics.Bitmap?, val isVideo: Boolean)
+
 fun RdChatInput(
     h: HazeState?,
     value: String,
@@ -3270,6 +3341,16 @@ fun RdChatInput(
      *  privacy law). */
     mentionCandidates: List<Person> = emptyList(),
     onMentionPick: ((Person) -> Unit)? = null,
+    /** ROUND 85 (WS-F): the staged-media strip (see StagedMedia.kt) —
+     *  thumbnails of media picked/captured but NOT yet sent, riding
+     *  above the pill exactly like the reply strip; each carries a ✕
+     *  ([onRemoveStaged] with the item's key). Empty (the default) =
+     *  no strip and the composer is exactly the pre-round one. While
+     *  the strip is non-empty the send disc commits even with an
+     *  empty field (the staged media IS the message; any typed text
+     *  rides as its own send, as text always has). */
+    stagedThumbs: List<StagedThumbUi> = emptyList(),
+    onRemoveStaged: (String) -> Unit = {},
 ) {
     // ROUND 26: themed composer colours. Every value falls back to the
     // EXACT pre-round expression when theme == null, so the Default
@@ -3345,6 +3426,54 @@ fun RdChatInput(
     val emojiFont = rememberChatFontFamily() // ROUND 48: Inter + iOS-emoji chain (see EmojiArt)
     val showCamera = value.isEmpty() && !fieldFocused
     Column(Modifier.padding(horizontal = 14.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        // ROUND 85 (WS-F): the staged-media strip — picked/captured
+        // media waiting for Send, thumbnails in pick order, each with
+        // a ✕ that drops just that item (see StagedMedia.kt).
+        if (stagedThumbs.isNotEmpty()) {
+            Row(
+                Modifier.fillMaxWidth().testTag("staged_strip"),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                stagedThumbs.forEach { st ->
+                    Box(Modifier.size(58.dp)) {
+                        val bmp = st.thumb
+                        if (bmp != null) {
+                            Image(
+                                bmp.asImageBitmap(), null,
+                                Modifier.fillMaxSize().clip(RoundedCornerShape(14.dp)),
+                                contentScale = ContentScale.Crop,
+                            )
+                        } else {
+                            Box(
+                                Modifier.fillMaxSize().clip(RoundedCornerShape(14.dp)).background(faintBg),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                Icon(Icons.Filled.Videocam, null, tint = contentCol, modifier = Modifier.size(22.dp))
+                            }
+                        }
+                        if (st.isVideo) {
+                            Box(
+                                Modifier.align(Alignment.BottomStart).padding(4.dp)
+                                    .size(16.dp).clip(CircleShape).background(Color.Black.copy(0.55f)),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                Icon(Icons.Filled.PlayArrow, null, tint = Color.White, modifier = Modifier.size(11.dp))
+                            }
+                        }
+                        Box(
+                            Modifier.align(Alignment.TopEnd).offset(x = 4.dp, y = (-4).dp)
+                                .size(20.dp).clip(CircleShape).background(RdCard)
+                                .border(1.dp, Color.White.copy(0.25f), CircleShape)
+                                .testTag("staged_remove")
+                                .rdPress { onRemoveStaged(st.key) },
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Icon(Icons.Filled.Close, null, tint = Color.White, modifier = Modifier.size(12.dp))
+                        }
+                    }
+                }
+            }
+        }
         // ROUND 57 (Fix 2): the editing banner — WhatsApp's pattern:
         // a strip above the pill naming the mode, with a ✕ that
         // cancels back to normal compose. It borrows the reply strip's
@@ -3626,7 +3755,9 @@ fun RdChatInput(
                             .onFocusChanged { fieldFocused = it.isFocused },
                     )
                 }
-                val has = value.isNotBlank()
+                // ROUND 85 (WS-F): staged media alone also arms the
+                // send disc (tapping it commits the staging strip).
+                val has = value.isNotBlank() || stagedThumbs.isNotEmpty()
                 val bg by animateColorAsState(if (has) accent else faintBg, label = "sendBg")
                 Box(
                     Modifier.size(42.dp).clip(CircleShape).background(bg).rdPress { if (has) onSend() else onMic() },
@@ -3716,6 +3847,19 @@ private fun decodeCaptureBounded(f: File): Bitmap? = runCatching {
     )
 }.getOrNull()
 
+/** ROUND 85 (WS-F): one poster frame from a video file for the
+ *  staging strip's thumbnail (the engine's own videoPoster, mirrored
+ *  for the composer side). Null when the file won't read. */
+private fun videoPosterThumb(f: File): android.graphics.Bitmap? = runCatching {
+    val r = android.media.MediaMetadataRetriever()
+    try {
+        r.setDataSource(f.absolutePath)
+        r.getFrameAtTime(0, android.media.MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+    } finally {
+        runCatching { r.release() }
+    }
+}.getOrNull()
+
 /** ROUND 15: duration (seconds) of a media file, 0 when unreadable. */
 private fun mediaDurationSec(f: File): Int = runCatching {
     val r = android.media.MediaMetadataRetriever()
@@ -3738,8 +3882,22 @@ fun ChatScreen(threadId: String) {
     val threads by AppState.threads.collectAsState()
     val thread = threads.firstOrNull { it.id == threadId }
     if (thread == null) {
-        Box(Modifier.fillMaxSize().background(Color.Black), contentAlignment = Alignment.Center) {
-            Text("Chat unavailable", color = RdSub, fontSize = 13.sp, fontFamily = PoppinsFamily)
+        // ROUND 85 (WS-A): a notification tap can land here a beat
+        // before the threads listener delivers the chat (cold start) —
+        // that is a LOADING state, not an unavailable chat, and it
+        // must never read as a black dead screen. Neutral spinner on
+        // the app's own dark surface until the thread arrives.
+        Box(
+            Modifier.fillMaxSize().background(Color.Black).testTag("chat_loading"),
+            contentAlignment = Alignment.Center,
+        ) {
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                androidx.compose.material3.CircularProgressIndicator(
+                    color = RdRose, modifier = Modifier.size(30.dp),
+                )
+                Spacer(Modifier.height(14.dp))
+                Text("Loading chat…", color = RdSub, fontSize = 13.sp, fontFamily = PoppinsFamily)
+            }
         }
         return
     }
@@ -3814,6 +3972,40 @@ private fun RdChatContent(thread: ChatThread) {
     // returns with the field untouched, so its draft stands.
     var input by remember(threadId) { mutableStateOf(DraftStore.getChat(threadId)) }
     LaunchedEffect(threadId, input) { DraftStore.setChat(threadId, input) }
+    // ROUND 85 (WS-F): this chat's STAGED media (StagedMediaStore —
+    // per-chat like the draft above: leaving and returning restores
+    // it; only Send commits it, through the existing pipeline; see
+    // commitStagedMedia + sendCurrent). Snapshot-backed, so picks /
+    // captures / ✕ removals recompose the strip immediately.
+    val stagedMedia = StagedMediaStore.listFor(threadId)
+    /** ROUND 85 (WS-F): commit every staged item, in staging order,
+     *  through the EXACT existing send entry points (the same calls
+     *  the pickers used to make directly — encryption, chunking,
+     *  outbox persistence and guarded sends all live behind them).
+     *  The strip clears first so a slow send can never double-commit;
+     *  a synchronous throw is spoken, never swallowed (Round 43/67
+     *  law), and the remaining items still commit. */
+    fun commitStagedMedia() {
+        val items = stagedMedia.toList()
+        if (items.isEmpty()) return
+        stagedMedia.clear()
+        for (item in items) {
+            val sent = runCatching {
+                when (stagedSendRoute(item)) {
+                    StagedSendRoute.PHOTO_VO ->
+                        AppState.repo.sendPhotoVo(threadId, (item as StagedMedia.Photo).bmp, item.vo)
+                    StagedSendRoute.VIDEO_VO -> {
+                        val v = item as StagedMedia.Video
+                        AppState.repo.sendVideoVo(threadId, v.file, v.mime, v.durSec, v.vo)
+                    }
+                }
+            }
+            if (sent.isFailure) {
+                Log.e("TikuSend", "staged media commit failed in chat $threadId", sent.exceptionOrNull())
+                AppState.toast("Couldn't send — please try again")
+            }
+        }
+    }
     var replyTarget by remember { mutableStateOf<TikuMessage?>(null) }
     /** ROUND 57 (Fix 2): the message being edited, or null. Set by the
      *  long-press menu's Edit (own text messages only): the composer
@@ -4073,10 +4265,17 @@ private fun RdChatContent(thread: ChatThread) {
             // and is consumed by it (the media twin of the fx arm) —
             // with a multi-pick the whole batch is the one pick, so
             // the allowance applies to every photo in it.
+            // ROUND 85 (WS-F): the batch now STAGES in the composer
+            // instead of sending — each photo keeps the pick's
+            // allowance as its own, and Send commits them in order
+            // through the same sendPhotoVo pipeline. The 10-photo cap
+            // now counts the photos already staged for this chat too.
             val vo = armedVo; armedVo = null
-            val picked = if (uris.size > 10) {
+            val alreadyStaged = stagedMedia.count { it is StagedMedia.Photo }
+            val room = (10 - alreadyStaged).coerceAtLeast(0)
+            val picked = if (uris.size > room) {
                 AppState.toast("Max 10 photos")
-                uris.take(10)
+                uris.take(room)
             } else uris
             val resolver = ctx.contentResolver
             scope.launch {
@@ -4087,9 +4286,15 @@ private fun RdChatContent(thread: ChatThread) {
                         }.getOrNull()
                     }
                     if (bmp != null) {
-                        AppState.repo.sendPhotoVo(threadId, bmp, vo)
+                        StagedMediaStore.add(
+                            threadId,
+                            StagedMedia.Photo(
+                                key = "pick-${java.util.UUID.randomUUID()}",
+                                bmp = bmp, vo = vo,
+                            ),
+                        )
                     } else {
-                        AppState.toast("Couldn't read one photo — the rest still sent")
+                        AppState.toast("Couldn't read one photo — the rest are staged")
                     }
                 }
             }
@@ -4108,8 +4313,22 @@ private fun RdChatContent(thread: ChatThread) {
             val f = copyUriToCacheFile(ctx, uri, "vid")
             if (f != null) {
                 // ROUND 31: the armed view-once allowance rides this pick.
+                // ROUND 85 (WS-F): the pick STAGES (the cache copy is
+                // the staging store's until Send commits it or ✕ drops
+                // it — the ✕ path deletes the copy, see the composer's
+                // onRemoveStaged).
                 val vo = armedVo; armedVo = null
-                AppState.repo.sendVideoVo(threadId, f, ctx.contentResolver.getType(uri) ?: "video/mp4", mediaDurationSec(f), vo)
+                StagedMediaStore.add(
+                    threadId,
+                    StagedMedia.Video(
+                        key = "pick-${java.util.UUID.randomUUID()}",
+                        file = f,
+                        mime = ctx.contentResolver.getType(uri) ?: "video/mp4",
+                        durSec = mediaDurationSec(f),
+                        poster = videoPosterThumb(f),
+                        vo = vo,
+                    ),
+                )
             } else AppState.toast("Couldn't read that video")
         }
     }
@@ -4148,36 +4367,19 @@ private fun RdChatContent(thread: ChatThread) {
     // decode is bounds-limited (a full-res OEM capture decodeFile
     // could OOM the callback), and every failure on the result path
     // is SPOKEN with a toast instead of swallowed.
-    var camVideoPath by rememberSaveable { mutableStateOf<String?>(null) }
     /** The view-once arm as it stood when the pending capture was
      *  LAUNCHED (-1 = Always / unarmed, 1 / 2 = the allowance). A
      *  plain MutableState<Int> on purpose: it is the state shape
-     *  rememberSaveable's default saver is guaranteed to carry. */
+     *  rememberSaveable's default saver is guaranteed to carry.
+     *  ROUND 85: it now seeds the camera confirm screen's looks
+     *  selector (WS-E) — the selector's final choice, not this
+     *  snapshot, governs the capture. */
     var camVoCode by rememberSaveable { mutableStateOf(-1) }
-    val recordVideoCapture = rememberLauncherForActivityResult(ActivityResultContracts.CaptureVideo()) { ok ->
-        val path = camVideoPath
-        val vo = camVoCode.takeIf { it in 1..2 }
-        camVideoPath = null
-        camVoCode = -1
-        val f = path?.let { File(it) }
-        if (ok && f != null && f.exists() && f.length() > 0) {
-            // ROUND 31 + 43: launch-time allowance snapshot, as above.
-            // ROUND 67: guarded send, same reasoning as takePhoto.
-            armedVo = null
-            val sent = runCatching {
-                AppState.repo.sendVideoVo(threadId, f, "video/mp4", mediaDurationSec(f), vo)
-            }
-            if (sent.isFailure) {
-                Log.e("TikuCamera", "camera video send failed", sent.exceptionOrNull())
-                AppState.toast("Couldn't send that video — please try again")
-            }
-        } else {
-            if (f != null) runCatching { f.delete() }
-            // ROUND 43: a "successful" capture with no usable file is
-            // a failure and says so (a cancel stays silent).
-            if (ok) AppState.toast("Couldn't send that video — please try again")
-        }
-    }
+    /** ROUND 85 (WS-D): which mode the in-app camera overlay opens
+     *  in — the CaptureVideo system intent is GONE: video records
+     *  inside Tiku's own camera (CameraCapture.kt), exactly like
+     *  photos since Round 83. */
+    var inAppCameraVideo by remember { mutableStateOf(false) }
     // ---- ROUND 67 — WHY OPENING THE CAMERA KILLED THE APP (owner,
     // build 111: "Tiku keeps stopping" the moment the camera opens
     // from a chat) ----
@@ -4220,7 +4422,6 @@ private fun RdChatContent(thread: ChatThread) {
      *  gallery (the attach sheet) as the fallback. */
     fun failCameraOpen(e: Throwable) {
         Log.e("TikuCamera", "camera open failed", e)
-        camVideoPath = null
         camVoCode = -1
         ChatSession.expectExternalActivity = false
         AppState.toast("Camera couldn't open — try the gallery")
@@ -4231,21 +4432,24 @@ private fun RdChatContent(thread: ChatThread) {
     // system-camera filters/effects/state can leak into a capture.
     // The view-once arm is snapshotted exactly as before (the
     // Round-43 lesson), and the confirmed photo re-enters through
-    // the overlay block at the end of this screen, which sends via
-    // the same sendPhotoVo pipeline. The VIDEO path below keeps the
-    // Round-67 guarded intent flow byte-identical.
+    // the overlay block at the end of this screen.
+    // ROUND 85 (WS-D): the VIDEO path joins it — the Round-67
+    // guarded CaptureVideo intent flow is retired; both modes open
+    // the one in-app overlay, and a confirmed capture STAGES in the
+    // composer (WS-F) instead of sending on the spot.
     fun launchCameraPhotoNow() {
         camVoCode = armedVo ?: -1
+        inAppCameraVideo = false
         inAppCameraOpen = true
     }
+    /** ROUND 85 (WS-D): video opens the SAME in-app overlay in VIDEO
+     *  mode — no system camera app, no FileProvider intent, nothing
+     *  leaves the app. The arm snapshot seeds the confirm screen's
+     *  looks selector exactly as the photo path's does. */
     fun launchCameraVideoNow() {
-        runCatching {
-            val f = File(ctx.cacheDir, "cap_${System.currentTimeMillis()}.mp4")
-            camVideoPath = f.absolutePath
-            camVoCode = armedVo ?: -1
-            ChatSession.expectExternalActivity = true
-            recordVideoCapture.launch(FileProvider.getUriForFile(ctx, "tiku.app.fileprovider", f))
-        }.onFailure { failCameraOpen(it) }
+        camVoCode = armedVo ?: -1
+        inAppCameraVideo = true
+        inAppCameraOpen = true
     }
     /** Which capture the in-flight CAMERA permission request belongs
      *  to: 0 = none, 1 = photo, 2 = video. rememberSaveable for the
@@ -4621,6 +4825,17 @@ private fun RdChatContent(thread: ChatThread) {
     }
 
     fun sendCurrent() {
+        // ROUND 85 (WS-F): staged media commits FIRST, through the
+        // existing pipeline (see commitStagedMedia) — Send is the one
+        // commit point for picks and captures now. Any typed text
+        // then sends exactly as it always has (its own message via
+        // the paths below — the media schema carries no caption
+        // field, and none is added). Edit mode is exempt: while an
+        // edit is open, Send means "save the edit", and the staging
+        // strip simply waits.
+        if (editingMsg == null && stagedMedia.isNotEmpty()) {
+            commitStagedMedia()
+        }
         val v = input.trim()
         if (v.isEmpty()) return
         // ROUND 57 (Fix 2): EDIT MODE — Send replaces the message being
@@ -5225,6 +5440,18 @@ private fun RdChatContent(thread: ChatThread) {
                             m.undecryptable -> RdUndecryptableRow(m, person) {
                                 menuMsg = m
                             }
+                            // ROUND 85 (WS-A/B): a PENDING copy (key
+                            // or media payload still landing) renders
+                            // the neutral loading treatment — the
+                            // can't-open placeholder above is reserved
+                            // for genuine, key-ready failures. A tap
+                            // on the pending media frame forces one
+                            // engine re-attempt.
+                            m.pendingDecrypt -> RdPendingRow(m, person) {
+                                if (!Config.PREVIEW_UI_ONLY) {
+                                    AppState.repo.retryDecrypt(threadId, m.id)
+                                }
+                            }
                             // ROUND 77 (WS-A+): a RECEIVER-side deleted
                             // message whose content survived (decryptDoc's
                             // retained fall-through — text / photo / video /
@@ -5702,6 +5929,19 @@ private fun RdChatContent(thread: ChatThread) {
                     fxArmed = armedFx,
                     onFxClick = { fxPickerOpen = true },
                     onFxDisarm = { armedFx = null },
+                    // ROUND 85 (WS-F): the staged-media strip — the
+                    // items render from this chat's staging list; ✕
+                    // drops the item (a staged VIDEO's cache file is
+                    // staging-owned until commit, so it goes too).
+                    stagedThumbs = stagedMedia.map { item ->
+                        StagedThumbUi(item.key, item.thumb, item is StagedMedia.Video)
+                    },
+                    onRemoveStaged = { key ->
+                        val removed = StagedMediaStore.remove(threadId, key)
+                        if (removed is StagedMedia.Video) {
+                            runCatching { removed.file.delete() }
+                        }
+                    },
                 )
             }
         }
@@ -6415,30 +6655,52 @@ private fun RdChatContent(thread: ChatThread) {
         }
 
         // ---- ROUND 83: the in-app camera (topmost) ----
-        // Opened by launchCameraPhotoNow (which snapshotted the
-        // view-once arm into camVoCode). Cancel leaves the live arm
-        // armed for the next pick, exactly as cancelling the old
-        // system camera did; a bind failure lands on the same
-        // Round-67 graceful surface (toast + gallery sheet). A
-        // confirmed photo is sent through the SAME sendPhotoVo
-        // pipeline the old capture result used, the cache file is
-        // deleted once the send owns the bitmap, and a synchronous
-        // send throw is spoken, never swallowed (Round 43/67 law).
+        // Opened by launchCameraPhotoNow / launchCameraVideoNow
+        // (which snapshotted the view-once arm into camVoCode — it
+        // now seeds the confirm screen's looks selector, WS-E).
+        // Cancel leaves the live arm armed for the next pick, exactly
+        // as cancelling the old system camera did; a bind failure
+        // lands on the same Round-67 graceful surface (toast +
+        // gallery sheet). ROUND 85: a confirmed capture STAGES in
+        // the composer (WS-F) — the overlay callbacks below.
         if (inAppCameraOpen) {
             CameraCaptureOverlay(
+                initialMode = if (inAppCameraVideo) CamMode.VIDEO else CamMode.PHOTO,
+                initialVo = camVoCode.takeIf { it in 1..2 },
                 onCancel = { inAppCameraOpen = false; camVoCode = -1 },
                 onBindFailed = { e -> inAppCameraOpen = false; failCameraOpen(e) },
-                onUsePhoto = { f, bmp ->
-                    val vo = camVoCode.takeIf { it in 1..2 }
+                // ROUND 85 (WS-F): a confirmed capture now STAGES in
+                // the composer (the confirm screen's looks choice
+                // rides as the item's own allowance, WS-E) — Send is
+                // the commit point. The photo's cache file is deleted
+                // here: the send pipeline owns the bitmap from the
+                // staging store on. The video's file stays — it IS
+                // the staged payload until commit / ✕.
+                onUsePhoto = { f, bmp, vo ->
                     camVoCode = -1
                     inAppCameraOpen = false
                     armedVo = null
-                    val sent = runCatching { AppState.repo.sendPhotoVo(threadId, bmp, vo) }
+                    StagedMediaStore.add(
+                        threadId,
+                        StagedMedia.Photo(
+                            key = "cam-${java.util.UUID.randomUUID()}",
+                            bmp = bmp, vo = vo,
+                        ),
+                    )
                     runCatching { f.delete() }
-                    if (sent.isFailure) {
-                        Log.e("TikuCamera", "camera photo send failed", sent.exceptionOrNull())
-                        AppState.toast("Couldn't send that photo — please try again")
-                    }
+                },
+                onUseVideo = { f, durSec, vo ->
+                    camVoCode = -1
+                    inAppCameraOpen = false
+                    armedVo = null
+                    StagedMediaStore.add(
+                        threadId,
+                        StagedMedia.Video(
+                            key = "camvid-${java.util.UUID.randomUUID()}",
+                            file = f, mime = "video/mp4", durSec = durSec,
+                            poster = videoPosterThumb(f), vo = vo,
+                        ),
+                    )
                 },
             )
         }
