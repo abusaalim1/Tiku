@@ -5056,7 +5056,7 @@ class ScreenshotsTest {
                 ),
             )
         }
-        AppState.goChat(id)
+        AppState.go(Screen.Chat(id))
         frame { ChatScreen(id) }
         // The loading treatment is on screen…
         org.junit.Assert.assertTrue(
@@ -5093,7 +5093,7 @@ class ScreenshotsTest {
                 ),
             )
         }
-        AppState.goChat(id)
+        AppState.go(Screen.Chat(id))
         frame { ChatScreen(id) }
         org.junit.Assert.assertTrue(
             "once the payload lands, the pending row is gone",
@@ -5116,11 +5116,11 @@ class ScreenshotsTest {
                 TikuMessage(
                     id = "r85camphoto", senderUid = "me", kind = MsgKind.IMAGE,
                     time = "10:15 AM", me = true, tsMs = todayAtR78(10, 15),
-                    photo = bmp, mediaChunks = 2, viewOnce = null,
+                    photo = bmp, mediaChunks = 2, vo = null,
                 ),
             )
         }
-        AppState.goChat(id)
+        AppState.go(Screen.Chat(id))
         frame { ChatScreen(id) }
         // Tap the bubble (its time chip sits inside the tap region).
         composeRule.onAllNodesWithText("10:15 AM").fetchSemanticsNodes().size.let {
@@ -5196,7 +5196,7 @@ class ScreenshotsTest {
         val vf = java.io.File(ctx.cacheDir, "r85-staged.mp4").apply { writeBytes(byteArrayOf(1, 2, 3)) }
         StagedMediaStore.add(id, StagedMedia.Photo("r85s1", bmp, null))
         StagedMediaStore.add(id, StagedMedia.Video("r85s2", vf, "video/mp4", 12, poster, 1))
-        AppState.goChat(id)
+        AppState.go(Screen.Chat(id))
         frame { ChatScreen(id) }
         composeRule.onNodeWithTag("staged_strip").assertIsDisplayed()
         org.junit.Assert.assertEquals(
@@ -5216,11 +5216,12 @@ class ScreenshotsTest {
         AppState.sheet {
             Column(Modifier.padding(20.dp)) {
                 Text(
-                    "Chat theme", color = RdInk, fontFamily = PoppinsFamily,
+                    "Chat theme", color = Color(0xFF26232B), fontFamily = PoppinsFamily,
                     fontWeight = FontWeight.SemiBold, fontSize = 15.sp,
                 )
-                Spacer(Modifier.height(12.dp))
-                BotThemeGrid(onPick = {}, onCustomPick = {})
+                Box(Modifier.padding(top = 12.dp)) {
+                    BotThemeGrid(onPick = {}, onCustomPick = {})
+                }
             }
         }
         frame { Box(Modifier.fillMaxSize().background(Color(0xFF14161A))) }
@@ -5255,18 +5256,24 @@ class ScreenshotsTest {
         val p = PreviewStore.people.first()
         val id = PreviewRepo.startThreadWith(p)
         AppState.updateThread(id) { th -> th.messages.clear() }
-        AppState.goChat(id)
+        AppState.go(Screen.Chat(id))
         AppState.sheet {
             Column(Modifier.padding(24.dp)) {
                 Text(
-                    "Use this theme", color = RdInk, fontFamily = PoppinsFamily,
+                    "Use this theme", color = Color(0xFF26232B), fontFamily = PoppinsFamily,
                     fontWeight = FontWeight.SemiBold, fontSize = 15.sp,
                 )
             }
         }
-        frame { ChatScreen(id) }
+        var backOwner: androidx.activity.OnBackPressedDispatcherOwner? = null
+        frame {
+            backOwner = androidx.activity.compose.LocalOnBackPressedDispatcherOwner.current
+            ChatScreen(id)
+        }
         composeRule.onNodeWithText("Use this theme").assertIsDisplayed()
-        composeRule.activity.onBackPressedDispatcher.onBackPressed()
+        composeRule.runOnUiThread {
+            backOwner!!.onBackPressedDispatcher.onBackPressed()
+        }
         composeRule.waitForIdle()
         org.junit.Assert.assertTrue(
             "Back must close the open sheet",

@@ -53,7 +53,7 @@ object DecryptGate {
     fun verdict(
         keyReady: Boolean,
         kindRaw: String,
-        mediaChunks: Int,
+        mediaChunks: Int?,
         error: Throwable?,
     ): Verdict = when {
         !keyReady -> Verdict.PENDING
