@@ -3281,13 +3281,13 @@ private object CommandBoldTransformation : VisualTransformation {
     }
 }
 
-@Composable
 /** ROUND 85 (WS-F): one staged item as the composer strip draws it —
  *  its store key (the ✕ reports it back), a thumbnail (a photo's
  *  bitmap or a video's poster; null draws the video glyph tile), and
  *  whether it is a video (the play badge). */
 data class StagedThumbUi(val key: String, val thumb: android.graphics.Bitmap?, val isVideo: Boolean)
 
+@Composable
 fun RdChatInput(
     h: HazeState?,
     value: String,
