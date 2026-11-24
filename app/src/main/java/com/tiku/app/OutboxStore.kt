@@ -66,6 +66,39 @@ object OutboxStore {
 
     private const val KEY = "entries"
 
+    // ================= ROUND 80 (WS-Q2): the OWED-NOTIFY section =================
+    // A second, independent section in the SAME per-account prefs
+    // file, under its own key ("owed"). When a message's push POST
+    // to the notify Worker finishes with a non-2xx verdict (the
+    // classic case: the Worker's Firestore reads die while the
+    // project's free read quota is burned), the message itself is
+    // already safe in Firestore — only its NOTIFICATION is owed.
+    // PushSender parks an [OwedNotify] here and the engine's drain
+    // (drainOutbox → drainOwedNotifies) retries the push on the
+    // next drain trigger, for up to [OWED_MAX_AGE_MS]. Calls never
+    // owe (a ring hours later is wrong). This section has its own
+    // raw helpers and never touches the "entries" key or its logic.
+
+    /** One owed notification retry. [type] is the Worker message
+     *  vocabulary (text / ai_text / photo / video / voice); [ct]/[iv]
+     *  are the message's own stored ciphertext, riding only for the
+     *  text types — exactly what the original push carried. */
+    data class OwedNotify(
+        val msgId: String,
+        val chatId: String,
+        val peerUid: String,
+        val type: String,
+        val ct: String? = null,
+        val iv: String? = null,
+        val queuedAtMs: Long,
+    )
+
+    private const val OWED_KEY = "owed"
+
+    /** An owed notify older than this is dropped, never retried —
+     *  a notification delivered hours late is noise, not help. */
+    const val OWED_MAX_AGE_MS = 6L * 3600 * 1000
+
     /** In-memory stand-in used whenever no prefs file is available
      *  (preview/harness processes, or a missing app context) — the
      *  DraftStore discipline, so the harness can exercise the store's
@@ -204,4 +237,96 @@ object OutboxStore {
     /** Test/harness hygiene: empty the box. */
     @Synchronized
     fun clearAll() = writeRaw("")
+
+    // ---- ROUND 80 (WS-Q2): owed-notify raw helpers (own key) ----
+
+    private fun readOwedRaw(): String {
+        val p = prefs()
+        if (p != null) return p.getString(OWED_KEY, "") ?: ""
+        return synchronized(mem) { mem[OWED_KEY] ?: "" }
+    }
+
+    private fun writeOwedRaw(raw: String) {
+        val p = prefs()
+        if (p != null) {
+            val e = p.edit()
+            if (raw.isEmpty()) e.remove(OWED_KEY) else e.putString(OWED_KEY, raw)
+            e.apply()
+        }
+        synchronized(mem) {
+            if (raw.isEmpty()) mem.remove(OWED_KEY) else mem[OWED_KEY] = raw
+        }
+    }
+
+    // ---- ROUND 80 (WS-Q2): owed encode / decode / planning (unit-tested) ----
+
+    internal fun encodeOwed(entries: List<OwedNotify>): String {
+        val arr = JSONArray()
+        for (e in entries) {
+            val o = JSONObject()
+            o.put("id", e.msgId); o.put("chat", e.chatId); o.put("peer", e.peerUid)
+            o.put("type", e.type)
+            e.ct?.let { o.put("ct", it) }
+            e.iv?.let { o.put("iv", it) }
+            o.put("at", e.queuedAtMs)
+            arr.put(o)
+        }
+        return arr.toString()
+    }
+
+    internal fun decodeOwed(raw: String): List<OwedNotify> {
+        if (raw.isBlank()) return emptyList()
+        return runCatching {
+            val arr = JSONArray(raw)
+            val out = ArrayList<OwedNotify>(arr.length())
+            for (i in 0 until arr.length()) {
+                val o = arr.getJSONObject(i)
+                out += OwedNotify(
+                    msgId = o.getString("id"),
+                    chatId = o.getString("chat"),
+                    peerUid = o.getString("peer"),
+                    type = o.getString("type"),
+                    ct = if (o.has("ct")) o.getString("ct") else null,
+                    iv = if (o.has("iv")) o.getString("iv") else null,
+                    queuedAtMs = o.optLong("at", 0L),
+                )
+            }
+            out
+        }.getOrDefault(emptyList())
+    }
+
+    /** The owed-drain decision, pure: an entry queued longer than
+     *  [maxAgeMs] ago is DROPPED (too stale to notify now); every
+     *  fresher entry is DELIVERED (retried). Boundary: an age of
+     *  exactly [maxAgeMs] still delivers — only strictly older
+     *  drops. Returns (deliver, drop), mirroring [planDrain]. */
+    internal fun planOwed(
+        entries: List<OwedNotify>,
+        nowMs: Long,
+        maxAgeMs: Long,
+    ): Pair<List<OwedNotify>, List<OwedNotify>> {
+        val drop = entries.filter { nowMs - it.queuedAtMs > maxAgeMs }
+        val deliver = entries.filter { nowMs - it.queuedAtMs <= maxAgeMs }
+        return deliver to drop
+    }
+
+    // ---- ROUND 80 (WS-Q2): owed store operations ----
+
+    /** Park (or re-park) one owed notify. Dedupes by msgId: an
+     *  existing entry for the same message is REPLACED, never
+     *  duplicated — one message can only ever owe one push. */
+    @Synchronized
+    fun enqueueOwed(entry: OwedNotify) {
+        val cur = decodeOwed(readOwedRaw()).filter { it.msgId != entry.msgId }
+        writeOwedRaw(encodeOwed(cur + entry))
+    }
+
+    @Synchronized
+    fun removeOwed(msgId: String) {
+        val cur = decodeOwed(readOwedRaw())
+        if (cur.none { it.msgId == msgId }) return
+        writeOwedRaw(encodeOwed(cur.filter { it.msgId != msgId }))
+    }
+
+    fun owedAll(): List<OwedNotify> = decodeOwed(readOwedRaw())
 }

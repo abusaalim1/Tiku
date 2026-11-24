@@ -1262,10 +1262,27 @@ object FirebaseEngine : ChatRepo {
      *  payloads are NOT downloaded — a stub carries kind/duration/amps, which
      *  is all a preview needs) and maintain messages + unread on the thread.
      *  While a chat is open, attachMessages owns its message list and the
-     *  preview path stays out of the way. */
+     *  preview path stays out of the way.
+     *  ROUND 80 (WS-Q1 — read dedupe): an OPEN chat no longer carries a
+     *  preview listener at all. Before this round the preview listener
+     *  (limit 40) stayed attached alongside attachMessages' own
+     *  subscription (limit 60) to the SAME subcollection, so every doc
+     *  change in the open chat was delivered — and billed — TWICE,
+     *  while applyPreviewSnapshot discarded its own deliveries for
+     *  open chats anyway (its openChatIds early return). Now an open
+     *  chat's preview registration is removed on open (and skipped
+     *  here), and re-registered on close, when the preview path
+     *  resumes feeding the list row exactly as before. */
     private fun syncPreviewListeners(threadIds: Set<String>) {
         (previewRegs.keys - threadIds).forEach { previewRegs.remove(it)?.remove() }
         threadIds.forEach { tid ->
+            // ROUND 80 (WS-Q1): never register a preview listener for
+            // an open chat — and drop one that is somehow still
+            // attached (attachMessages owns that chat's list).
+            if (tid in openChatIds) {
+                previewRegs.remove(tid)?.remove()
+                return@forEach
+            }
             if (!previewRegs.containsKey(tid)) {
                 previewRegs[tid] = db.collection(Schema.Chats.COLL).document(tid)
                     .collection(Schema.Chats.MESSAGES)
@@ -2017,6 +2034,15 @@ object FirebaseEngine : ChatRepo {
         // ROUND 77 (WS-B): a closed chat's cached page dies with it —
         // the foreground re-mark must never act on a stale page.
         latestMsgDocs.remove(id)
+        // ROUND 80 (WS-Q1): the chat is closed, so its preview
+        // listener (removed on open — see openThread) resumes:
+        // re-register it from the current full thread set, exactly
+        // the set the threads-list rebuild would pass. Guarded on
+        // listenersActive: a composition disposing during session
+        // teardown must not resurrect listeners stop() just removed.
+        if (listenersActive) {
+            syncPreviewListeners(AppState.threads.value.map { it.id }.toSet())
+        }
     }
 
     /**
@@ -2144,6 +2170,12 @@ object FirebaseEngine : ChatRepo {
             }
         }
         openChatIds += id
+        // ROUND 80 (WS-Q1): the open chat's preview listener comes
+        // off NOW (after the id joins openChatIds, so a racing
+        // syncPreviewListeners can never re-register it) —
+        // attachMessages below is this chat's only messages
+        // subscription while it is open. See syncPreviewListeners.
+        previewRegs.remove(id)?.remove()
         attachMessages(id)
         // ROUND 79 (WS-1): render this thread's persisted pending
         // sends the instant it opens — one cache+outbox merge pass
@@ -3657,7 +3689,33 @@ object FirebaseEngine : ChatRepo {
      *  moment a network returns. Idempotent and cheap when the box
      *  is empty (one prefs read); entries already in flight or whose
      *  thread is not built yet are simply left for the next trigger. */
+    /** ROUND 80 (WS-Q2) — drain the OWED-NOTIFY queue (see
+     *  OutboxStore's owed section + PushSender.retryOwed): pushes
+     *  whose POST finished non-2xx are retried here, and entries
+     *  older than [OutboxStore.OWED_MAX_AGE_MS] are dropped without
+     *  a retry. Called at the top of [drainOutbox] so every existing
+     *  drain trigger (engine start, threads-list rebuild,
+     *  connectivity callback) drains owed notifies too. The plan is
+     *  computed inside the launched coroutine (PushSender.retryOwed
+     *  is itself fire-and-forget per entry). */
+    private fun drainOwedNotifies() {
+        if (uid.isEmpty()) return
+        val entries = OutboxStore.owedAll()
+        if (entries.isEmpty()) return
+        scope.launch {
+            val (deliver, drop) = OutboxStore.planOwed(
+                entries, System.currentTimeMillis(), OutboxStore.OWED_MAX_AGE_MS,
+            )
+            drop.forEach { OutboxStore.removeOwed(it.msgId) }
+            deliver.forEach { PushSender.retryOwed(it) }
+        }
+    }
+
     fun drainOutbox() {
+        // ROUND 80 (WS-Q2): owed notifies drain FIRST — before this
+        // function's own empty-box early return below, so a session
+        // with nothing left to SEND still retries its owed pushes.
+        drainOwedNotifies()
         if (uid.isEmpty()) return
         val entries = OutboxStore.all()
         if (entries.isEmpty()) return

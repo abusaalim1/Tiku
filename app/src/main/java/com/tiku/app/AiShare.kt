@@ -120,6 +120,20 @@ object AiShare {
     private val _people = MutableStateFlow<List<Person>>(emptyList())
     val people: StateFlow<List<Person>> = _people
 
+    /** ROUND 80 (WS-Q1): when this process last SUCCESSFULLY fetched
+     *  the owner's people directory. [start] is re-invoked on every
+     *  engine start (unlock, threads-error re-attach, skipped-profile
+     *  re-attach, pull-to-refresh), and each re-attach used to pay a
+     *  FULL users-collection get() — pure read amplification against
+     *  the free Firestore quota. In-memory only: a fresh process
+     *  always fetches once. */
+    @Volatile private var peopleFetchedAtMs = 0L
+
+    /** ROUND 80 (WS-Q1): the people-directory cache TTL — a
+     *  [refreshPeople] call within this window of the last successful
+     *  fetch is a no-op; after it, the explicit call refetches. */
+    private const val PEOPLE_CACHE_TTL_MS = 30L * 60 * 1000
+
     private var incomingReg: ListenerRegistration? = null
     private var outgoingReg: ListenerRegistration? = null
     private var sharedReg: ListenerRegistration? = null
@@ -148,7 +162,18 @@ object AiShare {
         if (Config.PREVIEW_UI_ONLY) return
         val me = myUid
         if (me.isEmpty()) return
+        // ROUND 80 (WS-Q1): stop() below clears the people list as
+        // part of its session hygiene — but on a same-session
+        // re-attach (engine error retry, pull-to-refresh) that would
+        // defeat the refreshPeople cache and leave the owner's list
+        // empty until the TTL expired. Preserve a still-fresh cache
+        // across THIS internal stop and restore it after; a genuine
+        // lock / sign-out calls stop() with no start() following, so
+        // the list still dies with the session there.
+        val keepPeople = _people.value
+            .takeIf { System.currentTimeMillis() - peopleFetchedAtMs < PEOPLE_CACHE_TTL_MS }
         stop()
+        if (keepPeople != null) _people.value = keepPeople
         incomingReg = runCatching {
             db.collection(REQUESTS_COLL)
                 .whereEqualTo("toUid", me)
@@ -231,10 +256,25 @@ object AiShare {
      *  `users` collection the profile/search paths read). */
     fun refreshPeople() {
         if (Config.PREVIEW_UI_ONLY || !OwnerState.isOwner) return
+        // ROUND 80 (WS-Q1): serve the in-process cache inside the
+        // TTL — start() re-invokes this on every engine re-attach,
+        // and the directory does not change fast enough to justify
+        // a full users-collection read each time. The explicit
+        // entry point still refetches once the TTL has passed. The
+        // non-empty half of the guard matters: stop() (lock /
+        // sign-out) clears the list, and a cleared list must
+        // refetch even inside the TTL — the cache only ever serves
+        // a list that is actually there.
+        if (_people.value.isNotEmpty() &&
+            System.currentTimeMillis() - peopleFetchedAtMs < PEOPLE_CACHE_TTL_MS
+        ) return
         val me = myUid
         FirebaseEngine.scope.launch {
             runCatching {
                 val snap = db.collection(Schema.Users.COLL).get().await()
+                // ROUND 80: only a SUCCESSFUL fetch arms the cache —
+                // a failed get() must not suppress the next attempt.
+                peopleFetchedAtMs = System.currentTimeMillis()
                 _people.value = snap.documents
                     .mapNotNull { d ->
                         val username = d.getString("username").orEmpty()

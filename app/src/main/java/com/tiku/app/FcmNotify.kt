@@ -415,6 +415,16 @@ object FcmTokenSync {
 object PushSender {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
+    /** ROUND 80 (WS-Q2): [send]'s "not attempted" sentinel — the
+     *  signed-out early return. It is NOT a failure verdict: nothing
+     *  was POSTed, so nothing can be owed. */
+    private const val NOT_ATTEMPTED = -2
+
+    /** ROUND 80 (WS-Q2): msgIds with an owed-drain retry currently
+     *  in flight — a second drain trigger must never double-POST
+     *  the same owed push. Guarded by synchronizing on itself. */
+    private val owedInFlight = mutableSetOf<String>()
+
     /** [type] is the Worker's vocabulary: text / photo / video /
      *  voice / ai_text. [ct]/[iv] ride ONLY for the text types and are
      *  the message's own stored ciphertext — nothing else is sent. */
@@ -422,26 +432,86 @@ object PushSender {
                       ct: String? = null, iv: String? = null) {
         if (Config.PREVIEW_UI_ONLY) return
         if (peerUid.isBlank() || chatId.isBlank() || msgId.isBlank()) return
-        scope.launch { send(peerUid, chatId, msgId, type, ct, iv) }
+        scope.launch {
+            val code = send(peerUid, chatId, msgId, type, ct, iv)
+            // ROUND 80 (WS-Q2): a MESSAGE push that finished with a
+            // real non-2xx verdict (the Worker unreachable, or its
+            // Firestore reads dying on the burned read quota) is
+            // OWED: the message is safe in Firestore, only its
+            // notification is missing. Park it on the OutboxStore
+            // rails; the engine's drains retry it for up to
+            // OWED_MAX_AGE_MS. The NOT_ATTEMPTED sentinel (signed
+            // out — nothing was POSTed) never owes.
+            if (code != NOT_ATTEMPTED && code !in 200..299) {
+                OutboxStore.enqueueOwed(
+                    OutboxStore.OwedNotify(
+                        msgId = msgId, chatId = chatId, peerUid = peerUid,
+                        type = type, ct = ct, iv = iv,
+                        queuedAtMs = System.currentTimeMillis(),
+                    ),
+                )
+            }
+        }
     }
 
     /** An outgoing call was placed (its call doc exists): push the
      *  peer a ringing alert. The call id doubles as the msgId the
-     *  Worker requires (dedupe/grouping on the receiving device). */
+     *  Worker requires (dedupe/grouping on the receiving device).
+     *  ROUND 80 (WS-Q2): call pushes NEVER owe — a ring delivered
+     *  hours later is wrong, so notifyCall ignores [send]'s verdict. */
     fun notifyCall(chatId: String, peerUid: String, callId: String, video: Boolean) {
         if (Config.PREVIEW_UI_ONLY) return
         if (peerUid.isBlank() || chatId.isBlank() || callId.isBlank()) return
         scope.launch { send(peerUid, chatId, callId, if (video) "video_call" else "call", null, null) }
     }
 
+    /** ROUND 80 (WS-Q2) — one owed-notify retry, launched by the
+     *  engine's drain (FirebaseEngine.drainOwedNotifies). Runs the
+     *  same attempt core as a live send, marked as owed: success
+     *  (2xx) clears the entry; ANY other outcome simply leaves the
+     *  existing entry in place for the next drain — it is never
+     *  re-enqueued, so queuedAtMs (and therefore the 6-hour age
+     *  limit) is never refreshed by a retry. Re-entry is guarded
+     *  per msgId: a drain that fires while this retry is still in
+     *  flight skips the entry. */
+    fun retryOwed(entry: OutboxStore.OwedNotify) {
+        if (Config.PREVIEW_UI_ONLY) return
+        synchronized(owedInFlight) {
+            if (!owedInFlight.add(entry.msgId)) return
+        }
+        scope.launch {
+            try {
+                val code = send(entry.peerUid, entry.chatId, entry.msgId, entry.type, entry.ct, entry.iv)
+                if (code in 200..299) OutboxStore.removeOwed(entry.msgId)
+            } finally {
+                synchronized(owedInFlight) { owedInFlight.remove(entry.msgId) }
+            }
+        }
+    }
+
+    /** The POST-with-retries core. ROUND 80 (WS-Q2): returns the
+     *  final HTTP status — 200..299 = success, any other code = the
+     *  Worker/transport verdict as before (-1 transport), and
+     *  [NOT_ATTEMPTED] when the signed-out early return meant no
+     *  attempt was made at all. Every retry, delay, log line and
+     *  the payload itself are exactly as they were; only the
+     *  verdict now reaches the caller. */
     private suspend fun send(receiverId: String, chatId: String, msgId: String,
-                             type: String, ct: String?, iv: String?) {
+                             type: String, ct: String?, iv: String?): Int {
+        var finalCode = NOT_ATTEMPTED
         // ROUND 63 (push audit): the result is captured so a thrown
         // send (transport, token task, JSON) is logged instead of
         // swallowed whole. The signed-out early return inside stays
         // silent by design — that is not a failed attempt.
         val result = runCatching {
-            val user = FirebaseAuth.getInstance().currentUser ?: return
+            val user = FirebaseAuth.getInstance().currentUser ?: return@runCatching
+            // ROUND 80 (WS-Q2): past the signed-out return, an
+            // attempt IS being made — the provisional verdict is a
+            // plain failure (-1), so a throw anywhere below (logged
+            // by the onFailure at the end) still reports as a failed
+            // attempt rather than "not attempted". A completed POST
+            // sequence overwrites this with its real final code.
+            finalCode = -1
             val senderName = FirebaseEngine.myPerson.name
                 .takeIf { it.isNotBlank() && it != "You" }
                 ?: AppState.myUsername.takeIf { it.isNotBlank() }
@@ -474,7 +544,13 @@ object PushSender {
                 // return (and every failure below) was completely
                 // silent, which is how the chain stayed unproven.
                 Log.w("TikuPush", "push skipped for chat $chatId: no ID token after forced-refresh retry")
-                return
+                // ROUND 80 (WS-Q2): the attempt WAS made (a live
+                // send whose token fetch failed after the forced
+                // refresh) — its verdict is a plain failure (-1,
+                // like transport), NOT the NOT_ATTEMPTED sentinel,
+                // which is reserved for the signed-out return above.
+                finalCode = -1
+                return@runCatching
             }
             var code = runCatching { post(idToken, body) }.getOrDefault(-1)
             var retried = false
@@ -508,8 +584,14 @@ object PushSender {
             if (code !in 200..299) {
                 Log.w("TikuPush", "push POST for chat $chatId answered HTTP $code")
             }
+            // ROUND 80 (WS-Q2): hand the final verdict to the caller
+            // (see the function's doc). Assigned here, at the end of
+            // a completed POST sequence; the signed-out return above
+            // never reaches this line and keeps NOT_ATTEMPTED.
+            finalCode = code
         }
         result.onFailure { Log.w("TikuPush", "push send failed for chat $chatId", it) }
+        return finalCode
     }
 
     /** ROUND 61: one ID-token fetch; null on ANY failure (thrown
