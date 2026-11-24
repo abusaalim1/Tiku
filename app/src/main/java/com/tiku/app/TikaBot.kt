@@ -1883,7 +1883,10 @@ private fun BotDivider1() = Box(Modifier.fillMaxWidth().height(1.dp).background(
  * it applies: Reply (every message), Edit (my own text only),
  * Copy (any message with text — photo captions included), Star /
  * Unstar, Pin / Unpin, and Delete last, in danger colour, with a
- * divider above it. Delete is local-only (this store has no
+ * divider above it. ROUND 79 (WS-6): in BOTH menus, for my own
+ * editable messages Edit and Star swap slots (Edit sits where
+ * Star was, Star where Edit was); all other cases are unchanged.
+ * Delete is local-only (this store has no
  * server copy) and asks no confirmation, like theirs.
  *
  * Factored internal (not private) so the screenshot harness can
@@ -1964,10 +1967,20 @@ internal fun BotMessageMenu(
                 BotMenuItem("Reply", onClick = onReply) {
                     Text("↩", color = Color.White, fontSize = 20.sp)
                 }
-                if (msg.mine && msg.img == null && msg.game == null) {
+                // ROUND 79 (WS-6): the same Edit↔Star position swap
+                // as the normal chat's menu — for my own editable
+                // messages Star rides in Edit's old slot here and
+                // Edit takes Star's slot below; where Edit cannot
+                // apply, Star stays in its original place.
+                val canEditBot = msg.mine && msg.img == null && msg.game == null
+                if (canEditBot) {
                     BotDivider1()
-                    BotMenuItem("Edit", onClick = onEdit) {
-                        Text("✎", color = Color.White, fontSize = 20.sp)
+                    BotMenuItem(if (msg.starred) "Unstar" else "Star", onClick = onToggleStar) {
+                        Icon(
+                            Icons.Filled.Star, null,
+                            tint = if (msg.starred) Color(0xFFFFC857) else Color.White,
+                            modifier = Modifier.size(22.dp),
+                        )
                     }
                 }
                 if (msg.text.isNotBlank()) {
@@ -1977,12 +1990,18 @@ internal fun BotMessageMenu(
                     }
                 }
                 BotDivider1()
-                BotMenuItem(if (msg.starred) "Unstar" else "Star", onClick = onToggleStar) {
-                    Icon(
-                        Icons.Filled.Star, null,
-                        tint = if (msg.starred) Color(0xFFFFC857) else Color.White,
-                        modifier = Modifier.size(22.dp),
-                    )
+                if (canEditBot) {
+                    BotMenuItem("Edit", onClick = onEdit) {
+                        Text("✎", color = Color.White, fontSize = 20.sp)
+                    }
+                } else {
+                    BotMenuItem(if (msg.starred) "Unstar" else "Star", onClick = onToggleStar) {
+                        Icon(
+                            Icons.Filled.Star, null,
+                            tint = if (msg.starred) Color(0xFFFFC857) else Color.White,
+                            modifier = Modifier.size(22.dp),
+                        )
+                    }
                 }
                 BotDivider1()
                 BotMenuItem(if (msg.pinned) "Unpin" else "Pin", onClick = onTogglePin) {

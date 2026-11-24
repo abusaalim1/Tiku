@@ -5913,6 +5913,11 @@ private fun RdChatContent(thread: ChatThread) {
                                 Icon(Icons.Filled.Delete, null, tint = RdDanger, modifier = Modifier.size(22.dp))
                             }
                           } else {
+                            // ROUND 79 (WS-6): Edit's applicability,
+                            // hoisted — the owner's position swap
+                            // below keys both swapped slots on it.
+                            val canEdit = mm.me && mm.kind == MsgKind.TEXT && !mm.ai &&
+                                mm.status == SendStatus.SENT
                             RdMenuItem("Reply", onClick = { editingMsg = null; replyTarget = mm; menuMsg = null }) {
                                 Text("↩", color = Color.White, fontSize = 20.sp)
                             }
@@ -5927,18 +5932,21 @@ private fun RdChatContent(thread: ChatThread) {
                             // "Editing message" banner; the edit itself
                             // writes only the additive eCt/eIv doc
                             // fields and shows no "edited" mark anywhere.
-                            if (mm.me && mm.kind == MsgKind.TEXT && !mm.ai &&
-                                mm.status == SendStatus.SENT
-                            ) {
+                            // ROUND 79 (WS-6): for my OWN editable
+                            // messages, STAR rides in Edit's old slot
+                            // here and Edit takes Star's slot below
+                            // (the owner's position swap — Edit gets
+                            // Star's prominence). Where Edit cannot
+                            // apply (their messages, media, unsent),
+                            // this slot stays empty and Star renders
+                            // in its original place below, unchanged.
+                            if (canEdit) {
                                 RdDivider1()
-                                RdMenuItem("Edit", onClick = {
-                                    replyTarget = null
-                                    armedFx = null
-                                    editingMsg = mm
-                                    input = mm.text
-                                    menuMsg = null
+                                RdMenuItem(if (mm.starredByMe) "Unstar" else "Star", onClick = {
+                                    AppState.repo.toggleStar(threadId, mm.id)
+                                    AppState.toast(if (mm.starredByMe) "Unstarred" else "Starred"); menuMsg = null
                                 }) {
-                                    Text("✎", color = Color.White, fontSize = 20.sp)
+                                    Icon(Icons.Filled.Star, null, tint = if (mm.starredByMe) Color(0xFFFFC857) else Color.White, modifier = Modifier.size(22.dp))
                                 }
                             }
                             // ROUND 22: Copy is withheld for an
@@ -5952,11 +5960,27 @@ private fun RdChatContent(thread: ChatThread) {
                                 }) { Text("⧉", color = Color.White, fontSize = 20.sp) }
                             }
                             RdDivider1()
-                            RdMenuItem(if (mm.starredByMe) "Unstar" else "Star", onClick = {
-                                AppState.repo.toggleStar(threadId, mm.id)
-                                AppState.toast(if (mm.starredByMe) "Unstarred" else "Starred"); menuMsg = null
-                            }) {
-                                Icon(Icons.Filled.Star, null, tint = if (mm.starredByMe) Color(0xFFFFC857) else Color.White, modifier = Modifier.size(22.dp))
+                            // ROUND 79 (WS-6): Star's original slot —
+                            // for my own editable messages EDIT sits
+                            // here instead (the swap); every other
+                            // message keeps Star exactly here.
+                            if (canEdit) {
+                                RdMenuItem("Edit", onClick = {
+                                    replyTarget = null
+                                    armedFx = null
+                                    editingMsg = mm
+                                    input = mm.text
+                                    menuMsg = null
+                                }) {
+                                    Text("✎", color = Color.White, fontSize = 20.sp)
+                                }
+                            } else {
+                                RdMenuItem(if (mm.starredByMe) "Unstar" else "Star", onClick = {
+                                    AppState.repo.toggleStar(threadId, mm.id)
+                                    AppState.toast(if (mm.starredByMe) "Unstarred" else "Starred"); menuMsg = null
+                                }) {
+                                    Icon(Icons.Filled.Star, null, tint = if (mm.starredByMe) Color(0xFFFFC857) else Color.White, modifier = Modifier.size(22.dp))
+                                }
                             }
                             RdDivider1()
                             RdMenuItem(if (mm.id in thread.pinnedMsgIds) "Unpin" else "Pin", onClick = {
