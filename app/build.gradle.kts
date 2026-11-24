@@ -65,6 +65,17 @@ android {
     compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
     kotlinOptions { jvmTarget = "17" }
 }
+// ROUND 83: some Google libraries in this graph drag in the EMPTY
+// listenablefuture:9999.0-empty marker, which wins version resolution
+// and shadows the real class — the release compile then cannot see
+// ListenableFuture at all (CI run for the first R83 push failed on
+// exactly this). Pin the real 1.0 artifact.
+configurations.configureEach {
+    resolutionStrategy {
+        force("com.google.guava:listenablefuture:1.0")
+    }
+}
+
 tasks.withType<Test>().configureEach {
     // diagnostics for the Roborazzi screenshot suite: full stacks in the CI log
     testLogging {
@@ -109,6 +120,9 @@ dependencies {
     implementation("androidx.camera:camera-lifecycle:1.4.1")
     implementation("androidx.camera:camera-view:1.4.1")
     implementation("androidx.exifinterface:exifinterface:1.3.7")
+    // ROUND 83: CameraX's ProcessCameraProvider future needs the real
+    // ListenableFuture class (see the resolutionStrategy pin below).
+    implementation("com.google.guava:listenablefuture:1.0")
     // Real audio+video calls: maintained WebRTC fork (org.webrtc API), Maven Central.
     implementation("io.getstream:stream-webrtc-android:1.1.1")
     // ROUND 13: real backdrop blur for the owner-supplied liquid-glass design
