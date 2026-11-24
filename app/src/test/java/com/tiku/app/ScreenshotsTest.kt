@@ -5123,12 +5123,20 @@ class ScreenshotsTest {
         AppState.go(Screen.Chat(id))
         frame { ChatScreen(id) }
         // Tap the bubble (its time chip sits inside the tap region).
-        composeRule.onAllNodesWithText("10:15 AM").fetchSemanticsNodes().size.let {
-            org.junit.Assert.assertTrue("the photo bubble must render", it > 0)
+        // The time text can exist on more than one composed node —
+        // tap each candidate until the viewer opens.
+        val timeNodes = composeRule.onAllNodesWithText("10:15 AM")
+        val candidates = timeNodes.fetchSemanticsNodes().size
+        org.junit.Assert.assertTrue("the photo bubble must render", candidates > 0)
+        for (i in 0 until candidates) {
+            if (composeRule.onAllNodesWithTag("image_viewer")
+                    .fetchSemanticsNodes().isNotEmpty()
+            ) break
+            runCatching {
+                timeNodes[i].performTouchInput { click(center) }
+            }
+            composeRule.waitForIdle()
         }
-        composeRule.onAllNodesWithText("10:15 AM")[0]
-            .performTouchInput { click(center) }
-        composeRule.waitForIdle()
         org.junit.Assert.assertTrue(
             "tapping a normal camera photo must open the full-screen viewer",
             composeRule.onAllNodesWithTag("image_viewer").fetchSemanticsNodes().isNotEmpty(),
@@ -5203,35 +5211,44 @@ class ScreenshotsTest {
             2, composeRule.onAllNodesWithTag("staged_remove").fetchSemanticsNodes().size,
         )
         org.junit.Assert.assertEquals(2, StagedMediaStore.count(id))
-        shot("123-staged-composer.png")
-        StagedMediaStore.clear(id)
-        vf.delete()
+        try {
+            shot("123-staged-composer.png")
+        } finally {
+            StagedMediaStore.clear(id)
+            vf.delete()
+        }
     }
 
     @Test fun shot124_companionThemeGrid() {
         // WS-G: the companion's theme picker is the normal chat's
         // tile grid — Default + six built-ins + the Custom photo tile.
+        // Staged on the companion surface itself so the sheet host
+        // wears the Tik skin it wears in production there.
         AppState.appCtx = ctx
+        AppState.go(Screen.TikaBot)
         TikaBotStore.setThemeId("t1")
-        AppState.sheet {
-            Column(Modifier.padding(20.dp)) {
-                Text(
-                    "Chat theme", color = Color(0xFF26232B), fontFamily = PoppinsFamily,
-                    fontWeight = FontWeight.SemiBold, fontSize = 15.sp,
-                )
-                Box(Modifier.padding(top = 12.dp)) {
-                    BotThemeGrid(onPick = {}, onCustomPick = {})
+        try {
+            AppState.sheet {
+                Column(Modifier.padding(20.dp)) {
+                    Text(
+                        "Chat theme", color = Color(0xFF26232B), fontFamily = PoppinsFamily,
+                        fontWeight = FontWeight.SemiBold, fontSize = 15.sp,
+                    )
+                    Box(Modifier.padding(top = 12.dp)) {
+                        BotThemeGrid(onPick = {}, onCustomPick = {})
+                    }
                 }
             }
+            frame { Box(Modifier.fillMaxSize().background(Color(0xFF14161A))) }
+            composeRule.onNodeWithTag("bot_theme_grid").assertIsDisplayed()
+            composeRule.onNodeWithTag("bot_theme_custom").assertIsDisplayed()
+            composeRule.onNodeWithText("Blush Kisses").assertIsDisplayed()
+            composeRule.onNodeWithText("Custom photo").assertIsDisplayed()
+            shot("124-companion-theme-grid.png")
+        } finally {
+            AppState.closeSheet()
+            TikaBotStore.setThemeId("")
         }
-        frame { Box(Modifier.fillMaxSize().background(Color(0xFF14161A))) }
-        composeRule.onNodeWithTag("bot_theme_grid").assertIsDisplayed()
-        composeRule.onNodeWithTag("bot_theme_custom").assertIsDisplayed()
-        composeRule.onNodeWithText("Blush Kisses").assertIsDisplayed()
-        composeRule.onNodeWithText("Custom photo").assertIsDisplayed()
-        shot("124-companion-theme-grid.png")
-        AppState.closeSheet()
-        TikaBotStore.setThemeId("")
     }
 
     @Test fun shot125_companionThemedChat() {
@@ -5244,9 +5261,12 @@ class ScreenshotsTest {
         TikaBotStore.appendUser("Looks right.")
         frame { TikaBotScreen() }
         composeRule.onNodeWithText("Themed bubbles, themed wall.").assertIsDisplayed()
-        shot("125-companion-themed.png")
-        cleanupCompanionR73C(base)
-        TikaBotStore.setThemeId("")
+        try {
+            shot("125-companion-themed.png")
+        } finally {
+            cleanupCompanionR73C(base)
+            TikaBotStore.setThemeId("")
+        }
     }
 
     @Test fun shot126_sheetBackClosesFirst() {
@@ -5283,8 +5303,11 @@ class ScreenshotsTest {
             "Back must NOT navigate away from the chat while a sheet was open",
             AppState.screen is Screen.Chat,
         )
-        shot("126-sheet-back-closes.png")
-        AppState.closeSheet()
+        try {
+            shot("126-sheet-back-closes.png")
+        } finally {
+            AppState.closeSheet()
+        }
     }
 
     // ---------- ROUND 85 plain contracts (no composition) ----------
