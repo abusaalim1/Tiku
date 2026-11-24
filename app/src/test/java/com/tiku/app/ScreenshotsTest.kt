@@ -1285,12 +1285,131 @@ class ScreenshotsTest {
         }
     }
 
-    // ---------- ROUND 86: Tika replies not arriving — full-path repro ----------
+    // ---------- ROUND 86: Tika replies not arriving — stubbed repro ----------
     // The owner (build 168): NO AI reply arrives on either surface.
-    // These two tests drive the REAL send path end to end — type in
-    // the composer, tap the send disc, and require the reply to LAND
-    // (preview mode answers from GeminiClient's canned branch, so no
-    // network is involved: a failure here is an app-side break).
+    // Diagnosis (live probes with the app's own key + request
+    // shapes): the route itself is collapsing — lite + 3.8-flash
+    // hard-503 (capacity) in every probe and 3.5-flash, the one
+    // answering model, 429s under any burst; the old cascade burned
+    // through all three in seconds and gave up. These tests pin the
+    // app side DETERMINISTICALLY against a local stub server
+    // (GeminiConfig.BASE seam): the cascades must ride over dead
+    // models, the new second pass must ride out a quota storm, and
+    // the full UI send path must land the reply on both surfaces.
+
+    /** A local stand-in for the Gemini endpoint. Behaviours are
+     *  per-model lambdas of (hitCount, isStream) so a test can
+     *  script sequences (429 on pass 1, 200 on pass 2). */
+    private class GeminiStub {
+        val behaviours = mutableMapOf<String, (Int, Boolean) -> Triple<Int, String, String>>()
+        val hits = java.util.concurrent.ConcurrentHashMap<String, Int>()
+        private val server = com.sun.net.httpserver.HttpServer.create(
+            java.net.InetSocketAddress("127.0.0.1", 0), 0)
+        val base: String get() = "http://127.0.0.1:${server.address.port}/v1beta/models"
+        fun start(): GeminiStub {
+            server.createContext("/v1beta/models/") { ex ->
+                val path = ex.requestURI.path
+                val model = path.substringAfterLast("/").substringBefore(":")
+                val stream = path.contains("streamGenerateContent")
+                val n = hits.merge(model, 1) { a, b -> a + b } ?: 1
+                val (code, ctype, body) = behaviours[model]?.invoke(n, stream)
+                    ?: Triple(500, "application/json", "{}")
+                val bytes = body.toByteArray(Charsets.UTF_8)
+                ex.responseHeaders.set("Content-Type", ctype)
+                ex.sendResponseHeaders(code, bytes.size.toLong())
+                ex.responseBody.use { it.write(bytes) }
+            }
+            server.start()
+            return this
+        }
+        fun stop() = server.stop(0)
+    }
+
+    private fun stubError(code: Int): Triple<Int, String, String> =
+        Triple(code, "application/json", """{"error":{"code":$code,"status":"STUB"}}""")
+
+    private fun stubJsonAnswer(text: String): Triple<Int, String, String> =
+        Triple(200, "application/json",
+            """{"candidates":[{"content":{"parts":[{"text":"$text"}]},"finishReason":"STOP"}]}""")
+
+    private fun stubSseAnswer(vararg chunks: String): Triple<Int, String, String> =
+        Triple(200, "text/event-stream", chunks.joinToString("") { c ->
+            "data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"$c\"}]}}]}\n\n"
+        })
+
+    /** Run [block] with GeminiClient pointed at [stub] and the
+     *  Round-86 cascade retry delay shortened; always restores. */
+    private fun <T> withGeminiStub(stub: GeminiStub, block: () -> T): T {
+        val oldDelay = GeminiClient.cascadeRetryDelayMs
+        System.setProperty("tiku.gemini.base", stub.base)
+        GeminiClient.cascadeRetryDelayMs = 50
+        try {
+            return block()
+        } finally {
+            System.clearProperty("tiku.gemini.base")
+            GeminiClient.cascadeRetryDelayMs = oldDelay
+            stub.stop()
+        }
+    }
+
+    /** The /tiku cascade must step over a hard-down first model and
+     *  take the second model's answer. */
+    @Test fun r86stub_answerTextCascadesPastDeadFirstModel() {
+        val stub = GeminiStub().start()
+        stub.behaviours["gemini-3.5-flash"] = { _, _ -> stubError(503) }
+        stub.behaviours["gemini-3.1-flash-lite"] = { _, _ -> stubJsonAnswer("stub lite answer") }
+        stub.behaviours["gemini-3.8-flash"] = { _, _ -> stubError(503) }
+        val out = withGeminiStub(stub) {
+            runBlocking { GeminiClient.answerText("hello there") }
+        }
+        org.junit.Assert.assertEquals(
+            GeminiClient.Outcome.Ok("stub lite answer"), out)
+    }
+
+    /** THE Round-86 fix: a first pass that meets only transient
+     *  failures (429 quota + 503 capacity) must NOT be the end —
+     *  after the pause, a second pass runs and its answer lands. */
+    @Test fun r86stub_answerTextRetryPassRidesOutQuota() {
+        val stub = GeminiStub().start()
+        stub.behaviours["gemini-3.5-flash"] = { n, _ ->
+            if (n == 1) stubError(429) else stubJsonAnswer("second pass answer")
+        }
+        stub.behaviours["gemini-3.1-flash-lite"] = { _, _ -> stubError(503) }
+        stub.behaviours["gemini-3.8-flash"] = { _, _ -> stubError(503) }
+        val out = withGeminiStub(stub) {
+            runBlocking { GeminiClient.answerText("hello there") }
+        }
+        org.junit.Assert.assertEquals(
+            GeminiClient.Outcome.Ok("second pass answer"), out)
+        org.junit.Assert.assertTrue(
+            "the primary model must be hit on both passes",
+            (stub.hits["gemini-3.5-flash"] ?: 0) >= 2,
+        )
+    }
+
+    /** The companion's streaming cascade must step over a hard-down
+     *  lite (its first model) and stream the fallback's answer. */
+    @Test fun r86stub_companionStreamCascadesPastDeadLite() {
+        val stub = GeminiStub().start()
+        stub.behaviours["gemini-3.1-flash-lite"] = { _, _ -> stubError(503) }
+        stub.behaviours["gemini-3.5-flash"] = { _, stream ->
+            if (stream) stubSseAnswer("Hello ", "there") else stubJsonAnswer("Hello there")
+        }
+        stub.behaviours["gemini-3.8-flash"] = { _, _ -> stubError(503) }
+        val partials = mutableListOf<String>()
+        val out = withGeminiStub(stub) {
+            runBlocking {
+                GeminiClient.companionReplyStreaming(listOf(true to "hi"), "persona") { p ->
+                    synchronized(partials) { partials += p }
+                }
+            }
+        }
+        org.junit.Assert.assertEquals(GeminiClient.Outcome.Ok("Hello there"), out)
+        org.junit.Assert.assertTrue(
+            "streaming partials must have been delivered",
+            synchronized(partials) { partials.isNotEmpty() },
+        )
+    }
 
     /** Tap the composer's send disc: the ~42dp clickable at the
      *  bottom-right of the input bar (rdPress registers a real click
@@ -1321,75 +1440,92 @@ class ScreenshotsTest {
     }
 
     @Test fun r86_chatSlashCommandReplyLands() {
+        val stub = GeminiStub().start()
+        for (m in listOf("gemini-3.5-flash", "gemini-3.1-flash-lite", "gemini-3.8-flash")) {
+            stub.behaviours[m] = { _, _ -> stubJsonAnswer("Stub reply text") }
+        }
         val p = PreviewStore.people[1]
         val id = PreviewRepo.startThreadWith(p)
         try {
-            AppState.go(Screen.Chat(id))
-            frame { ChatScreen(id) }
-            composeRule.waitForIdle()
-            typeIntoComposer("/tiku hello there")
-            tapSendDiscR86()
-            val deadline = System.currentTimeMillis() + 15_000
-            var msgs = AppState.thread(id)?.messages.orEmpty()
-            while (System.currentTimeMillis() < deadline) {
-                msgs = AppState.thread(id)?.messages.orEmpty()
-                if (msgs.any { it.ai } && !AiJobs.thinking.containsKey(id)) break
-                Thread.sleep(50)
+            withGeminiStub(stub) {
+                AppState.go(Screen.Chat(id))
+                frame { ChatScreen(id) }
+                composeRule.waitForIdle()
+                typeIntoComposer("/tiku hello there")
+                tapSendDiscR86()
+                val deadline = System.currentTimeMillis() + 15_000
+                var msgs = AppState.thread(id)?.messages.orEmpty()
+                while (System.currentTimeMillis() < deadline) {
+                    msgs = AppState.thread(id)?.messages.orEmpty()
+                    if (msgs.any { it.ai } && !AiJobs.thinking.containsKey(id)) break
+                    Thread.sleep(50)
+                }
+                val dump = msgs.joinToString(" | ") {
+                    "ai=${it.ai} me=${it.me} kind=${it.kind} text='${it.text.take(40)}' " +
+                        "undec=${it.undecryptable} pend=${it.pendingDecrypt}"
+                }
+                org.junit.Assert.assertTrue(
+                    "the command message itself must be in the thread; msgs=[$dump]",
+                    msgs.any { it.text.startsWith("/tiku") },
+                )
+                org.junit.Assert.assertTrue(
+                    "an ai=true reply must land in the thread; " +
+                        "thinking=${AiJobs.thinking}; msgs=[$dump]",
+                    msgs.any { it.ai && it.text.contains("Stub reply") },
+                )
+                org.junit.Assert.assertFalse(
+                    "the thinking entry must clear after the reply lands",
+                    AiJobs.thinking.containsKey(id),
+                )
             }
-            val dump = msgs.joinToString(" | ") {
-                "ai=${it.ai} me=${it.me} kind=${it.kind} text='${it.text.take(40)}' " +
-                    "undec=${it.undecryptable} pend=${it.pendingDecrypt}"
-            }
-            org.junit.Assert.assertTrue(
-                "the command message itself must be in the thread; msgs=[$dump]",
-                msgs.any { it.text.startsWith("/tiku") },
-            )
-            org.junit.Assert.assertTrue(
-                "an ai=true reply must land in the thread; " +
-                    "thinking=${AiJobs.thinking}; msgs=[$dump]",
-                msgs.any { it.ai },
-            )
-            org.junit.Assert.assertFalse(
-                "the thinking entry must clear after the reply lands",
-                AiJobs.thinking.containsKey(id),
-            )
         } finally {
             AiJobs.cancel(id)
         }
     }
 
     @Test fun r86_companionReplyLands() {
+        val stub = GeminiStub().start()
+        // The companion leads with lite — scripted hard-down, exactly
+        // like the live route today; the stream must fall through to
+        // 3.5-flash's SSE answer.
+        stub.behaviours["gemini-3.1-flash-lite"] = { _, _ -> stubError(503) }
+        stub.behaviours["gemini-3.5-flash"] = { _, stream ->
+            if (stream) stubSseAnswer("Companion stub reply") else stubJsonAnswer("Companion stub reply")
+        }
+        stub.behaviours["gemini-3.8-flash"] = { _, _ -> stubError(503) }
         stageCompanionR73C()
         val base = TikaBotStore.messages.value.size
         try {
-            frame { TikaBotScreen() }
-            composeRule.waitForIdle()
-            typeIntoComposer("hello tika, how are you?")
-            tapSendDiscR86()
-            val deadline = System.currentTimeMillis() + 15_000
-            var msgs = TikaBotStore.messages.value
-            while (System.currentTimeMillis() < deadline) {
-                msgs = TikaBotStore.messages.value
-                if (msgs.size > base + 1 && !AiJobs.companionBusy) break
-                Thread.sleep(50)
+            withGeminiStub(stub) {
+                frame { TikaBotScreen() }
+                composeRule.waitForIdle()
+                typeIntoComposer("hello tika, how are you?")
+                tapSendDiscR86()
+                val deadline = System.currentTimeMillis() + 20_000
+                var msgs = TikaBotStore.messages.value
+                while (System.currentTimeMillis() < deadline) {
+                    msgs = TikaBotStore.messages.value
+                    if (msgs.size > base + 1 && !AiJobs.companionBusy) break
+                    Thread.sleep(50)
+                }
+                val fresh = msgs.drop(base)
+                val dump = fresh.joinToString(" | ") {
+                    "mine=${it.mine} sys=${it.sys} text='${it.text.take(40)}'"
+                }
+                org.junit.Assert.assertTrue(
+                    "the user's companion message must be appended; new=[$dump]",
+                    fresh.any { it.mine },
+                )
+                org.junit.Assert.assertTrue(
+                    "a bot reply (not mine, not sys) must land in the companion; " +
+                        "busy=${AiJobs.companionBusy}; new=[$dump]",
+                    fresh.any { !it.mine && !it.sys && it.text.contains("Companion stub reply") },
+                )
+                org.junit.Assert.assertFalse(
+                    "the companion busy flag must clear after the reply lands",
+                    AiJobs.companionBusy,
+                )
             }
-            val fresh = msgs.drop(base)
-            val dump = fresh.joinToString(" | ") {
-                "mine=${it.mine} sys=${it.sys} text='${it.text.take(40)}'"
-            }
-            org.junit.Assert.assertTrue(
-                "the user's companion message must be appended; new=[$dump]",
-                fresh.any { it.mine },
-            )
-            org.junit.Assert.assertTrue(
-                "a bot reply (not mine, not sys) must land in the companion; " +
-                    "busy=${AiJobs.companionBusy}; new=[$dump]",
-                fresh.any { !it.mine && !it.sys },
-            )
-            org.junit.Assert.assertFalse(
-                "the companion busy flag must clear after the reply lands",
-                AiJobs.companionBusy,
-            )
         } finally {
             cleanupCompanionR73C(base)
         }

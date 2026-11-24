@@ -36,7 +36,13 @@ object GeminiConfig {
         "gemini-3-pro-image",
     )
 
-    const val BASE = "https://generativelanguage.googleapis.com/v1beta/models"
+    /** ROUND 86 (test seam): the harness may point the client at a
+     *  local stub server via this system property; it is never set
+     *  in a real build, where the endpoint is exactly the production
+     *  one below. */
+    val BASE: String
+        get() = System.getProperty("tiku.gemini.base")?.takeIf { it.isNotBlank() }
+            ?: "https://generativelanguage.googleapis.com/v1beta/models"
 
     /** Free no-key image fallback (Pollinations.ai), ROUND 38 — used
      *  only after the whole Gemini image cascade fails. The full URL

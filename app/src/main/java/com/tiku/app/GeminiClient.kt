@@ -9,6 +9,7 @@ import android.graphics.Shader
 import android.util.Base64
 import android.util.Log
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
@@ -76,8 +77,20 @@ object GeminiClient {
     private sealed interface Raw {
         data class Ok(val json: JSONObject) : Raw
         data object Quota : Raw
-        data object Failed : Raw
+
+        /** ROUND 86: [httpCode] rides along (null for a transport
+         *  failure with no response) so the text cascades can tell a
+         *  transient 503 capacity failure — worth one delayed second
+         *  pass — from a permanent one. */
+        data class Failed(val httpCode: Int? = null) : Raw
     }
+
+    /** ROUND 86: the pause before the text cascades' single second
+     *  pass over a transient (429 / 503) first pass. Production
+     *  waits 20 s — long enough for a per-minute quota window or a
+     *  capacity spike to clear, far inside the AiJobs watchdog.
+     *  Internal var only so the harness can shorten it. */
+    internal var cascadeRetryDelayMs: Long = 20_000L
 
     /** Who Tika is — the owner's FIXED identity for the text-answer
      *  path (ROUND 41 addition, owner's exact words). It rides as the
@@ -626,24 +639,10 @@ object GeminiClient {
     /** The companion cascade — [cascadeTextAnswer]'s exact logic
      *  over [COMPANION_TEXT_MODELS]. ROUND 70: also reports whether
      *  any model answered empty (the blocked/empty signal) so the
-     *  public entry point can decide on the fallback provider. */
-    private suspend fun cascadeCompanionAnswer(body: JSONObject): Pair<Outcome<String>, Boolean> {
-        var sawQuota = false
-        var sawBlock = false
-        for (model in COMPANION_TEXT_MODELS) {
-            when (val r = post(model, body)) {
-                is Raw.Ok -> {
-                    val text = extractText(r.json)
-                    if (!text.isNullOrBlank()) return Outcome.Ok(text.trim()) to sawBlock
-                    sawBlock = true
-                    Log.w("TikaAi", "model $model answered empty — cascading")
-                }
-                Raw.Quota -> sawQuota = true
-                Raw.Failed -> Unit
-            }
-        }
-        return (if (sawQuota) Outcome.Quota else Outcome.Failed) to sawBlock
-    }
+     *  public entry point can decide on the fallback provider.
+     *  ROUND 86: both text cascades now share [cascadeTextOver]. */
+    private suspend fun cascadeCompanionAnswer(body: JSONObject): Pair<Outcome<String>, Boolean> =
+        cascadeTextOver(COMPANION_TEXT_MODELS, body)
 
     /** ROUND 54 (Part B): one reply from the Tika COMPANION — the
      *  pinned bot at the top of the Messages list. This is the one
@@ -1080,22 +1079,72 @@ object GeminiClient {
      *  (the blocked/empty signal) so the public text entry point
      *  can decide on the fallback provider; pure network failures
      *  and quota are NOT block signals. */
-    private suspend fun cascadeTextAnswer(body: JSONObject): Pair<Outcome<String>, Boolean> {
+    private suspend fun cascadeTextAnswer(body: JSONObject): Pair<Outcome<String>, Boolean> =
+        cascadeTextOver(GeminiConfig.TEXT_MODELS, body)
+
+    /**
+     * ROUND 86 — the shared text cascade, with a storm pass.
+     *
+     * The diagnosis (owner report 2026-11-24, Tika totally silent):
+     * the route probe with this app's own key found the cascade's
+     * models failing TOGETHER — gemini-3.1-flash-lite and
+     * gemini-3.8-flash hard-503 (capacity) in every probe, and the
+     * one answering model, gemini-3.5-flash, intermittently
+     * 429 RESOURCE_EXHAUSTED under any burst of requests. The old
+     * cascade burned through all three models in seconds and gave
+     * up, so a transient quota/capacity storm read as total death:
+     * no reply, ever, until the storm passed on its own.
+     *
+     * The pass structure is unchanged (models in order, first
+     * non-empty answer wins, Quota outranks Failed). What is new:
+     * when a full pass produces no answer AND at least one failure
+     * was transient (a 429, or a 503 capacity failure), the cascade
+     * waits [cascadeRetryDelayMs] and runs ONE more pass before
+     * reporting failure — per-minute quota windows and capacity
+     * spikes are measured in seconds, and a reply that lands late
+     * beats one that never lands. Permanent failures (a 400 body
+     * problem, a dead key) gain nothing from a retry and skip it.
+     * The streaming companion cascade inherits this via its
+     * non-streaming backstop ([cascadeCompanionAnswer]).
+     */
+    private suspend fun cascadeTextOver(
+        models: List<String>,
+        body: JSONObject,
+    ): Pair<Outcome<String>, Boolean> {
         var sawQuota = false
         var sawBlock = false
-        for (model in GeminiConfig.TEXT_MODELS) {
-            when (val r = post(model, body)) {
-                is Raw.Ok -> {
-                    val text = extractText(r.json)
-                    if (!text.isNullOrBlank()) return Outcome.Ok(text.trim()) to sawBlock
-                    sawBlock = true
-                    Log.w("TikaAi", "model $model answered empty — cascading")
+        var pass = 0
+        while (true) {
+            pass++
+            var sawTransient = false
+            for (model in models) {
+                when (val r = post(model, body)) {
+                    is Raw.Ok -> {
+                        val text = extractText(r.json)
+                        if (!text.isNullOrBlank()) return Outcome.Ok(text.trim()) to sawBlock
+                        sawBlock = true
+                        Log.w("TikaAi", "model $model answered empty — cascading")
+                    }
+                    Raw.Quota -> {
+                        sawQuota = true
+                        sawTransient = true
+                    }
+                    is Raw.Failed -> {
+                        if (r.httpCode == 503) sawTransient = true
+                    }
                 }
-                Raw.Quota -> sawQuota = true
-                Raw.Failed -> Unit
             }
+            if (pass == 1 && sawTransient) {
+                Log.w(
+                    "TikaAi",
+                    "text cascade pass 1 hit only transient failures — " +
+                        "one more pass in ${cascadeRetryDelayMs}ms",
+                )
+                delay(cascadeRetryDelayMs)
+                continue
+            }
+            return (if (sawQuota) Outcome.Quota else Outcome.Failed) to sawBlock
         }
-        return (if (sawQuota) Outcome.Quota else Outcome.Failed) to sawBlock
     }
 
     // ================= ROUND 70: refusal-only fallback provider =================
@@ -1243,7 +1292,7 @@ object GeminiClient {
                     Log.w("TikaAi", "model $model returned no image part — cascading")
                 }
                 Raw.Quota -> sawQuota = true
-                Raw.Failed -> Unit
+                is Raw.Failed -> Unit
             }
         }
         // Gemini exhausted (quota / capacity / network). ROUND 41:
@@ -1424,7 +1473,7 @@ object GeminiClient {
                         }
                     }
                     Raw.Quota -> sawQuota = true
-                    Raw.Failed -> Unit
+                    is Raw.Failed -> Unit
                 }
             }
             // Gemini could not build a valid game — MiniMax (NVIDIA) gets
@@ -1640,16 +1689,16 @@ object GeminiClient {
                 429 -> Raw.Quota
                 in 200..299 -> {
                     val text = conn.inputStream.bufferedReader(Charsets.UTF_8).readText()
-                    runCatching { Raw.Ok(JSONObject(text)) }.getOrElse { Raw.Failed }
+                    runCatching { Raw.Ok(JSONObject(text)) }.getOrElse { Raw.Failed(code) }
                 }
                 else -> {
                     Log.w("TikaAi", "model $model -> HTTP $code — cascading")
-                    Raw.Failed
+                    Raw.Failed(code)
                 }
             }
         } catch (e: Exception) {
             Log.w("TikaAi", "model $model call failed (${e.javaClass.simpleName}) — cascading")
-            Raw.Failed
+            Raw.Failed()
         } finally {
             conn?.disconnect()
         }
