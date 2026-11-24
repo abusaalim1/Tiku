@@ -1285,6 +1285,116 @@ class ScreenshotsTest {
         }
     }
 
+    // ---------- ROUND 86: Tika replies not arriving — full-path repro ----------
+    // The owner (build 168): NO AI reply arrives on either surface.
+    // These two tests drive the REAL send path end to end — type in
+    // the composer, tap the send disc, and require the reply to LAND
+    // (preview mode answers from GeminiClient's canned branch, so no
+    // network is involved: a failure here is an app-side break).
+
+    /** Tap the composer's send disc: the ~42dp clickable at the
+     *  bottom-right of the input bar (rdPress registers a real click
+     *  action; the mic icon shares the disc while the field is
+     *  empty, so callers type first). Picks the LOWEST matching node
+     *  so the jump-to-latest disc (same size, higher up) can never
+     *  be mistaken for it. */
+    private fun tapSendDiscR86() {
+        val nodes = composeRule.onAllNodes(androidx.compose.ui.test.hasClickAction())
+        val infos = nodes.fetchSemanticsNodes()
+        var best = -1
+        var bestY = Float.MIN_VALUE
+        infos.forEachIndexed { i, n ->
+            val b = n.boundsInRoot
+            if (b.width in 100f..170f && b.height in 100f..170f &&
+                b.center.x > 850f && b.center.y > 1900f && b.center.y > bestY
+            ) {
+                best = i
+                bestY = b.center.y
+            }
+        }
+        org.junit.Assert.assertTrue(
+            "the send disc must be findable among ${infos.size} clickable nodes",
+            best >= 0,
+        )
+        nodes[best].performClick()
+        composeRule.waitForIdle()
+    }
+
+    @Test fun r86_chatSlashCommandReplyLands() {
+        val p = PreviewStore.people[1]
+        val id = PreviewRepo.startThreadWith(p)
+        try {
+            AppState.go(Screen.Chat(id))
+            frame { ChatScreen(id) }
+            composeRule.waitForIdle()
+            typeIntoComposer("/tiku hello there")
+            tapSendDiscR86()
+            val deadline = System.currentTimeMillis() + 15_000
+            var msgs = AppState.thread(id)?.messages.orEmpty()
+            while (System.currentTimeMillis() < deadline) {
+                msgs = AppState.thread(id)?.messages.orEmpty()
+                if (msgs.any { it.ai } && !AiJobs.thinking.containsKey(id)) break
+                Thread.sleep(50)
+            }
+            val dump = msgs.joinToString(" | ") {
+                "ai=${it.ai} me=${it.me} kind=${it.kind} text='${it.text.take(40)}' " +
+                    "undec=${it.undecryptable} pend=${it.pendingDecrypt}"
+            }
+            org.junit.Assert.assertTrue(
+                "the command message itself must be in the thread; msgs=[$dump]",
+                msgs.any { it.text.startsWith("/tiku") },
+            )
+            org.junit.Assert.assertTrue(
+                "an ai=true reply must land in the thread; " +
+                    "thinking=${AiJobs.thinking}; msgs=[$dump]",
+                msgs.any { it.ai },
+            )
+            org.junit.Assert.assertFalse(
+                "the thinking entry must clear after the reply lands",
+                AiJobs.thinking.containsKey(id),
+            )
+        } finally {
+            AiJobs.cancel(id)
+        }
+    }
+
+    @Test fun r86_companionReplyLands() {
+        stageCompanionR73C()
+        val base = TikaBotStore.messages.value.size
+        try {
+            frame { TikaBotScreen() }
+            composeRule.waitForIdle()
+            typeIntoComposer("hello tika, how are you?")
+            tapSendDiscR86()
+            val deadline = System.currentTimeMillis() + 15_000
+            var msgs = TikaBotStore.messages.value
+            while (System.currentTimeMillis() < deadline) {
+                msgs = TikaBotStore.messages.value
+                if (msgs.size > base + 1 && !AiJobs.companionBusy) break
+                Thread.sleep(50)
+            }
+            val fresh = msgs.drop(base)
+            val dump = fresh.joinToString(" | ") {
+                "mine=${it.mine} sys=${it.sys} text='${it.text.take(40)}'"
+            }
+            org.junit.Assert.assertTrue(
+                "the user's companion message must be appended; new=[$dump]",
+                fresh.any { it.mine },
+            )
+            org.junit.Assert.assertTrue(
+                "a bot reply (not mine, not sys) must land in the companion; " +
+                    "busy=${AiJobs.companionBusy}; new=[$dump]",
+                fresh.any { !it.mine && !it.sys },
+            )
+            org.junit.Assert.assertFalse(
+                "the companion busy flag must clear after the reply lands",
+                AiJobs.companionBusy,
+            )
+        } finally {
+            cleanupCompanionR73C(base)
+        }
+    }
+
     /** Staging helper for the R82 shots: a two-message preview
      *  thread whose second message IS the slash command, staged with
      *  the exact id the AiJobs job will be linked to. */
