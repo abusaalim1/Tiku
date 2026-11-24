@@ -1,6 +1,7 @@
 package com.tiku.app
 
 import android.content.Context
+import androidx.camera.core.ImageCapture
 import androidx.compose.foundation.background
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.layout.Box
@@ -4791,5 +4792,114 @@ class ScreenshotsTest {
             composeRule.onAllNodesWithText("@meera").fetchSemanticsNodes().isNotEmpty(),
         )
         shot("109-companion-mention-suggestions.png")
+    }
+    // ================= ROUND 83 — the in-app camera =================
+    // The live camera cannot render a preview headlessly, so the
+    // chrome is staged with a placeholder surface (all four controls
+    // present, on-brand) and the confirm screen with a staged photo.
+    // Real capture quality/focus is a device check.
+
+    @Test fun shot114_inAppCamera() {
+        frame {
+            CameraChrome(
+                flashMode = ImageCapture.FLASH_MODE_OFF,
+                hasFlash = true,
+                capturing = false,
+                onClose = {}, onFlash = {}, onShutter = {}, onFlip = {},
+                preview = {
+                    Box(
+                        Modifier.fillMaxSize().background(
+                            Brush.linearGradient(
+                                listOf(Color(0xFF2A2D3A), Color(0xFF101116)),
+                            ),
+                        ),
+                    )
+                },
+            )
+        }
+        composeRule.waitForIdle()
+        org.junit.Assert.assertTrue(
+            "the in-app camera shows its close control",
+            composeRule.onAllNodesWithTag("camera_close").fetchSemanticsNodes().isNotEmpty(),
+        )
+        org.junit.Assert.assertTrue(
+            "the in-app camera shows its flash control",
+            composeRule.onAllNodesWithTag("camera_flash").fetchSemanticsNodes().isNotEmpty(),
+        )
+        org.junit.Assert.assertTrue(
+            "the in-app camera shows its shutter",
+            composeRule.onAllNodesWithTag("camera_shutter").fetchSemanticsNodes().isNotEmpty(),
+        )
+        org.junit.Assert.assertTrue(
+            "the in-app camera shows its flip control",
+            composeRule.onAllNodesWithTag("camera_flip").fetchSemanticsNodes().isNotEmpty(),
+        )
+        shot("114-inapp-camera.png")
+    }
+
+    @Test fun shot115_inAppCameraConfirm() {
+        frame {
+            CameraConfirmView(
+                bmp = solidBitmapR79(720, 960, 0xFF3E5C50.toInt()),
+                onRetake = {}, onUse = {},
+            )
+        }
+        composeRule.waitForIdle()
+        org.junit.Assert.assertTrue(
+            "the confirm screen is staged",
+            composeRule.onAllNodesWithTag("camera_confirm").fetchSemanticsNodes().isNotEmpty(),
+        )
+        org.junit.Assert.assertTrue(
+            "the confirm screen offers Retake",
+            composeRule.onAllNodesWithText("Retake").fetchSemanticsNodes().isNotEmpty(),
+        )
+        org.junit.Assert.assertTrue(
+            "the confirm screen offers Use photo",
+            composeRule.onAllNodesWithText("Use photo").fetchSemanticsNodes().isNotEmpty(),
+        )
+        shot("115-inapp-camera-confirm.png")
+    }
+
+    /** ROUND 83: the EXIF orientation table, pinned against the
+     *  androidx constants (1 NORMAL, 2 FLIP_HORIZONTAL, 3 ROTATE_180,
+     *  4 FLIP_VERTICAL, 5 TRANSPOSE, 6 ROTATE_90, 7 TRANSVERSE,
+     *  8 ROTATE_270) — a wrong row here is a sideways photo forever. */
+    @Test fun cameraExifTransformR83() {
+        org.junit.Assert.assertEquals(
+            "orientation 1 (NORMAL) needs no transform",
+            ExifTransform(0, false), exifTransform(1),
+        )
+        org.junit.Assert.assertEquals(
+            "orientation 2 (FLIP_HORIZONTAL) mirrors only",
+            ExifTransform(0, true), exifTransform(2),
+        )
+        org.junit.Assert.assertEquals(
+            "orientation 3 (ROTATE_180) rotates 180",
+            ExifTransform(180, false), exifTransform(3),
+        )
+        org.junit.Assert.assertEquals(
+            "orientation 4 (FLIP_VERTICAL) is 180 + mirror",
+            ExifTransform(180, true), exifTransform(4),
+        )
+        org.junit.Assert.assertEquals(
+            "orientation 5 (TRANSPOSE) is 270 + mirror",
+            ExifTransform(270, true), exifTransform(5),
+        )
+        org.junit.Assert.assertEquals(
+            "orientation 6 (ROTATE_90) rotates 90",
+            ExifTransform(90, false), exifTransform(6),
+        )
+        org.junit.Assert.assertEquals(
+            "orientation 7 (TRANSVERSE) is 90 + mirror",
+            ExifTransform(90, true), exifTransform(7),
+        )
+        org.junit.Assert.assertEquals(
+            "orientation 8 (ROTATE_270) rotates 270",
+            ExifTransform(270, false), exifTransform(8),
+        )
+        org.junit.Assert.assertEquals(
+            "an unknown orientation falls back to no transform",
+            ExifTransform(0, false), exifTransform(0),
+        )
     }
 }

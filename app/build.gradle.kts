@@ -101,6 +101,14 @@ dependencies {
     implementation("com.google.android.libraries.identity.googleid:googleid:1.1.1")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-play-services:1.8.1")
     implementation("androidx.security:security-crypto:1.1.0-alpha06")
+    // ROUND 83: the in-app camera (CameraCapture.kt) — CameraX Preview +
+    // ImageCapture only (no analysis), plus androidx ExifInterface for
+    // the capture orientation fix in decodeCameraCapture.
+    implementation("androidx.camera:camera-core:1.4.1")
+    implementation("androidx.camera:camera-camera2:1.4.1")
+    implementation("androidx.camera:camera-lifecycle:1.4.1")
+    implementation("androidx.camera:camera-view:1.4.1")
+    implementation("androidx.exifinterface:exifinterface:1.3.7")
     // Real audio+video calls: maintained WebRTC fork (org.webrtc API), Maven Central.
     implementation("io.getstream:stream-webrtc-android:1.1.1")
     // ROUND 13: real backdrop blur for the owner-supplied liquid-glass design

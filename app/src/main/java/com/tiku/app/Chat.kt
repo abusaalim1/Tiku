@@ -3863,6 +3863,8 @@ private fun RdChatContent(thread: ChatThread) {
         }
     }
     var camChooserOpen by remember { mutableStateOf(false) }
+    /** ROUND 83: the in-app camera overlay (CameraCapture.kt) is open. */
+    var inAppCameraOpen by remember { mutableStateOf(false) }
     var recording by remember { mutableStateOf(false) }
     var recSecs by remember { mutableIntStateOf(0) }
     val recorder = remember { VoiceRecorder(ctx) }
@@ -4146,46 +4148,12 @@ private fun RdChatContent(thread: ChatThread) {
     // decode is bounds-limited (a full-res OEM capture decodeFile
     // could OOM the callback), and every failure on the result path
     // is SPOKEN with a toast instead of swallowed.
-    var camPhotoPath by rememberSaveable { mutableStateOf<String?>(null) }
     var camVideoPath by rememberSaveable { mutableStateOf<String?>(null) }
     /** The view-once arm as it stood when the pending capture was
      *  LAUNCHED (-1 = Always / unarmed, 1 / 2 = the allowance). A
      *  plain MutableState<Int> on purpose: it is the state shape
      *  rememberSaveable's default saver is guaranteed to carry. */
     var camVoCode by rememberSaveable { mutableStateOf(-1) }
-    val takePhoto = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { ok ->
-        val path = camPhotoPath
-        val vo = camVoCode.takeIf { it in 1..2 }
-        camPhotoPath = null
-        camVoCode = -1
-        val f = path?.let { File(it) }
-        if (!ok) {
-            // user cancelled the camera — not a failure; the live arm
-            // survives for the next pick, as before.
-            if (f != null) runCatching { f.delete() }
-            return@rememberLauncherForActivityResult
-        }
-        val bmp = f?.let { decodeCaptureBounded(it) }
-        if (f == null || bmp == null) {
-            // ROUND 43: never silent again — a capture that cannot be
-            // read says so (the arm stays armed for the retry).
-            AppState.toast("Couldn't send that photo — please try again")
-            if (f != null) runCatching { f.delete() }
-            return@rememberLauncherForActivityResult
-        }
-        // ROUND 31 + 43: the allowance snapshotted at launch rides
-        // this capture; the send consumes the live arm too.
-        // ROUND 67: the send itself is guarded too — a synchronous
-        // throw out of this callback would kill the process exactly
-        // like the launch-side crash did.
-        armedVo = null
-        val sent = runCatching { AppState.repo.sendPhotoVo(threadId, bmp, vo) }
-        runCatching { f.delete() }
-        if (sent.isFailure) {
-            Log.e("TikuCamera", "camera photo send failed", sent.exceptionOrNull())
-            AppState.toast("Couldn't send that photo — please try again")
-        }
-    }
     val recordVideoCapture = rememberLauncherForActivityResult(ActivityResultContracts.CaptureVideo()) { ok ->
         val path = camVideoPath
         val vo = camVoCode.takeIf { it in 1..2 }
@@ -4252,21 +4220,23 @@ private fun RdChatContent(thread: ChatThread) {
      *  gallery (the attach sheet) as the fallback. */
     fun failCameraOpen(e: Throwable) {
         Log.e("TikuCamera", "camera open failed", e)
-        camPhotoPath = null
         camVideoPath = null
         camVoCode = -1
         ChatSession.expectExternalActivity = false
         AppState.toast("Camera couldn't open — try the gallery")
         attachOpen = true
     }
+    // ROUND 83: the PHOTO path no longer leaves the app at all — it
+    // opens Tiku's own CameraX camera (CameraCapture.kt), so no
+    // system-camera filters/effects/state can leak into a capture.
+    // The view-once arm is snapshotted exactly as before (the
+    // Round-43 lesson), and the confirmed photo re-enters through
+    // the overlay block at the end of this screen, which sends via
+    // the same sendPhotoVo pipeline. The VIDEO path below keeps the
+    // Round-67 guarded intent flow byte-identical.
     fun launchCameraPhotoNow() {
-        runCatching {
-            val f = File(ctx.cacheDir, "cap_${System.currentTimeMillis()}.jpg")
-            camPhotoPath = f.absolutePath
-            camVoCode = armedVo ?: -1
-            ChatSession.expectExternalActivity = true
-            takePhoto.launch(FileProvider.getUriForFile(ctx, "tiku.app.fileprovider", f))
-        }.onFailure { failCameraOpen(it) }
+        camVoCode = armedVo ?: -1
+        inAppCameraOpen = true
     }
     fun launchCameraVideoNow() {
         runCatching {
@@ -6402,6 +6372,35 @@ private fun RdChatContent(thread: ChatThread) {
         }
         nikahCertMsg?.nikahKeepsake?.let { k ->
             NikahCertificateOverlay(k) { nikahCertMsg = null }
+        }
+
+        // ---- ROUND 83: the in-app camera (topmost) ----
+        // Opened by launchCameraPhotoNow (which snapshotted the
+        // view-once arm into camVoCode). Cancel leaves the live arm
+        // armed for the next pick, exactly as cancelling the old
+        // system camera did; a bind failure lands on the same
+        // Round-67 graceful surface (toast + gallery sheet). A
+        // confirmed photo is sent through the SAME sendPhotoVo
+        // pipeline the old capture result used, the cache file is
+        // deleted once the send owns the bitmap, and a synchronous
+        // send throw is spoken, never swallowed (Round 43/67 law).
+        if (inAppCameraOpen) {
+            CameraCaptureOverlay(
+                onCancel = { inAppCameraOpen = false; camVoCode = -1 },
+                onBindFailed = { e -> inAppCameraOpen = false; failCameraOpen(e) },
+                onUsePhoto = { f, bmp ->
+                    val vo = camVoCode.takeIf { it in 1..2 }
+                    camVoCode = -1
+                    inAppCameraOpen = false
+                    armedVo = null
+                    val sent = runCatching { AppState.repo.sendPhotoVo(threadId, bmp, vo) }
+                    runCatching { f.delete() }
+                    if (sent.isFailure) {
+                        Log.e("TikuCamera", "camera photo send failed", sent.exceptionOrNull())
+                        AppState.toast("Couldn't send that photo — please try again")
+                    }
+                },
+            )
         }
     }
 }
