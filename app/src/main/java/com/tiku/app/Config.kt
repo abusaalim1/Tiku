@@ -74,6 +74,30 @@ object Config {
      * PushSender / TikuFcmService in FcmNotify.kt).
      */
     const val NOTIFY_URL = "https://tiku-notify.tiku-notify-abu.workers.dev/notify"
+
+    /**
+     * ROUND 81 — the push endpoint's new PRIMARY host: a Vercel
+     * serverless function riding the download-page deployment. It is
+     * a behaviour clone of the Worker (same validation, same payload)
+     * except it reads the receiver's token from the Realtime
+     * Database mirror ([PUSH_TOKENS_RTDB_BASE] — a separate quota
+     * pool from Firestore) and only falls back to ONE Firestore read
+     * on a store miss; the Worker's per-push Firestore membership
+     * read is dropped. [PushSender] POSTs here FIRST and falls back
+     * to [NOTIFY_URL] (the Worker, untouched) on any failure — the
+     * payload bytes are identical on both paths.
+     */
+    const val NOTIFY_URL_VERCEL = "https://tiku-study.vercel.app/api/notify"
+
+    /**
+     * ROUND 81 — Realtime Database base for the FCM-token mirror:
+     * [FcmTokenSync] writes `pushTokens/{myUid}` (the plain token as
+     * a JSON string) here via REST alongside the Firestore field, so
+     * the Vercel notify function can find the token with ZERO
+     * Firestore reads. Rules: each uid writes only its own node;
+     * reads are server-side only (the function's service account).
+     */
+    const val PUSH_TOKENS_RTDB_BASE = "https://tiku-chat-default-rtdb.firebaseio.com"
 }
 
 /** One ICE server entry (STUN or TURN). */

@@ -344,6 +344,12 @@ object FcmTokenSync {
     fun save(token: String) {
         runCatching {
             val uid = FirebaseAuth.getInstance().currentUser?.uid ?: return
+            // ROUND 81: mirror the token to the Realtime Database
+            // store the Vercel notify function reads FIRST (zero
+            // Firestore reads on a hit). Fired independently of the
+            // Firestore write below — a failed mirror never blocks
+            // it or any UI, and vice versa.
+            mirrorTokenToRtdb(uid, token)
             val ref = FirebaseFirestore.getInstance().collection(Schema.Users.COLL).document(uid)
             ref.set(mapOf("fcmToken" to token), SetOptions.merge())
                 .addOnSuccessListener {
@@ -363,6 +369,84 @@ object FcmTokenSync {
         }.onFailure {
             tokenPresent = false
             retryAtNextUnlock = true
+        }
+    }
+
+    /** ROUND 81: the RTDB mirror's IO scope (fire-and-forget, like
+     *  everything else in this object). */
+    private val mirrorScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+    /** ROUND 81: PUT the plain token as a JSON string to
+     *  `pushTokens/{uid}` in the Realtime Database, authenticated
+     *  with the signed-in user's own Firebase ID token (the RTDB
+     *  rules allow each uid to write only its own node). No
+     *  firebase-database SDK dependency exists in this app, so the
+     *  mirror rides the RTDB REST API. STRICTLY best-effort: any
+     *  failure (token fetch, network, rules) is swallowed — the
+     *  Firestore field above remains the fallback the notify paths
+     *  read on a store miss. */
+    private fun mirrorTokenToRtdb(uid: String, token: String) {
+        runCatching {
+            val user = FirebaseAuth.getInstance().currentUser ?: return
+            user.getIdToken(false)
+                .addOnSuccessListener { result ->
+                    val idToken = result.token
+                    if (idToken.isNullOrBlank()) return@addOnSuccessListener
+                    mirrorScope.launch {
+                        runCatching {
+                            val url = URL(
+                                "${Config.PUSH_TOKENS_RTDB_BASE}/pushTokens/$uid.json?auth=$idToken"
+                            )
+                            val conn = url.openConnection() as HttpURLConnection
+                            try {
+                                conn.requestMethod = "PUT"
+                                conn.connectTimeout = 10_000
+                                conn.readTimeout = 10_000
+                                conn.doOutput = true
+                                conn.setRequestProperty("Content-Type", "application/json")
+                                conn.outputStream.use {
+                                    it.write(JSONObject.quote(token).toByteArray(Charsets.UTF_8))
+                                }
+                                conn.responseCode // drain the call; verdict ignored by design
+                            } finally {
+                                conn.disconnect()
+                            }
+                        }
+                    }
+                }
+        }
+    }
+
+    /** ROUND 81: sign-out counterpart of [mirrorTokenToRtdb] —
+     *  DELETE `pushTokens/{uid}` best-effort, fired under the
+     *  still-live auth session exactly like the Firestore field
+     *  delete in [clearOnSignOut]. If the delete is lost, the
+     *  notify function's dead-token cleanup removes the node on
+     *  its next send attempt. */
+    private fun deleteRtdbMirror(uid: String) {
+        runCatching {
+            val user = FirebaseAuth.getInstance().currentUser ?: return
+            user.getIdToken(false)
+                .addOnSuccessListener { result ->
+                    val idToken = result.token
+                    if (idToken.isNullOrBlank()) return@addOnSuccessListener
+                    mirrorScope.launch {
+                        runCatching {
+                            val url = URL(
+                                "${Config.PUSH_TOKENS_RTDB_BASE}/pushTokens/$uid.json?auth=$idToken"
+                            )
+                            val conn = url.openConnection() as HttpURLConnection
+                            try {
+                                conn.requestMethod = "DELETE"
+                                conn.connectTimeout = 10_000
+                                conn.readTimeout = 10_000
+                                conn.responseCode // drain; verdict ignored by design
+                            } finally {
+                                conn.disconnect()
+                            }
+                        }
+                    }
+                }
         }
     }
 
@@ -397,6 +481,8 @@ object FcmTokenSync {
                     FirebaseFirestore.getInstance().collection(Schema.Users.COLL).document(uid)
                         .update("fcmToken", FieldValue.delete())
                 }
+                // ROUND 81: the RTDB mirror node goes too (best-effort).
+                runCatching { deleteRtdbMirror(uid) }
             }
             runCatching { FirebaseMessaging.getInstance().deleteToken() }
         }
@@ -601,12 +687,31 @@ object PushSender {
         user: com.google.firebase.auth.FirebaseUser, forceRefresh: Boolean,
     ): String? = runCatching { user.getIdToken(forceRefresh).await().token }.getOrNull()
 
-    /** One POST to the Worker; returns the HTTP status (or -1 via the
-     *  caller's runCatching on any transport failure). The response
-     *  body is drained, never logged — it carries no user content,
-     *  and the discipline costs nothing. */
+    /** ROUND 81: one logical POST = the Vercel endpoint FIRST
+     *  ([Config.NOTIFY_URL_VERCEL]); on ANY failure (non-2xx verdict
+     *  or transport) the SAME payload bytes go to the Cloudflare
+     *  Worker ([Config.NOTIFY_URL], untouched) as the fallback leg.
+     *  The returned verdict is the fallback's when it produced one,
+     *  otherwise the primary's — so the R80 owed-notify queue wraps
+     *  BOTH attempts: an entry is owed only when this function as a
+     *  whole finishes non-2xx, i.e. both paths failed. The retry
+     *  logic in [send] (401 forced-refresh, one extra attempt) is
+     *  unchanged and applies to this combined attempt. */
     private fun post(idToken: String, body: JSONObject): Int {
-        val conn = URL(Config.NOTIFY_URL).openConnection() as HttpURLConnection
+        val primary = runCatching { postTo(Config.NOTIFY_URL_VERCEL, idToken, body) }
+            .getOrDefault(-1)
+        if (primary in 200..299) return primary
+        val fallback = runCatching { postTo(Config.NOTIFY_URL, idToken, body) }
+            .getOrDefault(-1)
+        return if (fallback != -1) fallback else primary
+    }
+
+    /** One POST to one endpoint; returns the HTTP status (or -1 via
+     *  the caller's runCatching on any transport failure). The
+     *  response body is drained, never logged — it carries no user
+     *  content, and the discipline costs nothing. */
+    private fun postTo(url: String, idToken: String, body: JSONObject): Int {
+        val conn = URL(url).openConnection() as HttpURLConnection
         return try {
             conn.requestMethod = "POST"
             conn.connectTimeout = 10_000
