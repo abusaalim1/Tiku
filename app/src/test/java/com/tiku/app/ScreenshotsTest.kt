@@ -5122,23 +5122,31 @@ class ScreenshotsTest {
         }
         AppState.go(Screen.Chat(id))
         frame { ChatScreen(id) }
-        // Tap the photo itself: the bubble's time chip sits at the
-        // frame's bottom-end corner (inset 8 dp), so the frame's
-        // centre is a fixed offset up-left from the chip's centre —
-        // (69 dp, 113 dp) at this harness's 3x density. A direct
-        // touch on the image is the tap a finger makes; the row's
-        // tap detector routes it to the viewer.
-        val chipNodes = composeRule.onAllNodesWithText("10:15 AM").fetchSemanticsNodes()
-        org.junit.Assert.assertTrue("the photo bubble must render", chipNodes.isNotEmpty())
-        val chipCentre = chipNodes.first().boundsInRoot.center
-        composeRule.onRoot().performTouchInput {
-            click(
-                androidx.compose.ui.geometry.Offset(
-                    chipCentre.x - 207f, chipCentre.y - 339f,
-                ),
-            )
-        }
+        // The staged chat first (evidence of the bubble either way).
+        shot("119-camera-photo-chat.png")
+        val chipNodes = composeRule.onAllNodesWithText("10:15 AM")
+        val chipSemantics = chipNodes.fetchSemanticsNodes()
+        org.junit.Assert.assertTrue("the photo bubble must render", chipSemantics.isNotEmpty())
+        // Attempt 1: tap the bubble's time chip (inside the tap
+        // region), then flush the row detector's double-tap window
+        // on the compose clock so its single-tap route fires.
+        runCatching { chipNodes[0].performTouchInput { click(center) } }
+        composeRule.mainClock.advanceBy(700)
         composeRule.waitForIdle()
+        if (composeRule.onAllNodesWithTag("image_viewer").fetchSemanticsNodes().isEmpty()) {
+            // Attempt 2: a raw touch on the photo's centre, derived
+            // from the chip's bounds (the chip hugs the frame's
+            // bottom-end corner, inset 8 dp; the frame is 220x260 dp;
+            // this harness renders at 3x density).
+            val c = chipSemantics.first().boundsInRoot.center
+            runCatching {
+                composeRule.onRoot().performTouchInput {
+                    click(androidx.compose.ui.geometry.Offset(c.x - 207f, c.y - 339f))
+                }
+            }
+            composeRule.mainClock.advanceBy(700)
+            composeRule.waitForIdle()
+        }
         org.junit.Assert.assertTrue(
             "tapping a normal camera photo must open the full-screen viewer",
             composeRule.onAllNodesWithTag("image_viewer").fetchSemanticsNodes().isNotEmpty(),
@@ -5223,26 +5231,28 @@ class ScreenshotsTest {
 
     @Test fun shot124_companionThemeGrid() {
         // WS-G: the companion's theme picker is the normal chat's
-        // tile grid — Default + six built-ins + the Custom photo tile.
-        // Staged on the companion surface itself so the sheet host
-        // wears the Tik skin it wears in production there.
+        // tile grid — Default + six built-ins + the Custom photo
+        // tile, with the live selection ring on the current theme.
+        // The grid is staged directly (the sheet host it rides in
+        // production is proven by shot126); t1 is the store's live
+        // selection, so its tile carries the ring + check.
         AppState.appCtx = ctx
-        AppState.go(Screen.TikaBot)
         TikaBotStore.setThemeId("t1")
         try {
-            AppState.sheet {
-                Column(Modifier.padding(12.dp)) {
+            frame {
+                Column(
+                    Modifier.fillMaxSize().background(Color(0xFF14161A)).padding(20.dp),
+                ) {
                     BotThemeGrid(onPick = {}, onCustomPick = {})
                 }
             }
-            frame { Box(Modifier.fillMaxSize().background(Color(0xFF14161A))) }
             composeRule.onNodeWithTag("bot_theme_grid").assertIsDisplayed()
             composeRule.onNodeWithTag("bot_theme_custom").assertIsDisplayed()
+            composeRule.onNodeWithTag("bot_theme_t1").assertIsDisplayed()
             composeRule.onNodeWithText("Blush Kisses").assertIsDisplayed()
             composeRule.onNodeWithText("Custom photo").assertIsDisplayed()
             shot("124-companion-theme-grid.png")
         } finally {
-            AppState.closeSheet()
             TikaBotStore.setThemeId("")
         }
     }
