@@ -477,14 +477,30 @@ object PushSender {
                 return
             }
             var code = runCatching { post(idToken, body) }.getOrDefault(-1)
+            var retried = false
             if (code == 401) {
                 // 401 = the ID token went stale between Firestore
                 // and here: the one POST retry carries a fresh one.
+                retried = true
                 delay(1_200)
                 val fresh = fetchIdToken(user, forceRefresh = true)
                 if (!fresh.isNullOrBlank()) {
+                    idToken = fresh
                     code = runCatching { post(fresh, body) }.getOrDefault(-1)
                 }
+            }
+            // ROUND 79 (WS-N2): any OTHER failure — a non-2xx verdict
+            // (including the Worker's 502 while the Firestore read
+            // quota is burned; the Worker now retries its own reads,
+            // so a second POST a moment later often lands) or a
+            // transport failure (-1) — also earns exactly ONE retry
+            // instead of dropping the push outright. Bounded: at most
+            // two POSTs per send in total (the 401 retry above counts
+            // as the one). Fire-and-forget either way; the message
+            // itself is already safe in Firestore.
+            if (code !in 200..299 && !retried) {
+                delay(1_500)
+                code = runCatching { post(idToken, body) }.getOrDefault(-1)
             }
             // ROUND 63 (push audit): the Worker's verdict is logged
             // (status only — never the body, which is drained unread
@@ -633,9 +649,29 @@ class TikuFcmService : FirebaseMessagingService() {
                 // suppressions are the gates above: signed-out / no
                 // identity, the preference gate, open-chat, per-chat
                 // mute (plus the OS permission check inside postMessage).
-                val body = runCatching { decryptedBody(chatId, type, data) }
-                    .getOrNull() ?: genericBody(type)
-                PushAlerts.postMessage(ctx, chatId, senderName, body)
+                //
+                // ROUND 79 (WS-N2 — SPEED, the owner's "instantly"
+                // order): the first post now happens from the payload
+                // data ALONE — no key derivation, no fetch. The old
+                // order decrypted BEFORE posting, and on a cold
+                // FCM-woken process the conversation-key derivation
+                // misses both in-memory caches and fetches the peer's
+                // public key from Firestore (convKey → fetchPerson):
+                // with the read quota burned that read stalls/retries
+                // inside the SDK and the notification waited on it.
+                // Now the generic body posts immediately, and when the
+                // decrypt lands the SAME per-chat notification id is
+                // re-posted with the real body — a replace, never a
+                // second alert (postMessage's id scheme +
+                // setOnlyAlertOnce). Appearance and behaviour are
+                // unchanged; only the wait is gone.
+                PushAlerts.postMessage(ctx, chatId, senderName, genericBody(type))
+                if (type == "text" || type == "ai_text") {
+                    val body = runCatching { decryptedBody(chatId, type, data) }.getOrNull()
+                    if (body != null) {
+                        PushAlerts.postMessage(ctx, chatId, senderName, body)
+                    }
+                }
             }
         }
     }

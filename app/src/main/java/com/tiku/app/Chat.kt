@@ -1895,6 +1895,16 @@ private fun RdBubbleRow(
      *  the fx dressing overlays are untouched, and media bubbles / the
      *  sealed gift wrap keep their own rendering. */
     theme: ChatTheme? = null,
+    /** ROUND 79 (WS-2): the message this reply quotes, resolved by
+     *  the caller from [TikuMessage.replyToId] — its photo (or video
+     *  poster) renders as the quote strip's thumbnail, IG-style, and
+     *  tapping the strip calls [onQuoteTap] (the caller jumps to the
+     *  original and opens its viewer). Null = the original is
+     *  outside the loaded window, or a pre-79 reply that carries no
+     *  id: the quote stays the label-only strip it always was and is
+     *  not tappable. */
+    quoteTarget: TikuMessage? = null,
+    onQuoteTap: () -> Unit = {},
 ) {
     val scope = rememberCoroutineScope()
     // ROUND 26: this bubble's text colour under the theme (on Default
@@ -2154,12 +2164,41 @@ private fun RdBubbleRow(
                                         // list previews still say
                                         // "Gift message".
                                         if (m.replyQuote != null) {
-                                            Text(
-                                                m.replyQuote, color = bubbleText.copy(0.75f), fontSize = 12.sp, maxLines = 1,
-                                                fontFamily = emojiFont,
-                                                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
-                                                modifier = Modifier.padding(bottom = 6.dp).rdDrawLeftBar().padding(start = 8.dp),
-                                            )
+                                            // ROUND 79 (WS-2): the quote
+                                            // strip SHOWS what it answers
+                                            // — the original's thumbnail
+                                            // (photo, or the video's
+                                            // poster frame) beside the
+                                            // label — and the whole strip
+                                            // taps through to the original
+                                            // message (the caller jumps +
+                                            // opens the viewer). Without
+                                            // a resolved target it renders
+                                            // exactly the label-only strip
+                                            // it always was.
+                                            Row(
+                                                Modifier.padding(bottom = 6.dp).rdDrawLeftBar().padding(start = 8.dp)
+                                                    .then(
+                                                        if (quoteTarget != null) Modifier.rdPress(onQuoteTap)
+                                                        else Modifier,
+                                                    ),
+                                                verticalAlignment = Alignment.CenterVertically,
+                                            ) {
+                                                val qThumb = quoteTarget?.photo
+                                                if (qThumb != null) {
+                                                    Image(
+                                                        qThumb.asImageBitmap(), null,
+                                                        Modifier.size(36.dp).clip(RoundedCornerShape(8.dp)),
+                                                        contentScale = ContentScale.Crop,
+                                                    )
+                                                    Spacer(Modifier.width(8.dp))
+                                                }
+                                                Text(
+                                                    m.replyQuote, color = bubbleText.copy(0.75f), fontSize = 12.sp, maxLines = 1,
+                                                    fontFamily = emojiFont,
+                                                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                                                )
+                                            }
                                         }
                                         // ROUND 46: links inside the text
                                         // are detected + styled, and the
@@ -2312,8 +2351,8 @@ private fun RdBubbleRow(
             }
         }
         // ROUND 31 — the SENDER's view-once line under his own bubble:
-        // the allowance while views remain ("View once" / "View
-        // twice"), flipping to "Opened" when the recipient's client
+        // the allowance while views remain ("One look" / "Two looks"
+        // — renamed in round 79, WS-4), flipping to "Opened" when the recipient's client
         // reports the allowance exhausted (voDone on the doc, read back
         // by decryptDoc like every other metadata field).
         if (m.me && m.vo != null && m.status != SendStatus.FAILED) {
@@ -2328,7 +2367,7 @@ private fun RdBubbleRow(
                 )
                 Spacer(Modifier.width(4.dp))
                 Text(
-                    if (m.voDone) "Opened" else if (m.vo == 1) "View once" else "View twice",
+                    if (m.voDone) "Opened" else if (m.vo == 1) "One look" else "Two looks",
                     color = RdSub, fontSize = 11.5.sp, fontFamily = PoppinsFamily,)
             }
         }
@@ -3186,6 +3225,12 @@ fun RdChatInput(
     accent: Color,
     replyText: String?,
     onClearReply: () -> Unit,
+    /** ROUND 79 (WS-2): the reply target's thumbnail (a photo, or a
+     *  video's poster) shown in the reply strip — the composer half
+     *  of the media-quote fix: you can SEE what you're answering
+     *  before you send, not just read the word "Photo". Null for
+     *  text targets and unloaded media. */
+    replyThumb: android.graphics.Bitmap? = null,
     recording: Boolean,
     recSecs: Int,
     onPlus: () -> Unit,
@@ -3311,6 +3356,13 @@ fun RdChatInput(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Box(Modifier.width(3.dp).height(28.dp).clip(RoundedCornerShape(2.dp)).background(accent))
+                if (replyThumb != null) {
+                    Image(
+                        replyThumb.asImageBitmap(), null,
+                        Modifier.padding(start = 10.dp).size(36.dp).clip(RoundedCornerShape(8.dp)),
+                        contentScale = ContentScale.Crop,
+                    )
+                }
                 Column(Modifier.weight(1f).padding(horizontal = 10.dp)) {
                     Text("Replying", color = accent, fontSize = 11.sp, fontFamily = PoppinsFamily)
                     Text(replyText ?: "", color = subCol, fontSize = 13.sp, maxLines = 1, fontFamily = emojiFont)
@@ -4617,7 +4669,7 @@ private fun RdChatContent(thread: ChatThread) {
             val question = visionQuestion.ifEmpty { "What is in this photo? Describe it." }
             val targetId = visionTarget.id
             val snapshot = visionTarget.photo
-            AppState.repo.sendTextFx(threadId, v, replyQuoteLabel(visionTarget), null)
+            AppState.repo.sendReply(threadId, v, replyQuoteLabel(visionTarget), null, visionTarget.id)
             input = ""; replyTarget = null
             scope.launch { AppState.repo.setTyping(threadId, false) }
             // ROUND 71 (Fix 3): AiJobs owns the job (app scope) and
@@ -4685,7 +4737,7 @@ private fun RdChatContent(thread: ChatThread) {
         // empties — so the keyboard stays exactly where it was, open,
         // with the field still focused for the next message.
         val fx = armedFx
-        AppState.repo.sendTextFx(threadId, v, replyTarget?.let { replyQuoteLabel(it) }, fx)
+        AppState.repo.sendReply(threadId, v, replyTarget?.let { replyQuoteLabel(it) }, fx, replyTarget?.id)
         armedFx = null
         input = ""; replyTarget = null
         scope.launch { AppState.repo.setTyping(threadId, false) }
@@ -5237,6 +5289,35 @@ private fun RdChatContent(thread: ChatThread) {
                                     }
                                 },
                                 onRetry = { AppState.repo.retrySend(threadId, m.id) },
+                                // ROUND 79 (WS-2): resolve the quoted
+                                // original from the loaded window — its
+                                // thumbnail rides the quote strip, and
+                                // a tap jumps to it (paging older in if
+                                // needed) and opens its viewer. A
+                                // view-once original is NEVER opened
+                                // from here (its own bubble tap is the
+                                // only door — the quote just jumps),
+                                // and an unloaded video jumps only.
+                                quoteTarget = m.replyToId?.let { rid ->
+                                    visible.firstOrNull { it.id == rid }
+                                },
+                                onQuoteTap = {
+                                    m.replyToId?.let { rid ->
+                                        jumpToMessage(rid)
+                                        val t = visible.firstOrNull { it.id == rid }
+                                        if (t != null) {
+                                            val voGatedQ = !t.me && t.vo != null &&
+                                                !VoStore.ownerBypass(ctx)
+                                            when (t.kind) {
+                                                MsgKind.IMAGE ->
+                                                    if (!voGatedQ && t.photo != null) viewerMsg = t
+                                                MsgKind.VIDEO ->
+                                                    if (!voGatedQ && t.localPath != null) videoViewerMsg = t
+                                                else -> Unit
+                                            }
+                                        }
+                                    }
+                                },
                                 // ROUND 22 (insta port): pop only while
                                 // this tail arrival is inside its window
                                 animateIn = m.id in popFresh,
@@ -5458,6 +5539,7 @@ private fun RdChatContent(thread: ChatThread) {
                     accent = chatTheme?.accent ?: acc.first,
                     theme = chatTheme,
                     replyText = replyTarget?.let { replyQuoteLabel(it) },
+                    replyThumb = replyTarget?.photo,
                     onClearReply = { replyTarget = null },
                     recording = recording,
                     recSecs = recSecs,

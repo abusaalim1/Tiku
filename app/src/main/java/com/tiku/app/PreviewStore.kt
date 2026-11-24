@@ -107,7 +107,7 @@ object PreviewStore {
             id = "preview-request-naina",
             person = people[6],
             messages = mutableListOf(
-                msg("Hey! Loved your note ✨", time = "2h"),
+                msg("Hey! Loved your whisper ✨", time = "2h"),
                 msg("Are you around this weekend?", time = "2h"),
             ),
             unread = 2, time = "2h",
@@ -531,7 +531,7 @@ object PreviewRepo : ChatRepo {
 
     override fun sendNoteReply(id: String, text: String, noteText: String) {
         push(id, TikuMessage(UUID.randomUUID().toString(), "", MsgKind.TEXT, text, "now", me = true,
-            amps = List(22) { 8 }, replyQuote = "Note: $noteText", replyToId = "__note__",
+            amps = List(22) { 8 }, replyQuote = "Whisper: $noteText", replyToId = "__note__",
             tsMs = System.currentTimeMillis()))
         simulateReply(id)
     }

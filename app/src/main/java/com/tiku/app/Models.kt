@@ -380,6 +380,16 @@ data class NoteUi(
      *  owner's own user doc). Additive — older builds ignore it and
      *  render the plain text note. Null = no song attached. */
     val music: NoteMusic? = null,
+    // ---- ROUND 79 (appended last, same discipline) ----
+    /** WS-3: the LOCAL-DEVICE song attached to this note (Firestore
+     *  `noteSong`: a {title, mime, durSec, bytes, chunks} map on the
+     *  owner's own user doc; the audio bytes themselves live chunked
+     *  under users/{uid}/noteasset/main — see [NoteSong]). Additive —
+     *  older builds ignore it and render the plain text note, and it
+     *  is fully independent of the YouTube-shaped [music] above (that
+     *  feature stays removed; this is a different feature the owner
+     *  ordered in round 79). Null = no local song attached. */
+    val song: NoteSong? = null,
 )
 
 /** ROUND 68 (WS8): one @mention inside a note. [uid] is the mentioned
@@ -406,6 +416,29 @@ data class NoteMusic(
     val title: String = "",
     val startSec: Int = 0,
     val endSec: Int = 30,
+)
+
+/** ROUND 79 (WS-3): one song picked from the LOCAL DEVICE attached
+ *  to a note — the round-79 replacement for the removed YouTube
+ *  feature (that model above stays untouched and unrendered, per
+ *  the round-75 law). The metadata rides the owner's own user doc
+ *  as the additive `noteSong` map; the audio BYTES live in the
+ *  chunk subcollection under `users/{ownerUid}/noteasset/main`
+ *  (the theme-asset chunk shape), written with the same 700 KB
+ *  chunking as chat media. Notes are plaintext by design (the note
+ *  text itself is a plaintext field on the user doc), and the song
+ *  chunks inherit exactly that level — they are NOT wrapped in a
+ *  chat conversation key, because a note's audience is every thread
+ *  partner and no pairwise key could serve them all. [chunks] is
+ *  the live chunk count (0 while an upload is still in flight);
+ *  [bytes] is the plaintext size the 15 MB cap was enforced
+ *  against. */
+data class NoteSong(
+    val title: String = "",
+    val mime: String = "",
+    val durSec: Int = 0,
+    val bytes: Long = 0L,
+    val chunks: Int = 0,
 )
 
 /** Contact / person. In real mode, username/uid come from Firestore. */

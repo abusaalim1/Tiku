@@ -278,6 +278,19 @@ interface ChatRepo {
     fun sendTextFx(id: String, text: String, quote: String?, fx: String?) {
         sendText(id, text, quote)
     }
+    /** ROUND 79 (WS-2): a reply send that also carries the quoted
+     *  message's id — written to the doc's additive `replyToId` field
+     *  so every receiver can resolve the original message: a media
+     *  reply's quote then renders the original's thumbnail and taps
+     *  through to it (IG behaviour). Before this round the send path
+     *  carried only the quote LABEL, so a reply to a photo/video said
+     *  just "Photo"/"Video" and pointed nowhere. Default routes to
+     *  the plain effect send and drops the id, so implementers that
+     *  predate it (the preview store) keep compiling and behaving
+     *  exactly as before; the real engine overrides it. */
+    fun sendReply(id: String, text: String, quote: String?, fx: String?, replyToId: String?) {
+        sendTextFx(id, text, quote, fx)
+    }
     /** ROUND 37: send a TEXT answer authored by the in-chat AI (Tika)
      *  — the asking client posts it through the ordinary encrypted
      *  send path with the additive `ai=true` doc field, so both sides

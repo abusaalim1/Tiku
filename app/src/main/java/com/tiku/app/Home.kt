@@ -66,6 +66,7 @@ import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -83,6 +84,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.chrisbanes.haze.hazeSource
+import java.io.File
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -163,6 +165,103 @@ fun HomeScreen() {
     val threads by AppState.threads.collectAsState()
     val blocked by AppState.blockedUids.collectAsState()
     var noteTarget by remember { mutableStateOf<NoteTarget?>(null) }
+    // ---- ROUND 79 (WS-3): the note's local song, host-owned ----
+    // The staged pick (copied into cache, not yet shared), the
+    // explicit-remove flag, and the playback state for whichever
+    // note sheet is open. The player is the chat voice-note player
+    // (local files only); a partner's song is downloaded on first
+    // play via FirebaseEngine.fetchNoteSong.
+    var noteSongPick by remember { mutableStateOf<File?>(null) }
+    var noteSongPickTitle by remember { mutableStateOf("") }
+    var noteSongPickMime by remember { mutableStateOf("") }
+    var noteSongPickDur by remember { mutableIntStateOf(0) }
+    var noteSongRemoved by remember { mutableStateOf(false) }
+    var noteSongPlaying by remember { mutableStateOf(false) }
+    val noteSongPlayer = remember { VoicePlayer() }
+    val noteSongScope = rememberCoroutineScope()
+    LaunchedEffect(noteTarget) {
+        if (noteTarget == null) {
+            noteSongPlayer.stop()
+            noteSongPlaying = false
+            noteSongPick = null
+            noteSongRemoved = false
+        }
+    }
+    fun toggleNoteSong(ownerUid: String) {
+        if (noteSongPlaying) {
+            noteSongPlayer.stop()
+            noteSongPlaying = false
+            return
+        }
+        val staged = noteSongPick
+        if (staged != null) {
+            noteSongPlaying = true
+            noteSongPlayer.toggle("note_song", staged) { noteSongPlaying = false }
+            return
+        }
+        val eng = AppState.repo as? FirebaseEngine
+        if (eng == null) {
+            AppState.toast("Songs play in the real app")
+            return
+        }
+        eng.fetchNoteSong(ownerUid) { f ->
+            if (f != null && noteTarget != null) {
+                noteSongPlaying = true
+                noteSongPlayer.toggle("note_song", f) { noteSongPlaying = false }
+            }
+        }
+    }
+    val pickNoteSong = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+        ChatSession.expectExternalActivity = false
+        if (uri == null) return@rememberLauncherForActivityResult
+        noteSongScope.launch {
+            val picked = withContext(Dispatchers.IO) {
+                runCatching {
+                    val f = File(ctx.cacheDir, "note_pick_${System.currentTimeMillis()}")
+                    val ok = ctx.contentResolver.openInputStream(uri)?.use { input ->
+                        f.outputStream().use { input.copyTo(it) }
+                        true
+                    } ?: false
+                    if (!ok) return@runCatching null
+                    val title = runCatching {
+                        ctx.contentResolver.query(
+                            uri, arrayOf(android.provider.OpenableColumns.DISPLAY_NAME),
+                            null, null, null,
+                        )?.use { c -> if (c.moveToFirst()) c.getString(0) else null }
+                    }.getOrNull()?.takeIf { it.isNotBlank() } ?: "Song"
+                    val mime = ctx.contentResolver.getType(uri) ?: "audio/mpeg"
+                    val dur = runCatching {
+                        val r = android.media.MediaMetadataRetriever()
+                        r.setDataSource(f.absolutePath)
+                        val ms = r.extractMetadata(
+                            android.media.MediaMetadataRetriever.METADATA_KEY_DURATION,
+                        )?.toLongOrNull() ?: 0L
+                        r.release()
+                        (ms / 1000).toInt()
+                    }.getOrDefault(0)
+                    Triple(f, title, mime) to dur
+                }.getOrNull()
+            }
+            if (picked == null) {
+                AppState.toast("Couldn't read that file")
+                return@launch
+            }
+            val (meta, dur) = picked
+            val (f, title, mime) = meta
+            if (f.length() > 15L * 1024 * 1024) {
+                AppState.toast("Song is too large — up to 15 MB")
+                f.delete()
+                return@launch
+            }
+            noteSongPlayer.stop()
+            noteSongPlaying = false
+            noteSongPick = f
+            noteSongPickTitle = title
+            noteSongPickMime = mime
+            noteSongPickDur = dur
+            noteSongRemoved = false
+        }
+    }
     // ROUND 52: the Archived list rides as an overlay of this shell
     // (the note sheet's pattern) — no new destination was added.
     var showArchived by remember { mutableStateOf(false) }
@@ -282,10 +381,10 @@ fun HomeScreen() {
                             hearted = false, headerAvatar = {},
                             onShare = { t ->
                                 if (t.isBlank()) AppState.toast("Write something first")
-                                else { AppState.repo.setMyNote(t); AppState.toast("Note shared") }
+                                else { AppState.repo.setMyNote(t); AppState.toast("Whisper shared") }
                                 noteTarget = null
                             },
-                            onDelete = { AppState.repo.deleteMyNote(); AppState.toast("Note deleted"); noteTarget = null },
+                            onDelete = { AppState.repo.deleteMyNote(); AppState.toast("Whisper deleted"); noteTarget = null },
                             onHeart = {},
                             onReply = {},
                             // ROUND 68 (WS8): mentions ride the note;
@@ -305,13 +404,54 @@ fun HomeScreen() {
                             onShareFull = { t, mentioned ->
                                 if (t.isBlank()) AppState.toast("Write something first")
                                 else {
-                                    (AppState.repo as? FirebaseEngine)?.setMyNoteFull(
-                                        t, mentioned, notes[myUidKey()]?.music,
-                                    ) ?: AppState.repo.setMyNote(t)
-                                    AppState.toast("Note shared")
+                                    // ROUND 79 (WS-3): the song leg of
+                                    // the share — a fresh pick uploads
+                                    // and attaches; an explicit Remove
+                                    // clears the field AND the chunks;
+                                    // otherwise the stored song passes
+                                    // through untouched (the round-75
+                                    // pass-through law, now for both
+                                    // song kinds).
+                                    val eng = AppState.repo as? FirebaseEngine
+                                    val stored = notes[myUidKey()]
+                                    val pick = noteSongPick
+                                    when {
+                                        eng == null -> AppState.repo.setMyNote(t)
+                                        pick != null -> eng.shareNoteWithSong(
+                                            t, mentioned, stored?.music,
+                                            pick, noteSongPickTitle, noteSongPickMime, noteSongPickDur,
+                                        )
+                                        noteSongRemoved -> {
+                                            eng.setMyNoteFull(t, mentioned, stored?.music, null)
+                                            eng.removeMyNoteSongAsset()
+                                        }
+                                        else -> eng.setMyNoteFull(
+                                            t, mentioned, stored?.music, stored?.song,
+                                        )
+                                    }
+                                    AppState.toast("Whisper shared")
                                 }
                                 noteTarget = null
                             },
+                            // ROUND 79 (WS-3): the local-song surface.
+                            song = if (noteSongRemoved) null else notes[myUidKey()]?.song,
+                            songPickLabel = noteSongPick?.let {
+                                if (noteSongPickDur > 0) {
+                                    "$noteSongPickTitle · ${noteSongPickDur / 60}:${(noteSongPickDur % 60).toString().padStart(2, '0')}"
+                                } else noteSongPickTitle
+                            },
+                            onPickSong = {
+                                ChatSession.expectExternalActivity = true
+                                pickNoteSong.launch("audio/*")
+                            },
+                            onRemoveSong = {
+                                noteSongPlayer.stop()
+                                noteSongPlaying = false
+                                if (noteSongPick != null) noteSongPick = null
+                                else noteSongRemoved = true
+                            },
+                            songPlaying = noteSongPlaying,
+                            onSongToggle = { toggleNoteSong(myUidKey()) },
                         )
                         is NoteTarget.Peer -> {
                             val person = nt.thread.person
@@ -337,9 +477,14 @@ fun HomeScreen() {
                                 },
                                 // ROUND 68 (WS8): render the note's
                                 // mentions highlighted. ROUND 75 (WS4):
-                                // a stored song is no longer rendered or
-                                // played — the note shows as a plain note.
+                                // a stored YouTube song is no longer
+                                // rendered or played. ROUND 79 (WS-3):
+                                // the LOCAL song below IS rendered and
+                                // played — a different feature.
                                 mentions = note?.mentions ?: emptyList(),
+                                song = note?.song,
+                                songPlaying = noteSongPlaying,
+                                onSongToggle = { toggleNoteSong(person.uid) },
                             )
                         }
                     }
@@ -472,10 +617,11 @@ internal fun MessagesScreen(
                 item {
                     val myNote = notes[myUidKey()]
                     NoteItem(
-                        "Your note", myNote?.text ?: "Share a thought", myNote == null,
+                        "Your whisper", myNote?.text ?: "Share a thought", myNote == null,
                         heart = false, idx = 0,
                         onClick = { onNote(NoteTarget.Me) },
                         avatar = { AvMe(58) },
+                        song = myNote?.song != null,
                     )
                 }
                 itemsIndexed(notedThreads) { idx, th ->
@@ -485,6 +631,7 @@ internal fun MessagesScreen(
                         heart = myUidKey() in (n?.hearts ?: emptySet()), idx = idx + 1,
                         onClick = { onNote(NoteTarget.Peer(th)) },
                         avatar = { Av(th.person, 58) },
+                        song = n?.song != null,
                     )
                 }
             }
@@ -1437,16 +1584,16 @@ fun OwnerSection(
     // other account keeps the normal limits and never sees this row.
     var voUnlimited by remember { mutableStateOf(VoStore.unlimited(ctx)) }
     ToggleRow(
-        "View once media — unlimited for me",
-        "Photos and videos sent to you as view once or twice never run out of views on this phone — only for your account",
+        "One-look media — unlimited for me",
+        "Photos and videos sent to you as one-look or two-looks never run out of views on this phone — only for your account",
         voUnlimited,
     ) {
         val on = !voUnlimited
         VoStore.setUnlimited(ctx, on)
         voUnlimited = on
         AppState.toast(
-            if (on) "View once media is unlimited for you"
-            else "View once limits apply to you again",
+            if (on) "One-look media is unlimited for you"
+            else "One-look limits apply to you again",
         )
     }
     // ROUND 33 — GHOST READ: while this is on, opening a chat marks

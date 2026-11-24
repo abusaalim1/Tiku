@@ -84,6 +84,29 @@ internal fun seenGatePasses(
     foreground && unlocked && chatId in openIds &&
         (screen as? Screen.Chat)?.threadId == chatId
 
+/**
+ * ROUND 79 (WS-1) — the by-id union the closed-chat rebuild
+ * ([FirebaseEngine.applyPreviewSnapshot]) applies: [pending] locals
+ * whose doc id is already in [base] are dropped (the landed /
+ * in-window copy wins), the rest join the list, and the whole list
+ * is re-sorted by tsMs. Pure + top-level so the harness can pin the
+ * merge contract directly (the Firestore-driven rebuild itself
+ * cannot run headless). The open-chat rebuild
+ * ([FirebaseEngine.applyCacheToThread]) keeps its own tail
+ * semantics but selects its pending entries through the same
+ * [OutboxStore.selectPending] rule.
+ */
+internal fun mergePendingById(
+    base: List<TikuMessage>,
+    pending: List<TikuMessage>,
+): List<TikuMessage> {
+    if (pending.isEmpty()) return base
+    val have = base.mapTo(HashSet()) { it.id }
+    val extra = pending.filter { it.id !in have }
+    if (extra.isEmpty()) return base
+    return (base + extra).sortedBy { it.tsMs }
+}
+
 object FirebaseEngine : ChatRepo {
     lateinit var appCtx: Context
 
@@ -1347,7 +1370,7 @@ object FirebaseEngine : ChatRepo {
         val dmCutoff = if (SettingsStore.state.value.toggles["dm"] == true)
             System.currentTimeMillis() - 24L * 3600 * 1000 else 0L
         val existingById = th.messages.associateBy { it.id }
-        val msgs = docs.mapNotNull { d ->
+        val serverMsgs = docs.mapNotNull { d ->
             // ROUND 18: a doc whose ciphertext this device cannot open
             // (written under a retired key — e.g. the pre-reset journal's
             // chats) must still EXIST in the list. Dropping it silently
@@ -1365,6 +1388,21 @@ object FirebaseEngine : ChatRepo {
         }.filter { m ->
             !m.deletedForMe && m.tsMs >= clearedBefore && (dmCutoff == 0L || m.tsMs >= dmCutoff)
         }.sortedBy { it.tsMs }
+        // ROUND 79 (WS-1): this rebuild REPLACES the thread's list —
+        // before this round it silently dropped every staged send
+        // whose doc hadn't landed yet (the pending local is in NO
+        // server doc — that's the point of pending), which is exactly
+        // the owner's offline-send vanish on leave/re-enter and after
+        // relaunch. Pending entries now render FROM THE OUTBOX STORE,
+        // merged by doc id alongside the snapshot window: an entry
+        // already in the window (landed) or already visible wins, the
+        // rest are appended as SENDING/FAILED locals. The chat-list
+        // preview therefore shows the pending message too, and the
+        // copy survives into applyCacheToThread's tail merge when the
+        // chat is opened — no path depends on the drain having run.
+        val pendingLocals = outboxLocalsFor(id, serverMsgs.map { it.id }.toSet())
+            .filter { it.tsMs >= clearedBefore }
+        val msgs = mergePendingById(serverMsgs, pendingLocals)
         val lr = lastRead(id)
         val unread = msgs.count { !it.me && it.kind != MsgKind.CALL && it.tsMs > lr }
         AppState.threads.value = AppState.threads.value.map { t ->
@@ -1713,11 +1751,26 @@ object FirebaseEngine : ChatRepo {
                 endSec = (it["endSec"] as? Number)?.toInt()?.coerceAtLeast(0) ?: 0,
             )
         }?.takeIf { it.endSec > it.startSec }
+        // ROUND 79 (WS-3): the local-device song (additive `noteSong`
+        // map) — parsed independently of the YouTube-shaped noteMusic
+        // above; a note can carry either, both, or neither.
+        @Suppress("UNCHECKED_CAST")
+        val songMap = snap.get("noteSong") as? Map<String, Any?>
+        val song = songMap?.let {
+            val chunks = (it["chunks"] as? Number)?.toInt() ?: 0
+            if (chunks <= 0) null else NoteSong(
+                title = (it["title"] as? String).orEmpty(),
+                mime = (it["mime"] as? String).orEmpty(),
+                durSec = (it["durSec"] as? Number)?.toInt()?.coerceAtLeast(0) ?: 0,
+                bytes = (it["bytes"] as? Number)?.toLong() ?: 0L,
+                chunks = chunks,
+            )
+        }
         noteLikesByUser[ownerUid] = likes
         val fresh = text.isNotEmpty() && atMs > 0L &&
             System.currentTimeMillis() - atMs < 24L * 3600 * 1000
         if (fresh) {
-            noteBase[ownerUid] = NoteUi(ownerUid, text, hearts, atMs, mentions, music)
+            noteBase[ownerUid] = NoteUi(ownerUid, text, hearts, atMs, mentions, music, song)
         } else {
             noteBase.remove(ownerUid)
         }
@@ -2092,6 +2145,14 @@ object FirebaseEngine : ChatRepo {
         }
         openChatIds += id
         attachMessages(id)
+        // ROUND 79 (WS-1): render this thread's persisted pending
+        // sends the instant it opens — one cache+outbox merge pass
+        // now, instead of waiting for the first snapshot (which,
+        // offline, arrives from Firestore's local cache and can never
+        // contain the pending doc). applyCacheToThread's tail merge
+        // re-derives them from the outbox store by doc id.
+        msgCache.getOrPut(id) { LinkedHashMap() }
+        scope.launch { runCatching { applyCacheToThread(id) } }
         // ROUND 52: opening a chat is a reconcile point for item 5 — a
         // call that started ringing while this phone was elsewhere
         // (YouTube, shade) must surface here even if the watcher's
@@ -2279,7 +2340,20 @@ object FirebaseEngine : ChatRepo {
             } else sm
         }
         val localOnly = localsById.values.filter { it.id !in cacheIds }
-        val msgs = mergedServer.sortedBy { it.tsMs } + localOnly.sortedBy { it.tsMs }
+        // ROUND 79 (WS-1): the tail ALSO renders straight from the
+        // outbox store, merged by doc id. R78 persisted the send but
+        // left its visibility to whatever copy happened to sit in the
+        // visible list — and the preview rebuild (applyPreviewSnapshot)
+        // replaces that list with server docs only, so a pending send
+        // vanished on leave/re-enter and after relaunch (the owner's
+        // device report on 145). A staged entry whose id is neither in
+        // the server cache nor already in the tail is re-derived here,
+        // so a pending send is visible whenever its thread is —
+        // snapshot or no snapshot.
+        val tailById = LinkedHashMap<String, TikuMessage>()
+        localOnly.forEach { tailById[it.id] = it }
+        outboxLocalsFor(id, cacheIds + tailById.keys).forEach { tailById[it.id] = it }
+        val msgs = mergedServer.sortedBy { it.tsMs } + tailById.values.sortedBy { it.tsMs }
         val lr = lastRead(id)
         val older = hasOlderCache[id] ?: false
         AppState.threads.value = AppState.threads.value.map { t ->
@@ -2774,11 +2848,24 @@ object FirebaseEngine : ChatRepo {
      *  server echo — same client-chosen id, fx read back by decryptDoc —
      *  replaces it 1:1. Retry rides this same [local] through
      *  [deliverText], so a failed effect send keeps its effect. */
-    override fun sendTextFx(id: String, text: String, quote: String?, fx: String?) {
+    override fun sendTextFx(id: String, text: String, quote: String?, fx: String?) =
+        sendTextInternal(id, text, quote, fx, null)
+
+    /** ROUND 79 (WS-2): the reply-carrying send — identical staging
+     *  to [sendTextFx], with the quoted message's id on the local, so
+     *  it rides the outbox entry and lands in the doc's additive
+     *  `replyToId` field (deliverText already writes it; decryptDoc
+     *  already reads it). The id is what lets every receiver resolve
+     *  the original message for the quote thumbnail + tap-to-jump. */
+    override fun sendReply(id: String, text: String, quote: String?, fx: String?, replyToId: String?) =
+        sendTextInternal(id, text, quote, fx, replyToId)
+
+    private fun sendTextInternal(id: String, text: String, quote: String?, fx: String?, replyToId: String?) {
         val th = AppState.thread(id) ?: return
         val local = TikuMessage(
             id = newLocalId(), senderUid = uid, kind = MsgKind.TEXT, text = text,
             time = fmtTime(System.currentTimeMillis()), me = true, replyQuote = quote,
+            replyToId = replyToId,
             tsMs = System.currentTimeMillis(), status = SendStatus.SENDING,
             fx = fx?.takeIf { it in MESSAGE_FX_KINDS },
         )
@@ -3165,6 +3252,8 @@ object FirebaseEngine : ChatRepo {
     // real song or voice file a picker would offer.
     private const val VIDEO_MAX_BYTES = 64L * 1024 * 1024
     private const val AUDIO_MAX_BYTES = 32L * 1024 * 1024
+    /** ROUND 79 (WS-3): the note-song cap (the owner's "~15 MB"). */
+    private const val NOTE_SONG_MAX_BYTES = 15L * 1024 * 1024
     /** ROUND 41: a game's HTML cap — the same 200 KB the generator's
      *  validator enforces (GeminiClient.cleanGameHtml). */
     private const val GAME_MAX_BYTES = 200 * 1024
@@ -3468,8 +3557,21 @@ object FirebaseEngine : ChatRepo {
                 replyQuote = e.replyQuote, replyToId = e.replyToId,
                 fx = e.fx?.takeIf { it in MESSAGE_FX_KINDS }, ai = e.ai,
             )
+            // ROUND 79 (WS-1): a media entry whose payload file is
+            // GONE (OS purged the cache, or a photo's staging write
+            // failed) rebuilds as a FAILED placeholder instead of
+            // null — R78 returned null and the drain dropped the
+            // entry, so the send vanished without a trace. The
+            // placeholder carries the entry's metadata (duration,
+            // amps, title) so the bubble renders honestly as FAILED;
+            // the entry itself STAYS in the box (see drainOutbox), so
+            // every rebuild keeps showing it until the user deletes
+            // it or a retry succeeds.
             "image" -> {
-                val f = payloadFile() ?: return null
+                val f = payloadFile() ?: return base.copy(
+                    kind = MsgKind.IMAGE, status = SendStatus.FAILED,
+                    vo = e.vo, ai = e.ai,
+                )
                 base.copy(
                     kind = MsgKind.IMAGE, localPath = f.absolutePath,
                     photo = runCatching {
@@ -3479,14 +3581,21 @@ object FirebaseEngine : ChatRepo {
                 )
             }
             "voice" -> {
-                val f = payloadFile() ?: return null
+                val f = payloadFile() ?: return base.copy(
+                    kind = MsgKind.VOICE, status = SendStatus.FAILED,
+                    voiceDurSec = e.voiceDurSec, amps = e.amps,
+                )
                 base.copy(
                     kind = MsgKind.VOICE, localPath = f.absolutePath,
                     voiceDurSec = e.voiceDurSec, amps = e.amps,
                 )
             }
             "video" -> {
-                val f = payloadFile() ?: return null
+                val f = payloadFile() ?: return base.copy(
+                    kind = MsgKind.VIDEO, status = SendStatus.FAILED,
+                    voiceDurSec = e.voiceDurSec, mimeType = e.mimeType,
+                    vo = e.vo,
+                )
                 base.copy(
                     kind = MsgKind.VIDEO, localPath = f.absolutePath,
                     voiceDurSec = e.voiceDurSec, mimeType = e.mimeType,
@@ -3494,7 +3603,10 @@ object FirebaseEngine : ChatRepo {
                 )
             }
             "audio" -> {
-                val f = payloadFile() ?: return null
+                val f = payloadFile() ?: return base.copy(
+                    kind = MsgKind.AUDIO, status = SendStatus.FAILED,
+                    voiceDurSec = e.voiceDurSec, mimeType = e.mimeType,
+                )
                 base.copy(
                     kind = MsgKind.AUDIO, localPath = f.absolutePath,
                     voiceDurSec = e.voiceDurSec, mimeType = e.mimeType,
@@ -3502,7 +3614,10 @@ object FirebaseEngine : ChatRepo {
                 )
             }
             "game" -> {
-                val f = payloadFile() ?: return null
+                val f = payloadFile() ?: return base.copy(
+                    kind = MsgKind.GAME, status = SendStatus.FAILED,
+                    mimeType = "text/html", game = true, gameTitle = e.gameTitle,
+                )
                 base.copy(
                     kind = MsgKind.GAME, localPath = f.absolutePath,
                     mimeType = "text/html", mediaBytes = f.length(),
@@ -3511,6 +3626,26 @@ object FirebaseEngine : ChatRepo {
             }
             else -> null
         }
+    }
+
+    /** ROUND 79 (WS-1) — the RENDER half of the outbox guarantee:
+     *  rebuild the visible locals for one chat's persisted pending
+     *  sends, straight from [OutboxStore]. [present] holds the doc
+     *  ids the caller has already accounted for (the server cache,
+     *  the snapshot window, a copy already in the visible list) — an
+     *  entry whose id is present is skipped, because the landed /
+     *  in-session copy wins. Both list-building paths
+     *  ([applyCacheToThread] for the open chat, [applyPreviewSnapshot]
+     *  for every closed one) merge these in by doc id, so a pending
+     *  send renders whenever its thread's list is built — independent
+     *  of snapshot state and of whether the drain has run yet. */
+    private fun outboxLocalsFor(id: String, present: Set<String>): List<TikuMessage> {
+        if (uid.isEmpty()) return emptyList()
+        val out = ArrayList<TikuMessage>()
+        for (e in OutboxStore.selectPending(OutboxStore.all(), id, present)) {
+            rebuildOutboxLocal(e)?.let { out += it }
+        }
+        return out
     }
 
     /** ROUND 78 (WS-3) — drain the outbox (see OutboxStore): every
@@ -3543,11 +3678,11 @@ object FirebaseEngine : ChatRepo {
                 }
                 val local = rebuildOutboxLocal(e)
                 if (local == null) {
-                    // Undeliverable (payload purged): drop the entry
-                    // rather than resurrecting a bubble that can only
-                    // fail forever. The in-session FAILED bubble, if
-                    // any, is untouched — this path is for entries
-                    // whose bubble died with the process.
+                    // Unknown kind (never written by this app's send
+                    // paths): drop the entry — there is nothing honest
+                    // to render for it. Payload-purged media no longer
+                    // lands here: it rebuilds as a FAILED placeholder
+                    // and its entry stays (ROUND 79, see above).
                     OutboxStore.remove(e.msgId)
                     outboxInFlight -= e.msgId
                     continue
@@ -3555,7 +3690,7 @@ object FirebaseEngine : ChatRepo {
                 if (th.messages.none { it.id == e.msgId }) {
                     AppState.upsertMessage(e.chatId, local)
                     AppState.requestTailScroll(e.chatId, e.msgId)
-                } else {
+                } else if (local.status != SendStatus.FAILED) {
                     AppState.setMessageStatus(e.chatId, e.msgId, SendStatus.SENDING)
                 }
                 when (e.kind) {
@@ -3565,7 +3700,13 @@ object FirebaseEngine : ChatRepo {
                             runCatching { File(it).readBytes() }.getOrNull()
                         }
                         if (bytes == null) {
-                            OutboxStore.remove(e.msgId)
+                            // ROUND 79 (WS-1): the payload file is
+                            // gone — the entry STAYS in the box (R78
+                            // removed it here, erasing the last trace
+                            // of the send). The FAILED placeholder the
+                            // rebuild produced above stays visible via
+                            // the outbox render merge until the user
+                            // deletes the bubble or a retry lands.
                             AppState.setMessageStatus(e.chatId, e.msgId, SendStatus.FAILED)
                             outboxInFlight -= e.msgId
                         } else {
@@ -4444,7 +4585,11 @@ object FirebaseEngine : ChatRepo {
     }
 
     override fun setMyNote(text: String) {
-        setMyNoteFull(text, emptyList(), null)
+        // ROUND 79 (WS-3): the plain share passes the stored local
+        // song through untouched, exactly like HomeScreen passes the
+        // stored YouTube song — only the composer's explicit Remove
+        // (or a fresh upload) ever changes it.
+        setMyNoteFull(text, emptyList(), null, AppState.notes.value[uid]?.song)
     }
 
     /** ROUND 68 (WS8 + WS10): publish/replace MY note WITH its @mentions
@@ -4457,13 +4602,20 @@ object FirebaseEngine : ChatRepo {
      *  Called from HomeScreen via a cast (AppState.repo is the ChatRepo
      *  interface, which this round does not change); preview mode falls
      *  back to [setMyNote]. */
-    fun setMyNoteFull(text: String, mentions: List<NoteMention>, music: NoteMusic?) {
+    fun setMyNoteFull(text: String, mentions: List<NoteMention>, music: NoteMusic?, song: NoteSong?) {
+        // ROUND 79 (WS-3): the fourth field is the LOCAL-device song
+        // (additive `noteSong` map — see [NoteSong]); [song] = null
+        // clears it (the composer's explicit Remove, or a delete).
+        // Callers pass the currently stored song through when the
+        // share doesn't touch it, so a plain re-share never wipes an
+        // attached song.
         val t = text.trim().take(60)
         if (t.isEmpty()) { deleteMyNote(); return }
         val cleanMusic = music?.takeIf { it.videoId.isNotBlank() && it.endSec > it.startSec }
+        val cleanSong = song?.takeIf { it.chunks > 0 }
         val cleanMentions = mentions.filter { it.uid.isNotEmpty() && it.username.isNotEmpty() }
         AppState.notes.value = AppState.notes.value +
-            (uid to NoteUi(uid, t, emptySet(), System.currentTimeMillis(), cleanMentions, cleanMusic))
+            (uid to NoteUi(uid, t, emptySet(), System.currentTimeMillis(), cleanMentions, cleanMusic, cleanSong))
         scope.launch {
             runCatching {
                 db.collection(Schema.Users.COLL).document(uid).update(mapOf(
@@ -4477,6 +4629,13 @@ object FirebaseEngine : ChatRepo {
                         mapOf(
                             "videoId" to m.videoId, "title" to m.title,
                             "startSec" to m.startSec, "endSec" to m.endSec,
+                        )
+                    } ?: FieldValue.delete()),
+                    "noteSong" to (cleanSong?.let { s ->
+                        mapOf(
+                            "title" to s.title, "mime" to s.mime,
+                            "durSec" to s.durSec, "bytes" to s.bytes,
+                            "chunks" to s.chunks,
                         )
                     } ?: FieldValue.delete()),
                 )).await()
@@ -4494,8 +4653,133 @@ object FirebaseEngine : ChatRepo {
                     "noteHearts" to emptyList<String>(),
                     "noteMentions" to FieldValue.delete(),
                     "noteMusic" to FieldValue.delete(),
+                    "noteSong" to FieldValue.delete(),
                 )).await()
             }.onFailure { Log.e("TikuChat", "deleteMyNote failed", it) }
+            // ROUND 79 (WS-3): the song's chunks go with the note.
+            deleteNoteAsset()
+        }
+    }
+
+    // ================= ROUND 79 (WS-3): the note's local song =================
+    // The song's bytes live under MY OWN user doc —
+    // users/{me}/noteasset/main + its `chunks` subcollection — the
+    // theme-asset chunk shape (uploadChunksTo / downloadChunksFrom),
+    // NOT the chat pipeline: a note's audience is every thread
+    // partner, so the pairwise conversation key chat media uses
+    // could never serve them. Notes are plaintext by design (the
+    // note text is a plaintext field on this same doc), and the
+    // chunks inherit exactly that level. The noteasset parent doc
+    // carries {mime, mediaBytes, durSec, title, mediaChunks, ts}
+    // with mediaChunks written LAST (0 = still uploading), the same
+    // contract as a media message doc.
+
+    private fun noteAssetRef(ownerUid: String): com.google.firebase.firestore.DocumentReference =
+        db.collection(Schema.Users.COLL).document(ownerUid)
+            .collection("noteasset").document("main")
+
+    /** Delete my note song's parent doc + every chunk (replace,
+     *  remove and note-delete all funnel here). Best-effort: a
+     *  failure is logged, never fatal to the note write itself. */
+    private suspend fun deleteNoteAsset() {
+        runCatching {
+            val parent = noteAssetRef(uid)
+            val chunks = parent.collection("chunks").get().await()
+            var batch = db.batch()
+            var n = 0
+            for (d in chunks.documents) {
+                batch.delete(d.reference)
+                if (++n >= 400) { batch.commit().await(); batch = db.batch(); n = 0 }
+            }
+            batch.delete(parent)
+            batch.commit().await()
+        }.onFailure { Log.w("TikuChat", "deleteNoteAsset failed", it) }
+    }
+
+    /** Attach a NEW local song and share the note with it: upload
+     *  the picked file's chunks under my noteasset doc FIRST (the
+     *  parent doc lands with mediaChunks = 0, the count lands last),
+     *  then publish the note carrying the song reference. An upload
+     *  failure aborts the share with a toast — the note is never
+     *  published pointing at a song that isn't there. The cap is
+     *  15 MB (the owner's round-79 "~15 MB"): ~22 chunk docs at
+     *  700 KB — a full song, not an album. Called from HomeScreen
+     *  via the same cast as [setMyNoteFull]. */
+    fun shareNoteWithSong(
+        text: String, mentions: List<NoteMention>, music: NoteMusic?,
+        file: File, title: String, mime: String, durSec: Int,
+    ) {
+        val t = text.trim().take(60)
+        if (t.isEmpty()) { deleteMyNote(); return }
+        if (file.length() > NOTE_SONG_MAX_BYTES) {
+            AppState.toast("Song is too large — up to 15 MB")
+            return
+        }
+        scope.launch {
+            runCatching {
+                val bytes = file.readBytes()
+                deleteNoteAsset() // a replaced song's chunks never linger
+                val parent = noteAssetRef(uid)
+                parent.set(mapOf(
+                    "mime" to mime, "mediaBytes" to bytes.size.toLong(),
+                    "durSec" to durSec, "title" to title,
+                    "mediaChunks" to 0, "ts" to FieldValue.serverTimestamp(),
+                )).await()
+                val chunks = uploadChunksTo(parent, bytes)
+                parent.update("mediaChunks", chunks).await()
+                setMyNoteFull(
+                    text, mentions, music,
+                    NoteSong(
+                        title = title, mime = mime, durSec = durSec,
+                        bytes = bytes.size.toLong(), chunks = chunks,
+                    ),
+                )
+            }.onFailure {
+                Log.e("TikuChat", "note song upload failed", it)
+                AppState.toast("Couldn't upload the song — try again")
+            }
+        }
+    }
+
+    /** ROUND 79 (WS-3): the composer's explicit Remove — the chunks
+     *  behind the noteSong reference go too (the field itself is
+     *  cleared by the share write that follows the remove). */
+    fun removeMyNoteSongAsset() {
+        scope.launch { deleteNoteAsset() }
+    }
+
+    /** Download a note's song for playback (mine or a partner's):
+     *  reads the owner's noteasset doc, pulls the chunks, writes the
+     *  plaintext to the app's cache (dl_note_<owner>.<ext> — the
+     *  media cache shape) and hands the file to [onReady] (null =
+     *  failed / still uploading; a toast says which). A cached copy
+     *  whose size still matches the doc is reused with no network. */
+    fun fetchNoteSong(ownerUid: String, onReady: (File?) -> Unit) {
+        scope.launch {
+            var stillUploading = false
+            val f = runCatching {
+                val parent = noteAssetRef(ownerUid)
+                val snap = parent.get().await()
+                val chunks = (snap.getLong("mediaChunks") ?: 0L).toInt()
+                if (chunks <= 0) { stillUploading = true; return@runCatching null }
+                val mime = snap.getString("mime") ?: "audio/mpeg"
+                val size = snap.getLong("mediaBytes") ?: 0L
+                val out = File(appCtx.cacheDir, "dl_note_$ownerUid.${mediaFileExt(mime, "audio")}")
+                if (out.exists() && size > 0L && out.length() == size) return@runCatching out
+                val bytes = downloadChunksFrom(parent, chunks)
+                out.writeBytes(bytes)
+                out
+            }.getOrElse {
+                Log.e("TikuChat", "fetchNoteSong failed for $ownerUid", it)
+                null
+            }
+            if (f == null) {
+                AppState.toast(
+                    if (stillUploading) "Still uploading — try again in a moment"
+                    else "Couldn't load the song",
+                )
+            }
+            onReady(f)
         }
     }
 
@@ -4541,7 +4825,7 @@ object FirebaseEngine : ChatRepo {
         val local = TikuMessage(
             id = newLocalId(), senderUid = uid, kind = MsgKind.TEXT, text = text,
             time = fmtTime(System.currentTimeMillis()), me = true,
-            replyQuote = "Note: $noteText", replyToId = "__note__",
+            replyQuote = "Whisper: $noteText", replyToId = "__note__",
             tsMs = System.currentTimeMillis(), status = SendStatus.SENDING,
         )
         // ROUND 78 (WS-3): outbox first, like every send (see sendTextFx).

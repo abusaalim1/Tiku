@@ -155,6 +155,20 @@ object OutboxStore {
         }.getOrDefault(emptyList())
     }
 
+    /** The RENDER selection, pure (ROUND 79): the entries for
+     *  [chatId] whose doc id is NOT in [present] (the ids a list
+     *  rebuild has already accounted for — server cache, snapshot
+     *  window, or a copy already visible). Both of the engine's
+     *  list-building paths select their pending locals through this
+     *  one rule, so a staged send is re-derived from the store on
+     *  every rebuild instead of depending on a copy that some other
+     *  rebuild may have dropped. */
+    internal fun selectPending(
+        entries: List<PendingSend>,
+        chatId: String,
+        present: Set<String>,
+    ): List<PendingSend> = entries.filter { it.chatId == chatId && it.msgId !in present }
+
     /** The drain decision, pure: an entry whose message doc is
      *  already known on the server ([landedIds] — the engine passes
      *  the ids its message cache holds) is DROPPED without a resend

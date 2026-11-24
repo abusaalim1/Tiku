@@ -4012,4 +4012,366 @@ class ScreenshotsTest {
         )
         shot("101-sending-pending.png")
     }
+
+    // ---------- ROUND 79 (WS-1): pending sends render FROM THE OUTBOX ----------
+    // R78 persisted the send but left its visibility to a copy in the
+    // visible list — the closed-chat (preview) rebuild replaced that
+    // list with server docs only and the pending bubble vanished on
+    // leave/re-enter and after relaunch (owner's device report on
+    // 145). The engine now re-derives pending locals from the store
+    // on EVERY rebuild (OutboxStore.selectPending +
+    // mergePendingById). The Firestore-driven rebuilds can't run
+    // headless, so: the pure merge contract is pinned directly here,
+    // and the shots stage the device cases at the AppState level —
+    // a thread whose list does NOT contain the pending message (the
+    // post-wipe state), the outbox entry persisted, then the exact
+    // merge the engine applies on re-entry, then a recomposition.
+
+    @Test fun outboxRenderMergeR79() {
+        val entries = listOf(
+            OutboxStore.PendingSend(msgId = "p1", chatId = "cA", kind = "text", tsMs = 10L, text = "one"),
+            OutboxStore.PendingSend(msgId = "p2", chatId = "cA", kind = "text", tsMs = 20L, text = "two"),
+            OutboxStore.PendingSend(msgId = "p3", chatId = "cB", kind = "text", tsMs = 30L, text = "other chat"),
+            OutboxStore.PendingSend(msgId = "landed", chatId = "cA", kind = "text", tsMs = 40L, text = "landed"),
+        )
+        val sel = OutboxStore.selectPending(entries, "cA", setOf("landed"))
+        org.junit.Assert.assertEquals(
+            "selection keeps only this chat's unaccounted entries, in store order",
+            listOf("p1", "p2"), sel.map { it.msgId },
+        )
+        org.junit.Assert.assertEquals(
+            "everything accounted for selects nothing",
+            0, OutboxStore.selectPending(entries, "cA", setOf("p1", "p2", "landed")).size,
+        )
+        val base = listOf(
+            TikuMessage(id = "s1", tsMs = 5L, text = "server old"),
+            TikuMessage(id = "landed", tsMs = 40L, text = "landed server copy"),
+        )
+        val pending = listOf(
+            TikuMessage(id = "p2", tsMs = 20L, text = "two", status = SendStatus.SENDING),
+            TikuMessage(id = "landed", tsMs = 40L, text = "landed local copy", status = SendStatus.SENDING),
+            TikuMessage(id = "p1", tsMs = 10L, text = "one", status = SendStatus.SENDING),
+        )
+        val merged = mergePendingById(base, pending)
+        org.junit.Assert.assertEquals(
+            "merge is a by-id union sorted by ts — the landed id never doubles",
+            listOf("s1", "p1", "p2", "landed"), merged.map { it.id },
+        )
+        org.junit.Assert.assertEquals(
+            "the landed copy in the base wins over the pending copy",
+            "landed server copy", merged.first { it.id == "landed" }.text,
+        )
+        org.junit.Assert.assertSame(
+            "no pending entries returns the base untouched",
+            base, mergePendingById(base, emptyList()),
+        )
+    }
+
+    @Test fun shot102_outboxPendingSurvivesReentry() {
+        OutboxStore.clearAll()
+        try {
+            val p = PreviewStore.people.first()
+            val id = PreviewRepo.startThreadWith(p)
+            val pendTs = todayAtR78(12, 30)
+            // The persisted send (what the send path wrote at staging).
+            OutboxStore.enqueue(
+                OutboxStore.PendingSend(
+                    msgId = "r79pend", chatId = id, kind = "text",
+                    tsMs = pendTs, text = "r79 offline hello",
+                ),
+            )
+            // The thread's list as the OLD preview rebuild left it:
+            // server messages only — the pending copy is GONE (the bug).
+            AppState.updateThread(id) { th ->
+                th.messages.clear()
+                th.messages.addAll(
+                    listOf(
+                        TikuMessage(
+                            id = "r79old", senderUid = p.uid, kind = MsgKind.TEXT,
+                            text = "purana message", time = "10:00 AM",
+                            me = false, tsMs = todayAtR78(10, 0),
+                        ),
+                    ),
+                )
+            }
+            AppState.go(Screen.Chat(id))
+            frame { ChatScreen(id) }
+            composeRule.waitForIdle()
+            org.junit.Assert.assertTrue(
+                "pre-merge staging mimics the bug: the pending text is absent",
+                composeRule.onAllNodesWithText("r79 offline hello", substring = true)
+                    .fetchSemanticsNodes().isEmpty(),
+            )
+            // Re-entry: the engine's rebuild re-derives the pending
+            // local from the store (selectPending → rebuild → merge).
+            val sel = OutboxStore.selectPending(
+                OutboxStore.all(), id,
+                AppState.thread(id)?.messages?.map { it.id }?.toSet() ?: emptySet(),
+            )
+            org.junit.Assert.assertEquals(listOf("r79pend"), sel.map { it.msgId })
+            val rebuilt = sel.map { e ->
+                TikuMessage(
+                    id = e.msgId, senderUid = "me", kind = MsgKind.TEXT,
+                    text = e.text, time = "12:30 PM", me = true,
+                    tsMs = e.tsMs, status = SendStatus.SENDING,
+                )
+            }
+            AppState.updateThread(id) { th ->
+                val merged = mergePendingById(th.messages.toList(), rebuilt)
+                th.messages.clear(); th.messages.addAll(merged)
+            }
+            // Leaving and re-entering the composition must not lose it.
+            frame { ChatScreen(id) }
+            composeRule.waitForIdle()
+            org.junit.Assert.assertTrue(
+                "after re-entry the pending send renders from the outbox",
+                composeRule.onAllNodesWithText("r79 offline hello", substring = true)
+                    .fetchSemanticsNodes().isNotEmpty(),
+            )
+            org.junit.Assert.assertTrue(
+                "and it still carries the Sending… caption",
+                composeRule.onAllNodesWithText("Sending…").fetchSemanticsNodes().isNotEmpty(),
+            )
+            shot("102-outbox-pending-reentry.png")
+        } finally {
+            OutboxStore.clearAll()
+        }
+    }
+
+    @Test fun shot103_outboxPendingVoiceRenders() {
+        OutboxStore.clearAll()
+        try {
+            val p = PreviewStore.people.first()
+            val id = PreviewRepo.startThreadWith(p)
+            OutboxStore.enqueue(
+                OutboxStore.PendingSend(
+                    msgId = "r79voice", chatId = id, kind = "voice",
+                    tsMs = todayAtR78(12, 45), localPath = "/tmp/r79-voice.m4a",
+                    voiceDurSec = 7, amps = listOf(1, 5, 9, 3, 8, 2),
+                ),
+            )
+            AppState.updateThread(id) { th ->
+                th.messages.clear()
+                th.messages.addAll(
+                    listOf(
+                        TikuMessage(
+                            id = "r79old2", senderUid = p.uid, kind = MsgKind.TEXT,
+                            text = "purana message", time = "10:00 AM",
+                            me = false, tsMs = todayAtR78(10, 0),
+                        ),
+                    ),
+                )
+            }
+            val sel = OutboxStore.selectPending(
+                OutboxStore.all(), id,
+                AppState.thread(id)?.messages?.map { it.id }?.toSet() ?: emptySet(),
+            )
+            org.junit.Assert.assertEquals(listOf("r79voice"), sel.map { it.msgId })
+            val rebuilt = sel.map { e ->
+                TikuMessage(
+                    id = e.msgId, senderUid = "me", kind = MsgKind.VOICE,
+                    time = "12:45 PM", me = true, tsMs = e.tsMs,
+                    status = SendStatus.SENDING,
+                    voiceDurSec = e.voiceDurSec, amps = e.amps,
+                    localPath = e.localPath,
+                )
+            }
+            AppState.updateThread(id) { th ->
+                val merged = mergePendingById(th.messages.toList(), rebuilt)
+                th.messages.clear(); th.messages.addAll(merged)
+            }
+            AppState.go(Screen.Chat(id))
+            frame { ChatScreen(id) }
+            composeRule.waitForIdle()
+            org.junit.Assert.assertTrue(
+                "a pending voice send renders its bubble after the merge",
+                composeRule.onAllNodesWithText("0:07").fetchSemanticsNodes().isNotEmpty(),
+            )
+            org.junit.Assert.assertTrue(
+                "and it still carries the Sending… caption",
+                composeRule.onAllNodesWithText("Sending…").fetchSemanticsNodes().isNotEmpty(),
+            )
+            shot("103-outbox-pending-voice.png")
+        } finally {
+            OutboxStore.clearAll()
+        }
+    }
+
+    // ---------- ROUND 79 (WS-2): media reply quotes ----------
+    // A reply to a photo/video used to quote just the word
+    // "Photo"/"Video" and point nowhere (the send path never carried
+    // the original's id). Now the reply doc carries replyToId, the
+    // bubble's quote strip renders the original's thumbnail beside
+    // the label, and tapping the strip jumps to the original and
+    // opens its viewer.
+
+    private fun solidBitmapR79(w: Int, h: Int, color: Int): android.graphics.Bitmap {
+        val b = android.graphics.Bitmap.createBitmap(
+            w, h, android.graphics.Bitmap.Config.ARGB_8888,
+        )
+        b.eraseColor(color)
+        return b
+    }
+
+    @Test fun shot104_mediaReplyQuotePhoto() {
+        val p = PreviewStore.people.first()
+        val id = PreviewRepo.startThreadWith(p)
+        val photoBmp = solidBitmapR79(160, 120, 0xFF7A4E8F.toInt())
+        AppState.updateThread(id) { th ->
+            th.messages.clear()
+            th.messages.addAll(
+                listOf(
+                    TikuMessage(
+                        id = "r79photo", senderUid = p.uid, kind = MsgKind.IMAGE,
+                        time = "10:00 AM", me = false, tsMs = todayAtR78(10, 0),
+                        photo = photoBmp, mediaChunks = 1,
+                    ),
+                    TikuMessage(
+                        id = "r79reply", senderUid = "me", kind = MsgKind.TEXT,
+                        text = "yeh wali photo best hai", time = "10:05 AM",
+                        me = true, tsMs = todayAtR78(10, 5),
+                        replyQuote = "Photo", replyToId = "r79photo",
+                    ),
+                ),
+            )
+        }
+        AppState.go(Screen.Chat(id))
+        frame { ChatScreen(id) }
+        composeRule.waitForIdle()
+        org.junit.Assert.assertTrue(
+            "the reply renders under its media quote",
+            composeRule.onAllNodesWithText("yeh wali photo best hai", substring = true)
+                .fetchSemanticsNodes().isNotEmpty(),
+        )
+        org.junit.Assert.assertTrue(
+            "the quote strip carries the Photo label",
+            composeRule.onAllNodesWithText("Photo").fetchSemanticsNodes().isNotEmpty(),
+        )
+        shot("104-media-reply-quote-photo.png")
+        // Tapping the quote strip jumps to the original and opens
+        // the image viewer on it.
+        composeRule.onNodeWithText("Photo").performClick()
+        composeRule.waitForIdle()
+        org.junit.Assert.assertTrue(
+            "tapping the quote opens the image viewer on the original",
+            composeRule.onAllNodesWithTag("image_viewer").fetchSemanticsNodes().isNotEmpty(),
+        )
+    }
+
+    @Test fun shot105_mediaReplyQuoteVideo() {
+        val p = PreviewStore.people.first()
+        val id = PreviewRepo.startThreadWith(p)
+        val poster = solidBitmapR79(160, 200, 0xFF2E5E4E.toInt())
+        AppState.updateThread(id) { th ->
+            th.messages.clear()
+            th.messages.addAll(
+                listOf(
+                    TikuMessage(
+                        id = "r79video", senderUid = p.uid, kind = MsgKind.VIDEO,
+                        time = "11:00 AM", me = false, tsMs = todayAtR78(11, 0),
+                        photo = poster, mediaChunks = 3, voiceDurSec = 42,
+                        mediaBytes = 5_000_000L, mimeType = "video/mp4",
+                    ),
+                    TikuMessage(
+                        id = "r79replyv", senderUid = "me", kind = MsgKind.TEXT,
+                        text = "video ka ye part dekho", time = "11:05 AM",
+                        me = true, tsMs = todayAtR78(11, 5),
+                        replyQuote = "Video", replyToId = "r79video",
+                    ),
+                ),
+            )
+        }
+        AppState.go(Screen.Chat(id))
+        frame { ChatScreen(id) }
+        composeRule.waitForIdle()
+        org.junit.Assert.assertTrue(
+            "the reply renders under its video quote",
+            composeRule.onAllNodesWithText("video ka ye part dekho", substring = true)
+                .fetchSemanticsNodes().isNotEmpty(),
+        )
+        org.junit.Assert.assertTrue(
+            "the quote strip carries the Video label (its thumbnail is the poster)",
+            composeRule.onAllNodesWithText("Video").fetchSemanticsNodes().isNotEmpty(),
+        )
+        shot("105-media-reply-quote-video.png")
+    }
+
+    // ================= ROUND 79 WS-3 — the note's local song =================
+    // The NoteSheet is composed directly (the sheet is a pure
+    // function of its params; HomeScreen's picker/player wiring is
+    // device behaviour and is covered by the code path, not the
+    // harness). 106: the composer's empty state offers "Add music".
+    // 107: a staged pick shows its name + duration with a remove
+    // affordance. 108: a partner's note shows the song row with the
+    // play affordance.
+
+    @Test fun shot106_noteSongComposerEmpty() {
+        frame {
+            NoteSheet(
+                h = null, mine = true, headerName = "", note = "",
+                hearted = false, headerAvatar = {},
+                onShare = {}, onDelete = {}, onHeart = {}, onReply = {},
+                onPickSong = {}, onRemoveSong = {},
+                songPlaying = false, onSongToggle = {},
+            )
+        }
+        composeRule.waitForIdle()
+        org.junit.Assert.assertTrue(
+            "the composer offers Add music when no song is attached",
+            composeRule.onAllNodesWithText("Add music").fetchSemanticsNodes().isNotEmpty(),
+        )
+        shot("106-note-song-composer-empty.png")
+    }
+
+    @Test fun shot107_noteSongComposerStaged() {
+        frame {
+            NoteSheet(
+                h = null, mine = true, headerName = "", note = "",
+                hearted = false, headerAvatar = {},
+                onShare = {}, onDelete = {}, onHeart = {}, onReply = {},
+                songPickLabel = "Midnight Drive.mp3 · 3:24",
+                onPickSong = {}, onRemoveSong = {},
+                songPlaying = false, onSongToggle = {},
+            )
+        }
+        composeRule.waitForIdle()
+        org.junit.Assert.assertTrue(
+            "the staged pick shows its name and duration in the composer",
+            composeRule.onAllNodesWithText("Midnight Drive.mp3 · 3:24", substring = true)
+                .fetchSemanticsNodes().isNotEmpty(),
+        )
+        org.junit.Assert.assertTrue(
+            "the Add music offer is replaced while a song is staged",
+            composeRule.onAllNodesWithText("Add music").fetchSemanticsNodes().isEmpty(),
+        )
+        shot("107-note-song-composer-staged.png")
+    }
+
+    @Test fun shot108_noteSongPeerRow() {
+        frame {
+            NoteSheet(
+                h = null, mine = false, headerName = "sexxy bou",
+                note = "sunset drive wala mood", hearted = false,
+                headerAvatar = {},
+                onShare = {}, onDelete = {}, onHeart = {}, onReply = {},
+                song = NoteSong(
+                    title = "Midnight Drive.mp3", mime = "audio/mpeg",
+                    durSec = 204, bytes = 4_800_000L, chunks = 7,
+                ),
+                songPlaying = false, onSongToggle = {},
+            )
+        }
+        composeRule.waitForIdle()
+        org.junit.Assert.assertTrue(
+            "the peer note renders above its song row",
+            composeRule.onAllNodesWithText("sunset drive wala mood", substring = true)
+                .fetchSemanticsNodes().isNotEmpty(),
+        )
+        org.junit.Assert.assertTrue(
+            "the song row shows the title and duration with a play affordance",
+            composeRule.onAllNodesWithText("Midnight Drive.mp3 · 3:24", substring = true)
+                .fetchSemanticsNodes().isNotEmpty(),
+        )
+        shot("108-note-song-peer.png")
+    }
 }

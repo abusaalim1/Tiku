@@ -56,6 +56,9 @@ import androidx.compose.material.icons.filled.Email
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.KeyboardArrowRight
+import androidx.compose.material.icons.filled.MusicNote
+import androidx.compose.material.icons.filled.Pause
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Send
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Icon
@@ -86,6 +89,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -327,7 +331,7 @@ fun Divider1() = Box(Modifier.fillMaxWidth().height(1.dp).background(Color.White
 
 // ---- notes (verbatim from the file; avatar is a caller-provided slot) ----
 @Composable
-fun NoteItem(label: String, note: String, placeholder: Boolean, heart: Boolean, idx: Int, onClick: () -> Unit, avatar: @Composable () -> Unit) {
+fun NoteItem(label: String, note: String, placeholder: Boolean, heart: Boolean, idx: Int, onClick: () -> Unit, avatar: @Composable () -> Unit, song: Boolean = false) {
     val hp by rememberInfiniteTransition(label = "hp").animateFloat(1f, 1.15f, infiniteRepeatable(tween(900), RepeatMode.Reverse), label = "hp2")
     Column(Modifier.width(76.dp).rise(idx).press(onClick), horizontalAlignment = Alignment.CenterHorizontally) {
         Box(Modifier.height(50.dp).fillMaxWidth(), contentAlignment = Alignment.BottomCenter) {
@@ -340,6 +344,12 @@ fun NoteItem(label: String, note: String, placeholder: Boolean, heart: Boolean, 
                 Modifier.align(Alignment.BottomEnd).offset(x = 2.dp, y = 10.dp).graphicsLayer { scaleX = hp; scaleY = hp }.size(24.dp).clip(CircleShape).background(CardC).border(1.dp, Color.White.copy(0.15f), CircleShape),
                 contentAlignment = Alignment.Center
             ) { Icon(Icons.Filled.Favorite, null, tint = Rose, modifier = Modifier.size(13.dp)) }
+            // ROUND 79 (WS-3): a note carrying a local song gets the
+            // music badge (bottom-start, mirroring the heart badge).
+            if (song) Box(
+                Modifier.align(Alignment.BottomStart).offset(x = (-2).dp, y = 10.dp).size(24.dp).clip(CircleShape).background(CardC).border(1.dp, Color.White.copy(0.15f), CircleShape),
+                contentAlignment = Alignment.Center
+            ) { Icon(Icons.Filled.MusicNote, null, tint = Rose, modifier = Modifier.size(13.dp)) }
         }
         Box(
             Modifier.padding(top = 4.dp).size(66.dp).border(2.dp, Brush.linearGradient(listOf(Rose, Color(0xFFFFB347))), CircleShape).padding(4.dp),
@@ -376,6 +386,56 @@ private fun noteMentionAnnotated(text: String, mentions: List<NoteMention>): Ann
     }
 }
 
+/** ROUND 79 (WS-3): the note's song row — a play/pause disc (when a
+ *  toggle is wired), the song's title + duration, and an optional
+ *  remove ✕. Shared by the composer (attach state) and the viewer
+ *  (playback). */
+@Composable
+private fun NoteSongRow(
+    label: String,
+    playing: Boolean = false,
+    onToggle: (() -> Unit)? = null,
+    onRemove: (() -> Unit)? = null,
+) {
+    Row(
+        Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(CardC)
+            .border(1.dp, Color.White.copy(0.1f), RoundedCornerShape(16.dp))
+            .padding(horizontal = 12.dp, vertical = 9.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        if (onToggle != null) {
+            Box(
+                Modifier.size(34.dp).clip(CircleShape).background(Rose).press(onToggle),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    if (playing) Icons.Filled.Pause else Icons.Filled.PlayArrow, null,
+                    tint = Color.White, modifier = Modifier.size(18.dp),
+                )
+            }
+        } else {
+            Icon(Icons.Filled.MusicNote, null, tint = Rose, modifier = Modifier.size(20.dp))
+        }
+        Spacer(Modifier.width(10.dp))
+        Text(
+            label, color = Color.White, fontSize = 13.5.sp, maxLines = 1,
+            overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f),
+            fontFamily = PoppinsFamily,
+        )
+        if (onRemove != null) {
+            Box(Modifier.size(30.dp).press(onRemove), contentAlignment = Alignment.Center) {
+                Icon(Icons.Filled.Close, null, tint = Sub, modifier = Modifier.size(16.dp))
+            }
+        }
+    }
+}
+
+/** ROUND 79 (WS-3): "Title · 3:24" — the note-song row label. */
+private fun noteSongLabel(song: NoteSong): String {
+    val name = song.title.ifBlank { "Song" }
+    return if (song.durSec > 0) "$name · ${song.durSec / 60}:${(song.durSec % 60).toString().padStart(2, '0')}" else name
+}
+
 @Composable
 fun NoteSheet(
     h: HazeState?, mine: Boolean, headerName: String, note: String, hearted: Boolean,
@@ -395,6 +455,23 @@ fun NoteSheet(
      *  Firestore `noteMusic`) and HomeScreen's share write passes it
      *  through untouched, but nothing here offers, renders or plays it. */
     onShareFull: ((String, List<NoteMention>) -> Unit)? = null,
+    // ---- ROUND 79 (WS-3, all defaulted) ----
+    /** The LOCAL song attached to this note (either side may play
+     *  it; mine may also remove it). A different feature from the
+     *  removed YouTube music above — this one is a file picked from
+     *  the device. */
+    song: NoteSong? = null,
+    /** Mine only: a freshly picked song's staged label ("Title ·
+     *  3:24") — shown instead of [song] until the share lands. */
+    songPickLabel: String? = null,
+    /** Mine only: opens the system audio picker (host-owned). */
+    onPickSong: (() -> Unit)? = null,
+    /** Mine only: removes the attached / staged song. */
+    onRemoveSong: (() -> Unit)? = null,
+    /** Playback state + toggle for the attached song (the host owns
+     *  the player and the download). */
+    songPlaying: Boolean = false,
+    onSongToggle: (() -> Unit)? = null,
 ) {
     var text by remember(headerName, note) { mutableStateOf(if (mine) note else "") }
     // WS8: the mentions the editor has picked (seeded from the stored note).
@@ -423,6 +500,33 @@ fun NoteSheet(
             Box(Modifier.fillMaxWidth().clip(RoundedCornerShape(20.dp)).background(CardC).padding(16.dp)) {
                 if (text.isEmpty()) Text("What's on your mind? Type @ to mention someone", color = Sub, fontSize = 15.sp, fontFamily = PoppinsFamily)
                 BasicTextField(text, { if (it.length <= 60) text = it }, textStyle = TextStyle(fontFamily = PoppinsFamily, color = Color.White, fontSize = 15.sp), cursorBrush = SolidColor(Rose), modifier = Modifier.fillMaxWidth())
+            }
+            // ROUND 79 (WS-3): the local song — an "Add music" row
+            // when nothing is attached; the song row (play + remove)
+            // once one is attached or freshly picked.
+            if (onPickSong != null) {
+                val stagedLabel = songPickLabel
+                when {
+                    stagedLabel != null -> NoteSongRow(
+                        label = stagedLabel, playing = songPlaying,
+                        onToggle = onSongToggle, onRemove = onRemoveSong,
+                    )
+                    song != null -> NoteSongRow(
+                        label = noteSongLabel(song), playing = songPlaying,
+                        onToggle = onSongToggle, onRemove = onRemoveSong,
+                    )
+                    else -> Row(
+                        Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(CardC)
+                            .border(1.dp, Color.White.copy(0.1f), RoundedCornerShape(16.dp))
+                            .press { onPickSong() }
+                            .padding(horizontal = 12.dp, vertical = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Icon(Icons.Filled.MusicNote, null, tint = Rose, modifier = Modifier.size(20.dp))
+                        Spacer(Modifier.width(10.dp))
+                        Text("Add music", color = Color.White, fontSize = 13.5.sp, fontFamily = PoppinsFamily)
+                    }
+                }
             }
             // WS8: mention picker — appears while "@…" is being typed.
             if (mentionSuggestions.isNotEmpty()) {
@@ -472,6 +576,13 @@ fun NoteSheet(
                 modifier = Modifier.clip(RoundedCornerShape(20.dp)).background(CardC).padding(horizontal = 16.dp, vertical = 12.dp),
                 fontFamily = rememberChatFontFamily(),
             )
+            // ROUND 79 (WS-3): the note's local song — tap to play.
+            if (song != null) {
+                NoteSongRow(
+                    label = noteSongLabel(song), playing = songPlaying,
+                    onToggle = onSongToggle,
+                )
+            }
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Box(Modifier.size(46.dp).clip(CircleShape).background(Color.White.copy(0.12f)).press(onHeart), contentAlignment = Alignment.Center) {
                     Icon(
@@ -480,7 +591,7 @@ fun NoteSheet(
                     )
                 }
                 Box(Modifier.weight(1f).padding(horizontal = 10.dp).clip(RoundedCornerShape(999.dp)).background(CardC).padding(horizontal = 16.dp, vertical = 13.dp)) {
-                    if (text.isEmpty()) Text("Reply to note…", color = Sub, fontSize = 14.sp, fontFamily = PoppinsFamily)
+                    if (text.isEmpty()) Text("Reply to whisper…", color = Sub, fontSize = 14.sp, fontFamily = PoppinsFamily)
                     BasicTextField(text, { text = it }, singleLine = true, textStyle = TextStyle(fontFamily = PoppinsFamily, color = Color.White, fontSize = 14.sp), cursorBrush = SolidColor(Rose), modifier = Modifier.fillMaxWidth())
                 }
                 Box(Modifier.size(46.dp).clip(CircleShape).background(Rose).press { onReply(text) }, contentAlignment = Alignment.Center) {

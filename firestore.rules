@@ -6,6 +6,21 @@ service cloud.firestore {
     match /users/{uid} {
       allow read: if signedIn();
       allow write: if signedIn() && request.auth.uid == uid;
+
+      // ROUND 79 (WS-3): the note's local song —
+      // users/{uid}/noteasset/main + its chunks subcollection.
+      // Readable by any signed-in user (the same level as the user
+      // doc itself: a note's audience is every thread partner);
+      // writable ONLY by the owner.
+      match /noteasset/{assetId} {
+        allow read: if signedIn();
+        allow write: if signedIn() && request.auth.uid == uid;
+
+        match /chunks/{chunkId} {
+          allow read: if signedIn();
+          allow write: if signedIn() && request.auth.uid == uid;
+        }
+      }
     }
 
     match /usernames/{name} {
