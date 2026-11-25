@@ -34,7 +34,21 @@
 var player = null;
 var ready = false;
 var lastPos = 0;
+// ROUND 89 — LOAD WATCHDOG: if the IFrame API script never loads
+// (no network in the WebView, blocked request), onYouTubeIframeAPIReady
+// never fires and NOTHING else in this page reports anything — the
+// pane sat black forever with zero feedback (the owner's "kuch bhi
+// kaam nhi kr rha"). After 10 s without a ready player, report error
+// -1 through the same bridge so the app shows a visible error + Retry.
+// The app ALSO runs its own 15 s deadline (see WatchTogetherPane), so
+// a stall is surfaced even if this script never runs.
+setTimeout(function () {
+  if (!ready) {
+    try { TikuWatchNative.onError(-1); } catch (err) {}
+  }
+}, 10000);
 function onYouTubeIframeAPIReady() {
+  try {
   player = new YT.Player('player', {
     videoId: '__VIDEO_ID__',
     playerVars: { playsinline: 1, rel: 0, modestbranding: 1, fs: 0 },
@@ -53,6 +67,9 @@ function onYouTubeIframeAPIReady() {
       }
     }
   });
+  } catch (err) {
+    try { TikuWatchNative.onError(-1); } catch (e2) {}
+  }
 }
 setInterval(function () {
   if (!ready || !player) return;

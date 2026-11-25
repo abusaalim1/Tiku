@@ -403,6 +403,10 @@ internal fun RdLinkPreviewCard(
     hostColor: Color,
     onLongPress: () -> Unit,
     modifier: Modifier = Modifier,
+    // ROUND 89: when set, tapping a YouTube preview card calls this
+    // instead of opening the browser — the caller shows the "Watch
+    // together?" offer. Any other link still opens in the browser.
+    onYouTubeTap: ((String) -> Unit)? = null,
 ) {
     // Preview mode must be deterministic — no network under the harness.
     if (Config.PREVIEW_UI_ONLY) return
@@ -416,7 +420,14 @@ internal fun RdLinkPreviewCard(
         modifier.clip(shape).background(cardBg).border(1.dp, borderColor, shape)
             .pointerInput(url) {
                 detectTapGestures(
-                    onTap = { openLinkInBrowser(ctx, url) },
+                    onTap = {
+                        // ROUND 89: a YouTube card offers Watch
+                        // Together; any other card opens the browser.
+                        if (onYouTubeTap != null &&
+                            WatchSync.parseUrl(url)?.kind == WatchSync.Kind.YOUTUBE
+                        ) onYouTubeTap(url)
+                        else openLinkInBrowser(ctx, url)
+                    },
                     onLongPress = { onLongPress() },
                 )
             },

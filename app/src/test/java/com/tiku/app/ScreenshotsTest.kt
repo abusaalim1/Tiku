@@ -5917,4 +5917,176 @@ class ScreenshotsTest {
         }
     }
 
+    // ================= ROUND 89: Watch Together FIX =================
+    // Every staging below FAILS on the R87 code and PASSES on the
+    // R89 code. The pane's WebView is a Robolectric shadow here, so
+    // the player NEVER reports ready — which is exactly the stall
+    // the owner hit on his phone. On R87 that stall sat black and
+    // silent; on R89 it is visible, it times out, and it retries.
+
+    /** WS-3: while the player hasn't loaded, the pane shows a
+     *  VISIBLE loading state — never a black void. (R87 showed the
+     *  "Video plays here" placeholder hidden behind the opaque
+     *  WebView — i.e. nothing at all.) */
+    @Test fun shot133_watchLoadingState() {
+        val id = r87StageInvite(
+            me = false, sessionState = "playing",
+            joined = mapOf("host1" to true, "me" to true),
+        )
+        try {
+            AppState.go(Screen.Chat(id))
+            frame { ChatScreen(id) }
+            composeRule.waitForIdle()
+            composeRule.onNodeWithText("YouTube video")
+                .performTouchInput { click(center) }
+            composeRule.mainClock.advanceTimeBy(700)
+            composeRule.waitForIdle()
+            org.junit.Assert.assertTrue(
+                "the loading state must be visible while the player loads",
+                composeRule.onAllNodesWithText("Loading video…")
+                    .fetchSemanticsNodes().isNotEmpty(),
+            )
+            shot("133-watch-loading.png")
+        } finally {
+            WatchPartyStore.setPreview(id, null)
+        }
+    }
+
+    /** WS-3: a player that never loads times out into a visible
+     *  error with a Retry — never black forever. Advancing the test
+     *  clock 16 s fires the pane's 15 s load deadline. */
+    @Test fun shot134_watchLoadTimeoutErrorRetry() {
+        val id = r87StageInvite(
+            me = false, sessionState = "playing",
+            joined = mapOf("host1" to true, "me" to true),
+        )
+        try {
+            AppState.go(Screen.Chat(id))
+            frame { ChatScreen(id) }
+            composeRule.waitForIdle()
+            composeRule.onNodeWithText("YouTube video")
+                .performTouchInput { click(center) }
+            composeRule.mainClock.advanceTimeBy(700)
+            composeRule.waitForIdle()
+            composeRule.mainClock.advanceTimeBy(16000)
+            composeRule.waitForIdle()
+            org.junit.Assert.assertTrue(
+                "the timed-out load must name the failure",
+                composeRule.onAllNodesWithText("Couldn't load the video.")
+                    .fetchSemanticsNodes().isNotEmpty(),
+            )
+            org.junit.Assert.assertTrue(
+                "the timed-out load must offer a retry",
+                composeRule.onAllNodesWithText("Try again")
+                    .fetchSemanticsNodes().isNotEmpty(),
+            )
+            shot("134-watch-load-error-retry.png")
+        } finally {
+            WatchPartyStore.setPreview(id, null)
+        }
+    }
+
+    /** WS-3: the guest pane names the role on screen — the host
+     *  controls playback. (R87 named the role nowhere, and the
+     *  guest's play button sat dimmed like a broken button.) */
+    @Test fun shot135_watchGuestRole() {
+        val id = r87StageInvite(
+            me = false, sessionState = "playing",
+            joined = mapOf("host1" to true, "me" to true),
+        )
+        try {
+            AppState.go(Screen.Chat(id))
+            frame { ChatScreen(id) }
+            composeRule.waitForIdle()
+            composeRule.onNodeWithText("YouTube video")
+                .performTouchInput { click(center) }
+            composeRule.mainClock.advanceTimeBy(700)
+            composeRule.waitForIdle()
+            org.junit.Assert.assertTrue(
+                "the guest pane must name who controls playback",
+                composeRule.onAllNodesWithText("Host controls playback")
+                    .fetchSemanticsNodes().isNotEmpty(),
+            )
+            shot("135-watch-guest-role.png")
+        } finally {
+            WatchPartyStore.setPreview(id, null)
+        }
+    }
+
+    /** WS-3: the host pane names the host's role on screen. */
+    @Test fun shot136_watchHostRole() {
+        val id = r87StageInvite(
+            me = true, sessionState = "waiting",
+            joined = mapOf("me" to true),
+        )
+        try {
+            AppState.go(Screen.Chat(id))
+            frame { ChatScreen(id) }
+            composeRule.waitForIdle()
+            composeRule.onNodeWithText("YouTube video")
+                .performTouchInput { click(center) }
+            composeRule.mainClock.advanceTimeBy(700)
+            composeRule.waitForIdle()
+            org.junit.Assert.assertTrue(
+                "the host pane must name the host's role",
+                composeRule.onAllNodesWithText("You're the host")
+                    .fetchSemanticsNodes().isNotEmpty(),
+            )
+            shot("136-watch-host-role.png")
+        } finally {
+            WatchPartyStore.setPreview(id, null)
+        }
+    }
+
+    /** WS-3: a YouTube link sent as a plain message offers Watch
+     *  Together — tap the link, tap "Watch together", and the invite
+     *  + pane open exactly like the attach-sheet flow. (R87 sent
+     *  the tap to the external browser and never offered anything.) */
+    @Test fun shot137_watchLinkOffer() {
+        val p = PreviewStore.people.first()
+        val id = PreviewRepo.startThreadWith(p)
+        val url = "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+        AppState.updateThread(id) { th ->
+            th.messages.clear()
+            th.messages.add(
+                TikuMessage(
+                    id = "r89link1", senderUid = p.uid,
+                    kind = MsgKind.TEXT, text = url,
+                    time = "9:41 AM", me = false, tsMs = todayAtR78(9, 41),
+                ),
+            )
+        }
+        try {
+            AppState.go(Screen.Chat(id))
+            frame { ChatScreen(id) }
+            composeRule.waitForIdle()
+            composeRule.onNodeWithText(url)
+                .performTouchInput { click(center) }
+            composeRule.mainClock.advanceTimeBy(700)
+            composeRule.waitForIdle()
+            org.junit.Assert.assertTrue(
+                "tapping a YouTube link must offer Watch Together",
+                composeRule.onAllNodesWithText("Watch together?")
+                    .fetchSemanticsNodes().isNotEmpty(),
+            )
+            shot("137-watch-link-offer.png")
+            composeRule.onNodeWithText("Watch together")
+                .performTouchInput { click(center) }
+            composeRule.mainClock.advanceTimeBy(700)
+            composeRule.waitForIdle()
+            org.junit.Assert.assertTrue(
+                "accepting the offer must open the watch pane as host",
+                composeRule.onAllNodesWithText("Press play to start")
+                    .fetchSemanticsNodes().isNotEmpty(),
+            )
+            org.junit.Assert.assertTrue(
+                "the invite card must land in the thread",
+                composeRule.onAllNodesWithText("YouTube video")
+                    .fetchSemanticsNodes().isNotEmpty(),
+            )
+        } finally {
+            WatchPartyStore.setPreview(id, null)
+        }
+    }
+
 }

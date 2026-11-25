@@ -114,8 +114,58 @@ import kotlin.math.abs
 // ============================================================================
 
 /** The watch pane's height — Chat.kt grows the message list's top
- *  padding by exactly this while the pane is open. */
-internal const val WATCH_PANE_HEIGHT_DP = 264
+ *  padding by exactly this while the pane is open.
+ *  ROUND 89: 264 -> 312. The old pane left only 264 - 46 (header) -
+ *  50 (controls) = 168 dp for the video — a ~2.1:1 strip at phone
+ *  width, so a 16:9 video letterboxed hard inside a big black void
+ *  ("screen acchi nhi hai"). At 312 the video area is 216 dp, which
+ *  is 16:9 within 8% for 360-412 dp-wide phones (see
+ *  WatchPlayerFrame.isNearSixteenNine, pinned by unit test). */
+internal const val WATCH_PANE_HEIGHT_DP = 312
+
+/** ROUND 89 — the pane's fixed chrome, for the 16:9 frame math:
+ *  header row 30 dp + 2x8 dp padding = 46; controls row 34 dp +
+ *  2x8 dp padding = 50. */
+internal object WatchPlayerFrame {
+    const val HEADER_DP = 46
+    const val CONTROLS_DP = 50
+    const val LOAD_TIMEOUT_MS = 15_000L
+    fun videoHeightDp(paneHeightDp: Int): Int =
+        paneHeightDp - HEADER_DP - CONTROLS_DP
+
+    fun aspectForWidth(widthDp: Float, paneHeightDp: Int): Float =
+        widthDp / videoHeightDp(paneHeightDp).coerceAtLeast(1)
+
+    /** True when the video area is within [tolerance] of 16:9 at
+     *  [widthDp]. The old 264 dp pane fails this at every phone
+     *  width; the 312 dp pane passes it at 360-412 dp. */
+    fun isNearSixteenNine(
+        widthDp: Float, paneHeightDp: Int, tolerance: Float = 0.12f,
+    ): Boolean {
+        val aspect = aspectForWidth(widthDp, paneHeightDp)
+        val target = 16f / 9f
+        return abs(aspect - target) / target <= tolerance
+    }
+}
+
+/** ROUND 89 — the player error line, by YouTube error code (plus
+ *  -1, the load-timeout code the player page + the pane's own
+ *  deadline report when the IFrame API never loads). A failed player
+ *  must say WHY in plain words, never sit black and silent. */
+internal fun watchPlayerErrorTitle(code: Int): String = when (code) {
+    -1 -> "Couldn't load the video."
+    100 -> "This video isn't available."
+    101, 150 -> "This video can't play here — its owner doesn't allow embedding."
+    2, 5 -> "This video can't play here."
+    else -> "This video can't play here."
+}
+
+/** ROUND 89 — the second line under [watchPlayerErrorTitle]. */
+internal fun watchPlayerErrorHint(code: Int): String = when (code) {
+    100 -> "It may have been removed or made private."
+    101, 150 -> "Try another video — this one can't play inside Tik."
+    else -> "Check your connection and try again."
+}
 
 /** The chat's own dark tokens (the same values as Chat.kt's
  *  RdCard / RdRose / RdSub / RdDanger) — reused, not reinvented:
@@ -616,7 +666,14 @@ fun WatchTogetherPane(
     var playerPos by remember(msg.id) { mutableStateOf(0.0) }
     var playerDur by remember(msg.id) { mutableStateOf(0.0) }
     var loadFailed by remember(msg.id) { mutableStateOf(false) }
+    // ROUND 89: WHICH failure (YT code, or -1 = the player never
+    // loaded — script stall / deadline). Drives the plain-words
+    // error line; null = no error.
+    var playerErrorCode by remember(msg.id) { mutableStateOf<Int?>(null) }
     var webAttempt by remember(msg.id) { mutableIntStateOf(0) }
+    // ROUND 89: the web pane's own loaded flag — the loading overlay
+    // ("Loading page…") shows until the first onPageFinished.
+    var pageLoaded by remember(msg.id, webAttempt) { mutableStateOf(false) }
     var pageTitle by remember(msg.id) { mutableStateOf("") }
     var pageUrl by remember(msg.id) { mutableStateOf(msg.wpUrl) }
     var canGoBack by remember(msg.id) { mutableStateOf(false) }
@@ -644,7 +701,38 @@ fun WatchTogetherPane(
         }.getOrNull()
     }
     LaunchedEffect(msg.id, webAttempt) {
-        if (isYouTube && ytHtml == null) loadFailed = true
+        if (isYouTube && ytHtml == null) {
+            loadFailed = true
+            playerErrorCode = -1
+        }
+    }
+
+    // ROUND 89 — LOAD DEADLINE (the app-side half of the watchdog):
+    // if the player still isn't ready 15 s after this attempt started,
+    // the load has stalled (the JS watchdog in youtube_player.html
+    // fires first at 10 s when the page itself runs; this covers the
+    // cases where even that never runs). A stalled load becomes a
+    // visible error + Retry — never a black pane forever. A fresh
+    // attempt (Retry) restarts the deadline with it.
+    LaunchedEffect(msg.id, webAttempt) {
+        delay(WatchPlayerFrame.LOAD_TIMEOUT_MS)
+        if (!loadFailed && ((isYouTube && !playerReady) || (!isYouTube && !pageLoaded))) {
+            playerErrorCode = -1
+            loadFailed = true
+        }
+    }
+
+    // ROUND 89 — JOIN, AT LAST: opening the pane marks this phone
+    // joined. The R87 code defined markWatchJoined and never called
+    // it anywhere, so the guest's joined flag stayed false forever,
+    // "Both joined" could never appear, and the host waited for a
+    // join that had already happened. Idempotent (sets true); the
+    // host is already joined at creation, so this is a harmless
+    // re-assert for them.
+    LaunchedEffect(msg.id) {
+        if (myUid.isNotEmpty()) {
+            FirebaseEngine.markWatchJoined(chatId, msg.id, myUid)
+        }
     }
 
     /** Host-only publish: state change or heartbeat. Updates the
@@ -750,8 +838,11 @@ fun WatchTogetherPane(
                     }
                 }
             },
-            onErrorFn = {
-                postOnMain { loadFailed = true }
+            onErrorFn = { code ->
+                postOnMain {
+                    playerErrorCode = code
+                    loadFailed = true
+                }
             },
         )
     }
@@ -899,32 +990,18 @@ fun WatchTogetherPane(
                 Icon(Icons.Filled.Close, null, Modifier.size(18.dp), tint = Color.White)
             }
         }
-        // ---- surface: the WebView over a placeholder ----
+        // ---- surface: the WebView, with the loading overlay above it
+        // and the error state in place of it. ----
         Box(
             Modifier.fillMaxWidth().weight(1f).background(Color.Black),
             contentAlignment = Alignment.Center,
         ) {
-            // Placeholder behind the view: what the harness sees (its
-            // WebView is a shadow), and what a slow load shows until
-            // the real page covers it.
-            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                EmojiGlyph("▶️", 30.dp)
-                Spacer(Modifier.size(8.dp))
-                Text(
-                    if (isYouTube) "Video plays here" else "Page loads here",
-                    color = Color.White.copy(alpha = 0.55f), fontSize = 12.sp,
-                    fontFamily = PoppinsFamily,
-                )
-                if (!isYouTube) {
-                    Spacer(Modifier.size(4.dp))
-                    Text(
-                        watchDomain(msg.wpUrl),
-                        color = Color.White.copy(alpha = 0.4f), fontSize = 11.5.sp,
-                        maxLines = 1, overflow = TextOverflow.Ellipsis,
-                        fontFamily = PoppinsFamily,
-                    )
-                }
-            }
+            // ROUND 89: the R87 placeholder ("Video plays here") is
+            // GONE — it sat under the opaque WebView, invisible on a
+            // real phone, and it collided with the loading overlay's
+            // own text in the harness (shot 133 caught the overlap).
+            // The loading overlay below is the only pre-ready state
+            // now, and it sits ABOVE the view where it can be seen.
             if (loadFailed) {
                 Column(
                     Modifier.fillMaxSize().background(Color.Black)
@@ -933,14 +1010,15 @@ fun WatchTogetherPane(
                 ) {
                     Spacer(Modifier.weight(1f))
                     Text(
-                        if (isYouTube) "This video can't play here."
+                        if (isYouTube) watchPlayerErrorTitle(playerErrorCode ?: -1)
                         else "This page couldn't load.",
                         color = Color.White, fontSize = 14.sp,
                         fontWeight = FontWeight.SemiBold, fontFamily = InterTight,
                     )
                     Spacer(Modifier.size(6.dp))
                     Text(
-                        "Check your connection and try again.",
+                        if (isYouTube) watchPlayerErrorHint(playerErrorCode ?: -1)
+                        else "Check your connection and try again.",
                         color = WatchSub, fontSize = 12.5.sp, fontFamily = PoppinsFamily,
                     )
                     Spacer(Modifier.size(14.dp))
@@ -951,6 +1029,7 @@ fun WatchTogetherPane(
                                 indication = null,
                             ) {
                                 loadFailed = false
+                                playerErrorCode = null
                                 webAttempt++
                             }
                             .padding(horizontal = 22.dp, vertical = 10.dp),
@@ -972,9 +1051,41 @@ fun WatchTogetherPane(
                             pageTitle = title
                             pageUrl = url
                             canGoBack = back
+                            pageLoaded = true
                         },
                         onLoadError = { loadFailed = true },
                     )
+                }
+            }
+            // ROUND 89 — LOADING STATE, ABOVE the WebView (not behind
+            // it): the R87 placeholder sat UNDER the opaque WebView,
+            // so a loading player looked exactly like a dead one —
+            // pure black. This overlay is composed after the view, so
+            // it is visible while the player/page loads; it takes no
+            // clicks, so the player's own controls still receive
+            // touches through it. It vanishes the moment the player
+            // reports ready (YouTube) or the first page finishes
+            // (web). Under the harness the player never reports
+            // ready, so the loading state is what the shots show —
+            // which is the honest picture there.
+            if (!loadFailed && ((isYouTube && !playerReady) || (!isYouTube && !pageLoaded))) {
+                Column(
+                    Modifier.fillMaxSize(),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    Spacer(Modifier.weight(1f))
+                    androidx.compose.material3.CircularProgressIndicator(
+                        color = WatchRose,
+                        modifier = Modifier.size(30.dp),
+                        strokeWidth = 3.dp,
+                    )
+                    Spacer(Modifier.size(10.dp))
+                    Text(
+                        if (isYouTube) "Loading video…" else "Loading page…",
+                        color = Color.White.copy(alpha = 0.75f), fontSize = 12.5.sp,
+                        fontFamily = PoppinsFamily,
+                    )
+                    Spacer(Modifier.weight(1f))
                 }
             }
         }
@@ -984,34 +1095,52 @@ fun WatchTogetherPane(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             if (isYouTube) {
-                Box(
-                    Modifier.size(34.dp).clip(CircleShape)
-                        .background(
-                            if (isHost) WatchRose
-                            else WatchRose.copy(alpha = 0.45f),
+                // ROUND 89 — the play control: the host's is a button;
+                // the guest's is a STATUS INDICATOR, not a button. R87
+                // dimmed it to 0.45 alpha and left it clickable with
+                // only a toast — to a guest tester that reads as a
+                // broken button. Now it is full-opacity (it shows the
+                // live play/pause state) and takes no taps at all;
+                // the role line next to it says who drives playback.
+                val controlModifier = Modifier.size(34.dp).clip(CircleShape)
+                    .background(WatchRose)
+                if (isHost) {
+                    Box(
+                        controlModifier
+                            .clickable(
+                                interactionSource = remember { MutableInteractionSource() },
+                                indication = null,
+                            ) {
+                                val wv = wvHolder.value ?: return@clickable
+                                // ROUND 89: a tap before the player is
+                                // ready used to do NOTHING (silent
+                                // return) — the owner pressed play on
+                                // a black pane and nothing happened.
+                                // Now it says so.
+                                if (!playerReady) {
+                                    AppState.toast("Video is still loading…")
+                                    return@clickable
+                                }
+                                if (playerPlaying) {
+                                    wv.evaluateJavascript("window.__tikuPause()", null)
+                                } else {
+                                    wv.evaluateJavascript("window.__tikuPlay()", null)
+                                }
+                            },
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(
+                            if (playerPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow,
+                            null, Modifier.size(20.dp), tint = Color.White,
                         )
-                        .clickable(
-                            interactionSource = remember { MutableInteractionSource() },
-                            indication = null,
-                        ) {
-                            val wv = wvHolder.value ?: return@clickable
-                            if (!playerReady) return@clickable
-                            if (!isHost) {
-                                AppState.toast("Only the host can play or pause")
-                                return@clickable
-                            }
-                            if (playerPlaying) {
-                                wv.evaluateJavascript("window.__tikuPause()", null)
-                            } else {
-                                wv.evaluateJavascript("window.__tikuPlay()", null)
-                            }
-                        },
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Icon(
-                        if (playerPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow,
-                        null, Modifier.size(20.dp), tint = Color.White,
-                    )
+                    }
+                } else {
+                    Box(controlModifier, contentAlignment = Alignment.Center) {
+                        Icon(
+                            if (playerPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow,
+                            null, Modifier.size(20.dp), tint = Color.White,
+                        )
+                    }
                 }
                 Spacer(Modifier.width(10.dp))
                 if (timeText.isNotEmpty()) {
@@ -1021,6 +1150,20 @@ fun WatchTogetherPane(
                     )
                     Spacer(Modifier.width(10.dp))
                 }
+                // ROUND 89 — the role, on the screen itself: the R87
+                // pane never said who controls playback anywhere.
+                // Kept SHORT on purpose: the full "You're the host —
+                // you control playback" truncated mid-word against
+                // the join line in shot 136 — the host's working play
+                // button next to "You're the host" says the rest.
+                Text(
+                    if (isHost) "You're the host"
+                    else "Host controls playback",
+                    color = WatchSub, fontSize = 11.5.sp, maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f), fontFamily = PoppinsFamily,
+                )
+                Spacer(Modifier.width(8.dp))
             } else {
                 Box(
                     Modifier.size(34.dp).clip(CircleShape)
@@ -1050,7 +1193,10 @@ fun WatchTogetherPane(
                     modifier = Modifier.weight(1f), fontFamily = PoppinsFamily,
                 )
             }
-            Spacer(Modifier.weight(1f))
+            // ROUND 89: the YouTube branch already carries its role
+            // line at weight(1f); only the web branch needs the spacer
+            // to push the join line right.
+            if (!isYouTube) Spacer(Modifier.weight(1f))
             Text(
                 joinLine, color = WatchSub, fontSize = 11.5.sp,
                 maxLines = 1, overflow = TextOverflow.Ellipsis,
@@ -1175,6 +1321,107 @@ fun WatchUrlSheet(
                         fontWeight = FontWeight.SemiBold, fontFamily = PoppinsFamily,
                     )
                 }
+            }
+        }
+    }
+}
+
+/** ROUND 89 — the "Watch together?" offer: tapping a YouTube link
+ *  inside an ordinary text message used to fire an external browser
+ *  intent (openLinkInBrowser) — out of Tik, and never a watch
+ *  session. Now a YouTube link tap opens this sheet instead: watch
+ *  it together in sync (starts a session exactly like the
+ *  attach-sheet flow), or open it in the browser as before.
+ *  Non-YouTube links never reach this sheet — their tap still opens
+ *  the browser directly. */
+@Composable
+fun WatchLinkSheet(
+    url: String,
+    onDismiss: () -> Unit,
+    onWatchTogether: () -> Unit,
+    onOpenBrowser: () -> Unit,
+) {
+    Box(
+        Modifier.fillMaxSize().background(Color.Black.copy(0.55f))
+            .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null,
+            ) { onDismiss() },
+        contentAlignment = Alignment.Center,
+    ) {
+        Column(
+            Modifier.fillMaxWidth().padding(horizontal = 24.dp)
+                .clip(RoundedCornerShape(24.dp)).background(WatchCard)
+                .clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null,
+                ) { }
+                .padding(20.dp),
+        ) {
+            Text(
+                "Watch together?",
+                color = Color.White, fontSize = 17.sp,
+                fontWeight = FontWeight.SemiBold, fontFamily = InterTight,
+            )
+            Spacer(Modifier.size(6.dp))
+            Text(
+                "This is a YouTube video — watch it in sync with " +
+                    "your chat partner, inside Tik.",
+                color = WatchSub, fontSize = 13.sp, fontFamily = PoppinsFamily,
+            )
+            Spacer(Modifier.size(10.dp))
+            Text(
+                watchDomain(url),
+                color = Color.White.copy(alpha = 0.6f), fontSize = 12.5.sp,
+                maxLines = 1, overflow = TextOverflow.Ellipsis,
+                fontFamily = PoppinsFamily,
+            )
+            Spacer(Modifier.size(18.dp))
+            Box(
+                Modifier.fillMaxWidth().clip(RoundedCornerShape(20.dp))
+                    .background(WatchRose)
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null,
+                    ) { onWatchTogether() }
+                    .padding(vertical = 12.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    "Watch together", color = Color.White, fontSize = 14.sp,
+                    fontWeight = FontWeight.SemiBold, fontFamily = PoppinsFamily,
+                )
+            }
+            Spacer(Modifier.size(10.dp))
+            Box(
+                Modifier.fillMaxWidth().clip(RoundedCornerShape(20.dp))
+                    .background(Color.White.copy(0.08f))
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null,
+                    ) { onOpenBrowser() }
+                    .padding(vertical = 12.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    "Open in browser", color = Color.White, fontSize = 14.sp,
+                    fontWeight = FontWeight.SemiBold, fontFamily = PoppinsFamily,
+                )
+            }
+            Spacer(Modifier.size(6.dp))
+            Box(
+                Modifier.fillMaxWidth()
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null,
+                    ) { onDismiss() }
+                    .padding(vertical = 10.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    "Cancel", color = WatchSub, fontSize = 14.sp,
+                    fontWeight = FontWeight.SemiBold, fontFamily = PoppinsFamily,
+                )
             }
         }
     }

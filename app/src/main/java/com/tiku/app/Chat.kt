@@ -880,6 +880,10 @@ private fun RdTimedText(
     fontFamily: FontFamily?,
     timeColor: Color,
     showTicks: Boolean,
+    // ROUND 89: when set, tapping a YouTube link calls this instead
+    // of opening the browser — the caller shows the "Watch together?"
+    // offer for the URL. Any other link still opens in the browser.
+    onYouTubeLink: ((String) -> Unit)? = null,
 ) {
     var anchor by remember(m.id, text, fontSize) { mutableStateOf<RdTimeAnchor?>(null) }
     val onLayout: (TextLayoutResult) -> Unit = { lr ->
@@ -911,7 +915,17 @@ private fun RdTimedText(
                         detectTapGestures(onTap = { pos ->
                             val off = layout?.getOffsetForPosition(pos) ?: return@detectTapGestures
                             annotated.getStringAnnotations(LINK_ANNOTATION, off, off)
-                                .firstOrNull()?.let { openLinkInBrowser(ctx, it.item) }
+                                .firstOrNull()?.let { ann ->
+                                    // ROUND 89: a YouTube link offers
+                                    // Watch Together instead of leaving
+                                    // Tik for the browser; any other
+                                    // link still opens in the browser.
+                                    if (onYouTubeLink != null &&
+                                        WatchSync.parseUrl(ann.item)?.kind ==
+                                            WatchSync.Kind.YOUTUBE
+                                    ) onYouTubeLink(ann.item)
+                                    else openLinkInBrowser(ctx, ann.item)
+                                }
                         })
                     },
                 )
@@ -1970,6 +1984,10 @@ private fun RdBubbleRow(
      *  not tappable. */
     quoteTarget: TikuMessage? = null,
     onQuoteTap: () -> Unit = {},
+    /** ROUND 89: tapping a YouTube link inside this bubble offers
+     *  Watch Together — the caller (ChatScreen) opens the offer
+     *  sheet for the URL. Null = links open in the browser. */
+    onYouTubeLink: ((String) -> Unit)? = null,
 ) {
     val scope = rememberCoroutineScope()
     // ROUND 26: this bubble's text colour under the theme (on Default
@@ -2290,6 +2308,10 @@ private fun RdBubbleRow(
                                             fontFamily = emojiFont,
                                             timeColor = bubbleText.copy(alpha = 0.65f),
                                             showTicks = true,
+                                            // ROUND 89: a YouTube link in
+                                            // this bubble offers Watch
+                                            // Together (see onYouTubeLink).
+                                            onYouTubeLink = onYouTubeLink,
                                         )
                                         if (msgLink != null) {
                                             Spacer(Modifier.height(8.dp))
@@ -2301,6 +2323,10 @@ private fun RdBubbleRow(
                                                 descColor = bubbleText.copy(alpha = 0.72f),
                                                 hostColor = bubbleText.copy(alpha = 0.55f),
                                                 onLongPress = onMenu,
+                                                // ROUND 89: same YouTube
+                                                // -> Watch Together offer
+                                                // as the link text above.
+                                                onYouTubeTap = onYouTubeLink,
                                             )
                                         }
                                         // ROUND 63: no time row here —
@@ -2773,6 +2799,9 @@ private fun RdAiBubbleRow(
     textSp: Float,
     onMenu: () -> Unit,
     onOpenImage: (TikuMessage) -> Unit,
+    /** ROUND 89: same YouTube -> Watch Together offer as the
+     *  ordinary bubble (see RdBubbleRow.onYouTubeLink). */
+    onYouTubeLink: ((String) -> Unit)? = null,
 ) {
     Column(Modifier.fillMaxWidth()) {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -2838,6 +2867,9 @@ private fun RdAiBubbleRow(
                     fontSize = textSp.sp, fontFamily = rememberChatFontFamily(),
                     timeColor = aiInk.copy(alpha = 0.6f),
                     showTicks = false,
+                    // ROUND 89: same YouTube -> Watch Together offer
+                    // as the ordinary text bubble.
+                    onYouTubeLink = onYouTubeLink,
                 )
                 if (aiLink != null) {
                     Spacer(Modifier.height(8.dp))
@@ -2849,6 +2881,9 @@ private fun RdAiBubbleRow(
                         descColor = aiInk.copy(alpha = 0.72f),
                         hostColor = aiInk.copy(alpha = 0.55f),
                         onLongPress = onMenu,
+                        // ROUND 89: same YouTube -> Watch Together
+                        // offer as the ordinary text bubble.
+                        onYouTubeTap = onYouTubeLink,
                     )
                 }
                 // ROUND 63: no time row here — the time rides in
@@ -4139,6 +4174,9 @@ private fun RdChatContent(thread: ChatThread) {
     var watchMsg by remember(threadId) { mutableStateOf<TikuMessage?>(null) }
     /** ROUND 87: the URL entry sheet is open. */
     var watchUrlOpen by remember(threadId) { mutableStateOf(false) }
+    /** ROUND 89: a YouTube link tapped in a plain message — the
+     *  "Watch together?" offer sheet is open for this URL. */
+    var watchLinkUrl by remember(threadId) { mutableStateOf<String?>(null) }
     /** ROUND 87: the id of the invite whose send just landed — the
      *  pane opens on it once the message is in the thread. */
     var pendingWatchMsgId by remember(threadId) { mutableStateOf<String?>(null) }
@@ -5696,6 +5734,9 @@ private fun RdChatContent(thread: ChatThread) {
                                 m = m, theme = chatTheme, textSp = textSp,
                                 onMenu = { menuMsg = m },
                                 onOpenImage = { vm -> viewerMsg = vm },
+                                // ROUND 89: a YouTube link in Tika's
+                                // bubble offers Watch Together too.
+                                onYouTubeLink = { watchLinkUrl = it },
                             )
                             else -> RdBubbleRow(
                                 i = idx,
@@ -5841,6 +5882,9 @@ private fun RdChatContent(thread: ChatThread) {
                                 },
                                 // ROUND 24: bubble anchor for fx playback
                                 onBubblePositioned = { a -> fxAnchorMap[m.id] = a },
+                                // ROUND 89: a YouTube link in this bubble
+                                // offers Watch Together (see watchLinkUrl).
+                                onYouTubeLink = { watchLinkUrl = it },
                             )
                         }
                         // ROUND 18 — "Seen" / "Sent" caption (IG-style)
@@ -6949,6 +6993,30 @@ private fun RdChatContent(thread: ChatThread) {
                         threadId, url,
                         latestWatchMsg?.id?.takeIf { watchSession?.active == true },
                     ) { msgId -> pendingWatchMsgId = msgId }
+                },
+            )
+        }
+
+        // ---- ROUND 89: the link -> Watch Together offer (topmost) ----
+        // A YouTube link tapped in a plain message lands here instead
+        // of the external browser. "Watch together" starts a session
+        // exactly like the attach-sheet flow above (same repo call,
+        // same pane-on-land); "Open in browser" keeps the old tap.
+        if (watchLinkUrl != null) {
+            val offerUrl = watchLinkUrl!!
+            WatchLinkSheet(
+                url = offerUrl,
+                onDismiss = { watchLinkUrl = null },
+                onWatchTogether = {
+                    watchLinkUrl = null
+                    AppState.repo.sendWatchParty(
+                        threadId, offerUrl,
+                        latestWatchMsg?.id?.takeIf { watchSession?.active == true },
+                    ) { msgId -> pendingWatchMsgId = msgId }
+                },
+                onOpenBrowser = {
+                    watchLinkUrl = null
+                    openLinkInBrowser(ctx, offerUrl)
                 },
             )
         }

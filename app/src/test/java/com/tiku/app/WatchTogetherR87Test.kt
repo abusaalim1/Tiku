@@ -336,4 +336,86 @@ class WatchTogetherR87Test {
         assertEquals(95.0, target, 0.001)
         assertTrue(abs(target) < 600.0)
     }
+
+    // ================= ROUND 89: Watch Together FIX =================
+    // Each test below FAILS on the R87 code and PASSES on the R89
+    // code — they pin the exact defects the owner hit on his phone
+    // (see round89-PLAN.md Step 1):
+    //  - the player frame was ~2.1:1, not 16:9 (264 dp pane);
+    //  - a stalled player load had no error text at all (no code
+    //    mapping, no timeout code);
+    //  - a YouTube link in a plain message had no Watch Together
+    //    offer (the tap went to the external browser).
+
+    @Test fun r89PlayerFrameIsSixteenNine() {
+        // The R87 pane (264 dp) fails this at every phone width:
+        // 264 - 46 - 50 = 168 dp of video at ~360 dp wide is 2.14:1.
+        assertFalse(WatchPlayerFrame.isNearSixteenNine(360f, 264))
+        assertFalse(WatchPlayerFrame.isNearSixteenNine(393f, 264))
+        // The R89 pane (312 dp) leaves 216 dp of video: 16:9 within
+        // 8% at 360-412 dp-wide phones.
+        assertEquals(216, WatchPlayerFrame.videoHeightDp(WATCH_PANE_HEIGHT_DP))
+        assertTrue(WatchPlayerFrame.isNearSixteenNine(360f, WATCH_PANE_HEIGHT_DP))
+        assertTrue(WatchPlayerFrame.isNearSixteenNine(393f, WATCH_PANE_HEIGHT_DP))
+        assertTrue(WatchPlayerFrame.isNearSixteenNine(412f, WATCH_PANE_HEIGHT_DP))
+        // The deadline the pane enforces on a stalled load.
+        assertEquals(15_000L, WatchPlayerFrame.LOAD_TIMEOUT_MS)
+    }
+
+    @Test fun r89PlayerErrorTitlesNameTheFailure() {
+        // -1 is the load-timeout code (JS watchdog + pane deadline):
+        // the R87 pane had no code mapping at all, so a stalled load
+        // showed nothing — now it names the failure in plain words.
+        assertEquals("Couldn't load the video.", watchPlayerErrorTitle(-1))
+        assertEquals(
+            "Check your connection and try again.",
+            watchPlayerErrorHint(-1),
+        )
+        assertEquals("This video isn't available.", watchPlayerErrorTitle(100))
+        assertEquals(
+            "It may have been removed or made private.",
+            watchPlayerErrorHint(100),
+        )
+        assertEquals(
+            "This video can't play here — its owner doesn't allow embedding.",
+            watchPlayerErrorTitle(101),
+        )
+        assertEquals(
+            "This video can't play here — its owner doesn't allow embedding.",
+            watchPlayerErrorTitle(150),
+        )
+        assertEquals(
+            "Try another video — this one can't play inside Tik.",
+            watchPlayerErrorHint(150),
+        )
+        assertEquals("This video can't play here.", watchPlayerErrorTitle(2))
+        assertEquals("This video can't play here.", watchPlayerErrorTitle(5))
+        assertEquals("This video can't play here.", watchPlayerErrorTitle(999))
+    }
+
+    @Test fun r89YouTubeLinksOfferWatchTogether() {
+        // The link-tap offer fires exactly for YouTube videos (every
+        // share shape) and never for a plain web page — the R87 tap
+        // sent every link to the external browser instead.
+        for (url in listOf(
+            "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+            "https://youtu.be/dQw4w9WgXcQ?si=abc123",
+            "https://www.youtube.com/shorts/dQw4w9WgXcQ",
+            "https://m.youtube.com/watch?v=dQw4w9WgXcQ",
+        )) {
+            assertEquals(
+                "offer expected for $url",
+                WatchSync.Kind.YOUTUBE,
+                WatchSync.parseUrl(url)?.kind,
+            )
+        }
+        assertEquals(
+            WatchSync.Kind.WEB,
+            WatchSync.parseUrl("https://example.com/a-nice-article")?.kind,
+        )
+        assertEquals(
+            WatchSync.Kind.WEB,
+            WatchSync.parseUrl("https://www.youtube.com/")?.kind,
+        )
+    }
 }
