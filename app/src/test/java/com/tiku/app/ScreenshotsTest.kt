@@ -5635,4 +5635,217 @@ class ScreenshotsTest {
         vf.delete()
     }
 
+    // ================= ROUND 87: Watch Together =================
+    // WS-1/WS-2: the invite card, the watch pane (player chrome +
+    // chat below), the guest-joined state, and the in-app browser.
+    // The pane's WebView is a Robolectric shadow here — the Compose
+    // chrome + placeholder carry the shots; real playback is a
+    // device-only remainder (see the round-87 report).
+
+    /** Stage a 1:1 thread holding one watch invite + its session.
+     *  [me] = I am the host; otherwise the partner is. The session
+     *  is staged through WatchPartyStore.setPreview (the store's
+     *  watch() never overwrites a staged session — see the store). */
+    private fun r87StageInvite(
+        me: Boolean = false,
+        kind: String = "youtube",
+        sessionState: String = "waiting",
+        joined: Map<String, Boolean> = mapOf("host1" to true),
+    ): String {
+        val p = PreviewStore.people.first()
+        val id = PreviewRepo.startThreadWith(p)
+        val url = if (kind == "youtube") "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+        else "https://example.com/a-nice-article"
+        AppState.updateThread(id) { th ->
+            th.messages.clear()
+            th.messages.add(
+                TikuMessage(
+                    id = "r87wp1", senderUid = if (me) "me" else p.uid,
+                    kind = MsgKind.TEXT, text = "Watch together 🎬\n$url",
+                    time = "9:41 AM", me = me, tsMs = todayAtR78(9, 41),
+                    watchparty = true, wpUrl = url,
+                    wpVideoId = if (kind == "youtube") "dQw4w9WgXcQ" else "",
+                    wpKind = kind,
+                ),
+            )
+        }
+        WatchPartyStore.setPreview(
+            id, WatchSession(
+                id = "r87wp1", url = url,
+                videoId = if (kind == "youtube") "dQw4w9WgXcQ" else "",
+                kind = kind, hostUid = if (me) "me" else p.uid,
+                state = sessionState, joined = joined, inviteMsgId = "r87wp1",
+            ),
+        )
+        return id
+    }
+
+    /** WS-1: a guest invite renders as the cream card — "Watch
+     *  together" + the video title + the tap-to-join line — never
+     *  the raw link. */
+    @Test fun shot127_watchInviteCard() {
+        val id = r87StageInvite(me = false)
+        try {
+            AppState.go(Screen.Chat(id))
+            frame { ChatScreen(id) }
+            composeRule.waitForIdle()
+            composeRule.onNodeWithText("Watch together").assertIsDisplayed()
+            composeRule.onNodeWithText("YouTube video").assertIsDisplayed()
+            org.junit.Assert.assertTrue(
+                "a guest invite must carry the tap-to-join line",
+                composeRule.onAllNodesWithText("invited you to watch", substring = true)
+                    .fetchSemanticsNodes().isNotEmpty(),
+            )
+            shot("127-watch-invite-card.png")
+        } finally {
+            WatchPartyStore.setPreview(id, null)
+        }
+    }
+
+    /** WS-2: tapping the invite opens the pane — player chrome on
+     *  top, the SAME thread + composer below it (never a second
+     *  chat, never an outside browser). The card tap uses
+     *  detectTapGestures, so the double-tap window is flushed first
+     *  (the shot119 pattern). */
+    @Test fun shot128_watchScreenPlayerChat() {
+        val id = r87StageInvite(
+            me = false, sessionState = "playing",
+            joined = mapOf("host1" to true, "me" to true),
+        )
+        try {
+            AppState.go(Screen.Chat(id))
+            frame { ChatScreen(id) }
+            composeRule.waitForIdle()
+            composeRule.onNodeWithText("YouTube video")
+                .performTouchInput { click(center) }
+            composeRule.mainClock.advanceTimeBy(700)
+            composeRule.waitForIdle()
+            org.junit.Assert.assertTrue(
+                "tapping the invite must open the watch pane",
+                composeRule.onAllNodesWithText("Playing together")
+                    .fetchSemanticsNodes().isNotEmpty(),
+            )
+            org.junit.Assert.assertTrue(
+                "both partners joined must show in the pane",
+                composeRule.onAllNodesWithText("Both joined")
+                    .fetchSemanticsNodes().isNotEmpty(),
+            )
+            org.junit.Assert.assertTrue(
+                "the chat thread stays below the player",
+                composeRule.onAllNodesWithTag("message_list")
+                    .fetchSemanticsNodes().isNotEmpty(),
+            )
+            org.junit.Assert.assertTrue(
+                "the composer stays usable while watching",
+                composeRule.onAllNodesWithTag("composer_camera")
+                    .fetchSemanticsNodes().isNotEmpty(),
+            )
+            shot("128-watch-screen-player-chat.png")
+        } finally {
+            WatchPartyStore.setPreview(id, null)
+        }
+    }
+
+    /** WS-1: the host's pane with the guest joined — "Both joined"
+     *  plus the host-only End control. */
+    @Test fun shot129_watchGuestJoined() {
+        val p = PreviewStore.people.first()
+        val id = r87StageInvite(
+            me = true, sessionState = "playing",
+            joined = mapOf("me" to true, p.uid to true),
+        )
+        try {
+            AppState.go(Screen.Chat(id))
+            frame { ChatScreen(id) }
+            composeRule.waitForIdle()
+            composeRule.onNodeWithText("YouTube video")
+                .performTouchInput { click(center) }
+            composeRule.mainClock.advanceTimeBy(700)
+            composeRule.waitForIdle()
+            org.junit.Assert.assertTrue(
+                "the host pane must show the guest joined",
+                composeRule.onAllNodesWithText("Both joined")
+                    .fetchSemanticsNodes().isNotEmpty(),
+            )
+            org.junit.Assert.assertTrue(
+                "the host pane must offer End",
+                composeRule.onAllNodesWithText("End")
+                    .fetchSemanticsNodes().isNotEmpty(),
+            )
+            shot("129-watch-guest-joined.png")
+        } finally {
+            WatchPartyStore.setPreview(id, null)
+        }
+    }
+
+    /** WS-2: a non-YouTube link opens the in-app browser in the
+     *  same pane — the page's domain in the URL bar, the in-app
+     *  browser state line, no external intent offered. */
+    @Test fun shot130_watchInAppBrowser() {
+        val id = r87StageInvite(me = false, kind = "web")
+        try {
+            AppState.go(Screen.Chat(id))
+            frame { ChatScreen(id) }
+            composeRule.waitForIdle()
+            composeRule.onNodeWithText("example.com")
+                .performTouchInput { click(center) }
+            composeRule.mainClock.advanceTimeBy(700)
+            composeRule.waitForIdle()
+            org.junit.Assert.assertTrue(
+                "the web pane must name the in-app browser",
+                composeRule.onAllNodesWithText("In-app browser", substring = true)
+                    .fetchSemanticsNodes().isNotEmpty(),
+            )
+            org.junit.Assert.assertTrue(
+                "the web pane must show the page URL",
+                composeRule.onAllNodesWithText(
+                    "https://example.com/a-nice-article",
+                ).fetchSemanticsNodes().isNotEmpty(),
+            )
+            shot("130-watch-inapp-browser.png")
+        } finally {
+            WatchPartyStore.setPreview(id, null)
+        }
+    }
+
+    /** WS-2: the player asset itself — the local HTML the WebView
+     *  loads must define the IFrame API hook, the video-id slot,
+     *  and the native bridge. */
+    @Test fun watchYoutubeAssetLoadsR87() {
+        val html = ctx.assets.open("watch/youtube_player.html")
+            .bufferedReader().readText()
+        org.junit.Assert.assertTrue(html.contains("onYouTubeIframeAPIReady"))
+        org.junit.Assert.assertTrue(html.contains("__VIDEO_ID__"))
+        org.junit.Assert.assertTrue(html.contains("TikuWatchNative"))
+        org.junit.Assert.assertTrue(html.contains("iframe_api"))
+    }
+
+    /** WS-1: the preview send stages the invite card AND the
+     *  waiting session (host joined) and reports the landed id. */
+    @Test fun watchInviteSendR87_previewRepoStagesCardAndSession() {
+        val p = PreviewStore.people.first()
+        val id = PreviewRepo.startThreadWith(p)
+        try {
+            var landed: String? = null
+            AppState.repo.sendWatchParty(id, "https://youtu.be/dQw4w9WgXcQ", null) {
+                landed = it
+            }
+            val m = AppState.thread(id)?.messages?.firstOrNull { it.id == landed }
+            org.junit.Assert.assertNotNull("the invite must land in the thread", m)
+            org.junit.Assert.assertTrue(m!!.watchparty)
+            org.junit.Assert.assertEquals("youtube", m.wpKind)
+            org.junit.Assert.assertEquals("dQw4w9WgXcQ", m.wpVideoId)
+            org.junit.Assert.assertEquals(
+                "https://youtu.be/dQw4w9WgXcQ", m.wpUrl,
+            )
+            val s = WatchPartyStore.current(id)
+            org.junit.Assert.assertNotNull("the session must be staged", s)
+            org.junit.Assert.assertEquals("waiting", s!!.state)
+            org.junit.Assert.assertEquals("me", s.hostUid)
+            org.junit.Assert.assertTrue(s.joined["me"] == true)
+        } finally {
+            WatchPartyStore.setPreview(id, null)
+        }
+    }
+
 }

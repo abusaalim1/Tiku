@@ -374,6 +374,43 @@ object PreviewRepo : ChatRepo {
             mediaBytes = bytes.size.toLong(), game = true, gameTitle = title.take(48)))
     }
 
+    /** ROUND 87: the Watch Together invite, preview mirror — the
+     *  pushed copy carries the wp* fields so the harness renders the
+     *  invite card, and the preview session is staged in "waiting"
+     *  with the host joined, so the pane + banner render offline.
+     *  A previous preview session is ended first (the single-active
+     *  rule, same as the engine). No simulated partner reply: the
+     *  invite IS the message. */
+    override fun sendWatchParty(
+        id: String, url: String, previousSessionId: String?,
+        onLanded: (String) -> Unit,
+    ) {
+        val parsed = WatchSync.parseUrl(url) ?: return
+        val msgId = UUID.randomUUID().toString()
+        if (previousSessionId != null) {
+            val prev = WatchPartyStore.current(id)
+            if (prev != null && prev.id == previousSessionId && prev.active) {
+                WatchPartyStore.setPreview(id, WatchSync.endSession(prev))
+            }
+        }
+        push(id, TikuMessage(
+            msgId, "", MsgKind.TEXT, "Watch together 🎬\n${parsed.url}", "now",
+            me = true, tsMs = System.currentTimeMillis(),
+            watchparty = true, wpUrl = parsed.url,
+            wpVideoId = parsed.videoId ?: "",
+            wpKind = if (parsed.kind == WatchSync.Kind.YOUTUBE) "youtube" else "web",
+        ))
+        WatchPartyStore.setPreview(
+            id, WatchSession(
+                id = msgId, url = parsed.url, videoId = parsed.videoId ?: "",
+                kind = if (parsed.kind == WatchSync.Kind.YOUTUBE) "youtube" else "web",
+                hostUid = "me", state = "waiting",
+                joined = mapOf("me" to true), inviteMsgId = msgId,
+            ),
+        )
+        onLanded(msgId)
+    }
+
     override fun sendVoice(id: String, audioFile: File?, durSec: Int, amps: List<Int>) {
         push(id, TikuMessage(UUID.randomUUID().toString(), "", MsgKind.VOICE, "", "now", me = true,
             voiceDurSec = durSec, amps = amps.ifEmpty { List(22) { 8 } },

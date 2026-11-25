@@ -341,6 +341,16 @@ interface ChatRepo {
      *  that predate games (test doubles) compiling and behaving
      *  exactly as before; the real engine + preview store override it. */
     fun sendGame(id: String, html: String, title: String) {}
+    /** ROUND 87: send a Watch Together invite — [url] is the host's
+     *  pasted link (YouTube or any web page); [previousSessionId] is
+     *  the chat's currently-active session, ended as part of this
+     *  send (single-active rule); [onLanded] receives the new invite
+     *  message id once the write lands. Default no-op keeps test
+     *  doubles compiling; the real engine + preview store override it. */
+    fun sendWatchParty(
+        id: String, url: String, previousSessionId: String?,
+        onLanded: (String) -> Unit = {},
+    ) {}
     /** ROUND 14: send a reply to a partner's NOTE — a real text message in
      *  our thread whose encrypted reply-quote snapshot reads "Note: <text>"
      *  and whose doc carries replyToId "__note__" (the note sentinel).

@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<!--
+  ROUND 87 — Watch Together: the YouTube player page.
+  A local HTML asset loaded into the in-app WebView with
+  loadDataWithBaseURL("https://www.youtube.com/", ...). The video
+  streams straight from YouTube through the sanctioned IFrame API;
+  the app never downloads it. __VIDEO_ID__ is replaced by the app
+  with the video id from the shared link before loading.
+
+  The page reports to the app through the injected TikuWatchNative
+  bridge (see WatchTogether.kt):
+    onReady(durationSec)            — player ready
+    onPlayerState(state, position)  — YT state: 1 playing, 2 paused,
+                                      0 ended, 3 buffering, -1 unstarted
+    onTick(positionSec)             — 1 s position poll (drives the
+                                      host heartbeat + guest drift check)
+    onError(code)                   — YT error (2/5/100/101/150)
+  The app drives the player through window.__tikuSeek/__tikuPlay/
+  __tikuPause. No navigation ever leaves this page: the WebView
+  refuses every navigation (see buildWatchYouTubeWebView).
+-->
+<html>
+<head>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  html, body { margin: 0; padding: 0; background: #000; height: 100%; overflow: hidden; }
+  #player { position: absolute; top: 0; left: 0; width: 100%; height: 100%; }
+</style>
+</head>
+<body>
+<div id="player"></div>
+<script src="https://www.youtube.com/iframe_api"></script>
+<script>
+var player = null;
+var ready = false;
+var lastPos = 0;
+function onYouTubeIframeAPIReady() {
+  player = new YT.Player('player', {
+    videoId: '__VIDEO_ID__',
+    playerVars: { playsinline: 1, rel: 0, modestbranding: 1, fs: 0 },
+    events: {
+      onReady: function (e) {
+        ready = true;
+        try { TikuWatchNative.onReady(e.target.getDuration()); } catch (err) {}
+      },
+      onStateChange: function (e) {
+        var p = 0;
+        try { p = player.getCurrentTime(); } catch (err) {}
+        try { TikuWatchNative.onPlayerState(e.data, p); } catch (err) {}
+      },
+      onError: function (e) {
+        try { TikuWatchNative.onError(e.data); } catch (err) {}
+      }
+    }
+  });
+}
+setInterval(function () {
+  if (!ready || !player) return;
+  var p = 0;
+  try { p = player.getCurrentTime(); } catch (e) { return; }
+  if (Math.abs(p - lastPos) > 0.05) {
+    lastPos = p;
+    try { TikuWatchNative.onTick(p); } catch (e) {}
+  }
+}, 1000);
+window.__tikuSeek = function (t) {
+  if (player) { try { player.seekTo(t, true); } catch (e) {} }
+};
+window.__tikuPlay = function () {
+  if (player) { try { player.playVideo(); } catch (e) {} }
+};
+window.__tikuPause = function () {
+  if (player) { try { player.pauseVideo(); } catch (e) {} }
+};
+</script>
+</body>
+</html>

@@ -82,6 +82,15 @@ service cloud.firestore {
         allow read, write: if signedIn() && request.auth.uid in
           get(/databases/$(database)/documents/chats/$(chatId)).data.members;
       }
+
+      // ROUND 87: Watch Together session (chats/{chatId}/watchparty/{sessionId}
+      // — one doc per invite; plaintext playback metadata: url, videoId,
+      // kind, hostUid, state, positionSeconds, updatedAt, joined, hostLeft;
+      // members only, exactly like gamestate above.
+      match /watchparty/{docId} {
+        allow read, write: if signedIn() && request.auth.uid in
+          get(/databases/$(database)/documents/chats/$(chatId)).data.members;
+      }
     }
 
     match /moments/{uid} {

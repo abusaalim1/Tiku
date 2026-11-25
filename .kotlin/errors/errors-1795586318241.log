@@ -1,0 +1,5 @@
+kotlin version: 2.0.20
+error message: The daemon has terminated unexpectedly on startup attempt #1 with error code: 0. The daemon process output:
+    1. Picked up JAVA_TOOL_OPTIONS: -Djava.net.preferIPv4Stack=true -Dhttp.proxyHost=::1 -Dhttp.proxyPort=8899 -Dhttps.proxyHost=::1 -Dhttps.proxyPort=8899 -Dhttp.nonProxyHosts=localhost|127.0.0.1 -Dhttps.nonProxyHosts=localhost|127.0.0.1 -Djavax.net.ssl.trustStore=/tmp/hatch-truststore.jks -Djavax.net.ssl.trustStorePassword=changeit
+    2. Kotlin compile daemon is ready
+

@@ -54,6 +54,10 @@ import javax.crypto.SecretKey
  *       full the moment a call resolves; see Rtc.kt)
  *   chats/{chatId}/gamestate/{msgId} {json, by, updatedAt} (round 41 — the
  *       shared board state of one /babeg game message; see listenGameState)
+ *   chats/{chatId}/watchparty/{sessionId} {url, videoId, kind, hostUid,
+ *       state, positionSeconds, updatedAt, joined{uid:bool}, hostLeft,
+ *       inviteMsgId} (round 87 — one Watch Together session per invite
+ *       message; sessionId == invite message id; see listenWatchParty)
  *   moments/{uid}/items/{itemId} {quote, ts}
  */
 /** ROUND 22 — the Instagram-style send-effect kinds the `fx` message
@@ -2785,6 +2789,18 @@ object FirebaseEngine : ChatRepo {
         // so OLD builds render the fallback bubble and ignore all of this.
         val nikah = doc.getString("nk")?.takeIf { it == "invite" || it == "keepsake" }
         val nikahState = doc.getString("nkState")?.takeIf { it == "cancelled" || it == "done" }
+        // ROUND 87 — Watch Together invite (additive, same discipline
+        // as fx/vo/ai/game/nikah). Docs from older builds lack all four
+        // → false / "" → ordinary message. `wpKind` is validated to
+        // "youtube" | "web" (a YouTube id with a missing kind still
+        // reads as YouTube); the doc's kind stays "text" and its ct/iv
+        // a readable fallback line, so OLD builds render the fallback
+        // bubble and ignore all of this.
+        val watchparty = doc.getBoolean("wp") == true
+        val wpUrl = doc.getString("wpUrl") ?: ""
+        val wpVideoId = doc.getString("wpVid") ?: ""
+        val wpKind = doc.getString("wpKind")?.takeIf { it == "youtube" || it == "web" }
+            ?: if (wpVideoId.isNotEmpty()) "youtube" else "web"
         // ROUND 60 — the keepsake's certificate payload, decrypted from
         // the ADDITIVE ksCt/ksIv pair (the rqCt/rqIv pattern) under the
         // same conversation key. Failure (retired key, partial write)
@@ -3041,7 +3057,10 @@ object FirebaseEngine : ChatRepo {
             deletedForEveryone = retained,
             nikah = nikah, nikahState = nikahState, nikahKeepsake = nikahKeepsake,
             // ROUND 85 (WS-B): pending payload (see the media branch).
-            pendingDecrypt = pendingMedia)
+            pendingDecrypt = pendingMedia,
+            // ROUND 87: Watch Together invite fields (see the wp read above).
+            watchparty = watchparty, wpUrl = wpUrl,
+            wpVideoId = wpVideoId, wpKind = wpKind)
         // ROUND 33 — HIDE RECOVERY: mirror this copy into the hidden
         // registry (or drop its entry, when the doc no longer hides it
         // for me — e.g. right after an unhide lands).
@@ -3294,6 +3313,131 @@ object FirebaseEngine : ChatRepo {
             // ROUND 63: failures PROPAGATE to deliverNikahCard's retry
             // loop (marking FAILED + the toast happen there, once,
             // after the last attempt) — never swallowed per attempt.
+            throw e
+        }
+    }
+
+    /** ROUND 87 — post one Watch Together invite. [url] is the
+     *  host's pasted link (normalised by [WatchSync.parseUrl] at the
+     *  sheet — the engine re-parses defensively and refuses garbage
+     *  with a toast instead of sending it). The message is an
+     *  ordinary kind="text" send whose encrypted body is the readable
+     *  fallback line old builds render, plus the additive `wp` /
+     *  `wpUrl` / `wpVid` / `wpKind` fields; [previousSessionId] is the
+     *  chat's currently-active session (if any), ended as part of
+     *  this send — the single-active-session rule. [onLanded]
+     *  receives the new message id once the write lands (the sender
+     *  opens the watch pane on it). Like the Nikah card, this send
+     *  bypasses the outbox (no chunk payload to drain) and retries
+     *  its two writes up to 3 times — both are set()s of fixed doc
+     *  ids, so re-attempts are idempotent. */
+    override fun sendWatchParty(
+        id: String, url: String, previousSessionId: String?,
+        onLanded: (String) -> Unit,
+    ) {
+        val th = AppState.thread(id) ?: return
+        val parsed = WatchSync.parseUrl(url)
+        if (parsed == null) {
+            AppState.toast("Enter a YouTube link or a web address")
+            return
+        }
+        val fallback = "Watch together 🎬\n${parsed.url}"
+        val local = TikuMessage(
+            id = newLocalId(), senderUid = uid, kind = MsgKind.TEXT, text = fallback,
+            time = fmtTime(System.currentTimeMillis()), me = true,
+            tsMs = System.currentTimeMillis(), status = SendStatus.SENDING,
+            watchparty = true, wpUrl = parsed.url,
+            wpVideoId = parsed.videoId ?: "",
+            wpKind = if (parsed.kind == WatchSync.Kind.YOUTUBE) "youtube" else "web",
+        )
+        AppState.upsertMessage(id, local)
+        AppState.requestTailScroll(id, local.id)
+        scope.launch {
+            deliverWatchPartyCard(id, th.person.uid, local, previousSessionId, onLanded)
+        }
+    }
+
+    private suspend fun deliverWatchPartyCard(
+        id: String, peerUid: String, local: TikuMessage,
+        previousSessionId: String?, onLanded: (String) -> Unit,
+    ) {
+        var lastErr: Exception? = null
+        repeat(3) { attempt ->
+            try {
+                deliverWatchPartyCardOnce(id, peerUid, local, previousSessionId, onLanded)
+                outboxInFlight -= local.id // ROUND 78: retrySend marked it
+                return
+            } catch (e: Exception) {
+                lastErr = e
+                if (attempt < 2) delay(600L * (attempt + 1))
+            }
+        }
+        outboxInFlight -= local.id
+        Log.e("TikuSend", "watchparty invite send failed in chat $id (msg ${local.id})", lastErr)
+        AppState.setMessageStatus(id, local.id, SendStatus.FAILED)
+        AppState.toast("Couldn't send — ${sendFailureReason(lastErr ?: IllegalStateException("send failed"))}")
+    }
+
+    private suspend fun deliverWatchPartyCardOnce(
+        id: String, peerUid: String, local: TikuMessage,
+        previousSessionId: String?, onLanded: (String) -> Unit,
+    ) {
+        try {
+            ensureChatDoc(id, peerUid)
+            val key = convKeyOrNull(id, peerUid)
+                ?: throw IllegalStateException("encryption key not ready — the other person may not have finished setting up")
+            val (iv, ct) = Crypto.encryptText(key, local.text)
+            val docData = mutableMapOf<String, Any?>(
+                "senderId" to uid, "kind" to "text", "ct" to ct, "iv" to iv,
+                "ts" to FieldValue.serverTimestamp(),
+                "replyToId" to null, "rqCt" to "", "rqIv" to "",
+                "reaction" to emptyMap<String, String>(), "starredBy" to emptyList<String>(),
+                "deletedFor" to emptyList<String>(), "seenBy" to listOf(uid),
+                "durationMs" to 0, "amps" to emptyList<Int>(), "mediaChunks" to 0,
+                // ROUND 87: the additive invite fields — present ONLY
+                // on Watch Together invites (see TikuMessage.watchparty).
+                "wp" to true, "wpUrl" to local.wpUrl,
+                "wpVid" to local.wpVideoId, "wpKind" to local.wpKind,
+            )
+            msgRef(id, local.id).set(docData).await()
+            // Single-active-session rule: the previous session (if a
+            // different one) ends first; then this invite's session
+            // doc is created in "waiting" with the host joined.
+            if (!previousSessionId.isNullOrEmpty() && previousSessionId != local.id) {
+                runCatching {
+                    watchPartyRef(id, previousSessionId).update(
+                        mapOf(
+                            "state" to "ended",
+                            "updatedAt" to FieldValue.serverTimestamp(),
+                        ),
+                    ).await()
+                }
+            }
+            watchPartyRef(id, local.id).set(
+                mapOf(
+                    "url" to local.wpUrl,
+                    "videoId" to local.wpVideoId,
+                    "kind" to local.wpKind,
+                    "hostUid" to uid,
+                    "state" to "waiting",
+                    "positionSeconds" to 0.0,
+                    "updatedAt" to FieldValue.serverTimestamp(),
+                    "joined" to mapOf(uid to true),
+                    "hostLeft" to false,
+                    "inviteMsgId" to local.id,
+                ),
+            ).await()
+            AppState.setMessageStatus(id, local.id, SendStatus.SENT)
+            // The invite is a text message for push purposes (no new
+            // worker type — the existing "text" path carries it).
+            PushSender.notifyMessage(id, peerUid, local.id, "text", ct, iv)
+            liftHideOnSend(id)
+            touchChat(id)
+            onLanded(local.id)
+        } catch (e: Exception) {
+            // Failures PROPAGATE to deliverWatchPartyCard's retry loop
+            // (marking FAILED + the toast happen there, once, after
+            // the last attempt) — never swallowed per attempt.
             throw e
         }
     }
@@ -3765,6 +3909,25 @@ object FirebaseEngine : ChatRepo {
                     // caller omits it too): it only records the fresh
                     // send's id into the ceremony session.
                     deliverNikahCard(id, th.person.uid, m, onLanded = {})
+                } else if (m.watchparty) {
+                    // ROUND 87: a Watch Together invite retries through
+                    // its OWN delivery — deliverText would rewrite the
+                    // doc WITHOUT the additive `wp` fields and the
+                    // partner would get a plain fallback bubble instead
+                    // of the invite card (and no session doc at all).
+                    // No landing callback on a retry: the pane opens
+                    // from the local copy, which is already in the
+                    // thread; the retry only has to land the doc.
+                    // The supersede target is the invite before this
+                    // one — but ONLY when this invite is still the
+                    // latest: retrying a superseded invite must never
+                    // end the newer session that replaced it.
+                    val latestWp = th.messages.lastOrNull { it.watchparty }
+                    val prev = if (latestWp?.id == msgId) {
+                        th.messages.filter { it.watchparty && it.id != msgId }
+                            .lastOrNull()?.id
+                    } else null
+                    deliverWatchPartyCard(id, th.person.uid, m, prev, onLanded = {})
                 } else {
                     deliverText(id, th.person.uid, m)
                 }
@@ -4104,6 +4267,125 @@ object FirebaseEngine : ChatRepo {
                     ),
                 ).await()
             }.onFailure { Log.w("TikuGame", "gamestate write failed chat=$chatId msg=$msgId", it) }
+        }
+    }
+
+    // ================= ROUND 87: Watch Together session =================
+    // One tiny doc per invite message (sessionId == invite message id):
+    //   chats/{chatId}/watchparty/{sessionId}
+    //   {url, videoId, kind, hostUid, state, positionSeconds,
+    //    updatedAt, joined{uid:bool}, hostLeft, inviteMsgId}
+    // Plaintext metadata by design (video id / state / position — the
+    // Nikah step-metadata class, not chat content); the URL is shared
+    // by design (both partners see the same video). Host writes on
+    // state change + a 15 s heartbeat while playing ONLY (see
+    // WatchSync.HEARTBEAT_MS); the guest never writes state, only its
+    // joined flag. Firestore rules: members-only, like gamestate.
+    private fun watchPartyRef(chatId: String, sessionId: String) =
+        db.collection(Schema.Chats.COLL).document(chatId)
+            .collection("watchparty").document(sessionId)
+
+    /** Observe one watch session; the callback receives the decoded
+     *  session (null = no doc yet). Registration is the caller's to
+     *  remove — WatchPartyStore owns exactly one per open chat. */
+    fun listenWatchParty(
+        chatId: String, sessionId: String,
+        onState: (WatchSession?) -> Unit,
+    ): ListenerRegistration =
+        watchPartyRef(chatId, sessionId).addSnapshotListener { snap, e ->
+            if (e != null) {
+                Log.w("TikuWatch", "watchparty listener failed chat=$chatId session=$sessionId", e)
+                return@addSnapshotListener
+            }
+            onState(watchSessionFromDoc(sessionId, snap))
+        }
+
+    /** Host publish: a state change or heartbeat (fire-and-forget;
+     *  failures are logged, the local player stays authoritative on
+     *  this phone until the next successful write lands). */
+    fun writeWatchParty(
+        chatId: String, sessionId: String, state: String,
+        positionSec: Double, hostLeft: Boolean,
+    ) {
+        scope.launch {
+            runCatching {
+                watchPartyRef(chatId, sessionId).update(
+                    mapOf(
+                        "state" to state,
+                        "positionSeconds" to positionSec,
+                        "updatedAt" to FieldValue.serverTimestamp(),
+                        "hostLeft" to hostLeft,
+                    ),
+                ).await()
+            }.onFailure { Log.w("TikuWatch", "watchparty write failed chat=$chatId session=$sessionId", it) }
+        }
+    }
+
+    /** Mark one participant joined (the host is joined at creation;
+     *  a guest joins by opening the pane — see WatchTogetherPane). */
+    fun markWatchJoined(chatId: String, sessionId: String, participantUid: String) {
+        if (participantUid.isEmpty()) return
+        scope.launch {
+            runCatching {
+                watchPartyRef(chatId, sessionId)
+                    .update("joined.$participantUid", true).await()
+            }.onFailure { Log.w("TikuWatch", "watchparty join failed chat=$chatId session=$sessionId", it) }
+        }
+    }
+
+    /** Mark one participant left (their joined flag clears; the
+     *  session itself is untouched — a guest leaving never pauses
+     *  the host's video). */
+    fun markWatchLeft(chatId: String, sessionId: String, participantUid: String) {
+        if (participantUid.isEmpty()) return
+        scope.launch {
+            runCatching {
+                watchPartyRef(chatId, sessionId)
+                    .update("joined.$participantUid", false).await()
+            }.onFailure { Log.w("TikuWatch", "watchparty leave failed chat=$chatId session=$sessionId", it) }
+        }
+    }
+
+    /** End a session (host's End button, or superseded by a new
+     *  invite). Idempotent: ending an ended session is a no-op. */
+    fun endWatchParty(chatId: String, sessionId: String) {
+        scope.launch {
+            runCatching {
+                watchPartyRef(chatId, sessionId).update(
+                    mapOf(
+                        "state" to "ended",
+                        "updatedAt" to FieldValue.serverTimestamp(),
+                    ),
+                ).await()
+            }.onFailure { Log.w("TikuWatch", "watchparty end failed chat=$chatId session=$sessionId", it) }
+        }
+    }
+
+    /** Host leaving the pane: park the session PAUSED at the given
+     *  position with hostLeft=true — the guest sees "Host left —
+     *  session paused". A transaction, so a session the host already
+     *  ENDED (End button, then pane close) is never resurrected as
+     *  paused by the dispose racing the end write. */
+    fun hostLeaveWatchParty(chatId: String, sessionId: String, positionSec: Double) {
+        scope.launch {
+            runCatching {
+                db.runTransaction { tx ->
+                    val ref = watchPartyRef(chatId, sessionId)
+                    val snap = tx.get(ref)
+                    val cur = snap.getString("state")
+                    if (snap.exists() && cur != "ended") {
+                        tx.update(
+                            ref, mapOf(
+                                "state" to "paused",
+                                "positionSeconds" to positionSec,
+                                "updatedAt" to FieldValue.serverTimestamp(),
+                                "hostLeft" to true,
+                            ),
+                        )
+                    }
+                    Unit
+                }.await()
+            }.onFailure { Log.w("TikuWatch", "watchparty host-leave failed chat=$chatId session=$sessionId", it) }
         }
     }
 

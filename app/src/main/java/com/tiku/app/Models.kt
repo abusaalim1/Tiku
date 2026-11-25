@@ -200,6 +200,20 @@ data class TikuMessage(
      *  ([undecryptable]) is reserved for key-ready + genuine decrypt
      *  failure — see DecryptGate. */
     val pendingDecrypt: Boolean = false,
+    // ---- ROUND 87 (appended last, same discipline) ----
+    /** A Watch Together invite (Firestore `wp=true` + `wpUrl` /
+     *  `wpVid` / `wpKind`): the doc is an ordinary kind="text" message
+     *  whose ct/iv hold a readable fallback line ("Watch together:
+     *  <url>"), so builds from before round 87 ignore the wp* fields
+     *  and render that fallback as a plain text bubble — degraded,
+     *  never a crash — while this build renders the invite card
+     *  (see WatchTogether.kt). `wpKind` is "youtube" | "web";
+     *  `wpVid` is the YouTube video id ("" for web pages). The
+     *  session doc id is the message id (see WatchPartyStore). */
+    val watchparty: Boolean = false,
+    val wpUrl: String = "",
+    val wpVideoId: String = "",
+    val wpKind: String = "",
 )
 
 /** ROUND 60 — the self-contained payload of a Nikah keepsake card: everything

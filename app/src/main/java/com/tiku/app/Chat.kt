@@ -3007,6 +3007,108 @@ private fun RdGameCard(
     }
 }
 
+/** ROUND 87 — one Watch Together invite message. The same cream
+ *  card family as the game card (mine right, theirs left), but
+ *  compact — there is no live preview to show (the player lives in
+ *  the watch pane, not in the list): ▶ + "Watch together" + the
+ *  video/page title + a live state line from the session doc.
+ *  Tap opens the pane; an ended session says so instead of opening;
+ *  a FAILED own send turns the tap into a retry. Long-press reaches
+ *  the ordinary message menu. Old builds never see this card — they
+ *  render the invite's fallback text bubble. */
+@Composable
+private fun RdWatchPartyCard(
+    m: TikuMessage,
+    person: Person,
+    session: WatchSession?,
+    isLatestInvite: Boolean,
+    onMenu: () -> Unit,
+    onOpen: () -> Unit,
+    onRetry: () -> Unit,
+) {
+    val failed = m.me && m.status == SendStatus.FAILED
+    // Only the latest invite can be active — a superseded invite's
+    // session doc may still read "waiting" on a stale snapshot, so
+    // the card trusts the thread order, not the doc, for "ended".
+    val ended = !isLatestInvite || session?.state == "ended"
+    val stateLine = when {
+        failed -> "Couldn't send · tap to retry"
+        ended -> "Session ended"
+        session?.hostLeft == true -> "Host left — session paused · tap to rejoin"
+        session?.state == "playing" -> "Playing now · tap to join"
+        session?.state == "paused" -> "Paused · tap to rejoin"
+        m.me -> "Waiting for ${person.name} to join · tap to watch"
+        else -> "${person.name} invited you to watch · tap to join"
+    }
+    Column(Modifier.fillMaxWidth()) {
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = if (m.me) Arrangement.End else Arrangement.Start,
+        ) {
+            Column(
+                Modifier.width(264.dp)
+                    .clip(RoundedCornerShape(22.dp))
+                    .background(GameCardCream)
+                    .border(1.dp, GameCardInk.copy(alpha = 0.16f), RoundedCornerShape(22.dp))
+                    .pointerInput(m.id, failed, ended) {
+                        detectTapGestures(
+                            onTap = {
+                                when {
+                                    failed -> onRetry()
+                                    ended -> AppState.toast("This watch session has ended")
+                                    else -> onOpen()
+                                }
+                            },
+                            onLongPress = { onMenu() },
+                        )
+                    }
+                    .padding(12.dp),
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(
+                        Modifier.size(34.dp).clip(CircleShape).background(GameCardInk),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(
+                            Icons.Filled.PlayArrow, null, Modifier.size(20.dp),
+                            tint = GameCardCream,
+                        )
+                    }
+                    Spacer(Modifier.width(10.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            "Watch together",
+                            color = GameCardInk, fontSize = 14.5.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis, fontFamily = InterTight,)
+                        Text(
+                            watchDisplayTitle(m),
+                            color = GameCardInk.copy(alpha = 0.55f), fontSize = 11.5.sp, fontFamily = PoppinsFamily,
+                            maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,)
+                    }
+                }
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    stateLine,
+                    color = GameCardInk.copy(alpha = 0.7f), fontSize = 12.sp,
+                    fontWeight = FontWeight.SemiBold, fontFamily = PoppinsFamily,)
+                if (m.me && m.status == SendStatus.SENDING) {
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        "Sending…", color = GameCardInk.copy(alpha = 0.5f),
+                        fontSize = 11.5.sp, fontFamily = PoppinsFamily,)
+                }
+                Row(
+                    Modifier.fillMaxWidth().padding(top = 8.dp),
+                    horizontalArrangement = Arrangement.End,
+                ) {
+                    RdBubbleTime(m, color = GameCardInk.copy(alpha = 0.55f), showTicks = true)
+                }
+            }
+        }
+    }
+}
+
 /** ROUND 41 — the game card's live mini preview: the game's actual
  *  first frame in a small WebView (built once per message, destroyed
  *  with the row — Moments discipline), running on the
@@ -4031,6 +4133,15 @@ private fun RdChatContent(thread: ChatThread) {
      *  (GamePlayer.kt), or null. Only ever set for a LOADED game —
      *  the card gates the tap (unloaded → fetchMedia first). */
     var gamePlayerMsg by remember { mutableStateOf<TikuMessage?>(null) }
+    /** ROUND 87: the invite message whose watch pane is open (or
+     *  null). Keyed on threadId like the Nikah open flags — switching
+     *  chats never carries an open pane across. */
+    var watchMsg by remember(threadId) { mutableStateOf<TikuMessage?>(null) }
+    /** ROUND 87: the URL entry sheet is open. */
+    var watchUrlOpen by remember(threadId) { mutableStateOf(false) }
+    /** ROUND 87: the id of the invite whose send just landed — the
+     *  pane opens on it once the message is in the thread. */
+    var pendingWatchMsgId by remember(threadId) { mutableStateOf<String?>(null) }
     /** ROUND 68 (WS9): the full profile picture is open. */
     var showPhoto by remember { mutableStateOf(false) }
     // ---- ROUND 60: Nikah ceremony (Nikah.kt / NikahUi.kt) ----
@@ -4052,6 +4163,33 @@ private fun RdChatContent(thread: ChatThread) {
     LaunchedEffect(threadId) {
         if (!Config.PREVIEW_UI_ONLY) {
             NikahStore.watch(threadId, person.uid, myDisplayName, thread.displayName)
+        }
+    }
+    /** ROUND 87: the live Watch Together session for THIS chat
+     *  (WatchPartyStore's doc listener) + the latest invite in the
+     *  thread. Only the latest invite can be active — the store
+     *  follows its doc id, and the card reads "Session ended" for
+     *  every superseded invite. The listener is attached while this
+     *  chat is open and removed on leaving it (one listener per
+     *  participant — WS-4); a new invite re-keys it, so there is
+     *  never more than one live. */
+    val watchSession by WatchPartyStore.flow(threadId).collectAsState()
+    val latestWatchMsg = thread.messages.lastOrNull { it.watchparty }
+    val myUid = if (Config.PREVIEW_UI_ONLY) "me" else FirebaseEngine.myUid()
+    DisposableEffect(threadId, latestWatchMsg?.id) {
+        val sid = latestWatchMsg?.id
+        if (sid != null) WatchPartyStore.watch(threadId, sid)
+        onDispose { WatchPartyStore.unwatch(threadId) }
+    }
+    // ROUND 87: open the pane on the invite whose send just landed
+    // (the local copy is in the thread from the moment the send
+    // stages, so this fires on the send's own echo at the latest).
+    LaunchedEffect(pendingWatchMsgId, thread.messages.size) {
+        val pid = pendingWatchMsgId ?: return@LaunchedEffect
+        val m = thread.messages.firstOrNull { it.id == pid }
+        if (m != null) {
+            watchMsg = m
+            pendingWatchMsgId = null
         }
     }
     var camChooserOpen by remember { mutableStateOf(false) }
@@ -5356,7 +5494,10 @@ private fun RdChatContent(thread: ChatThread) {
                     start = 16.dp, end = 16.dp,
                     // top stays generous: the glass header still floats
                     // over the list's first screenful (designed look).
-                    top = if (thread.pinnedMsgIds.isNotEmpty()) 148.dp else 96.dp,
+                    // ROUND 87: the watch pane (below) occupies the
+                    // list's top while open — the list starts under it.
+                    top = (if (thread.pinnedMsgIds.isNotEmpty()) 148.dp else 96.dp) +
+                        if (watchMsg != null) WATCH_PANE_HEIGHT_DP.dp else 0.dp,
                     // bottom is now just breathing room — the composer's
                     // bound is the Box padding above, not a guess here.
                     bottom = 14.dp,
@@ -5520,6 +5661,17 @@ private fun RdChatContent(thread: ChatThread) {
                                     }
                                 },
                                 onPlay = { gamePlayerMsg = m },
+                                onRetry = { AppState.repo.retrySend(threadId, m.id) },
+                            )
+                            // ROUND 87: a Watch Together invite renders
+                            // as its own cream card (never the AI bubble,
+                            // never the raw link) — see RdWatchPartyCard.
+                            m.watchparty -> RdWatchPartyCard(
+                                m = m, person = person,
+                                session = watchSession,
+                                isLatestInvite = m.id == latestWatchMsg?.id,
+                                onMenu = { menuMsg = m },
+                                onOpen = { watchMsg = m },
                                 onRetry = { AppState.repo.retrySend(threadId, m.id) },
                             )
                             // ROUND 60: Nikah ceremony cards (invite /
@@ -5829,6 +5981,19 @@ private fun RdChatContent(thread: ChatThread) {
                         Text("${thread.pinnedMsgIds.size} pinned", fontSize = 11.5.sp, color = RdSub, fontFamily = PoppinsFamily)
                     }
                 }
+            }
+            // ---- ROUND 87: the watch pane — player/browser on top of
+            // the SAME thread + composer (not a second chat). It is a
+            // child of this header column, so it stacks under the top
+            // bar + pinned strip, and the list's top padding (above)
+            // keeps the first message below it. ----
+            watchMsg?.let { wm ->
+                WatchTogetherPane(
+                    chatId = threadId, msg = wm, session = watchSession,
+                    role = if (wm.me || (myUid.isNotEmpty() && myUid == wm.senderUid)) "host" else "guest",
+                    myUid = myUid, peerName = thread.displayName, peerUid = person.uid,
+                    onClose = { watchMsg = null },
+                )
             }
         }
 
@@ -6333,6 +6498,46 @@ private fun RdChatContent(thread: ChatThread) {
             }
         }
 
+        // ---- ROUND 87: Watch Together rejoin banner — floats directly
+        // above the composer while a session is live and the pane is
+        // closed (same position as the Nikah banner; offset when both
+        // are live so they never stack on each other). ----
+        if (watchSession?.active == true && watchMsg == null && latestWatchMsg != null) {
+            val bannerMsg = latestWatchMsg
+            Box(
+                Modifier.align(Alignment.BottomCenter)
+                    .padding(
+                        bottom = composerHeight +
+                            if (nikahSession?.active == true && !nikahOpen) 56.dp else 0.dp,
+                    ),
+            ) {
+                Row(
+                    Modifier.fillMaxWidth().padding(horizontal = 14.dp)
+                        .clip(RoundedCornerShape(999.dp)).background(RdCard)
+                        .pointerInput(bannerMsg.id) {
+                            detectTapGestures(onTap = { watchMsg = bannerMsg })
+                        }
+                        .padding(horizontal = 14.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Icon(Icons.Filled.PlayArrow, null, Modifier.size(15.dp), tint = RdRose)
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        "Watching together · ${watchDisplayTitle(bannerMsg)}",
+                        color = Color.White, fontSize = 13.sp, fontFamily = PoppinsFamily,
+                        maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f),
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        "Rejoin", color = RdRose, fontSize = 13.sp,
+                        fontWeight = FontWeight.SemiBold, fontFamily = PoppinsFamily,
+                        maxLines = 1,
+                    )
+                }
+            }
+        }
+
         // ---- attachment sheet: the file's glass sheet ----
         // ROUND 15: Photo / Video / Audio file rows. The keyboard is
         // dismissed the moment this opens (see the attachOpen effect), so
@@ -6410,6 +6615,30 @@ private fun RdChatContent(thread: ChatThread) {
                         Spacer(Modifier.width(10.dp))
                         Text(
                             if (nikahSession?.active == true) "In progress — tap to rejoin" else "Live ceremony, together",
+                            color = RdSub, fontSize = 12.sp, fontFamily = PoppinsFamily,
+                        )
+                    }
+                    // ROUND 87: the Watch Together entry — inside a 1:1
+                    // chat only (this sheet exists only on the 1:1 chat
+                    // screen). A live session re-opens; otherwise the
+                    // URL sheet starts one and lands the invite card.
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.fillMaxWidth().rdPress {
+                            attachOpen = false
+                            if (watchSession?.active == true && latestWatchMsg != null) {
+                                watchMsg = latestWatchMsg
+                            } else {
+                                watchUrlOpen = true
+                            }
+                        }.padding(16.dp),
+                    ) {
+                        Icon(Icons.Filled.PlayArrow, null, tint = Color.White, modifier = Modifier.size(21.dp))
+                        Spacer(Modifier.width(12.dp))
+                        Text("Watch together", color = Color.White, fontSize = 15.sp, fontFamily = PoppinsFamily)
+                        Spacer(Modifier.width(10.dp))
+                        Text(
+                            if (watchSession?.active == true) "In progress — tap to rejoin" else "YouTube or any web page, in sync",
                             color = RdSub, fontSize = 12.sp, fontFamily = PoppinsFamily,
                         )
                     }
@@ -6701,6 +6930,25 @@ private fun RdChatContent(thread: ChatThread) {
                             poster = videoPosterThumb(f), vo = vo,
                         ),
                     )
+                },
+            )
+        }
+
+        // ---- ROUND 87: the Watch Together URL entry sheet (topmost) ----
+        // Start sends the invite through the repo; the pane opens on
+        // the landed message id (see pendingWatchMsgId above). The
+        // supersede target is the latest invite, and only while its
+        // session is still active — a new invite ends the old one.
+        if (watchUrlOpen) {
+            WatchUrlSheet(
+                initial = "",
+                onDismiss = { watchUrlOpen = false },
+                onStart = { url ->
+                    watchUrlOpen = false
+                    AppState.repo.sendWatchParty(
+                        threadId, url,
+                        latestWatchMsg?.id?.takeIf { watchSession?.active == true },
+                    ) { msgId -> pendingWatchMsgId = msgId }
                 },
             )
         }
