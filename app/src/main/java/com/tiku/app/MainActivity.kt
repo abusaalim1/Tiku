@@ -222,9 +222,32 @@ class MainActivity : ComponentActivity() {
         // delivery is the platform's job while the app is away; the
         // old foreground service that needed a legal start window here
         // is deleted.
-        if (!Config.PREVIEW_UI_ONLY && ChatSession.unlocked && FirebaseEngine.signedIn) {
+        // ROUND 88: a pause is NOT an exit — minimize / switch-app /
+        // screen-off must not flip the user offline. The old
+        // setPresence(false) here WAS the minimize bug: every pause
+        // wrote offline instantly and cancelled the heartbeat job.
+        // The heartbeat lives in the engine's process-lifetime scope
+        // and keeps stamping while the process is alive; real exits
+        // write offline explicitly (lock(), quickExit(), signOut(),
+        // onDestroy below). ChatSession.foreground = false above stays
+        // — the seen-gate still needs it.
+    }
+
+    override fun onDestroy() {
+        // ROUND 88: best-effort explicit offline on a clean activity
+        // death (e.g. swiped from recents — the process is going away
+        // and this is the last chance to write it). Guarded on
+        // isChangingConfigurations: a rotation must NOT flip the user
+        // offline. Fire-and-forget; if the write doesn't land before
+        // the process dies, the reader's staleness window is the
+        // backstop. This never runs while the session is merely
+        // backgrounded (onPause/onStop don't destroy the activity).
+        if (!isChangingConfigurations && !Config.PREVIEW_UI_ONLY &&
+            ChatSession.unlocked && FirebaseEngine.signedIn
+        ) {
             FirebaseEngine.setPresence(false)
         }
+        super.onDestroy()
     }
 
     override fun onStop() {

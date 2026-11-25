@@ -567,6 +567,8 @@ object FirebaseEngine : ChatRepo {
                 // ROUND 51: additive sibling — old builds ignore it.
                 "keyRecovery" to recBlob,
                 "online" to true, "lastSeen" to FieldValue.serverTimestamp(),
+                // ROUND 88: new accounts get a heartbeat stamp from birth.
+                "hbAt" to FieldValue.serverTimestamp(),
                 // round 4: live username search fields (prefix + token queries)
                 "usernameNorm" to SearchNorm.norm(u),
                 "nameTokens" to SearchNorm.tokens(u, u),
@@ -706,6 +708,7 @@ object FirebaseEngine : ChatRepo {
             photoBitmap = photoData.takeIf { it.isNotEmpty() }?.let { MediaStore.decodeBitmap(it) },
             online = doc.getBoolean("online") == true,
             lastSeenMs = doc.getTimestamp("lastSeen")?.toDate()?.time ?: 0L,
+            hbAtMs = doc.getTimestamp("hbAt")?.toDate()?.time ?: 0L,
         )
         doc.getString("publicKey")?.let { if (it.isNotEmpty()) publicKeyCache[peerUid] = it }
         profileCache[peerUid] = p
@@ -763,6 +766,7 @@ object FirebaseEngine : ChatRepo {
             photoBitmap = photoData.takeIf { it.isNotEmpty() }?.let { MediaStore.decodeBitmap(it) },
             online = snap.getBoolean("online") == true,
             lastSeenMs = snap.getTimestamp("lastSeen")?.toDate()?.time ?: 0L,
+            hbAtMs = snap.getTimestamp("hbAt")?.toDate()?.time ?: 0L,
         )
         snap.getString("publicKey")?.let { if (it.isNotEmpty()) publicKeyCache[peerUid] = it }
         profileCache[peerUid] = p
@@ -1852,11 +1856,12 @@ object FirebaseEngine : ChatRepo {
      * the profile cache (so later fetchPerson consumers are fresh too)
      * and onto every live thread with that peer, republishing
      * AppState.threads — an open chat's header therefore updates LIVE
-     * while it stays open. Privacy is unchanged: this reads exactly the
-     * two fields the peer's own client already publishes under their
-     * "Last seen" toggle (toggle off = no lastSeen field on the doc =
-     * 0L here, exactly as personFromDoc/fetchPerson have always read
-     * it); no new field is read or exposed.
+     * while it stays open. Privacy is unchanged: lastSeen is still
+     * published only under the peer's "Last seen" toggle (toggle off =
+     * no lastSeen field on the doc = 0L here); the one new field read,
+     * hbAt (ROUND 88), is a freshness-only stamp the peer's own client
+     * publishes on every heartbeat — it is never displayed as a
+     * last-seen time.
      */
     private fun applyPresenceSnapshot(
         peerUid: String,
@@ -1864,18 +1869,19 @@ object FirebaseEngine : ChatRepo {
     ) {
         val online = snap.getBoolean("online") == true
         val lsMs = snap.getTimestamp("lastSeen")?.toDate()?.time ?: 0L
+        val hbMs = snap.getTimestamp("hbAt")?.toDate()?.time ?: 0L
         profileCache[peerUid]?.let { cached ->
-            if (cached.online != online || cached.lastSeenMs != lsMs) {
-                profileCache[peerUid] = cached.copy(online = online, lastSeenMs = lsMs)
+            if (cached.online != online || cached.lastSeenMs != lsMs || cached.hbAtMs != hbMs) {
+                profileCache[peerUid] = cached.copy(online = online, lastSeenMs = lsMs, hbAtMs = hbMs)
             }
         }
         var changed = false
         val updated = AppState.threads.value.map { t ->
             if (t.person.uid == peerUid &&
-                (t.person.online != online || t.person.lastSeenMs != lsMs)
+                (t.person.online != online || t.person.lastSeenMs != lsMs || t.person.hbAtMs != hbMs)
             ) {
                 changed = true
-                t.copy(person = t.person.copy(online = online, lastSeenMs = lsMs))
+                t.copy(person = t.person.copy(online = online, lastSeenMs = lsMs, hbAtMs = hbMs))
             } else t
         }
         if (changed) AppState.threads.value = updated
@@ -1977,11 +1983,15 @@ object FirebaseEngine : ChatRepo {
         }
     }
 
-    // ROUND 8 (item A): presence heartbeat — while I'm online, my lastSeen
-    // stamp is refreshed every 60s so a crash/kill (which never gets to
-    // write online=false) SELF-EXPIRES on the peer's screen within ~3
-    // minutes (see presenceText) instead of showing "online" forever with a
-    // days-old last seen next to it.
+    // ROUND 8 (item A) + ROUND 88: presence heartbeat — while I'm online,
+    // my heartbeat stamp is refreshed every 60s so a crash/kill (which
+    // never gets to write online=false) SELF-EXPIRES on the peer's screen
+    // within ~2 minutes (see presenceText / PresencePolicy) instead of
+    // showing "online" forever with a days-old last seen next to it.
+    // ROUND 88: the job lives in the engine's process-lifetime scope, so
+    // it keeps ticking while the app is BACKGROUNDED-but-alive — a mere
+    // minimize is not an exit and must not cancel it (the old
+    // MainActivity.onPause setPresence(false) did exactly that; removed).
     @Volatile private var presenceOnline = false
     private var presenceJob: kotlinx.coroutines.Job? = null
 
@@ -1992,36 +2002,40 @@ object FirebaseEngine : ChatRepo {
         val lsOn = SettingsStore.state.value.lastSeen
         val ref = db.collection(Schema.Users.COLL).document(uid)
         if (online) {
-            val updates = mutableMapOf<String, Any>("online" to true)
+            val updates = mutableMapOf<String, Any>(
+                "online" to true,
+                // ROUND 88: hbAt rides EVERY presence write, toggle or
+                // not — it is the freshness stamp the peer's reader uses
+                // to expire a dead process; it is never displayed as a
+                // last-seen time, so the "Last seen" toggle still fully
+                // controls what the peer can SEE.
+                "hbAt" to FieldValue.serverTimestamp(),
+            )
             // stamp immediately too — "last active" starts moving from the
             // first second, not the first heartbeat.
             if (lsOn) updates["lastSeen"] = FieldValue.serverTimestamp()
             runCatching { ref.update(updates) }
-            // ROUND 77 (WS-B): the heartbeat job now ALWAYS runs while
-            // online and re-reads the "Last seen" toggle on every tick.
-            // Before, the job was started only when the toggle was on at
-            // the instant setPresence(true) ran — a user who turned Last
-            // seen ON mid-session got no heartbeat (and no fresh stamp
-            // beyond the one initial write) until the next resume, and a
-            // user who turned it OFF mid-session kept being stamped
-            // until then. Each tick also re-asserts online=true WITH
-            // the stamp, so a transient offline write (a pause that was
-            // not a real exit) self-heals within a minute instead of
-            // leaving the peer's header showing "offline + old stamp"
-            // for a session that is actually live. Toggle off = the
-            // tick writes nothing at all, exactly as before.
+            // ROUND 77 (WS-B) + ROUND 88: the heartbeat job now ALWAYS
+            // runs while online and re-reads the "Last seen" toggle on
+            // every tick (R77 fixed the toggle flip mid-session). Each
+            // tick re-asserts online=true WITH the stamps. R88 change:
+            // the tick writes online + hbAt EVEN when the toggle is off
+            // (lastSeen only when it is on) — otherwise a toggle-off
+            // user who is killed can never expire on the peer's screen,
+            // because no stamp exists at all. Toggle off still means
+            // no lastSeen field is ever written, exactly as before.
             presenceJob = scope.launch {
                 while (presenceOnline) {
-                    delay(60_000)
-                    if (presenceOnline &&
-                        SettingsStore.state.value.lastSeen
-                    ) runCatching {
-                        ref.update(
-                            mapOf(
-                                "online" to true,
-                                "lastSeen" to FieldValue.serverTimestamp(),
-                            ),
+                    delay(PresencePolicy.HEARTBEAT_INTERVAL_MS)
+                    if (presenceOnline) runCatching {
+                        val tick = mutableMapOf<String, Any>(
+                            "online" to true,
+                            "hbAt" to FieldValue.serverTimestamp(),
                         )
+                        if (SettingsStore.state.value.lastSeen) {
+                            tick["lastSeen"] = FieldValue.serverTimestamp()
+                        }
+                        ref.update(tick)
                     }
                 }
             }
@@ -5490,16 +5504,25 @@ object FirebaseEngine : ChatRepo {
     }
 
     /**
-     * ROUND 8 (item A) — the peer's presence line, freshness-aware: "online"
-     * is honoured only while the peer's heartbeat stamp is fresh (≤3 min) or
-     * unmeasurable (they share no lastSeen — privacy toggle off; then the
-     * online flag is taken at face value). A STALE online flag (app crashed
-     * / killed before it could write offline) falls through to the exact
-     * last-seen instead of showing "online" forever.
+     * ROUND 8 (item A) + ROUND 88 — the peer's presence line,
+     * freshness-aware: "online" is honoured only while the peer's
+     * heartbeat stamp is fresh (≤2 min — PresencePolicy.STALE_MS) or
+     * unmeasurable (no stamp at all — old build / never stamped; then
+     * the online flag is taken at face value). ROUND 88: freshness is
+     * read off hbAt when present, else lastSeen — so a peer whose
+     * "Last seen" toggle is off still expires after a kill. A STALE
+     * online flag (app crashed / killed before it could write offline)
+     * falls through to the exact last-seen instead of showing "online"
+     * forever. The displayed last-seen still comes ONLY from lastSeenMs
+     * (hbAt is never shown); an explicit online=false is instant and
+     * never waits on this window.
      */
     fun presenceText(p: Person): String = when {
-        p.online && (p.lastSeenMs == 0L ||
-            System.currentTimeMillis() - p.lastSeenMs <= 180_000L) -> "online"
+        PresencePolicy.isOnline(
+            p.online,
+            PresencePolicy.freshnessMs(p),
+            System.currentTimeMillis(),
+        ) -> "online"
         p.lastSeenMs > 0L -> fmtLastSeen(p.lastSeenMs)
         else -> "offline"
     }
@@ -5525,6 +5548,12 @@ object FirebaseEngine : ChatRepo {
     }
 
     fun signOut(ctx: Context) {
+        // ROUND 88: sign-out is a CLEAN exit — flip the peer's header
+        // offline instantly, FIRST, while the auth session is still
+        // live (after auth.signOut() the uid is gone and the write
+        // would no-op). Without this the peer saw "online" until the
+        // staleness window expired.
+        if (!Config.PREVIEW_UI_ONLY && signedIn) setPresence(false)
         // ROUND 58: sign-out retires this device's push registration —
         // the FCM token is deleted and the users/{me}.fcmToken field
         // cleared FIRST, while the auth session is still live (the

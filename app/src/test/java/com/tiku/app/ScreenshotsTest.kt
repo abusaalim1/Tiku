@@ -4202,6 +4202,75 @@ class ScreenshotsTest {
         shot("93-chat-presence-last-seen.png")
     }
 
+    // ---------- ROUND 88: presence — minimize stays online, real exit is instant ----------
+
+    @Test fun shot131_chatPresenceBackgroundedOnline() {
+        // The minimize case, staged: the peer is backgrounded-but-alive
+        // — lastSeen an HOUR stale (toggle off / old stamp) but the
+        // heartbeat stamp fresh. R88 reads online off hbAt, so the
+        // header must still show "Active now" with the green dot: the
+        // process lives, the stamp is fresh, the user is online.
+        val th = AppState.threads.value.first()
+        val backgrounded = th.copy(
+            person = th.person.copy(
+                online = true,
+                lastSeenMs = System.currentTimeMillis() - 3_600_000L,
+                hbAtMs = System.currentTimeMillis(),
+            ),
+        )
+        AppState.threads.value = AppState.threads.value.map {
+            if (it.id == th.id) backgrounded else it
+        }
+        AppState.go(Screen.Chat(th.id))
+        frame { ChatScreen(th.id) }
+        composeRule.waitForIdle()
+        org.junit.Assert.assertTrue(
+            "backgrounded peer must still show 'Active now'",
+            composeRule.onAllNodesWithText("Active now").fetchSemanticsNodes().isNotEmpty(),
+        )
+        org.junit.Assert.assertTrue(
+            "backgrounded peer must still carry the presence dot",
+            composeRule.onAllNodesWithTag("presence_dot", useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty(),
+        )
+        shot("131-chat-presence-backgrounded-online.png")
+    }
+
+    @Test fun shot132_chatPresenceExplicitOfflineFresh() {
+        // The clean-exit case, staged: the peer wrote online=false
+        // (lock / close / sign-out) with FRESH stamps. The explicit
+        // offline must win instantly — no "Active now", no dot, the
+        // last-seen line shown instead.
+        val th = AppState.threads.value.first()
+        val now = System.currentTimeMillis()
+        val offline = th.copy(
+            person = th.person.copy(
+                online = false,
+                lastSeenMs = now,
+                hbAtMs = now,
+            ),
+        )
+        AppState.threads.value = AppState.threads.value.map {
+            if (it.id == th.id) offline else it
+        }
+        AppState.go(Screen.Chat(th.id))
+        frame { ChatScreen(th.id) }
+        composeRule.waitForIdle()
+        org.junit.Assert.assertTrue(
+            "explicitly offline peer must show the last seen",
+            composeRule.onAllNodesWithText("last seen today at", substring = true)
+                .fetchSemanticsNodes().isNotEmpty(),
+        )
+        org.junit.Assert.assertTrue(
+            "explicitly offline peer must not show Active now",
+            composeRule.onAllNodesWithText("Active now").fetchSemanticsNodes().isEmpty(),
+        )
+        org.junit.Assert.assertTrue(
+            "explicitly offline peer must not carry the presence dot",
+            composeRule.onAllNodesWithTag("presence_dot", useUnmergedTree = true).fetchSemanticsNodes().isEmpty(),
+        )
+        shot("132-chat-presence-explicit-offline.png")
+    }
+
     /** ROUND 77 (WS-B) — the seen gate's truth table, proven at unit
      *  level (the Firestore write itself needs a live session and is
      *  NOT claimed here): seen-marking passes ONLY for a foregrounded,

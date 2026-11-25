@@ -477,7 +477,42 @@ data class Person(
     val photoBitmap: Bitmap? = null,
     var online: Boolean = true,
     val lastSeenMs: Long = 0L,
+    /** ROUND 88 — heartbeat freshness stamp (server timestamp, written
+     *  on every heartbeat tick regardless of the "Last seen" toggle).
+     *  NEVER displayed as a last-seen time — it only decides
+     *  online/offline. Additive: old builds/docs simply lack it (0L →
+     *  the lastSeen fallback in [PresencePolicy.freshnessMs]). */
+    val hbAtMs: Long = 0L,
 )
+
+/**
+ * ROUND 88 — presence freshness policy (pure; unit-tested in
+ * PresenceR88Test, no Firebase dependency so plain unit tests can
+ * import it without initialising the engine):
+ * - The heartbeat ticks every HEARTBEAT_INTERVAL_MS while the user is
+ *   online (foreground AND background, while the process lives).
+ * - A peer reads "online" only while the freshest stamp (hbAt, falling
+ *   back to lastSeen for old docs/builds) is within STALE_MS.
+ * - STALE_MS = 2 × interval: exactly one missed 60 s tick is tolerated
+ *   (a tick at t, the next at t+60 missed, the one at t+120 landing
+ *   keeps the stamp ≤120 s old throughout); two consecutive missed
+ *   ticks flip the peer offline, and a killed process (stamp frozen)
+ *   flips offline 60–180 s after the kill (typically ~120 s) instead
+ *   of today's ~3–4 min. An explicit online=false write is instant —
+ *   it never waits on this window.
+ */
+object PresencePolicy {
+    const val HEARTBEAT_INTERVAL_MS = 60_000L
+    const val STALE_MS = 120_000L
+
+    /** Freshest heartbeat stamp for a peer: hbAt when present, else the
+     *  legacy lastSeen stamp; 0L means "no stamp at all" (old build /
+     *  never stamped) and is taken at face value, exactly as before. */
+    fun freshnessMs(p: Person): Long = if (p.hbAtMs > 0L) p.hbAtMs else p.lastSeenMs
+
+    fun isOnline(online: Boolean, freshMs: Long, nowMs: Long): Boolean =
+        online && (freshMs == 0L || nowMs - freshMs <= STALE_MS)
+}
 
 /** Username search normalization (round 4, item 4). Pure + shared by the real
  *  engine (Firestore field writes + queries) and the preview store.
