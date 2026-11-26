@@ -4172,6 +4172,14 @@ private fun RdChatContent(thread: ChatThread) {
      *  null). Keyed on threadId like the Nikah open flags — switching
      *  chats never carries an open pane across. */
     var watchMsg by remember(threadId) { mutableStateOf<TikuMessage?>(null) }
+    /** ROUND 90: the watch session this device has dismissed the
+     *  rejoin banner for. Closing the pane (Back or ✕) dismisses
+     *  the banner for that session — the chat comes back perfectly
+     *  clean (the owner's "watermark" complaint: the banner had no
+     *  way to go away, and a Back-leave keeps the session "active"
+     *  forever). A new session has a new id and shows it again;
+     *  the invite card always remains a way back in. */
+    var watchBannerDismissedId by remember(threadId) { mutableStateOf<String?>(null) }
     /** ROUND 87: the URL entry sheet is open. */
     var watchUrlOpen by remember(threadId) { mutableStateOf(false) }
     /** ROUND 89: a YouTube link tapped in a plain message — the
@@ -4227,6 +4235,7 @@ private fun RdChatContent(thread: ChatThread) {
         val m = thread.messages.firstOrNull { it.id == pid }
         if (m != null) {
             watchMsg = m
+            watchBannerDismissedId = null
             pendingWatchMsgId = null
         }
     }
@@ -5709,7 +5718,13 @@ private fun RdChatContent(thread: ChatThread) {
                                 session = watchSession,
                                 isLatestInvite = m.id == latestWatchMsg?.id,
                                 onMenu = { menuMsg = m },
-                                onOpen = { watchMsg = m },
+                                onOpen = {
+                                    watchMsg = m
+                                    // ROUND 90: an explicit open
+                                    // clears any earlier dismissal —
+                                    // closing again re-dismisses.
+                                    watchBannerDismissedId = null
+                                },
                                 onRetry = { AppState.repo.retrySend(threadId, m.id) },
                             )
                             // ROUND 60: Nikah ceremony cards (invite /
@@ -6036,7 +6051,14 @@ private fun RdChatContent(thread: ChatThread) {
                     chatId = threadId, msg = wm, session = watchSession,
                     role = if (wm.me || (myUid.isNotEmpty() && myUid == wm.senderUid)) "host" else "guest",
                     myUid = myUid, peerName = thread.displayName, peerUid = person.uid,
-                    onClose = { watchMsg = null },
+                    // ROUND 90: closing the pane (Back or ✕) also
+                    // dismisses the rejoin banner for this session —
+                    // the chat must come back exactly as it was,
+                    // with nothing left floating on it.
+                    onClose = {
+                        watchMsg = null
+                        watchBannerDismissedId = watchSession?.id ?: wm.id
+                    },
                 )
             }
         }
@@ -6546,8 +6568,18 @@ private fun RdChatContent(thread: ChatThread) {
         // above the composer while a session is live and the pane is
         // closed (same position as the Nikah banner; offset when both
         // are live so they never stack on each other). ----
-        if (watchSession?.active == true && watchMsg == null && latestWatchMsg != null) {
-            val bannerMsg = latestWatchMsg
+        // ROUND 90: the banner obeys watchBannerShouldShow — a
+        // session this device dismissed (by closing the pane, or by
+        // the ✕ chip beside the pill) never leaves it floating on
+        // the chat. R87/R89 had NO dismissal at all: a Back-leave
+        // parks the session active forever, so the banner stayed
+        // forever — the owner's "watermark".
+        val watchBannerMsg = latestWatchMsg
+        if (watchBannerMsg != null && watchBannerShouldShow(
+                watchSession, watchMsg != null, true, watchBannerDismissedId,
+            )
+        ) {
+            val bannerMsg = watchBannerMsg
             Box(
                 Modifier.align(Alignment.BottomCenter)
                     .padding(
@@ -6556,28 +6588,53 @@ private fun RdChatContent(thread: ChatThread) {
                     ),
             ) {
                 Row(
-                    Modifier.fillMaxWidth().padding(horizontal = 14.dp)
-                        .clip(RoundedCornerShape(999.dp)).background(RdCard)
-                        .pointerInput(bannerMsg.id) {
-                            detectTapGestures(onTap = { watchMsg = bannerMsg })
-                        }
-                        .padding(horizontal = 14.dp, vertical = 10.dp),
+                    Modifier.fillMaxWidth().padding(horizontal = 14.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Icon(Icons.Filled.PlayArrow, null, Modifier.size(15.dp), tint = RdRose)
+                    Row(
+                        Modifier.weight(1f)
+                            .clip(RoundedCornerShape(999.dp)).background(RdCard)
+                            .pointerInput(bannerMsg.id) {
+                                detectTapGestures(onTap = {
+                                    watchMsg = bannerMsg
+                                    watchBannerDismissedId = null
+                                })
+                            }
+                            .padding(horizontal = 14.dp, vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Icon(Icons.Filled.PlayArrow, null, Modifier.size(15.dp), tint = RdRose)
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            "Watching together · ${watchDisplayTitle(bannerMsg)}",
+                            color = Color.White, fontSize = 13.sp, fontFamily = PoppinsFamily,
+                            maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f),
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            "Rejoin", color = RdRose, fontSize = 13.sp,
+                            fontWeight = FontWeight.SemiBold, fontFamily = PoppinsFamily,
+                            maxLines = 1,
+                        )
+                    }
                     Spacer(Modifier.width(8.dp))
-                    Text(
-                        "Watching together · ${watchDisplayTitle(bannerMsg)}",
-                        color = Color.White, fontSize = 13.sp, fontFamily = PoppinsFamily,
-                        maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f),
-                    )
-                    Spacer(Modifier.width(8.dp))
-                    Text(
-                        "Rejoin", color = RdRose, fontSize = 13.sp,
-                        fontWeight = FontWeight.SemiBold, fontFamily = PoppinsFamily,
-                        maxLines = 1,
-                    )
+                    // ROUND 90: dismiss for THIS session — the pill
+                    // is the way in, this is the way to make it go
+                    // away without joining.
+                    Box(
+                        Modifier.size(32.dp).clip(CircleShape).background(RdCard)
+                            .clickable(
+                                interactionSource = remember { MutableInteractionSource() },
+                                indication = null,
+                            ) { watchBannerDismissedId = watchSession?.id },
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(
+                            Icons.Filled.Close, null, Modifier.size(15.dp),
+                            tint = RdSub,
+                        )
+                    }
                 }
             }
         }
@@ -6672,6 +6729,7 @@ private fun RdChatContent(thread: ChatThread) {
                             attachOpen = false
                             if (watchSession?.active == true && latestWatchMsg != null) {
                                 watchMsg = latestWatchMsg
+                                watchBannerDismissedId = null
                             } else {
                                 watchUrlOpen = true
                             }

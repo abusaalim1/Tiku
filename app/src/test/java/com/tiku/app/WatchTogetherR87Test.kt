@@ -384,8 +384,11 @@ class WatchTogetherR87Test {
             "This video can't play here — its owner doesn't allow embedding.",
             watchPlayerErrorTitle(150),
         )
+        // ROUND 90: the restricted hint no longer says "try another
+        // video" — it names the way out (the in-app browser). The
+        // full R90 copy contract lives in WatchTogetherR90Test.
         assertEquals(
-            "Try another video — this one can't play inside Tik.",
+            "You can still watch it in the in-app browser — it just won't be synced.",
             watchPlayerErrorHint(150),
         )
         assertEquals("This video can't play here.", watchPlayerErrorTitle(2))

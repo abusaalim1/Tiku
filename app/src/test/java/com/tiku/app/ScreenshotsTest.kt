@@ -6089,4 +6089,161 @@ class ScreenshotsTest {
         }
     }
 
+    // ================= ROUND 90: Watch Together FIX #2 =================
+    // Bug 1 (player never loads) is proven in a REAL Chromium — the
+    // Robolectric WebView is inert and cannot prove anything about
+    // playback (see the round-90 report). What the harness proves
+    // here: the refused-embed error offers the in-app browser (not
+    // a useless retry), the fallback opens inside the pane with the
+    // not-synced line, and Back from the pane returns a perfectly
+    // clean chat (bug 2 — no pane, no leftover banner).
+
+    /** Bug 2: open the pane, press Back — the pane is gone AND the
+     *  rejoin banner is NOT left floating on the chat, even though
+     *  the (staged) session is still active. On R89 code the banner
+     *  appears the moment the pane closes and can never be removed
+     *  (the owner's "watermark"). The invite card remains — the
+     *  chat is exactly as it was before the pane opened. */
+    @Test fun shot138_watchBackLeavesCleanChat() {
+        val id = r87StageInvite(
+            me = true, sessionState = "playing",
+            joined = mapOf("me" to true, "host1" to true),
+        )
+        var backOwner: androidx.activity.OnBackPressedDispatcherOwner? = null
+        try {
+            AppState.go(Screen.Chat(id))
+            frame {
+                backOwner = androidx.activity.compose
+                    .LocalOnBackPressedDispatcherOwner.current
+                ChatScreen(id)
+            }
+            composeRule.waitForIdle()
+            composeRule.onNodeWithText("YouTube video")
+                .performTouchInput { click(center) }
+            composeRule.mainClock.advanceTimeBy(700)
+            composeRule.waitForIdle()
+            org.junit.Assert.assertTrue(
+                "the pane must be open before Back",
+                composeRule.onAllNodesWithText("Playing together")
+                    .fetchSemanticsNodes().isNotEmpty(),
+            )
+            composeRule.runOnUiThread {
+                backOwner!!.onBackPressedDispatcher.onBackPressed()
+            }
+            composeRule.waitForIdle()
+            org.junit.Assert.assertTrue(
+                "Back must close the watch pane",
+                composeRule.onAllNodesWithText("Playing together")
+                    .fetchSemanticsNodes().isEmpty(),
+            )
+            org.junit.Assert.assertTrue(
+                "Back must NOT leave the rejoin banner on the chat",
+                composeRule.onAllNodesWithText("Watching together", substring = true)
+                    .fetchSemanticsNodes().isEmpty(),
+            )
+            org.junit.Assert.assertTrue(
+                "Back must NOT leave a Rejoin strip on the chat",
+                composeRule.onAllNodesWithText("Rejoin")
+                    .fetchSemanticsNodes().isEmpty(),
+            )
+            org.junit.Assert.assertTrue(
+                "the invite card stays — the chat is exactly as it was",
+                composeRule.onAllNodesWithText("Watch together")
+                    .fetchSemanticsNodes().isNotEmpty(),
+            )
+            org.junit.Assert.assertTrue(
+                "the message list is back in place",
+                composeRule.onAllNodesWithTag("message_list")
+                    .fetchSemanticsNodes().isNotEmpty(),
+            )
+            shot("138-watch-back-clean-chat.png")
+        } finally {
+            WatchPartyStore.setPreview(id, null)
+        }
+    }
+
+    /** Bug 1 (part 2): an embed-restricted video (YT 150, staged
+     *  through WatchPaneStaging — the harness WebView never raises
+     *  a real YT error) shows the honest reason and offers the
+     *  in-app browser. "Try again" must NOT appear: retrying a
+     *  restricted embed fails identically forever (the owner's
+     *  "Try again wahi problem" loop). */
+    @Test fun shot139_watchRestrictedErrorBrowserOffer() {
+        WatchPaneStaging.errorCode = 150
+        val id = r87StageInvite(
+            me = false, sessionState = "playing",
+            joined = mapOf("host1" to true, "me" to true),
+        )
+        try {
+            AppState.go(Screen.Chat(id))
+            frame { ChatScreen(id) }
+            composeRule.waitForIdle()
+            composeRule.onNodeWithText("YouTube video")
+                .performTouchInput { click(center) }
+            composeRule.mainClock.advanceTimeBy(700)
+            composeRule.waitForIdle()
+            org.junit.Assert.assertTrue(
+                "the restricted error must name the real reason",
+                composeRule.onAllNodesWithText(
+                    "doesn't allow embedding", substring = true,
+                ).fetchSemanticsNodes().isNotEmpty(),
+            )
+            org.junit.Assert.assertTrue(
+                "the restricted error must offer the in-app browser",
+                composeRule.onAllNodesWithText("Watch in in-app browser")
+                    .fetchSemanticsNodes().isNotEmpty(),
+            )
+            org.junit.Assert.assertTrue(
+                "a restricted embed must NOT offer a useless retry",
+                composeRule.onAllNodesWithText("Try again")
+                    .fetchSemanticsNodes().isEmpty(),
+            )
+            shot("139-watch-restricted-browser-offer.png")
+        } finally {
+            WatchPaneStaging.errorCode = null
+            WatchPartyStore.setPreview(id, null)
+        }
+    }
+
+    /** Bug 1 (part 2): accepting the offer switches THIS pane to
+     *  the in-app browser — the header says plainly that playback
+     *  isn't synced, and the browser chrome (back + page) replaces
+     *  the player controls. Nothing leaves Tik. */
+    @Test fun shot140_watchBrowserFallback() {
+        WatchPaneStaging.errorCode = 150
+        val id = r87StageInvite(
+            me = false, sessionState = "playing",
+            joined = mapOf("host1" to true, "me" to true),
+        )
+        try {
+            AppState.go(Screen.Chat(id))
+            frame { ChatScreen(id) }
+            composeRule.waitForIdle()
+            composeRule.onNodeWithText("YouTube video")
+                .performTouchInput { click(center) }
+            composeRule.mainClock.advanceTimeBy(700)
+            composeRule.waitForIdle()
+            composeRule.onNodeWithText("Watch in in-app browser")
+                .performTouchInput { click(center) }
+            composeRule.mainClock.advanceTimeBy(700)
+            composeRule.waitForIdle()
+            org.junit.Assert.assertTrue(
+                "the fallback must say playback isn't synced",
+                composeRule.onAllNodesWithText(
+                    "playback isn't synced", substring = true,
+                ).fetchSemanticsNodes().isNotEmpty(),
+            )
+            org.junit.Assert.assertTrue(
+                "the error state must be gone once the fallback opens",
+                composeRule.onAllNodesWithText(
+                    "doesn't allow embedding", substring = true,
+                ).fetchSemanticsNodes().isEmpty(),
+            )
+            shot("140-watch-browser-fallback.png")
+        } finally {
+            WatchPaneStaging.errorCode = null
+            WatchPartyStore.setPreview(id, null)
+        }
+    }
+
 }

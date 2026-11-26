@@ -163,9 +163,56 @@ internal fun watchPlayerErrorTitle(code: Int): String = when (code) {
 /** ROUND 89 — the second line under [watchPlayerErrorTitle]. */
 internal fun watchPlayerErrorHint(code: Int): String = when (code) {
     100 -> "It may have been removed or made private."
-    101, 150 -> "Try another video — this one can't play inside Tik."
+    // ROUND 90: a restricted/refused video gets the honest way out —
+    // the same video on its real watch page, inside Tik's own
+    // browser (see watchErrorOffersBrowser). "Try another video"
+    // threw away a video the owner may have his heart set on.
+    101, 150, 152 -> "You can still watch it in the in-app browser — it just won't be synced."
     else -> "Check your connection and try again."
 }
+
+/** ROUND 90 — the player WebView's navigation policy, proven in a
+ *  real Chromium (see the round-90 report): the IFrame API builds
+ *  the player as a SUBFRAME document (youtube.com/embed/<id>), and
+ *  Android's shouldOverrideUrlLoading fires for subframes too —
+ *  R87/R89 returned true for EVERY navigation, which CANCELLED the
+ *  player's own iframe on every phone, every time. The player page
+ *  itself (the main frame) still never navigates anywhere; only
+ *  subframes (the embed, and whatever it nests) are allowed through.
+ *  Nothing can leave Tik: a main-frame escape is refused, and a
+ *  subframe load can never fire an intent or move the top page. */
+internal fun watchPlayerBlocksNavigation(isForMainFrame: Boolean): Boolean =
+    isForMainFrame
+
+/** ROUND 90 — the failures "Try again" can NEVER fix: 101/150 =
+ *  the owner forbids embedding; 152 = YouTube refuses playback in
+ *  this player/environment (seen live in the round-90 Chromium
+ *  runs: "This video is unavailable · Error code: 152"). Retrying
+ *  the embed fails identically forever — the working route is the
+ *  video's real watch page in the in-app browser (no sync, stated
+ *  on screen). These codes offer that route instead of a retry. */
+internal fun watchErrorOffersBrowser(code: Int): Boolean =
+    code == 101 || code == 150 || code == 152
+
+/** The canonical watch-page URL for a YouTube session's video —
+ *  where the in-app-browser fallback opens it. */
+internal fun youtubeWatchUrl(videoId: String): String =
+    "https://www.youtube.com/watch?v=$videoId"
+
+/** The rejoin banner's visibility rule (Chat.kt): a live session
+ *  with the pane closed and an invite in the thread shows the
+ *  banner — UNLESS this device has dismissed it for THIS session
+ *  (closing the pane with Back counts: the chat must come back
+ *  perfectly clean). A NEW session (a different id) shows it again;
+ *  the invite card in the list is always a second way back in. */
+internal fun watchBannerShouldShow(
+    session: WatchSession?,
+    paneOpen: Boolean,
+    hasInvite: Boolean,
+    dismissedSessionId: String?,
+): Boolean =
+    session?.active == true && !paneOpen && hasInvite &&
+        session?.id != dismissedSessionId
 
 /** The chat's own dark tokens (the same values as Chat.kt's
  *  RdCard / RdRose / RdSub / RdDanger) — reused, not reinvented:
@@ -445,6 +492,16 @@ object WatchPartyStore {
     }
 }
 
+/** Test / preview seam (mirrors [WatchPartyStore.setPreview]):
+ *  when set, the watch pane opens already showing this player
+ *  error, so the harness can stage the error states (a Robolectric
+ *  WebView never produces a real YT error). Production never sets
+ *  it — it stays null there and the pane behaves exactly as
+ *  written. */
+internal object WatchPaneStaging {
+    @Volatile var errorCode: Int? = null
+}
+
 /** The card / banner title for an invite message: YouTube videos
  *  have no title metadata on the message, so they read as "YouTube
  *  video"; web pages read as their domain. */
@@ -490,10 +547,14 @@ internal fun destroyWatchWebView(wv: WebView) {
 /** The YouTube player view: the local HTML asset (assets/watch/
  *  youtube_player.html, video id substituted) loaded with the
  *  youtube.com base URL, driving the IFrame API. The view refuses
- *  EVERY navigation — the player is a fixed embed, never a browser —
- *  and DOM storage is on because the IFrame API needs it. Playback
- *  needs no user gesture: the guest's player must start when the
- *  host presses play, with no tap on the guest's phone. */
+ *  every MAIN-FRAME navigation — the player is a fixed embed, never
+ *  a browser — while SUBFRAME loads (the player's own embed iframe)
+ *  go through: refusing those too was the round-90 root cause (the
+ *  player could never load on a real phone; see
+ *  watchPlayerBlocksNavigation). DOM storage is on because the
+ *  IFrame API needs it. Playback needs no user gesture: the guest's
+ *  player must start when the host presses play, with no tap on the
+ *  guest's phone. */
 @SuppressLint("SetJavaScriptEnabled")
 internal fun buildWatchYouTubeWebView(
     ctx: Context,
@@ -519,12 +580,20 @@ internal fun buildWatchYouTubeWebView(
     }
     wv.addJavascriptInterface(bridge, "TikuWatchNative")
     wv.webViewClient = object : WebViewClient() {
-        // The player page never navigates: refuse everything (a tap
-        // on the YouTube logo etc. stays put — there is no outside
-        // browser to escape to).
+        // ROUND 90 — THE fix: refuse only MAIN-FRAME navigations
+        // (the player page never moves; a tap on the YouTube logo
+        // etc. stays put — there is no outside browser to escape
+        // to). Subframes are the player's own embed iframe:
+        // R87/R89 refused those too, so the iframe was cancelled
+        // before it could load and the player NEVER became ready
+        // on a real phone — every attempt died on the watchdog.
+        // Proven in a real Chromium (round-90 report): with every
+        // document load blocked, the shipped page reports nothing
+        // but the 10 s watchdog error; with only main-frame loads
+        // blocked, the iframe loads and onReady fires.
         override fun shouldOverrideUrlLoading(
             view: WebView?, request: WebResourceRequest?,
-        ): Boolean = true
+        ): Boolean = watchPlayerBlocksNavigation(request?.isForMainFrame ?: true)
 
         override fun onReceivedError(
             view: WebView?, request: WebResourceRequest?,
@@ -611,10 +680,17 @@ private fun WatchWebViewHost(
     webAttempt: Int,
     onPage: (title: String, url: String, canGoBack: Boolean) -> Unit,
     onLoadError: () -> Unit,
+    // ROUND 90: non-null = show THIS page in the in-app browser
+    // instead of the embed (the embed-restricted fallback). The
+    // session stays a YouTube session; only this pane's surface
+    // switches, per device — the peer's pane is untouched.
+    browserUrl: String? = null,
 ) {
     val ctx = LocalContext.current
-    val webView = remember(msg.id, webAttempt) {
-        (if (msg.wpKind == "youtube") {
+    val webView = remember(msg.id, webAttempt, browserUrl) {
+        (if (browserUrl != null) {
+            buildWatchBrowserWebView(ctx, browserUrl, onPage, onLoadError)
+        } else if (msg.wpKind == "youtube") {
             buildWatchYouTubeWebView(
                 ctx, msg.wpVideoId, ytHtml ?: "", bridge, onLoadError,
             )
@@ -622,7 +698,7 @@ private fun WatchWebViewHost(
             buildWatchBrowserWebView(ctx, msg.wpUrl, onPage, onLoadError)
         }).also { wvHolder.value = it }
     }
-    DisposableEffect(msg.id, webAttempt) {
+    DisposableEffect(msg.id, webAttempt, browserUrl) {
         onDispose { destroyWatchWebView(webView) }
     }
     AndroidView(factory = { webView }, modifier = Modifier.fillMaxSize())
@@ -665,12 +741,26 @@ fun WatchTogetherPane(
     var playerPlaying by remember(msg.id) { mutableStateOf(false) }
     var playerPos by remember(msg.id) { mutableStateOf(0.0) }
     var playerDur by remember(msg.id) { mutableStateOf(0.0) }
-    var loadFailed by remember(msg.id) { mutableStateOf(false) }
+    // ROUND 90: the harness can stage a player error through
+    // WatchPaneStaging (production never sets it — both inits are
+    // the plain R89 values there).
+    var loadFailed by remember(msg.id) {
+        mutableStateOf(WatchPaneStaging.errorCode != null)
+    }
     // ROUND 89: WHICH failure (YT code, or -1 = the player never
     // loaded — script stall / deadline). Drives the plain-words
     // error line; null = no error.
-    var playerErrorCode by remember(msg.id) { mutableStateOf<Int?>(null) }
+    var playerErrorCode by remember(msg.id) {
+        mutableStateOf(WatchPaneStaging.errorCode)
+    }
     var webAttempt by remember(msg.id) { mutableIntStateOf(0) }
+    // ROUND 90: this pane is showing the watch page in the in-app
+    // browser instead of the embed (the embed was refused —
+    // 101/150/152). Local to this pane: the session, the sync and
+    // the peer's pane are all untouched; playback here is NOT
+    // synced and the header says so.
+    var browserFallback by remember(msg.id) { mutableStateOf(false) }
+    val inBrowser = !isYouTube || browserFallback
     // ROUND 89: the web pane's own loaded flag — the loading overlay
     // ("Loading page…") shows until the first onPageFinished.
     var pageLoaded by remember(msg.id, webAttempt) { mutableStateOf(false) }
@@ -716,7 +806,10 @@ fun WatchTogetherPane(
     // attempt (Retry) restarts the deadline with it.
     LaunchedEffect(msg.id, webAttempt) {
         delay(WatchPlayerFrame.LOAD_TIMEOUT_MS)
-        if (!loadFailed && ((isYouTube && !playerReady) || (!isYouTube && !pageLoaded))) {
+        // ROUND 90: which load the deadline watches follows the
+        // surface — the embed's ready flag, or the browser's first
+        // finished page when this pane is in the browser fallback.
+        if (!loadFailed && ((!inBrowser && !playerReady) || (inBrowser && !pageLoaded))) {
             playerErrorCode = -1
             loadFailed = true
         }
@@ -899,8 +992,14 @@ fun WatchTogetherPane(
     }
 
     BackHandler {
+        // ROUND 90: WebView history belongs to the BROWSER surface
+        // only (a web pane, or the browser fallback). The embed's
+        // WebView must never swallow Back into its own history —
+        // Back from the player closes the pane, always, and the
+        // chat comes back clean (Chat.kt dismisses the banner for
+        // this session on the same close).
         val wv = wvHolder.value
-        if (wv != null && wv.canGoBack()) wv.goBack() else onClose()
+        if (inBrowser && wv != null && wv.canGoBack()) wv.goBack() else onClose()
     }
 
     val bothJoined = (session?.joined?.values?.count { it } ?: 0) >= 2
@@ -910,6 +1009,9 @@ fun WatchTogetherPane(
         session.state == "ended" -> "Session ended"
         session.hostLeft -> "Host left — session paused"
         !isYouTube -> "In-app browser · both of you see this page"
+        // ROUND 90: the fallback is per-pane and NOT synced — the
+        // line says so before anything else about playback state.
+        browserFallback -> "In-app browser · playback isn't synced"
         session.state == "playing" && !isHost &&
             WatchSync.hostStale(session, nowMs) -> "Waiting for host…"
         session.state == "playing" -> "Playing together"
@@ -1010,35 +1112,67 @@ fun WatchTogetherPane(
                 ) {
                     Spacer(Modifier.weight(1f))
                     Text(
-                        if (isYouTube) watchPlayerErrorTitle(playerErrorCode ?: -1)
+                        // ROUND 90: the copy follows the SURFACE —
+                        // in the browser fallback a failed page is a
+                        // page failure, not a player failure.
+                        if (!inBrowser) watchPlayerErrorTitle(playerErrorCode ?: -1)
                         else "This page couldn't load.",
                         color = Color.White, fontSize = 14.sp,
                         fontWeight = FontWeight.SemiBold, fontFamily = InterTight,
                     )
                     Spacer(Modifier.size(6.dp))
                     Text(
-                        if (isYouTube) watchPlayerErrorHint(playerErrorCode ?: -1)
+                        if (!inBrowser) watchPlayerErrorHint(playerErrorCode ?: -1)
                         else "Check your connection and try again.",
                         color = WatchSub, fontSize = 12.5.sp, fontFamily = PoppinsFamily,
                     )
                     Spacer(Modifier.size(14.dp))
-                    Box(
-                        Modifier.clip(RoundedCornerShape(20.dp)).background(WatchRose)
-                            .clickable(
-                                interactionSource = remember { MutableInteractionSource() },
-                                indication = null,
-                            ) {
-                                loadFailed = false
-                                playerErrorCode = null
-                                webAttempt++
-                            }
-                            .padding(horizontal = 22.dp, vertical = 10.dp),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Text(
-                            "Try again", color = Color.White, fontSize = 13.5.sp,
-                            fontWeight = FontWeight.SemiBold, fontFamily = PoppinsFamily,
-                        )
+                    // ROUND 90: the action matches the failure. A
+                    // refused embed (101/150/152) can never succeed
+                    // on retry — its button opens the same video's
+                    // watch page in the in-app browser instead.
+                    // Anything else keeps the R89 retry.
+                    if (isYouTube && watchErrorOffersBrowser(playerErrorCode ?: -1)) {
+                        Box(
+                            Modifier.clip(RoundedCornerShape(20.dp)).background(WatchRose)
+                                .clickable(
+                                    interactionSource = remember { MutableInteractionSource() },
+                                    indication = null,
+                                ) {
+                                    browserFallback = true
+                                    loadFailed = false
+                                    playerErrorCode = null
+                                    pageLoaded = false
+                                    webAttempt++
+                                }
+                                .padding(horizontal = 22.dp, vertical = 10.dp),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Text(
+                                "Watch in in-app browser", color = Color.White,
+                                fontSize = 13.5.sp,
+                                fontWeight = FontWeight.SemiBold, fontFamily = PoppinsFamily,
+                            )
+                        }
+                    } else {
+                        Box(
+                            Modifier.clip(RoundedCornerShape(20.dp)).background(WatchRose)
+                                .clickable(
+                                    interactionSource = remember { MutableInteractionSource() },
+                                    indication = null,
+                                ) {
+                                    loadFailed = false
+                                    playerErrorCode = null
+                                    webAttempt++
+                                }
+                                .padding(horizontal = 22.dp, vertical = 10.dp),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Text(
+                                "Try again", color = Color.White, fontSize = 13.5.sp,
+                                fontWeight = FontWeight.SemiBold, fontFamily = PoppinsFamily,
+                            )
+                        }
                     }
                     Spacer(Modifier.weight(1f))
                 }
@@ -1054,6 +1188,11 @@ fun WatchTogetherPane(
                             pageLoaded = true
                         },
                         onLoadError = { loadFailed = true },
+                        // ROUND 90: the embed-refused fallback —
+                        // the same video's watch page, in-app.
+                        browserUrl = if (browserFallback) {
+                            youtubeWatchUrl(msg.wpVideoId)
+                        } else null,
                     )
                 }
             }
@@ -1068,7 +1207,7 @@ fun WatchTogetherPane(
             // (web). Under the harness the player never reports
             // ready, so the loading state is what the shots show —
             // which is the honest picture there.
-            if (!loadFailed && ((isYouTube && !playerReady) || (!isYouTube && !pageLoaded))) {
+            if (!loadFailed && ((!inBrowser && !playerReady) || (inBrowser && !pageLoaded))) {
                 Column(
                     Modifier.fillMaxSize(),
                     horizontalAlignment = Alignment.CenterHorizontally,
@@ -1081,7 +1220,7 @@ fun WatchTogetherPane(
                     )
                     Spacer(Modifier.size(10.dp))
                     Text(
-                        if (isYouTube) "Loading video…" else "Loading page…",
+                        if (inBrowser) "Loading page…" else "Loading video…",
                         color = Color.White.copy(alpha = 0.75f), fontSize = 12.5.sp,
                         fontFamily = PoppinsFamily,
                     )
@@ -1089,12 +1228,13 @@ fun WatchTogetherPane(
                 }
             }
         }
-        // ---- controls: play/pause + time (YouTube) / back + URL (web) ----
+        // ---- controls: play/pause + time (embed) / back + URL
+        // (browser surface — a web session, or the R90 fallback) ----
         Row(
             Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            if (isYouTube) {
+            if (!inBrowser) {
                 // ROUND 89 — the play control: the host's is a button;
                 // the guest's is a STATUS INDICATOR, not a button. R87
                 // dimmed it to 0.45 alpha and left it clickable with
@@ -1193,10 +1333,10 @@ fun WatchTogetherPane(
                     modifier = Modifier.weight(1f), fontFamily = PoppinsFamily,
                 )
             }
-            // ROUND 89: the YouTube branch already carries its role
-            // line at weight(1f); only the web branch needs the spacer
-            // to push the join line right.
-            if (!isYouTube) Spacer(Modifier.weight(1f))
+            // ROUND 89: the embed branch already carries its role
+            // line at weight(1f); only the browser branch needs the
+            // spacer to push the join line right.
+            if (inBrowser) Spacer(Modifier.weight(1f))
             Text(
                 joinLine, color = WatchSub, fontSize = 11.5.sp,
                 maxLines = 1, overflow = TextOverflow.Ellipsis,
